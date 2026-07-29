@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.vite/
+*.local
+.DS_Store
+
+# Local editor/agent tooling. launch.json holds a machine-specific node path.
+.claude/

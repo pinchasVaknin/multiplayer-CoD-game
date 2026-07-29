@@ -1,0 +1,87 @@
+/*
+ * OPERATOR design tokens.
+ * Brief S4.6: no "military" font stack exists. The look comes from uppercase labels,
+ * letter-spacing, tabular numerals, heavy weight contrast, a strict 4px spacing grid,
+ * and ONE accent colour on near-black. System stack only.
+ *
+ * Every palette / spacing / type value in the project resolves to a token here.
+ */
+
+:root {
+  /* ---- Palette: near-black base, cool neutrals, one accent ---- */
+  --c-void: #07080a;
+  --c-bg: #0c0e11;
+  --c-surface: #14171c;
+  --c-surface-hi: #1c2027;
+  --c-line: #262b33;
+  --c-line-hi: #39404b;
+
+  --c-text: #e8eaee;
+  --c-text-dim: #9aa1ad;
+  --c-text-faint: #626a77;
+
+  /* The one accent. Nothing else gets to be colourful. */
+  --c-accent: #ffb340;
+  --c-accent-dim: #a8722a;
+  --c-accent-glow: rgba(255, 179, 64, 0.16);
+
+  /* Semantic-only, used by instrumentation where meaning beats restraint. */
+  --c-good: #6fd08c;
+  --c-warn: #ffb340;
+  --c-bad: #e8604c;
+
+  /* ---- Spacing: strict 4px grid ---- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-12: 48px;
+
+  /* ---- Type ---- */
+  --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "Liberation Mono", monospace;
+
+  --t-micro: 10px;
+  --t-small: 11px;
+  --t-body: 13px;
+  --t-lead: 16px;
+  --t-title: 22px;
+  --t-display: 40px;
+
+  --track-label: 0.08em;
+  --track-display: 0.14em;
+
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-heavy: 800;
+
+  /* ---- Misc ---- */
+  --radius: 2px;
+  --dur-fast: 90ms;
+  --dur-med: 180ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* Shared primitives ------------------------------------------------------ */
+
+.op-label {
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--c-text-faint);
+}
+
+.op-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.op-accent {
+  color: var(--c-accent);
+}

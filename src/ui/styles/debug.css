@@ -1,0 +1,210 @@
+/* Debug overlay. Same tokens as the game UI: no second design language. */
+
+.dbg-root {
+  position: absolute;
+  inset: var(--s-3) auto var(--s-3) var(--s-3);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - var(--s-6));
+  width: min(760px, calc(100% - var(--s-6)));
+  background: rgba(7, 8, 10, 0.93);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  backdrop-filter: blur(3px);
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  color: var(--c-text);
+  overflow: hidden;
+}
+
+.dbg-root[hidden] {
+  display: none;
+}
+
+.dbg-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--c-line);
+  background: var(--c-surface);
+}
+
+.dbg-header__title {
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--c-accent);
+}
+
+.dbg-columns {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.dbg-col {
+  padding: var(--s-2);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.dbg-col--wide {
+  border-left: 1px solid var(--c-line);
+}
+
+.dbg-section {
+  margin-bottom: var(--s-3);
+}
+
+.dbg-section__title {
+  padding: var(--s-1) 0;
+  border-bottom: 1px solid var(--c-line);
+  margin-bottom: var(--s-1);
+  color: var(--c-text-dim);
+}
+
+.dbg-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: 1px 0;
+  line-height: 1.45;
+}
+
+.dbg-row__label {
+  color: var(--c-text-faint);
+  white-space: nowrap;
+}
+
+.dbg-row__value {
+  font-size: var(--t-small);
+  color: var(--c-text);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.dbg-graph {
+  display: block;
+  width: 100%;
+  height: 76px;
+  margin: var(--s-2) 0;
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  image-rendering: pixelated;
+}
+
+.dbg-btn {
+  appearance: none;
+  border: 1px solid var(--c-line-hi);
+  background: var(--c-surface);
+  color: var(--c-text-dim);
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  padding: var(--s-1) var(--s-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.dbg-btn:hover {
+  border-color: var(--c-accent-dim);
+  color: var(--c-accent);
+}
+
+.dbg-btn--block {
+  display: block;
+  width: 100%;
+  margin-top: var(--s-1);
+}
+
+.dbg-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) 0;
+  cursor: pointer;
+  color: var(--c-text-dim);
+}
+
+.dbg-toggle input {
+  accent-color: var(--c-accent);
+  margin: 0;
+}
+
+/* ---- tuning ---------------------------------------------------------- */
+
+.dbg-tuning {
+  margin-bottom: var(--s-4);
+}
+
+.dbg-tuning__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) 0 var(--s-2);
+  background: rgba(7, 8, 10, 0.96);
+  border-bottom: 1px solid var(--c-line);
+}
+
+.dbg-tuning__head .op-label {
+  flex: 1;
+  color: var(--c-accent);
+}
+
+.dbg-tuning__group {
+  margin: var(--s-2) 0 var(--s-1);
+  color: var(--c-text-faint);
+}
+
+.dbg-slider {
+  display: grid;
+  grid-template-columns: 108px 1fr 72px;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 1px 0;
+}
+
+.dbg-slider__label {
+  color: var(--c-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dbg-slider__input {
+  width: 100%;
+  accent-color: var(--c-accent);
+  height: 14px;
+  margin: 0;
+}
+
+.dbg-slider__value {
+  text-align: right;
+  color: var(--c-text);
+  font-size: var(--t-micro);
+}
+
+/* Scrollbars, so the panel does not look like a browser default. */
+.dbg-col::-webkit-scrollbar {
+  width: 8px;
+}
+
+.dbg-col::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dbg-col::-webkit-scrollbar-thumb {
+  background: var(--c-line);
+  border-radius: 4px;
+}

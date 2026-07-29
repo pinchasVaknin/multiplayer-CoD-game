@@ -1,0 +1,155 @@
+/**
+ * Versioned localStorage wrapper with a migration hook.
+ *
+ * M1 stores settings only. M6 fills this out with progression, loadouts, challenges
+ * and prestige, which is exactly why the version/migration seam exists now: the
+ * first schema break must not cost anyone their unlocks.
+ *
+ * If storage is unavailable (private browsing, blocked cookies, quota) the store
+ * silently degrades to in-memory. The game must not break because a save failed.
+ */
+
+export interface Versioned {
+  version: number;
+}
+
+/**
+ * Convert persisted data from an older schema. Return `null` to reject the payload
+ * and fall back to defaults. Called once, at construction, before any read.
+ */
+export type Migrator<T extends Versioned> = (raw: unknown, fromVersion: number) => T | null;
+
+export class SaveStore<T extends Versioned> {
+  private data: T;
+  private storage: Storage | null;
+  private dirty = false;
+  private flushHandle = 0;
+
+  constructor(
+    private readonly key: string,
+    private readonly version: number,
+    private readonly defaults: T,
+    private readonly migrate: Migrator<T>,
+  ) {
+    this.storage = probeStorage();
+    this.data = this.load();
+  }
+
+  /** The live document. Mutate through `patch`, not directly. */
+  get value(): Readonly<T> {
+    return this.data;
+  }
+
+  /** True when persistence is actually happening. */
+  get isPersistent(): boolean {
+    return this.storage !== null;
+  }
+
+  patch(changes: Partial<T>): void {
+    let changed = false;
+    for (const k of Object.keys(changes) as Array<keyof T>) {
+      const next = changes[k];
+      if (next === undefined) continue;
+      if (this.data[k] !== next) {
+        this.data[k] = next;
+        changed = true;
+      }
+    }
+    if (changed) this.scheduleFlush();
+  }
+
+  /** Force a write now, e.g. on pagehide. */
+  flush(): void {
+    if (this.flushHandle !== 0) {
+      clearTimeout(this.flushHandle);
+      this.flushHandle = 0;
+    }
+    if (!this.dirty) return;
+    this.dirty = false;
+    const store = this.storage;
+    if (store === null) return;
+    try {
+      store.setItem(this.key, JSON.stringify(this.data));
+    } catch (err) {
+      console.warn(`[SaveStore:${this.key}] write failed; continuing in memory.`, err);
+      this.storage = null;
+    }
+  }
+
+  reset(): void {
+    this.data = structuredClone(this.defaults);
+    this.data.version = this.version;
+    this.scheduleFlush();
+  }
+
+  private scheduleFlush(): void {
+    this.dirty = true;
+    if (this.flushHandle !== 0) return;
+    // Coalesce bursts (a slider drag is dozens of patches per second).
+    this.flushHandle = window.setTimeout(() => {
+      this.flushHandle = 0;
+      this.flush();
+    }, 250);
+  }
+
+  private load(): T {
+    const fresh = (): T => {
+      const d = structuredClone(this.defaults);
+      d.version = this.version;
+      return d;
+    };
+
+    const store = this.storage;
+    if (store === null) return fresh();
+
+    let raw: string | null = null;
+    try {
+      raw = store.getItem(this.key);
+    } catch (err) {
+      console.warn(`[SaveStore:${this.key}] read failed; using defaults.`, err);
+      return fresh();
+    }
+    if (raw === null) return fresh();
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      console.warn(`[SaveStore:${this.key}] corrupt JSON; resetting to defaults.`);
+      return fresh();
+    }
+
+    if (typeof parsed !== 'object' || parsed === null) return fresh();
+    const found = parsed as Partial<Versioned>;
+    const foundVersion = typeof found.version === 'number' ? found.version : 0;
+
+    if (foundVersion === this.version) {
+      // Union with defaults so a field added since the save was written exists.
+      return { ...structuredClone(this.defaults), ...(parsed as T), version: this.version };
+    }
+
+    const migrated = this.migrate(parsed, foundVersion);
+    if (migrated === null) {
+      console.warn(
+        `[SaveStore:${this.key}] no migration path from v${foundVersion} to v${this.version}; resetting.`,
+      );
+      return fresh();
+    }
+    migrated.version = this.version;
+    this.dirty = true;
+    this.scheduleFlush();
+    return migrated;
+  }
+}
+
+function probeStorage(): Storage | null {
+  try {
+    const s = window.localStorage;
+    const probe = '__operator_probe__';
+    s.setItem(probe, '1');
+    s.removeItem(probe);
+    return s;
+  } catch {
+    return null;
+  }
+}

@@ -1,0 +1,151 @@
+import * as THREE from 'three';
+import { damp, DEG2RAD, lerp } from '../core/MathUtil';
+import type { CameraConfig } from '../player/CameraConfig';
+import { CameraShake } from '../player/CameraShake';
+import type { PlayerSnapshot } from '../player/PlayerState';
+import type { ViewmodelLayer } from '../player/Viewmodel';
+
+/**
+ * Turns an interpolated player snapshot into a camera transform.
+ *
+ * Position and eye height are interpolated between the previous and current sim state
+ * with `alpha`. View angles are NOT interpolated — they come straight from the input
+ * layer at render rate, which is the one exception in S4.1 and the reason looking
+ * around has zero added latency.
+ *
+ * Everything additive (bob, landing dip, shake, roll) is layered on top so each can be
+ * tuned, or switched off, without touching the others.
+ */
+
+export interface CameraDrive {
+  sprint: boolean;
+  tacSprint: boolean;
+  slide: boolean;
+  ads: boolean;
+}
+
+/** Visual state, kept out of the sim: none of this affects gameplay. */
+export class CameraRig {
+  readonly camera: THREE.PerspectiveCamera;
+  readonly shake = new CameraShake();
+
+  /** Current FOV after smoothing. Surfaced by the debug overlay. */
+  fov: number;
+
+  private dipPos = 0;
+  private dipVel = 0;
+  private roll = 0;
+  private readonly right = new THREE.Vector3();
+
+  constructor(cfg: CameraConfig, aspect: number) {
+    this.fov = cfg.fov;
+    this.camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.05, 400);
+    this.camera.rotation.order = 'YXZ';
+  }
+
+  resize(aspect: number): void {
+    this.camera.aspect = aspect;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** Called from the landing event. `impactSpeed` is downward m/s at contact. */
+  applyLanding(cfg: CameraConfig, impactSpeed: number): void {
+    const strength = Math.min(1, impactSpeed / Math.max(cfg.landDipRefSpeed, 0.1));
+    if (strength <= 0.02) return;
+    this.dipVel -= strength * cfg.landDipMax * cfg.landDipSpring * 0.06;
+    // A hard landing also earns a little shake; a step off a kerb does not.
+    if (strength > 0.35) this.shake.add((strength - 0.35) * 0.55);
+  }
+
+  reset(cfg: CameraConfig): void {
+    this.dipPos = 0;
+    this.dipVel = 0;
+    this.roll = 0;
+    this.fov = cfg.fov;
+    this.shake.reset();
+  }
+
+  update(
+    prev: PlayerSnapshot,
+    curr: PlayerSnapshot,
+    alpha: number,
+    yaw: number,
+    pitch: number,
+    drive: CameraDrive,
+    cfg: CameraConfig,
+    dtRaw: number,
+    viewmodel: ViewmodelLayer | null,
+  ): void {
+    // Visual springs run at render rate; clamp so a stalled frame cannot explode them.
+    const dt = Math.min(dtRaw, 1 / 30);
+
+    const px = lerp(prev.x, curr.x, alpha);
+    const py = lerp(prev.y, curr.y, alpha);
+    const pz = lerp(prev.z, curr.z, alpha);
+    const eye = lerp(prev.eyeHeight, curr.eyeHeight, alpha);
+    const speed = lerp(prev.speed, curr.speed, alpha);
+    const phase = interpolatePhase(prev.bobPhase, curr.bobPhase, alpha);
+
+    // ---- FOV ------------------------------------------------------------
+    let targetFov = cfg.fov;
+    if (drive.tacSprint) targetFov += cfg.fovTacSprintAdd;
+    else if (drive.sprint) targetFov += cfg.fovSprintAdd;
+    if (drive.slide) targetFov += cfg.fovSlideAdd;
+    if (drive.ads) targetFov *= cfg.fovAdsScale;
+    this.fov = damp(this.fov, targetFov, cfg.fovRate, dt);
+    if (Math.abs(this.camera.fov - this.fov) > 0.01) {
+      this.camera.fov = this.fov;
+      this.camera.updateProjectionMatrix();
+    }
+    viewmodel?.setFov(cfg.viewmodelFov);
+
+    // ---- bob -------------------------------------------------------------
+    const speedRatio = Math.min(1, speed / Math.max(cfg.bobRefSpeed, 0.1));
+    const grounded = curr.grounded && curr.stance !== 'MANTLE';
+    const bobAmount = grounded ? cfg.bobAmplitude * speedRatio : 0;
+    // Two vertical dips per stride, one lateral sway: the classic footfall shape.
+    const bobUp = Math.sin(phase * 2) * bobAmount;
+    const bobSide = Math.sin(phase) * bobAmount * cfg.bobLateralScale;
+    const bobRoll = Math.sin(phase) * cfg.bobRollDeg * DEG2RAD * speedRatio;
+
+    // ---- landing dip (critically damped spring) --------------------------
+    this.dipVel += (-this.dipPos * cfg.landDipSpring - this.dipVel * cfg.landDipDamping) * dt;
+    this.dipPos += this.dipVel * dt;
+    if (this.dipPos < -cfg.landDipMax) {
+      this.dipPos = -cfg.landDipMax;
+      if (this.dipVel < 0) this.dipVel = 0;
+    }
+
+    // ---- roll ------------------------------------------------------------
+    const strafe = lerp(prev.strafe, curr.strafe, alpha);
+    const rollDeg = drive.slide ? cfg.slideRollDeg : cfg.strafeRollDeg;
+    const rollTarget = -strafe * rollDeg * DEG2RAD + bobRoll;
+    this.roll = damp(this.roll, rollTarget, cfg.rollRate, dt);
+
+    // ---- shake -----------------------------------------------------------
+    this.shake.update(cfg, dt);
+
+    // ---- compose ----------------------------------------------------------
+    this.right.set(Math.cos(yaw), 0, -Math.sin(yaw));
+    this.camera.position.set(
+      px + this.right.x * bobSide,
+      py + eye + bobUp + this.dipPos,
+      pz + this.right.z * bobSide,
+    );
+    this.camera.rotation.set(pitch + this.shake.pitch, yaw + this.shake.yaw, this.roll + this.shake.roll);
+
+    if (viewmodel !== null) {
+      viewmodel.camera.position.copy(this.camera.position);
+      viewmodel.camera.rotation.copy(this.camera.rotation);
+    }
+  }
+}
+
+/** Bob phase wraps at TAU; interpolate the short way around. */
+function interpolatePhase(a: number, b: number, alpha: number): number {
+  const TAU = Math.PI * 2;
+  let delta = b - a;
+  if (delta > Math.PI) delta -= TAU;
+  if (delta < -Math.PI) delta += TAU;
+  return a + delta * alpha;
+}
