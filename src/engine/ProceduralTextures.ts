@@ -27,6 +27,11 @@ export class ProceduralTextures {
     for (const key of MATERIAL_KEYS) this.cache.set(key, this.build(key));
   }
 
+  /** Shared with anything else that builds a CanvasTexture: the weapon, decals, Fx. */
+  get anisotropy(): number {
+    return this.maxAnisotropy;
+  }
+
   get(key: MaterialKey): MaterialProfile {
     const found = this.cache.get(key);
     if (found === undefined) throw new Error(`No procedural material for "${key}"`);

@@ -72,6 +72,12 @@ export class PlayerSim {
   groundNx = 0;
   groundNy = 1;
   groundNz = 0;
+  /**
+   * Material index of the surface underfoot. Footsteps, landings and (from M3) bot
+   * audibility read this, so the sound the player makes matches what they are standing
+   * on rather than being one generic thud.
+   */
+  groundMaterial = 0;
 
   /** Collision capsule height for the current stance. Snaps; never smoothed. */
   capsuleHeight = 1.8;
@@ -157,6 +163,7 @@ export class PlayerSim {
     this.groundNx = 0;
     this.groundNy = 1;
     this.groundNz = 0;
+    this.groundMaterial = 0;
     this.capsuleHeight = standHeight;
     this.eyeHeight = standEye;
 

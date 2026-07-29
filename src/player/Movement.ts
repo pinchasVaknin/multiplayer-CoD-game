@@ -274,6 +274,7 @@ export function integrateMotion(sim: PlayerSim, cfg: MovementConfig, world: Coll
     sim.groundNx = moveOut.groundNx;
     sim.groundNy = moveOut.groundNy;
     sim.groundNz = moveOut.groundNz;
+    sim.groundMaterial = world.colliders.materialAt(moveOut.groundIndex);
   }
   if (moveOut.hitCeiling && sim.vy > 0) sim.vy = 0;
   projectVelocity(sim, moveOut, true);
@@ -285,6 +286,7 @@ export function integrateMotion(sim: PlayerSim, cfg: MovementConfig, world: Coll
     sim.groundNx = stepDrop.groundNx;
     sim.groundNy = stepDrop.groundNy;
     sim.groundNz = stepDrop.groundNz;
+    sim.groundMaterial = world.colliders.materialAt(stepDrop.groundIndex);
   }
 
   // ---- ground snap: stay glued when walking off a step or down a ramp ----
@@ -301,6 +303,7 @@ export function integrateMotion(sim: PlayerSim, cfg: MovementConfig, world: Coll
     sim.groundNx = probe.nx;
     sim.groundNy = probe.ny;
     sim.groundNz = probe.nz;
+    sim.groundMaterial = world.colliders.materialAt(probe.index);
     if (sim.vy < 0) sim.vy = 0;
   }
 

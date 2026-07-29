@@ -1,0 +1,198 @@
+/*
+ * In-match HUD. Same tokens as everything else (S4.6): uppercase, tabular numerals,
+ * heavy weight contrast, one accent on near-black, 4px grid.
+ *
+ * Everything animated here is transform or opacity only, so the HUD never triggers
+ * layout during a match.
+ */
+
+:root {
+  --hud-cross-len: 7px;
+  --hud-cross-thick: 2px;
+  --hud-cross-color: rgba(232, 234, 238, 0.9);
+  --hud-cross-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
+}
+
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.hud[hidden] {
+  display: none;
+}
+
+/* ---- crosshair -------------------------------------------------------- */
+
+.hud-cross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  will-change: opacity;
+}
+
+.hud-cross__line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  background: var(--hud-cross-color);
+  box-shadow: var(--hud-cross-shadow);
+  will-change: transform;
+}
+
+.hud-cross__line--t,
+.hud-cross__line--b {
+  width: var(--hud-cross-thick);
+  height: var(--hud-cross-len);
+}
+
+.hud-cross__line--l,
+.hud-cross__line--r {
+  width: var(--hud-cross-len);
+  height: var(--hud-cross-thick);
+}
+
+.hud-cross__dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 2px;
+  margin: -1px 0 0 -1px;
+  border-radius: 50%;
+  background: var(--hud-cross-color);
+  box-shadow: var(--hud-cross-shadow);
+  opacity: 0.75;
+}
+
+/* ---- hitmarker -------------------------------------------------------- */
+
+.hud-hit {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  will-change: opacity, transform;
+}
+
+.hud-hit i {
+  position: absolute;
+  display: block;
+  width: 2px;
+  height: 8px;
+  background: #ffffff;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.85);
+}
+
+/* Four ticks on the diagonals, pointing away from the centre. */
+.hud-hit i:nth-child(1) {
+  transform: translate(-50%, -50%) translate(-9px, -9px) rotate(45deg);
+}
+.hud-hit i:nth-child(2) {
+  transform: translate(-50%, -50%) translate(9px, -9px) rotate(-45deg);
+}
+.hud-hit i:nth-child(3) {
+  transform: translate(-50%, -50%) translate(-9px, 9px) rotate(-45deg);
+}
+.hud-hit i:nth-child(4) {
+  transform: translate(-50%, -50%) translate(9px, 9px) rotate(45deg);
+}
+
+.hud-hit--kill i {
+  background: var(--c-bad);
+  width: 3px;
+  height: 10px;
+}
+
+/* ---- ammo ------------------------------------------------------------- */
+
+.hud-ammo {
+  position: absolute;
+  right: var(--s-8);
+  bottom: var(--s-6);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  color: var(--c-text);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+.hud-ammo__mag {
+  font-size: 38px;
+  font-weight: var(--w-heavy);
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+.hud-ammo__sep {
+  font-size: var(--t-lead);
+  color: var(--c-text-faint);
+}
+
+.hud-ammo__reserve {
+  font-size: var(--t-lead);
+  font-weight: var(--w-medium);
+  color: var(--c-text-dim);
+}
+
+.hud-ammo--low .hud-ammo__mag {
+  color: var(--c-accent);
+}
+
+/* ---- reload progress -------------------------------------------------- */
+
+.hud-reload {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 44px);
+  width: 96px;
+  height: 2px;
+  margin-left: -48px;
+  background: rgba(232, 234, 238, 0.18);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.hud-reload--on {
+  opacity: 1;
+}
+
+.hud-reload i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--c-accent);
+  transform-origin: left center;
+  transform: scaleX(0);
+  will-change: transform;
+}
+
+/* ---- damage numbers --------------------------------------------------- */
+
+.hud-numbers {
+  position: absolute;
+  inset: 0;
+}
+
+.hud-number {
+  position: absolute;
+  font-size: var(--t-body);
+  font-weight: var(--w-heavy);
+  color: var(--c-text);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.hud-number--head {
+  color: var(--c-accent);
+  font-size: var(--t-lead);
+}

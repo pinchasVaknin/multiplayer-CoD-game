@@ -31,8 +31,8 @@ import { capsuleHeightFor, eyeHeightFor, isLegalStanceTransition, type StanceId 
 const evSpawned = { x: 0, y: 0, z: 0, yaw: 0 };
 const evStance = { from: 'STAND' as StanceId, to: 'STAND' as StanceId, tick: 0 };
 const evJump = { x: 0, y: 0, z: 0, horizontalSpeed: 0 };
-const evLand = { x: 0, y: 0, z: 0, impactSpeed: 0, stance: 'STAND' as StanceId };
-const evStep = { x: 0, y: 0, z: 0, speed: 0, heavy: false };
+const evLand = { x: 0, y: 0, z: 0, impactSpeed: 0, stance: 'STAND' as StanceId, material: 0 };
+const evStep = { x: 0, y: 0, z: 0, speed: 0, heavy: false, material: 0 };
 const evSlideStart = { x: 0, y: 0, z: 0, entrySpeed: 0 };
 const evSlideEnd = { reason: 'expired' as SlideEndReason, exitSpeed: 0, tick: 0 };
 const evMantleStart = { x: 0, y: 0, z: 0, ledgeHeight: 0 };
@@ -96,6 +96,9 @@ export class PlayerController {
     const sprintHeld = isDown(buttons, Btn.Sprint);
     const sprintPressed = justPressed(buttons, prevButtons, Btn.Sprint);
     const adsHeld = isDown(buttons, Btn.Ads);
+    // Pulling the trigger stops a sprint, which is what starts the sprint-to-fire timer
+    // in the weapon. Holding shift into a gunfight must not be free (brief S6.6).
+    const fireHeld = isDown(buttons, Btn.Fire);
 
     this.tickTimers(jumpPressed);
 
@@ -135,7 +138,7 @@ export class PlayerController {
     }
     const movingForward = cmd.moveZ > 0.5;
 
-    this.updateSprint(sprintHeld, sprintPressed, movingForward, crouchHeld, adsHeld);
+    this.updateSprint(sprintHeld, sprintPressed, movingForward, crouchHeld, adsHeld || fireHeld);
 
     // ---- slide -----------------------------------------------------------
     this.crouchHeldThisTick = crouchHeld;
@@ -201,6 +204,7 @@ export class PlayerController {
       evLand.z = sim.z;
       evLand.impactSpeed = sim.landImpact;
       evLand.stance = sim.stance;
+      evLand.material = sim.groundMaterial;
       this.bus.emit(EV.PlayerLanded, evLand);
     }
 
@@ -242,12 +246,13 @@ export class PlayerController {
     if (jumpPressed) sim.jumpBuffer = cfg.jumpBufferTime;
   }
 
+  /** `weaponBusy` is ADS or the trigger: either one ends a sprint. */
   private updateSprint(
     sprintHeld: boolean,
     sprintPressed: boolean,
     movingForward: boolean,
     crouchHeld: boolean,
-    adsHeld: boolean,
+    weaponBusy: boolean,
   ): void {
     const sim = this.sim;
     const cfg = this.cfg;
@@ -258,9 +263,9 @@ export class PlayerController {
     const holdingSprint = sprintHeld && movingForward;
     if (holdingSprint && sim.grounded && !sim.slideActive) sim.sprintHeldTime += DT;
     else if (!holdingSprint) sim.sprintHeldTime = 0;
-    sim.sprintActive = holdingSprint && !crouchHeld && !adsHeld;
+    sim.sprintActive = holdingSprint && !crouchHeld && !weaponBusy;
 
-    if (sprintPressed && movingForward && !crouchHeld && !adsHeld) {
+    if (sprintPressed && movingForward && !crouchHeld && !weaponBusy) {
       const elapsed = (sim.tick - sim.lastSprintPressTick) * DT;
       const eligible =
         elapsed <= cfg.tacSprintDoubleTapWindow &&
@@ -417,6 +422,7 @@ export class PlayerController {
         evStep.z = sim.z;
         evStep.speed = speed;
         evStep.heavy = sim.tacSprintActive || sim.sprintActive;
+        evStep.material = sim.groundMaterial;
         this.bus.emit(EV.PlayerFootstep, evStep);
       }
     } else if (!sim.grounded) {

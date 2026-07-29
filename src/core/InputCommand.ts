@@ -23,8 +23,11 @@ export const Btn = {
   Jump: 1 << 0,
   Crouch: 1 << 1,
   Sprint: 1 << 2,
-  /** Reserved by the movement table for the ADS speed cap; bound to RMB. */
+  /** Right mouse. Drives both the movement speed cap and the weapon's ADS state. */
   Ads: 1 << 3,
+  /** Left mouse. Held, not edge-triggered: the weapon decides what auto fire means. */
+  Fire: 1 << 4,
+  Reload: 1 << 5,
 } as const;
 
 export type ButtonBit = (typeof Btn)[keyof typeof Btn];

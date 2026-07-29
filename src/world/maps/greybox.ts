@@ -17,6 +17,11 @@ import type { Brush, MapDef, PropDef } from './types';
  *   east alcove               mantling into a low ceiling: must end crouched
  *   angled barricades         oriented-box collision (rotationY)
  *
+ * M2 added a firing line at the west end of the measurement lane and a penetration bay at
+ * the east end: 0.05 m of steel a round gets through, and 0.6 m of concrete it does not,
+ * with a target standing behind each. The dummies themselves are placed by
+ * `combat/TargetRange.ts`, fanned out laterally so they do not shadow one another.
+ *
  * Convention: +X east, +Z south, Y up. Floor top is y = 0. Brushes that sit on the
  * floor are sunk slightly so no downward face is ever coplanar with the floor.
  */
@@ -152,6 +157,21 @@ function brushes(): Brush[] {
   add('concreteDark', 21.5, 0.5, 8, 5, 1.4, 7);
   add('metal', 21.5, 2.75, 8, 5, 0.6, 7);
   add('accent', 19.02, 1.18, 8, 0.06, 0.05, 7, { solid: false, shadows: false });
+
+  // ---- M2 penetration bay (S6.4 / acceptance 4) -------------------------
+  // Two panels at the far end of the measurement lane, sized so one weapon answers both
+  // halves of the criterion: 0.05 m of steel costs 0.095 of the AR's 0.28 penetration
+  // budget and lets it through with a reported loss; 0.6 m of concrete costs 0.6 and
+  // stops it outright. A dummy stands behind each.
+  add('metal', 17.5, 1.3, -13.9, 0.05, 2.6, 2.6);
+  add('concrete', 17.5, 1.3, -11.0, 0.6, 2.6, 2.6);
+  // Frames, so the two panels read as different at a glance from the firing line.
+  add('hazard', 17.5, 2.68, -13.9, 0.16, 0.12, 2.72, { solid: false, shadows: false });
+  add('accent', 17.5, 2.68, -11.0, 0.72, 0.12, 2.72, { solid: false, shadows: false });
+
+  // Firing line: a thin accent bar sitting above the 20 m distance marker, not
+  // coplanar with it, because two quads on the same plane is a z-fighting bug.
+  add('accent', -20, 0.055, -14, 0.1, 0.04, 7, { solid: false, shadows: false });
 
   // ---- angled barricades: oriented-box collision ------------------------
   out.push({

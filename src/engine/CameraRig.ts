@@ -21,7 +21,16 @@ export interface CameraDrive {
   sprint: boolean;
   tacSprint: boolean;
   slide: boolean;
-  ads: boolean;
+  /**
+   * 0..1 from the weapon's ADS animation, not a boolean from the mouse button. The FOV
+   * has to travel with the sights; snapping it on the press and letting the viewmodel
+   * catch up is the single most common way an ADS transition ends up feeling cheap.
+   */
+  adsFraction: number;
+  /** World FOV multiplier at full ADS, from the equipped weapon. */
+  adsFovScale: number;
+  /** Viewmodel FOV multiplier at full ADS, from the equipped weapon. */
+  adsViewmodelFovScale: number;
 }
 
 /** Visual state, kept out of the sim: none of this affects gameplay. */
@@ -91,13 +100,16 @@ export class CameraRig {
     if (drive.tacSprint) targetFov += cfg.fovTacSprintAdd;
     else if (drive.sprint) targetFov += cfg.fovSprintAdd;
     if (drive.slide) targetFov += cfg.fovSlideAdd;
-    if (drive.ads) targetFov *= cfg.fovAdsScale;
+    const ads = drive.adsFraction < 0 ? 0 : drive.adsFraction > 1 ? 1 : drive.adsFraction;
+    targetFov *= lerp(1, drive.adsFovScale, ads);
     this.fov = damp(this.fov, targetFov, cfg.fovRate, dt);
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
-    viewmodel?.setFov(cfg.viewmodelFov);
+    // Pulling the viewmodel FOV in with the world FOV is what makes the sights appear to
+    // grow rather than the whole gun sliding toward the camera.
+    viewmodel?.setFov(cfg.viewmodelFov * lerp(1, drive.adsViewmodelFovScale, ads));
 
     // ---- bob -------------------------------------------------------------
     const speedRatio = Math.min(1, speed / Math.max(cfg.bobRefSpeed, 0.1));

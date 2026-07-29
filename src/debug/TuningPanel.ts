@@ -46,6 +46,26 @@ export function makeTuningGroup<T extends Record<keyof T, number>>(
   };
 }
 
+/**
+ * A tuning group over a nested config, addressed by dotted keys.
+ *
+ * `makeTuningGroup` above only works on a flat `Record<K, number>`; a `WeaponDef` is not
+ * flat, and flattening the schema to suit the debug panel would be the tail wagging the
+ * dog. The accessors stay compile-checked at their own definition site instead — see
+ * `WEAPON_TUNABLES` and the exhaustive switches next to it.
+ */
+export function makeAccessorGroup(
+  title: string,
+  keys: readonly string[],
+  meta: (key: string) => TunableMeta,
+  read: (key: string) => number,
+  write: (key: string, value: number) => void,
+  toSource: () => string,
+  resetToDefaults: () => void,
+): TuningGroup {
+  return { title, keys, meta, read, write, toSource, resetToDefaults };
+}
+
 interface SliderRow {
   key: string;
   input: HTMLInputElement;

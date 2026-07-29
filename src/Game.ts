@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { EV, createGameBus, type GameBus } from './core/Events';
 import { Input } from './core/Input';
-import { Btn, isDown, type InputCommand } from './core/InputCommand';
+import type { InputCommand } from './core/InputCommand';
 import { Loop, MAX_STEPS_PER_FRAME, type FrameSample } from './core/Loop';
+import { DEG2RAD } from './core/MathUtil';
 import { SaveStore, type Versioned } from './core/SaveStore';
 import { LocalBotTransport, type INetworkTransport } from './core/Transport';
 import { CameraRig, type CameraDrive } from './engine/CameraRig';
@@ -12,12 +13,19 @@ import { Renderer } from './engine/Renderer';
 import { CollisionDebug } from './debug/CollisionDebug';
 import { DebugOverlay } from './debug/DebugOverlay';
 import { Harness } from './debug/Harness';
+import { HitboxDebug } from './debug/HitboxDebug';
+import { WeaponDebug } from './debug/WeaponDebug';
+import { WeaponHarness } from './debug/WeaponHarness';
 import { isLegalGameTransition, type GameStateId } from './GameStates';
+import { Match } from './Match';
 import { DEFAULT_CAMERA_CONFIG, FOV_MAX, FOV_MIN, type CameraConfig } from './player/CameraConfig';
+import { DEFAULT_HEALTH_CONFIG, type HealthConfig } from './player/Health';
 import { DEFAULT_MOVEMENT_CONFIG, cloneMovementConfig, type MovementConfig } from './player/MovementConfig';
 import { PlayerController } from './player/PlayerController';
 import { ViewmodelLayer } from './player/Viewmodel';
 import { Screens } from './ui/Screens';
+import { AR_DEFAULT, cloneWeaponDef, type WeaponDef } from './weapons/WeaponDefs';
+import { cloneViewmodelConfig, DEFAULT_VIEWMODEL_CONFIG, type ViewmodelConfig } from './weapons/ViewmodelConfig';
 import { applyAmbient, loadMap, type LoadedMap } from './world/MapLoader';
 import { GREYBOX_MAP } from './world/maps/greybox';
 
@@ -59,6 +67,9 @@ export class Game {
   readonly bus: GameBus = createGameBus();
   readonly movementConfig: MovementConfig = cloneMovementConfig(DEFAULT_MOVEMENT_CONFIG);
   readonly cameraConfig: CameraConfig = { ...DEFAULT_CAMERA_CONFIG };
+  readonly weaponDef: WeaponDef = cloneWeaponDef(AR_DEFAULT);
+  readonly viewmodelConfig: ViewmodelConfig = cloneViewmodelConfig(DEFAULT_VIEWMODEL_CONFIG);
+  readonly healthConfig: HealthConfig = { ...DEFAULT_HEALTH_CONFIG };
 
   private readonly scene = new THREE.Scene();
   private readonly renderer: Renderer;
@@ -67,6 +78,7 @@ export class Game {
   private readonly cameraRig: CameraRig;
   private readonly audio = new ProceduralAudio();
   private readonly screens: Screens;
+  private readonly uiHost: HTMLElement;
   private readonly settings: SaveStore<Settings>;
   private readonly transport: INetworkTransport = new LocalBotTransport(64);
   private readonly input: Input;
@@ -74,17 +86,28 @@ export class Game {
 
   private map: LoadedMap | null = null;
   private player: PlayerController | null = null;
+  private match: Match | null = null;
   private collisionDebug: CollisionDebug | null = null;
+  private hitboxDebug: HitboxDebug | null = null;
   private overlay: DebugOverlay | null = null;
+  /** Retained so its window-level key handler can be removed on teardown. */
+  private weaponDebug: WeaponDebug | null = null;
   private harness: Harness | null = null;
+  private weaponHarness: WeaponHarness | null = null;
 
   private readonly states = new Map<GameStateId, StateHandlers>();
   private state: GameStateId = 'BOOT';
 
   private readonly drainBuffer: InputCommand[] = [];
-  private readonly drive: CameraDrive = { sprint: false, tacSprint: false, slide: false, ads: false };
+  private readonly drive: CameraDrive = {
+    sprint: false,
+    tacSprint: false,
+    slide: false,
+    adsFraction: 0,
+    adsFovScale: 1,
+    adsViewmodelFovScale: 1,
+  };
   private lastRenderMs = performance.now();
-  private lastButtons = 0;
 
   constructor(canvas: HTMLCanvasElement, uiHost: HTMLElement, debugHost: HTMLElement) {
     this.settings = new SaveStore<Settings>('operator.settings', 1, DEFAULT_SETTINGS, (raw, from) => {
@@ -96,6 +119,7 @@ export class Game {
     this.renderer = new Renderer(canvas);
     this.renderer.setSize(window.innerWidth, window.innerHeight, this.settings.value.renderScale);
     this.textures = new ProceduralTextures(this.renderer.three);
+    this.uiHost = uiHost;
     this.viewmodel = new ViewmodelLayer(this.cameraConfig);
     this.viewmodel.resize(this.renderer.aspect);
     this.cameraRig = new CameraRig(this.cameraConfig, this.renderer.aspect);
@@ -175,7 +199,6 @@ export class Game {
             ? 'Testbed'
             : `Testbed · ${stats.colliders} colliders · ${stats.drawCalls} draws · built in ${stats.buildMs.toFixed(0)} ms`;
         this.screens.showMenu(detail, () => this.transitionTo('MATCH'));
-        this.screens.setReticleVisible(false);
         this.input.clearHeld();
       },
       exit: () => this.screens.hide(),
@@ -184,12 +207,18 @@ export class Game {
     this.states.set('MATCH', {
       enter: () => {
         this.audio.start();
-        this.screens.setReticleVisible(true);
+        this.match?.setActive(true);
+        // The click that started the match must not also pull the trigger.
+        this.input.clearHeld();
         this.input.requestPointerLock();
+        // Only bites while the page is fullscreen; see Input.lockKeyboard and PLAN.md.
+        this.input.lockKeyboard();
       },
       exit: () => {
         this.input.exitPointerLock();
-        this.screens.setReticleVisible(false);
+        this.input.unlockKeyboard();
+        this.match?.setActive(false);
+        this.audio.setSlide(false, 0, 0, 0, 0);
       },
     });
   }
@@ -220,9 +249,32 @@ export class Game {
     this.collisionDebug = collisionDebug;
     this.scene.add(collisionDebug.group);
 
-    this.harness = new Harness(this.movementConfig);
+    const match = new Match({
+      bus: this.bus,
+      scene: this.scene,
+      viewmodel: this.viewmodel,
+      cameraRig: this.cameraRig,
+      audio: this.audio,
+      input: this.input,
+      world: map.collision,
+      player,
+      movementConfig: this.movementConfig,
+      weaponDef: this.weaponDef,
+      viewmodelConfig: this.viewmodelConfig,
+      healthConfig: this.healthConfig,
+      uiHost: this.uiHost,
+      anisotropy: this.textures.anisotropy,
+    });
+    this.match = match;
 
-    this.overlay = new DebugOverlay(debugHost, {
+    const hitboxDebug = new HitboxDebug(match.damage);
+    this.hitboxDebug = hitboxDebug;
+    this.scene.add(hitboxDebug.group);
+
+    this.harness = new Harness(this.movementConfig);
+    this.weaponHarness = new WeaponHarness(this.movementConfig, this.weaponDef, this.viewmodelConfig, this.healthConfig);
+
+    const overlay = new DebugOverlay(debugHost, {
       bus: this.bus,
       loop: this.loop,
       renderer: this.renderer,
@@ -235,13 +287,26 @@ export class Game {
       mapStats: map.stats,
       onConfigChanged: () => this.onConfigChanged(),
     });
+    this.overlay = overlay;
+
+    this.weaponDebug = new WeaponDebug(
+      overlay,
+      match,
+      this.weaponDef,
+      this.viewmodelConfig,
+      this.healthConfig,
+      hitboxDebug,
+      this.audio,
+      this.bus,
+      () => this.onWeaponConfigChanged(),
+    );
 
     this.bus.on(EV.PlayerLanded, (p) => {
       this.cameraRig.applyLanding(this.cameraConfig, p.impactSpeed);
-      this.audio.playLanding(p.x, p.y, p.z, p.impactSpeed);
+      this.audio.playLanding(p.x, p.y, p.z, p.impactSpeed, p.material);
     });
     this.bus.on(EV.PlayerFootstep, (p) => {
-      this.audio.playFootstep(p.x, p.y, p.z, p.speed, p.heavy);
+      this.audio.playFootstep(p.x, p.y, p.z, p.speed, p.heavy, p.material);
     });
 
     this.transport.open();
@@ -254,6 +319,15 @@ export class Game {
     this.map?.collision.configure(this.movementConfig.maxSlopeDeg, this.movementConfig.collisionSkin);
     this.cameraConfig.fov = clampFov(this.cameraConfig.fov);
     this.settings.patch({ fov: this.cameraConfig.fov });
+  }
+
+  private onWeaponConfigChanged(): void {
+    this.match?.weapons.setDefinition(this.weaponDef);
+    this.match?.playerHealth.setConfig(this.healthConfig);
+    for (const dummy of this.match?.range.dummies ?? []) {
+      dummy.health.setConfig(this.healthConfig);
+      dummy.markLabelDirty();
+    }
   }
 
   // -- loop ----------------------------------------------------------------
@@ -271,8 +345,10 @@ export class Game {
     for (let i = 0; i < count; i++) {
       const drained = this.drainBuffer[i];
       if (drained === undefined) continue;
-      this.lastButtons = drained.buttons;
       player.step(drained);
+      // The weapon consumes the same command the player did, one tick at a time, so
+      // fire rate and reload timing are as frame-rate independent as movement is (S4.1).
+      this.match?.simulate(drained);
     }
     this.collisionDebug?.update(player.sim, this.movementConfig);
   }
@@ -286,17 +362,30 @@ export class Game {
     this.lastRenderMs = now;
 
     const sim = player.sim;
+    const match = this.match;
+    const def = this.weaponDef;
+
+    // Sampled before the camera is composed: the interpolated aim-recoil offset is part
+    // of where the camera points, so it cannot be produced after the fact (S6.2).
+    match?.sampleVisual(alpha);
+    const aimYaw = match === null ? 0 : match.visual.aimYaw * DEG2RAD;
+    const aimPitch = match === null ? 0 : match.visual.aimPitch * DEG2RAD;
+    const yaw = this.input.yaw + aimYaw;
+    const pitch = this.input.pitch + aimPitch;
+
     this.drive.sprint = sim.sprintActive;
     this.drive.tacSprint = sim.tacSprintActive;
     this.drive.slide = sim.slideActive;
-    this.drive.ads = isDown(this.lastButtons, Btn.Ads);
+    this.drive.adsFraction = match === null ? 0 : match.visual.adsFraction;
+    this.drive.adsFovScale = def.adsFovScale;
+    this.drive.adsViewmodelFovScale = def.adsViewmodelFovScale;
 
     this.cameraRig.update(
       player.prev,
       player.curr,
       alpha,
-      this.input.yaw,
-      this.input.pitch,
+      yaw,
+      pitch,
       this.drive,
       this.cameraConfig,
       dt,
@@ -305,11 +394,17 @@ export class Game {
 
     const cam = this.cameraRig.camera;
     if (this.audio.isRunning) {
-      const fx = -Math.sin(this.input.yaw);
-      const fz = -Math.cos(this.input.yaw);
+      const fx = -Math.sin(yaw);
+      const fz = -Math.cos(yaw);
       this.audio.setListener(cam.position.x, cam.position.y, cam.position.z, fx, 0, fz, 0, 1, 0);
+      // The slide scrape is a sustained source, so it is driven per frame from the
+      // stance rather than fired from an event (see PLAN.md, M1 playtest note).
+      this.audio.setSlide(sim.slideActive, sim.x, sim.y, sim.z, sim.speed, sim.groundMaterial);
       this.audio.update();
     }
+
+    match?.render(alpha, cam, dt, yaw, pitch);
+    this.hitboxDebug?.update();
 
     this.renderer.render(this.scene, cam, this.viewmodel);
     this.overlay?.update(dt);
@@ -328,10 +423,7 @@ export class Game {
   // -- events --------------------------------------------------------------
 
   private onPointerLockChange(locked: boolean): void {
-    if (locked) {
-      if (this.state === 'MATCH') this.screens.setReticleVisible(true);
-      return;
-    }
+    if (locked) return;
     // Esc released the cursor. Drop back to MENU so re-clicking re-acquires lock
     // without the view jumping (acceptance criterion 1).
     if (this.state === 'MATCH') this.transitionTo('MENU');
@@ -356,13 +448,21 @@ export class Game {
     const api = {
       game: this,
       harness: this.harness,
+      weaponHarness: this.weaponHarness,
+      weaponDebug: () => this.weaponDebug,
+      match: () => this.match,
+      weapon: () => this.match?.weapons,
+      weaponDef: this.weaponDef,
+      viewmodelConfig: this.viewmodelConfig,
       speedometer: () => this.overlay?.speedo,
       stats: () => this.overlay?.stats,
+      latency: () => this.match?.latency,
       sim: () => this.player?.sim,
       setSyntheticLoad: (ms: number) => {
         this.loop.syntheticLoadMs = ms;
       },
       report: () => this.harness?.report(),
+      weaponReport: () => this.weaponHarness?.report(),
     };
     Object.defineProperty(window, '__operator', { value: api, configurable: true });
   }

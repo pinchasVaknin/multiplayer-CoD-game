@@ -381,6 +381,93 @@ export function rayBox(
   return true;
 }
 
+/**
+ * Distance at which a ray *leaves* an oriented box, or -1 if it never enters.
+ *
+ * This is the far slab intersection rather than the near one, and it is what wall
+ * penetration is measured with: `exit - entry` is exactly how much material the round
+ * has to push through (brief S6.4). Doing it as a second slab test against the same box
+ * is both cheaper and more robust than re-casting from inside the geometry, where a
+ * ray origin sitting a hair on the wrong side of a face flips the answer.
+ */
+export function rayBoxExit(
+  set: ColliderSet,
+  i: number,
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+): number {
+  const cx = set.centerX(i);
+  const cy = set.centerY(i);
+  const cz = set.centerZ(i);
+  const aligned = set.isAxisAligned(i);
+
+  const rx = ox - cx;
+  const ry = oy - cy;
+  const rz = oz - cz;
+
+  let lox: number;
+  let loy: number;
+  let loz: number;
+  let ldx: number;
+  let ldy: number;
+  let ldz: number;
+  if (aligned) {
+    lox = rx;
+    loy = ry;
+    loz = rz;
+    ldx = dx;
+    ldy = dy;
+    ldz = dz;
+  } else {
+    const b0 = set.basisAt(i, 0);
+    const b1 = set.basisAt(i, 1);
+    const b2 = set.basisAt(i, 2);
+    const b3 = set.basisAt(i, 3);
+    const b4 = set.basisAt(i, 4);
+    const b5 = set.basisAt(i, 5);
+    const b6 = set.basisAt(i, 6);
+    const b7 = set.basisAt(i, 7);
+    const b8 = set.basisAt(i, 8);
+    lox = rx * b0 + ry * b1 + rz * b2;
+    loy = rx * b3 + ry * b4 + rz * b5;
+    loz = rx * b6 + ry * b7 + rz * b8;
+    ldx = dx * b0 + dy * b1 + dz * b2;
+    ldy = dx * b3 + dy * b4 + dz * b5;
+    ldz = dx * b6 + dy * b7 + dz * b8;
+  }
+
+  // Unrolled per axis rather than looped over a scratch array: this runs once per
+  // penetrated surface per shot and must not allocate.
+  exitMin = -Infinity;
+  exitMax = Infinity;
+  if (!exitSlab(lox, ldx, set.halfX(i))) return -1;
+  if (!exitSlab(loy, ldy, set.halfY(i))) return -1;
+  if (!exitSlab(loz, ldz, set.halfZ(i))) return -1;
+  return exitMax;
+}
+
+let exitMin = 0;
+let exitMax = 0;
+
+function exitSlab(o: number, d: number, h: number): boolean {
+  if (Math.abs(d) < EPS) return o >= -h && o <= h;
+  const inv = 1 / d;
+  let t1 = (-h - o) * inv;
+  let t2 = (h - o) * inv;
+  if (t1 > t2) {
+    const tmp = t1;
+    t1 = t2;
+    t2 = tmp;
+  }
+  if (t1 > exitMin) exitMin = t1;
+  if (t2 < exitMax) exitMax = t2;
+  return exitMin <= exitMax;
+}
+
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }

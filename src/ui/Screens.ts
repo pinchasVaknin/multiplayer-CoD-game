@@ -18,15 +18,23 @@ const KEY_HELP: readonly KeyHelpEntry[] = [
   { keys: 'Ctrl / C', action: 'Crouch' },
   { keys: 'Sprint + Crouch', action: 'Slide' },
   { keys: 'Space', action: 'Jump / mantle' },
-  { keys: 'Right mouse', action: 'ADS speed' },
+  { keys: 'Left mouse', action: 'Fire' },
+  { keys: 'Right mouse', action: 'Aim down sights' },
+  { keys: 'R', action: 'Reload' },
   { keys: 'Esc', action: 'Release cursor' },
-  { keys: 'F1 / F2 / F3', action: 'Debug / collision / reset' },
+  { keys: 'F1 / F2 / F3 / F4', action: 'Debug / collision / reset / hitboxes' },
 ];
+
+/**
+ * `Ctrl+W` closes a browser tab and no amount of `preventDefault` stops it; only the
+ * Keyboard Lock API can, and only while the page is fullscreen. Saying so on the menu is
+ * better than letting a player discover it mid-slide. See PLAN.md.
+ */
+const FULLSCREEN_HINT = 'F11 for fullscreen — required to capture Ctrl+W (crouch + forward)';
 
 export class Screens {
   private readonly host: HTMLElement;
   private readonly screen: HTMLElement;
-  private readonly reticle: HTMLElement;
   private playHandler: (() => void) | null = null;
 
   constructor(host: HTMLElement) {
@@ -35,11 +43,6 @@ export class Screens {
     this.screen = document.createElement('div');
     this.screen.className = 'op-screen';
     this.host.appendChild(this.screen);
-
-    this.reticle = document.createElement('div');
-    this.reticle.className = 'op-reticle';
-    this.reticle.hidden = true;
-    this.host.appendChild(this.reticle);
   }
 
   showBoot(message: string): void {
@@ -69,16 +72,12 @@ export class Screens {
     }
 
     this.screen.hidden = false;
-    this.screen.replaceChildren(title('OPERATOR'), subtitle(subtitleText), button, keys);
+    this.screen.replaceChildren(title('OPERATOR'), subtitle(subtitleText), button, keys, subtitle(FULLSCREEN_HINT));
     button.focus();
   }
 
   hide(): void {
     this.screen.hidden = true;
-  }
-
-  setReticleVisible(on: boolean): void {
-    this.reticle.hidden = !on;
   }
 }
 

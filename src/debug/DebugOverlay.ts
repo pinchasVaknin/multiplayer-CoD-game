@@ -22,7 +22,7 @@ import type { MapStats } from '../world/MapLoader';
 import type { CollisionDebug } from './CollisionDebug';
 import { FrameStats } from './FrameStats';
 import { Speedometer } from './Speedometer';
-import { makeTuningGroup, TuningPanel } from './TuningPanel';
+import { makeTuningGroup, TuningPanel, type TuningGroup } from './TuningPanel';
 
 /**
  * The F1 debug overlay (brief S6).
@@ -99,6 +99,10 @@ export class DebugOverlay {
   private readonly ctx: DebugContext;
   private readonly sections: DebugSection[] = [];
   private readonly panels: TuningPanel[] = [];
+  private readonly textHooks: Array<() => void> = [];
+  private readonly graphHooks: Array<() => void> = [];
+  private readonly left: HTMLElement;
+  private readonly right: HTMLElement;
 
   private readonly canvas: HTMLCanvasElement;
   private readonly canvasCtx: CanvasRenderingContext2D;
@@ -159,6 +163,8 @@ export class DebugOverlay {
     const right = document.createElement('div');
     right.className = 'dbg-col dbg-col--wide';
     columns.append(left, right);
+    this.left = left;
+    this.right = right;
 
     // ---- PERF ------------------------------------------------------------
     const perf = this.section('Performance', left);
@@ -284,6 +290,36 @@ export class DebugOverlay {
     return s;
   }
 
+  /** Left column: read-outs. Right column: tuning. Both are extension points. */
+  get leftColumn(): HTMLElement {
+    return this.left;
+  }
+
+  get rightColumn(): HTMLElement {
+    return this.right;
+  }
+
+  /** Attach another generated slider set. Refreshed with the rest on open. */
+  addTuningGroup(group: TuningGroup, onChange: () => void): TuningPanel {
+    const panel = new TuningPanel(group, onChange);
+    this.panels.push(panel);
+    this.right.appendChild(panel.element);
+    return panel;
+  }
+
+  /**
+   * Extensions register here rather than running their own timers. Text hooks fire at
+   * 15 Hz and canvas hooks at 5 Hz, which is the whole reason the overlay does not show
+   * up in the frame times it exists to report.
+   */
+  addTextHook(fn: () => void): void {
+    this.textHooks.push(fn);
+  }
+
+  addGraphHook(fn: () => void): void {
+    this.graphHooks.push(fn);
+  }
+
   get isVisible(): boolean {
     return this.visible;
   }
@@ -322,6 +358,7 @@ export class DebugOverlay {
         budget: '#262b33',
         p99: '#ffb340',
       });
+      for (const fn of this.graphHooks) fn();
     }
   }
 
@@ -388,6 +425,8 @@ export class DebugOverlay {
       this.fPeaks,
       `${this.speedo.instantPeak.toFixed(3)} / ${this.speedo.sustainedPeak.toFixed(3)} m/s`,
     );
+
+    for (const fn of this.textHooks) fn();
   }
 
   private button(label: string, onClick: () => void): HTMLElement {
