@@ -285,3 +285,12 @@ must space synthetic key events by more than one tick.
 
 **Housekeeping.** `public/verify/*.js` are development verification scripts and
 currently ship in a production build. Gate or remove them before any public release.
+
+### Bugs & UX Issues from M1 Playtesting (To be fixed in M2)
+
+- **Browser Shortcut Conflicts (Missing Overrides):** The input system currently does not block default browser actions.
+For example, pressing `Ctrl + W` (Crouch + Move Forward) closes the browser tab instead of executing the gameplay action. 
+The DOM input listeners in `core/Input.ts` must implement `e.preventDefault()` to strictly override and capture all mapped game controls.
+- **Slide Audio Mismatch:** When the player executes a slide (Sprint + Crouch), the stance machine updates correctly, 
+but the audio system plays standard walking/sprinting footstep sounds instead of a sliding noise. 
+The audio synthesis logic in `ProceduralAudio` needs to be updated to recognize the `SLIDE` stance and trigger the appropriate acoustic feedback.
