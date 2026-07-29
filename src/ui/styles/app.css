@@ -53,6 +53,16 @@ body.op-locked #viewport {
   backdrop-filter: blur(2px);
 }
 
+/*
+ * Required, not defensive. The `hidden` attribute only hides an element because the UA
+ * stylesheet says `[hidden] { display: none }`, and any author-level `display` rule —
+ * the `display: flex` directly above — outranks it. Without this the menu stays painted
+ * over the canvas for the whole match even though `Screens.hide()` ran.
+ */
+.op-screen[hidden] {
+  display: none;
+}
+
 .op-screen__title {
   font-size: var(--t-display);
   font-weight: var(--w-heavy);
