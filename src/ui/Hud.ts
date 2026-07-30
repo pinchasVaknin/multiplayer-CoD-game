@@ -1,4 +1,4 @@
-import { clamp01, DEG2RAD } from '../core/MathUtil';
+import { clamp01, DEG2RAD, RAD2DEG } from '../core/MathUtil';
 import type { HitZone } from '../combat/HitboxRig';
 
 /**
@@ -20,6 +20,12 @@ const HITMARKER_SECONDS = 0.26;
 const KILLMARKER_SECONDS = 0.4;
 const DAMAGE_NUMBER_SECONDS = 0.8;
 
+/** Directional hit indicators alive at once. Four is enough to read a crossfire. */
+const HIT_DIRECTION_POOL = 4;
+const HIT_DIRECTION_SECONDS = 1.1;
+/** How long the full-screen hurt flash lasts. */
+const HURT_FLASH_SECONDS = 0.42;
+
 /** Crosshair line length in px; must match `--hud-cross-len` in hud.css. */
 const LINE_LENGTH = 7;
 const MIN_GAP = 3;
@@ -36,6 +42,11 @@ export interface HudState {
   viewportHeight: number;
   reloading: boolean;
   reloadFraction: number;
+  /** M3: damage flows both ways now, so the player needs to see their own health. */
+  health: number;
+  healthMax: number;
+  dead: boolean;
+  respawnSeconds: number;
 }
 
 export function makeHudState(): HudState {
@@ -49,6 +60,10 @@ export function makeHudState(): HudState {
     viewportHeight: 1080,
     reloading: false,
     reloadFraction: 0,
+    health: 100,
+    healthMax: 100,
+    dead: false,
+    respawnSeconds: 0,
   };
 }
 
@@ -57,6 +72,12 @@ interface DamageNumber {
   life: number;
   x: number;
   y: number;
+  active: boolean;
+}
+
+interface HitDirection {
+  el: HTMLElement;
+  life: number;
   active: boolean;
 }
 
@@ -75,6 +96,20 @@ export class Hud {
   private readonly ammoBox: HTMLElement;
   private readonly reloadBar: HTMLElement;
   private readonly numbers: DamageNumber[] = [];
+  private readonly hurtVignette: HTMLElement;
+  private readonly directions: HitDirection[] = [];
+  private readonly healthBar: HTMLElement;
+  private readonly healthFill: HTMLElement;
+  private readonly deadOverlay: HTMLElement;
+  private readonly deadCount: HTMLElement;
+
+  private hurtTimer = 0;
+  private hurtPeak = 0;
+  private lastVignette = -1;
+  private lastHealthScale = -1;
+  private healthShown = false;
+  private deadShown = false;
+  private lastDeadText = '';
 
   private hitTimer = 0;
   private hitDuration = HITMARKER_SECONDS;
@@ -140,6 +175,39 @@ export class Hud {
     }
     this.root.appendChild(numberLayer);
 
+    // ---- M3: taking damage ------------------------------------------------
+    this.hurtVignette = document.createElement('div');
+    this.hurtVignette.className = 'hud-hurt';
+    this.root.appendChild(this.hurtVignette);
+
+    const directionLayer = document.createElement('div');
+    directionLayer.className = 'hud-dirs';
+    for (let i = 0; i < HIT_DIRECTION_POOL; i++) {
+      const el = document.createElement('div');
+      el.className = 'hud-dir';
+      el.style.opacity = '0';
+      el.appendChild(document.createElement('i'));
+      directionLayer.appendChild(el);
+      this.directions.push({ el, life: 0, active: false });
+    }
+    this.root.appendChild(directionLayer);
+
+    this.healthBar = document.createElement('div');
+    this.healthBar.className = 'hud-health';
+    this.healthFill = document.createElement('i');
+    this.healthBar.appendChild(this.healthFill);
+    this.root.appendChild(this.healthBar);
+
+    this.deadOverlay = document.createElement('div');
+    this.deadOverlay.className = 'hud-dead';
+    const deadLabel = document.createElement('span');
+    deadLabel.className = 'hud-dead__label op-label';
+    deadLabel.textContent = 'You were killed';
+    this.deadCount = document.createElement('span');
+    this.deadCount.className = 'hud-dead__count op-num';
+    this.deadOverlay.append(deadLabel, this.deadCount);
+    this.root.appendChild(this.deadOverlay);
+
     host.appendChild(this.root);
   }
 
@@ -179,12 +247,55 @@ export class Hud {
     slot.el.style.opacity = '1';
   }
 
+  /**
+   * The player took a hit. `amount` scales the vignette so a graze and a near-death burst
+   * do not read the same, which is the only cue the player has for how much trouble they
+   * are in before they look at the bar.
+   */
+  showHurt(amount: number, maxHealth: number): void {
+    const severity = clamp01(amount / Math.max(maxHealth * 0.35, 1));
+    // Keep whichever is stronger: the decaying flash already on screen, or this one. A
+    // burst of five rounds should not restart at the intensity of its weakest hit.
+    const remaining = this.hurtPeak * (this.hurtTimer / HURT_FLASH_SECONDS);
+    this.hurtPeak = Math.max(remaining, severity);
+    this.hurtTimer = HURT_FLASH_SECONDS;
+  }
+
+  /**
+   * A round came in from `bearingRad`, screen-relative: 0 is straight ahead, positive is
+   * to the right. This is what tells the player which way to turn, so it is pooled rather
+   * than singular — being shot by two bots at once has to read as two directions.
+   */
+  showHitDirection(bearingRad: number): void {
+    let slot: HitDirection | undefined;
+    let oldest = Infinity;
+    for (const d of this.directions) {
+      if (!d.active) {
+        slot = d;
+        break;
+      }
+      if (d.life < oldest) {
+        oldest = d.life;
+        slot = d;
+      }
+    }
+    if (slot === undefined) return;
+    slot.active = true;
+    slot.life = HIT_DIRECTION_SECONDS;
+    slot.el.style.transform = `rotate(${(bearingRad * RAD2DEG).toFixed(1)}deg)`;
+    slot.el.style.opacity = '1';
+  }
+
   /** Called once per rendered frame, after the sim has advanced. */
   update(state: HudState, dt: number): void {
     this.updateCrosshair(state);
     this.updateAmmo(state);
     this.updateMarkers(dt);
     this.updateNumbers(dt);
+    this.updateHurt(dt);
+    this.updateDirections(dt);
+    this.updateHealth(state);
+    this.updateDead(state);
   }
 
   dispose(): void {
@@ -297,6 +408,67 @@ export class Hud {
     }
   }
 
+  /**
+   * The hurt vignette (S6.8 from the player's side).
+   *
+   * Squared decay rather than linear: a linear fade holds a red tint on screen long
+   * enough to read as "still being shot", which is a lie the moment the shooting stops.
+   */
+  private updateHurt(dt: number): void {
+    if (this.hurtTimer > 0) this.hurtTimer = Math.max(0, this.hurtTimer - dt);
+    const t = this.hurtTimer / HURT_FLASH_SECONDS;
+    const alpha = Math.round(this.hurtPeak * t * t * 100) / 100;
+    if (alpha === this.lastVignette) return;
+    this.lastVignette = alpha;
+    this.hurtVignette.style.opacity = alpha.toFixed(2);
+    if (alpha <= 0) this.hurtPeak = 0;
+  }
+
+  private updateDirections(dt: number): void {
+    for (const d of this.directions) {
+      if (!d.active) continue;
+      d.life -= dt;
+      if (d.life <= 0) {
+        d.active = false;
+        d.el.style.opacity = '0';
+        continue;
+      }
+      const t = d.life / HIT_DIRECTION_SECONDS;
+      d.el.style.opacity = (t * t).toFixed(2);
+    }
+  }
+
+  private updateHealth(state: HudState): void {
+    const fraction = state.healthMax > 0 ? clamp01(state.health / state.healthMax) : 0;
+    const scale = Math.round(fraction * 100) / 100;
+    if (scale !== this.lastHealthScale) {
+      this.lastHealthScale = scale;
+      this.healthFill.style.transform = `scaleX(${scale.toFixed(2)})`;
+      this.healthBar.classList.toggle('hud-health--critical', scale <= 0.34);
+    }
+    // Only on screen while it means something. Full health is the absence of information,
+    // and a bar that is always full is a bar the player stops reading.
+    const show = !state.dead && fraction < 0.999;
+    if (show === this.healthShown) return;
+    this.healthShown = show;
+    this.healthBar.classList.toggle('hud-health--on', show);
+  }
+
+  private updateDead(state: HudState): void {
+    if (state.dead !== this.deadShown) {
+      this.deadShown = state.dead;
+      this.deadOverlay.classList.toggle('hud-dead--on', state.dead);
+      // The crosshair belongs to a weapon the player is not currently holding.
+      this.crosshair.style.visibility = state.dead ? 'hidden' : '';
+      if (state.dead) this.clearMarkers();
+    }
+    if (!state.dead) return;
+    const text = state.respawnSeconds > 0 ? state.respawnSeconds.toFixed(1) : 'RESPAWNING';
+    if (text === this.lastDeadText) return;
+    this.lastDeadText = text;
+    this.deadCount.textContent = text;
+  }
+
   private clearMarkers(): void {
     this.hitTimer = 0;
     this.markerVisible = false;
@@ -306,5 +478,12 @@ export class Hud {
       n.active = false;
       n.el.style.opacity = '0';
     }
+    for (const d of this.directions) {
+      d.active = false;
+      d.life = 0;
+      d.el.style.opacity = '0';
+    }
+    this.hurtTimer = 0;
+    this.hurtPeak = 0;
   }
 }

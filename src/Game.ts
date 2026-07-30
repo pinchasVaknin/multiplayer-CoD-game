@@ -1,4 +1,13 @@
 import * as THREE from 'three';
+import { DEFAULT_SCHEDULER, type SchedulerConfig } from './ai/AiScheduler';
+import {
+  cloneTierTable,
+  DEFAULT_PERCEPTION,
+  DEFAULT_TIERS,
+  type PerceptionConfig,
+  type TierTable,
+} from './ai/DifficultyTiers';
+import { PLAYER_ENTITY_ID } from './combat/DamageSystem';
 import { EV, createGameBus, type GameBus } from './core/Events';
 import { Input } from './core/Input';
 import type { InputCommand } from './core/InputCommand';
@@ -10,6 +19,9 @@ import { CameraRig, type CameraDrive } from './engine/CameraRig';
 import { ProceduralAudio } from './engine/ProceduralAudio';
 import { ProceduralTextures } from './engine/ProceduralTextures';
 import { Renderer } from './engine/Renderer';
+import { AiDebug } from './debug/AiDebug';
+import { AiPanel } from './debug/AiPanel';
+import { BotHarness, parseHarnessOptions } from './debug/BotHarness';
 import { CollisionDebug } from './debug/CollisionDebug';
 import { DebugOverlay } from './debug/DebugOverlay';
 import { Harness } from './debug/Harness';
@@ -63,6 +75,12 @@ interface StateHandlers {
 
 const stateChangePayload = { from: 'BOOT' as GameStateId, to: 'BOOT' as GameStateId };
 
+/**
+ * Seed for everything in `ai/`. Fixed, so two runs of the harness with the same roster
+ * produce the same firefight and a regression in bot behaviour is reproducible.
+ */
+const AI_SEED = 0x0fe7_a105;
+
 export class Game {
   readonly bus: GameBus = createGameBus();
   readonly movementConfig: MovementConfig = cloneMovementConfig(DEFAULT_MOVEMENT_CONFIG);
@@ -70,6 +88,13 @@ export class Game {
   readonly weaponDef: WeaponDef = cloneWeaponDef(AR_DEFAULT);
   readonly viewmodelConfig: ViewmodelConfig = cloneViewmodelConfig(DEFAULT_VIEWMODEL_CONFIG);
   readonly healthConfig: HealthConfig = { ...DEFAULT_HEALTH_CONFIG };
+  /**
+   * M3 config. These are held here and handed to `Match` by reference, so a slider in the
+   * debug panel retunes the live bots rather than the next ones to spawn.
+   */
+  readonly tiers: TierTable = cloneTierTable(DEFAULT_TIERS);
+  readonly perceptionConfig: PerceptionConfig = { ...DEFAULT_PERCEPTION };
+  readonly schedulerConfig: SchedulerConfig = { ...DEFAULT_SCHEDULER };
 
   private readonly scene = new THREE.Scene();
   private readonly renderer: Renderer;
@@ -89,11 +114,14 @@ export class Game {
   private match: Match | null = null;
   private collisionDebug: CollisionDebug | null = null;
   private hitboxDebug: HitboxDebug | null = null;
+  private aiDebug: AiDebug | null = null;
+  private aiPanel: AiPanel | null = null;
   private overlay: DebugOverlay | null = null;
   /** Retained so its window-level key handler can be removed on teardown. */
   private weaponDebug: WeaponDebug | null = null;
   private harness: Harness | null = null;
   private weaponHarness: WeaponHarness | null = null;
+  private botHarness: BotHarness | null = null;
 
   private readonly states = new Map<GameStateId, StateHandlers>();
   private state: GameStateId = 'BOOT';
@@ -187,6 +215,7 @@ export class Game {
         window.setTimeout(() => {
           this.buildWorld(debugHost);
           this.transitionTo('MENU');
+          this.startBotHarnessIfRequested();
         }, 32);
       },
     });
@@ -210,9 +239,14 @@ export class Game {
         this.match?.setActive(true);
         // The click that started the match must not also pull the trigger.
         this.input.clearHeld();
-        this.input.requestPointerLock();
-        // Only bites while the page is fullscreen; see Input.lockKeyboard and PLAN.md.
-        this.input.lockKeyboard();
+        // The AFK harness has nobody to capture the cursor for, and asking for it without
+        // a user gesture logs a rejection — which would put noise in the console the soak
+        // run is there to prove is quiet.
+        if (this.botHarness === null) {
+          this.input.requestPointerLock();
+          // Only bites while the page is fullscreen; see Input.lockKeyboard and PLAN.md.
+          this.input.lockKeyboard();
+        }
       },
       exit: () => {
         this.input.exitPointerLock();
@@ -264,6 +298,11 @@ export class Game {
       healthConfig: this.healthConfig,
       uiHost: this.uiHost,
       anisotropy: this.textures.anisotropy,
+      mapDef: map.def,
+      tiers: this.tiers,
+      perceptionConfig: this.perceptionConfig,
+      schedulerConfig: this.schedulerConfig,
+      seed: AI_SEED,
     });
     this.match = match;
 
@@ -289,6 +328,19 @@ export class Game {
     });
     this.overlay = overlay;
 
+    const aiDebug = new AiDebug(match.bots);
+    this.aiDebug = aiDebug;
+    this.scene.add(aiDebug.group);
+    this.aiPanel = new AiPanel(
+      overlay,
+      match.bots,
+      aiDebug,
+      this.tiers,
+      this.perceptionConfig,
+      this.schedulerConfig,
+      debugHost,
+    );
+
     this.weaponDebug = new WeaponDebug(
       overlay,
       match,
@@ -301,8 +353,13 @@ export class Game {
       () => this.onWeaponConfigChanged(),
     );
 
+    // From M3 these fire for bots too, which is exactly how you hear one coming. The
+    // *camera* dip is the one part that is not shared: only the local player's own
+    // landing moves the local player's view.
     this.bus.on(EV.PlayerLanded, (p) => {
-      this.cameraRig.applyLanding(this.cameraConfig, p.impactSpeed);
+      if (p.entityId === PLAYER_ENTITY_ID) {
+        this.cameraRig.applyLanding(this.cameraConfig, p.impactSpeed);
+      }
       this.audio.playLanding(p.x, p.y, p.z, p.impactSpeed, p.material);
     });
     this.bus.on(EV.PlayerFootstep, (p) => {
@@ -312,6 +369,28 @@ export class Game {
     this.transport.open();
     this.loop.start();
     this.exposeDebugApi();
+  }
+
+  /**
+   * `?harness=botmatch` boots straight into an AFK bot match (S7).
+   *
+   * The roster is populated *before* entering MATCH so `Match.setActive` sees a non-empty
+   * one and skips the default firefight — otherwise seven bots would be built and thrown
+   * away on the same frame.
+   */
+  private startBotHarnessIfRequested(): void {
+    const options = parseHarnessOptions(window.location.search);
+    if (options === null) return;
+    const match = this.match;
+    if (match === null) return;
+
+    const overlay = this.overlay;
+    if (overlay === null) return;
+
+    const harness = new BotHarness(options, match, this.loop, overlay.stats);
+    this.botHarness = harness;
+    harness.start();
+    this.transitionTo('MATCH');
   }
 
   private onConfigChanged(): void {
@@ -328,6 +407,10 @@ export class Game {
       dummy.health.setConfig(this.healthConfig);
       dummy.markLabelDirty();
     }
+    // Bots carry the same weapon and the same health, so a retune has to reach them or
+    // the two sides stop sharing the damage maths that makes TTK symmetric.
+    this.match?.bots.applyWeaponDef(this.weaponDef);
+    this.match?.bots.applyHealthConfig(this.healthConfig);
   }
 
   // -- loop ----------------------------------------------------------------
@@ -338,8 +421,13 @@ export class Game {
 
     // Input crosses the netcode boundary even in single player: the sim only ever
     // sees command data, which is what keeps INetworkTransport real (S4.2).
+    //
+    // A dead player submits neutral commands rather than being skipped: the sim still
+    // runs for them, the corpse still collides, and the seam stays honest — which is
+    // exactly what a real server would send while waiting on a respawn.
     const now = performance.now();
-    const cmd = this.state === 'MATCH' ? this.input.sample(tick, now) : this.input.sampleNeutral(tick, now);
+    const live = this.state === 'MATCH' && this.match?.isPlayerDead !== true;
+    const cmd = live ? this.input.sample(tick, now) : this.input.sampleNeutral(tick, now);
     this.transport.submit(cmd);
     const count = this.transport.drain(this.drainBuffer, MAX_STEPS_PER_FRAME);
     for (let i = 0; i < count; i++) {
@@ -400,11 +488,15 @@ export class Game {
       // The slide scrape is a sustained source, so it is driven per frame from the
       // stance rather than fired from an event (see PLAN.md, M1 playtest note).
       this.audio.setSlide(sim.slideActive, sim.x, sim.y, sim.z, sim.speed, sim.groundMaterial);
-      this.audio.update();
     }
+    // Recycling runs whatever the context is doing. Skipping it while suspended is how
+    // voices used to accumulate: nothing was freeing them, and something still had to.
+    this.audio.update();
 
     match?.render(alpha, cam, dt, yaw, pitch);
     this.hitboxDebug?.update();
+    this.aiDebug?.update();
+    this.aiPanel?.updateLabels(cam, alpha);
 
     this.renderer.render(this.scene, cam, this.viewmodel);
     this.overlay?.update(dt);
@@ -463,6 +555,13 @@ export class Game {
       },
       report: () => this.harness?.report(),
       weaponReport: () => this.weaponHarness?.report(),
+      bots: () => this.match?.bots,
+      botReport: () => this.match?.bots.report(),
+      botHarness: () => this.botHarness,
+      harnessReport: () => this.botHarness?.report(),
+      tiers: this.tiers,
+      perceptionConfig: this.perceptionConfig,
+      schedulerConfig: this.schedulerConfig,
     };
     Object.defineProperty(window, '__operator', { value: api, configurable: true });
   }

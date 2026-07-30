@@ -238,6 +238,91 @@ export class WeaponAudio {
     this.audio.playUiSweep(720, 300, 0.2, 0.13);
   }
 
+  /**
+   * A round landing on a body (S6.8).
+   *
+   * Deliberately the opposite shape to every surface impact above: no transient crack,
+   * a low centre frequency and a fast decay, so flesh reads as *soft* against concrete
+   * and steel without needing a sample. A headshot is tighter, higher and shorter — it
+   * has to be identifiable by ear alone, because that is how a player learns to aim.
+   */
+  playFleshImpact(x: number, y: number, z: number, headshot: boolean): void {
+    const noise = this.audio.noiseScratch;
+    noise.x = x;
+    noise.y = y;
+    noise.z = z;
+    noise.positional = true;
+    noise.bus = 'sfx';
+    noise.filter = 'lowpass';
+    noise.freq = headshot ? 1500 : 620;
+    noise.freqEnd = headshot ? 500 : 190;
+    noise.q = headshot ? 2.6 : 0.9;
+    noise.level = headshot ? 0.3 : 0.24;
+    noise.attack = 0.001;
+    noise.decay = headshot ? 0.05 : 0.075;
+    noise.wet = 0.16;
+    noise.rate = this.rng.range(0.92, 1.09);
+    this.audio.noiseBurst(noise);
+
+    const osc = this.audio.oscScratch;
+    osc.x = x;
+    osc.y = y;
+    osc.z = z;
+    osc.positional = true;
+    osc.bus = 'sfx';
+    osc.type = 'sine';
+    osc.freq = headshot ? 260 : 150;
+    osc.freqEnd = osc.freq * 0.45;
+    osc.level = 0.18;
+    osc.attack = 0.001;
+    osc.decay = 0.06;
+    osc.wet = 0.1;
+    osc.filterFreq = 420;
+    osc.filterQ = 0.7;
+    this.audio.oscHit(osc);
+  }
+
+  /**
+   * A body arriving on the floor (S6.8). Two layers a fifth of a second apart: the drop,
+   * then the settle. One thud reads as dropping a crate; two reads as a person falling.
+   */
+  playDeath(x: number, y: number, z: number): void {
+    const osc = this.audio.oscScratch;
+    osc.x = x;
+    osc.y = y;
+    osc.z = z;
+    osc.positional = true;
+    osc.bus = 'sfx';
+    osc.type = 'sine';
+    osc.freq = 118;
+    osc.freqEnd = 48;
+    osc.level = 0.4;
+    osc.attack = 0.003;
+    osc.decay = 0.2;
+    osc.wet = 0.24;
+    osc.filterFreq = 340;
+    osc.filterQ = 0.7;
+    this.audio.oscHit(osc);
+
+    // Gear and cloth going down with it.
+    const noise = this.audio.noiseScratch;
+    noise.x = x;
+    noise.y = y;
+    noise.z = z;
+    noise.positional = true;
+    noise.bus = 'sfx';
+    noise.filter = 'lowpass';
+    noise.freq = 1250;
+    noise.freqEnd = 300;
+    noise.q = 0.8;
+    noise.level = 0.22;
+    noise.attack = 0.004;
+    noise.decay = 0.26;
+    noise.wet = 0.3;
+    noise.rate = this.rng.range(0.9, 1.1);
+    this.audio.noiseBurst(noise);
+  }
+
   /** Impact report from the far end of the shot, coloured by what was hit. */
   playImpact(x: number, y: number, z: number, material: number, penetrated: boolean): void {
     const surface = surfaceAtIndex(material);

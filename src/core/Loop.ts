@@ -67,6 +67,22 @@ export class Loop {
    */
   syntheticLoadMs = 0;
 
+  /**
+   * Debug-only: how many seconds of simulation a second of wall clock is worth (S7).
+   *
+   * This scales the *number of ticks per frame* and nothing else. `DT` stays exactly
+   * 1/60 for every one of them, so no gameplay value is ever multiplied by a different
+   * number — a 4x harness run is indistinguishable from a run four times as long, which
+   * is the only way a soak test can say anything about the real build.
+   */
+  simSpeed = 1;
+
+  /**
+   * Debug-only companion to `simSpeed`: the catch-up cap has to rise with it, or the
+   * extra ticks are discarded as a backlog the moment the multiplier exceeds 5.
+   */
+  maxStepsPerFrame = MAX_STEPS_PER_FRAME;
+
   constructor(private readonly handlers: LoopHandlers) {}
 
   start(): void {
@@ -107,11 +123,11 @@ export class Loop {
     if (frameSeconds > MAX_FRAME_SECONDS) frameSeconds = MAX_FRAME_SECONDS;
     if (frameSeconds < 0) frameSeconds = 0;
 
-    this.accumulator += frameSeconds;
+    this.accumulator += frameSeconds * this.simSpeed;
 
     const simStart = performance.now();
     let steps = 0;
-    while (this.accumulator >= DT && steps < MAX_STEPS_PER_FRAME) {
+    while (this.accumulator >= DT && steps < this.maxStepsPerFrame) {
       this.handlers.sim(this.tickIndex);
       this.tickIndex++;
       this.accumulator -= DT;
@@ -121,7 +137,7 @@ export class Loop {
 
     // Step cap hit: throw away the whole-tick backlog but keep the sub-tick
     // fraction so interpolation stays smooth. Never spiral.
-    const starved = steps === MAX_STEPS_PER_FRAME && this.accumulator >= DT;
+    const starved = steps === this.maxStepsPerFrame && this.accumulator >= DT;
     if (starved) this.accumulator %= DT;
 
     const alpha = this.accumulator / DT;

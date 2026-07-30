@@ -51,12 +51,12 @@ const LOWER_SPEED_SCALE = 1.7;
 /** Safety valve: no weapon in this project fires faster than four rounds a tick. */
 const MAX_SHOTS_PER_TICK = 4;
 
-const evReloadStart = { weaponId: '', empty: false, duration: 0 };
-const evReloadStep = { weaponId: '', step: 'down' as ReloadStep };
-const evReloadDone = { weaponId: '', mag: 0, reserve: 0 };
-const evAds = { weaponId: '', aiming: false };
-const evAmmo = { weaponId: '', mag: 0, reserve: 0 };
-const evDry = { weaponId: '' };
+const evReloadStart = { weaponId: '', sourceId: 0, empty: false, duration: 0 };
+const evReloadStep = { weaponId: '', sourceId: 0, step: 'down' as ReloadStep };
+const evReloadDone = { weaponId: '', sourceId: 0, mag: 0, reserve: 0 };
+const evAds = { weaponId: '', sourceId: 0, aiming: false };
+const evAmmo = { weaponId: '', sourceId: 0, mag: 0, reserve: 0 };
+const evDry = { weaponId: '', sourceId: 0 };
 
 export class Weapon {
   mag: number;
@@ -93,9 +93,16 @@ export class Weapon {
    */
   private dryFiredThisPull = false;
 
+  /**
+   * `sourceId` stamps every event this weapon emits. It defaults to the local player (0)
+   * because M2 only ever had one weapon; from M3 each bot carries one, and the id is how
+   * a subscriber tells "I reloaded" from "something reloaded over there" — which matters,
+   * because the two sounds belong at completely different places in the room.
+   */
   constructor(
     private def: WeaponDef,
     private readonly bus: GameBus,
+    readonly sourceId: number = 0,
   ) {
     this.mag = def.magSize;
     this.reserve = def.reserveAmmo;
@@ -179,6 +186,7 @@ export class Weapon {
     this.reloadElapsed = 0;
     this.reloadStepIndex = 0;
     evReloadStart.weaponId = def.id;
+    evReloadStart.sourceId = this.sourceId;
     evReloadStart.empty = this.reloadEmpty;
     evReloadStart.duration = this.reloadDuration;
     this.bus.emit(EV.WeaponReloadStarted, evReloadStart);
@@ -238,6 +246,7 @@ export class Weapon {
     // resumes firing rather than clicking at a full weapon.
     this.dryFiredThisPull = false;
     evReloadDone.weaponId = def.id;
+    evReloadDone.sourceId = this.sourceId;
     evReloadDone.mag = this.mag;
     evReloadDone.reserve = this.reserve;
     this.bus.emit(EV.WeaponReloadFinished, evReloadDone);
@@ -256,6 +265,7 @@ export class Weapon {
     if (aimingNow !== this.aimingLastTick) {
       this.aimingLastTick = aimingNow;
       evAds.weaponId = this.def.id;
+      evAds.sourceId = this.sourceId;
       evAds.aiming = aimingNow;
       this.bus.emit(EV.WeaponAdsChanged, evAds);
     }
@@ -279,6 +289,7 @@ export class Weapon {
         this.dryFiredThisPull = true;
         this.dryFiredThisTick = true;
         evDry.weaponId = this.def.id;
+        evDry.sourceId = this.sourceId;
         this.bus.emit(EV.WeaponDryFired, evDry);
         if (this.reserve > 0) this.beginReload();
       }
@@ -300,12 +311,14 @@ export class Weapon {
 
   private emitReloadStep(): void {
     evReloadStep.weaponId = this.def.id;
+    evReloadStep.sourceId = this.sourceId;
     evReloadStep.step = this.reloadStep;
     this.bus.emit(EV.WeaponReloadStep, evReloadStep);
   }
 
   private emitAmmo(): void {
     evAmmo.weaponId = this.def.id;
+    evAmmo.sourceId = this.sourceId;
     evAmmo.mag = this.mag;
     evAmmo.reserve = this.reserve;
     this.bus.emit(EV.WeaponAmmoChanged, evAmmo);

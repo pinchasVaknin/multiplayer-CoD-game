@@ -47,8 +47,24 @@ function makeSnapshot(): WeaponSnapshot {
   };
 }
 
+/**
+ * Where a shot's muzzle position comes from.
+ *
+ * `viewmodel` is the local player: the gun is drawn at its own FOV so its barrel has no
+ * real world position, and the offset that *looks* right is taken from `ViewmodelConfig`.
+ * `world` is everybody else: the muzzle is a fixed offset from the eye, because a bot's
+ * rifle is actual geometry standing in the room and its tracer has to start at it.
+ */
+export type MuzzleStyle = 'viewmodel' | 'world';
+
+/** Third-person muzzle offset from the eye, metres: forward, right, down. */
+const WORLD_MUZZLE_FORWARD = 0.44;
+const WORLD_MUZZLE_RIGHT = 0.16;
+const WORLD_MUZZLE_DOWN = 0.16;
+
 const evFired = {
   weaponId: '',
+  sourceId: 0,
   x: 0,
   y: 0,
   z: 0,
@@ -95,6 +111,13 @@ export class WeaponSystem {
   private prevButtons = 0;
   private tracerCounter = 0;
 
+  /**
+   * `sourceId` and `muzzleStyle` are M3's additions and they are the only two things that
+   * differ between the player's weapon and a bot's. Everything else — recoil, spread,
+   * sprint-to-fire, reloads, falloff, penetration — is shared, which is the point: a bot
+   * that fired by calling `Ballistics` directly would be a bot that ignores every balance
+   * number in the def.
+   */
   constructor(
     def: WeaponDef,
     world: CollisionWorld,
@@ -102,11 +125,13 @@ export class WeaponSystem {
     private readonly bus: GameBus,
     private readonly viewmodelConfig: ViewmodelConfig,
     private readonly walkSpeed: number,
+    readonly sourceId: number = PLAYER_ENTITY_ID,
+    private readonly muzzleStyle: MuzzleStyle = 'viewmodel',
   ) {
-    this.weapon = new Weapon(def, bus);
+    this.weapon = new Weapon(def, bus, sourceId);
     this.ballistics = new Ballistics(world, damage, bus);
     this.request = makeDamageRequest(def);
-    this.request.sourceId = PLAYER_ENTITY_ID;
+    this.request.sourceId = sourceId;
   }
 
   get definition(): WeaponDef {
@@ -242,6 +267,7 @@ export class WeaponSystem {
 
     const muzzle = this.muzzleWorld(cmd, sim);
     evFired.weaponId = def.id;
+    evFired.sourceId = this.sourceId;
     evFired.x = muzzle.x;
     evFired.y = muzzle.y;
     evFired.z = muzzle.z;
@@ -286,9 +312,10 @@ export class WeaponSystem {
     const uy = cp;
     const uz = cy * sp;
 
-    const right = cfg.muzzleRight * (1 - ads);
-    const up = lerp(cfg.muzzleUp, -0.02, ads);
-    const forward = cfg.muzzleForward;
+    const world = this.muzzleStyle === 'world';
+    const right = world ? WORLD_MUZZLE_RIGHT : cfg.muzzleRight * (1 - ads);
+    const up = world ? -WORLD_MUZZLE_DOWN : lerp(cfg.muzzleUp, -0.02, ads);
+    const forward = world ? WORLD_MUZZLE_FORWARD : cfg.muzzleForward;
 
     muzzleOut.x = sim.x + fx * forward + rx * right + ux * up;
     muzzleOut.y = sim.y + sim.eyeHeight + fy * forward + uy * up;

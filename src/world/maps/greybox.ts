@@ -1,4 +1,4 @@
-import type { Brush, MapDef, PropDef } from './types';
+import type { Brush, CoverPoint, MapDef, PropDef, PropShapeId, SpawnZone } from './types';
 
 /**
  * MP_TESTBED - the M1 grey-box room (brief S5.6).
@@ -16,6 +16,10 @@ import type { Brush, MapDef, PropDef } from './types';
  *   pit (3 m) + 27 deg ramp   falling, landing dip, slope climbing
  *   east alcove               mantling into a low ceiling: must end crouched
  *   angled barricades         oriented-box collision (rotationY)
+ *
+ * M3 added the two AI fields the schema has always carried: `coverPoints`, derived from
+ * the prop placements rather than hand-listed, and ten more `spawns` so the S6.9 spawn
+ * safety rule has enough candidates to satisfy in a room this size.
  *
  * M2 added a firing line at the west end of the measurement lane and a penetration bay at
  * the east end: 0.05 m of steel a round gets through, and 0.6 m of concrete it does not,
@@ -225,6 +229,129 @@ function props(): PropDef[] {
   return out;
 }
 
+/**
+ * Cover profiles, keyed by prop shape (brief S6.5).
+ *
+ * `coverPoints` has been in the map schema since M1 and unused until now. Rather than
+ * hand-listing sixty positions that would silently rot the first time a crate moved,
+ * cover is *derived* from the placements above: each shape declares how deep it is and
+ * which of its local faces are worth standing behind, and the generator emits a standing
+ * spot on each of those faces facing back through the object.
+ *
+ * `offsets` are the local face directions. A 1 m cube is cover from every side; a
+ * barrier is 2 m wide and 0.4 m deep, so only its broad faces are.
+ *
+ * Whether a generated point is actually standable is not decided here — the navmesh
+ * bake answers that, and `ai/Cover.ts` discards any point the grid says is unreachable.
+ */
+interface CoverProfile {
+  /** Half-depth along each offered face direction, metres. */
+  readonly halfDepth: number;
+  readonly height: CoverPoint['height'];
+  /** Local face normals to place cover behind. */
+  readonly faces: readonly Readonly<{ x: number; z: number }>[];
+}
+
+const FOUR_SIDES = [
+  { x: 0, z: -1 },
+  { x: 0, z: 1 },
+  { x: -1, z: 0 },
+  { x: 1, z: 0 },
+] as const;
+
+const BROAD_FACES = [
+  { x: 0, z: -1 },
+  { x: 0, z: 1 },
+] as const;
+
+const COVER_PROFILES: Partial<Record<PropShapeId, CoverProfile>> = {
+  crate: { halfDepth: 0.5, height: 'low', faces: FOUR_SIDES },
+  crateTall: { halfDepth: 0.55, height: 'high', faces: FOUR_SIDES },
+  pillar: { halfDepth: 0.35, height: 'high', faces: FOUR_SIDES },
+  barrier: { halfDepth: 0.2, height: 'low', faces: BROAD_FACES },
+};
+
+/** How far clear of the object's face a bot stands. Capsule radius plus breathing room. */
+const COVER_STANDOFF = 0.62;
+
+function coverPoints(placements: readonly PropDef[]): CoverPoint[] {
+  const out: CoverPoint[] = [];
+
+  const emit = (
+    cx: number,
+    cz: number,
+    yaw: number,
+    faceX: number,
+    faceZ: number,
+    depth: number,
+    height: CoverPoint['height'],
+  ): void => {
+    const c = Math.cos(yaw);
+    const s = Math.sin(yaw);
+    // Local face normal into world space, same yaw convention the prop mesher uses.
+    const wx = faceX * c + faceZ * s;
+    const wz = -faceX * s + faceZ * c;
+    const reach = depth + COVER_STANDOFF;
+    out.push({
+      position: { x: cx + wx * reach, y: 0, z: cz + wz * reach },
+      // The cover protects from the far side of the object, which is back through it.
+      facingYaw: Math.atan2(-wx, -wz),
+      height,
+    });
+  };
+
+  for (const p of placements) {
+    const profile = COVER_PROFILES[p.shape];
+    if (profile === undefined) continue;
+    for (const face of profile.faces) {
+      emit(p.position.x, p.position.z, p.rotationY, face.x, face.z, profile.halfDepth, profile.height);
+    }
+  }
+
+  // The two angled barricades and the penetration-bay panels are brushes rather than
+  // props, so they are listed by hand — but they are the only four that are.
+  emit(-4, 12, Math.PI / 6, 0, -1, 0.2, 'high');
+  emit(-4, 12, Math.PI / 6, 0, 1, 0.2, 'high');
+  emit(4, 15, -Math.PI / 5, 0, -1, 0.2, 'high');
+  emit(4, 15, -Math.PI / 5, 0, 1, 0.2, 'high');
+  emit(17.5, -13.9, Math.PI / 2, 0, -1, 0.03, 'high');
+  emit(17.5, -13.9, Math.PI / 2, 0, 1, 0.03, 'high');
+  emit(17.5, -11.0, Math.PI / 2, 0, -1, 0.3, 'high');
+  emit(17.5, -11.0, Math.PI / 2, 0, 1, 0.3, 'high');
+
+  return out;
+}
+
+/**
+ * Spawn zones.
+ *
+ * The first three are M1's and must stay first: `spawns[0]` is the firing line the M2
+ * range is laid out against. The rest are M3's, because ten bots respawning under the
+ * S6.9 rule ("never within 15 m of a living enemy, never inside their view cone") need
+ * somewhere to go — three zones in a 48 x 36 room cannot satisfy it. Every position
+ * below is open floor: no zone sits inside the corridor blocks, the alcove shelf, the
+ * pit, or a prop footprint.
+ */
+function spawns(): SpawnZone[] {
+  return [
+    { team: 'A', position: { x: -20, y: 0.05, z: -14 }, facingYaw: -Math.PI / 2, radius: 1.5 },
+    { team: 'B', position: { x: 20, y: 0.05, z: -14 }, facingYaw: Math.PI / 2, radius: 1.5 },
+    { team: 'FFA', position: { x: -20, y: 0.05, z: 14 }, facingYaw: -Math.PI / 2, radius: 2 },
+
+    { team: 'A', position: { x: -22, y: 0.05, z: -10 }, facingYaw: -Math.PI / 2, radius: 2 },
+    { team: 'A', position: { x: -22.5, y: 0.05, z: 12 }, facingYaw: -Math.PI / 2, radius: 2 },
+    { team: 'A', position: { x: -14, y: 0.05, z: 16 }, facingYaw: Math.PI, radius: 2.2 },
+    { team: 'A', position: { x: -8, y: 0.05, z: -16 }, facingYaw: 0, radius: 2.2 },
+    { team: 'A', position: { x: -10.5, y: 0.05, z: 1.5 }, facingYaw: -Math.PI / 2, radius: 2 },
+
+    { team: 'B', position: { x: 22, y: 0.05, z: -3 }, facingYaw: Math.PI / 2, radius: 2 },
+    { team: 'B', position: { x: 21, y: 0.05, z: 14 }, facingYaw: Math.PI / 2, radius: 2 },
+    { team: 'B', position: { x: 14, y: 0.05, z: 16 }, facingYaw: Math.PI, radius: 2.2 },
+    { team: 'B', position: { x: 8, y: 0.05, z: -16 }, facingYaw: 0, radius: 2.2 },
+    { team: 'B', position: { x: 13, y: 0.05, z: 1.5 }, facingYaw: Math.PI / 2, radius: 2 },
+  ];
+}
+
 /** Wall-mounted accent strips. Non-solid; they exist so the palette has an anchor. */
 function lightStrips(): PropDef[] {
   const out: PropDef[] = [];
@@ -239,16 +366,14 @@ function lightStrips(): PropDef[] {
   return out;
 }
 
+const COVER_PROPS = props();
+
 export const GREYBOX_MAP: MapDef = {
   id: 'mp_testbed',
   name: 'TESTBED',
   brushes: brushes(),
-  props: [...props(), ...lightStrips()],
-  spawns: [
-    { team: 'A', position: { x: -20, y: 0.05, z: -14 }, facingYaw: -Math.PI / 2, radius: 1.5 },
-    { team: 'B', position: { x: 20, y: 0.05, z: -14 }, facingYaw: Math.PI / 2, radius: 1.5 },
-    { team: 'FFA', position: { x: -20, y: 0.05, z: 14 }, facingYaw: -Math.PI / 2, radius: 2 },
-  ],
+  props: [...COVER_PROPS, ...lightStrips()],
+  spawns: spawns(),
   lights: [
     { kind: 'hemisphere', skyColor: 0x8fa6c4, groundColor: 0x24272d, intensity: 0.85 },
     {
@@ -268,7 +393,7 @@ export const GREYBOX_MAP: MapDef = {
     fogFar: 96,
   },
 
-  coverPoints: [],
+  coverPoints: coverPoints(COVER_PROPS),
   objectives: [],
   navBounds: {
     min: { x: -26, y: -6, z: -20 },

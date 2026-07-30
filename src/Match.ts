@@ -1,11 +1,19 @@
 import * as THREE from 'three';
-import { DamageSystem, makeDamageRequest, PLAYER_ENTITY_ID, type Damageable, type DamageRequest } from './combat/DamageSystem';
-import { HitboxRig, HUMANOID_RIG, type HitZone } from './combat/HitboxRig';
+import type { SchedulerConfig } from './ai/AiScheduler';
+import { BotDirector } from './ai/BotDirector';
+import type { BotTeam } from './ai/Combatant';
+import type { BotTier, PerceptionConfig, TierTable } from './ai/DifficultyTiers';
+import { PlayerCombatant } from './ai/PlayerCombatant';
+import { makeSpawnChoice, type SpawnChoice } from './ai/SpawnSelector';
+import { DamageSystem, makeDamageRequest, PLAYER_ENTITY_ID, type DamageRequest } from './combat/DamageSystem';
+import type { HitZone } from './combat/HitboxRig';
 import { TargetRange } from './combat/TargetRange';
 import { EV, type GameBus } from './core/Events';
 import type { Input } from './core/Input';
 import type { InputCommand } from './core/InputCommand';
-import { DEG2RAD } from './core/MathUtil';
+import { DT } from './core/Loop';
+import { angleDelta, DEG2RAD } from './core/MathUtil';
+import type { MapDef } from './world/maps/types';
 import type { CameraRig } from './engine/CameraRig';
 import { Fx } from './engine/Fx';
 import type { ProceduralAudio } from './engine/ProceduralAudio';
@@ -56,15 +64,12 @@ export interface MatchDeps {
   readonly healthConfig: HealthConfig;
   readonly uiHost: HTMLElement;
   readonly anisotropy: number;
-}
-
-/** The local player as a damage target: same rig M3's bots will carry. */
-class PlayerTarget implements Damageable {
-  readonly entityId = PLAYER_ENTITY_ID;
-  readonly displayName = 'OPERATOR';
-  readonly rig = new HitboxRig(HUMANOID_RIG);
-
-  constructor(readonly health: Health) {}
+  /** M3: the director bakes a navmesh and reads `spawns` and `coverPoints` from this. */
+  readonly mapDef: MapDef;
+  readonly tiers: TierTable;
+  readonly perceptionConfig: PerceptionConfig;
+  readonly schedulerConfig: SchedulerConfig;
+  readonly seed: number;
 }
 
 interface PendingNumber {
@@ -77,6 +82,21 @@ interface PendingNumber {
 
 const NUMBER_QUEUE = 8;
 
+/** The player's side. Bots added to 'A' fight alongside them, 'B' against. */
+export const PLAYER_TEAM: BotTeam = 'A';
+
+/** Seconds the player spends dead. Matches the bots' timer, because it is the same rule. */
+const PLAYER_RESPAWN_SECONDS = 4.5;
+
+/** The default firefight: three alongside the player, four against. */
+const DEFAULT_TEAM_A_BOTS = 3;
+const DEFAULT_TEAM_B_BOTS = 4;
+
+const DEFAULT_TIER_MIX: readonly BotTier[] = ['REGULAR', 'HARDENED', 'RECRUIT', 'REGULAR'];
+
+/** Reusable position record for "where did that sound come from". Zero allocation. */
+const sourceAt = { x: 0, y: 0, z: 0 };
+
 export class Match {
   readonly damage: DamageSystem;
   readonly weapons: WeaponSystem;
@@ -88,7 +108,13 @@ export class Match {
   readonly anim: ViewmodelAnim;
   readonly latency = new LatencyProbe();
   readonly playerHealth: Health;
-  readonly playerTarget: PlayerTarget;
+  /**
+   * The player, as the AI sees it. This replaces M2's local `PlayerTarget`: it is still
+   * the same `Damageable` with the same rig, plus the team, facing and stance that
+   * perception and spawn safety need. One object, so there is no second pose to drift.
+   */
+  readonly playerCombatant: PlayerCombatant;
+  readonly bots: BotDirector;
 
   /** Interpolated weapon state for this frame. Read by Game for the camera. */
   readonly visual: WeaponSnapshot = {
@@ -111,19 +137,28 @@ export class Match {
   private readonly numberQueue: PendingNumber[] = [];
   private numberCount = 0;
 
+  private readonly spawnChoice: SpawnChoice = makeSpawnChoice();
+
   private listenerX = 0;
   private listenerY = 0;
   private listenerZ = 0;
   private shotSinceRender = false;
   private active = false;
+  private playerDead = false;
+  private playerRespawnTimer = 0;
 
   constructor(deps: MatchDeps) {
     this.deps = deps;
 
     this.damage = new DamageSystem(deps.bus);
     this.playerHealth = new Health(deps.healthConfig);
-    this.playerTarget = new PlayerTarget(this.playerHealth);
-    this.damage.register(this.playerTarget);
+    this.playerCombatant = new PlayerCombatant(
+      this.playerHealth,
+      PLAYER_TEAM,
+      deps.player,
+      deps.movementConfig,
+    );
+    this.damage.register(this.playerCombatant);
     this.selfDamage = makeDamageRequest(deps.weaponDef);
     this.selfDamage.targetId = PLAYER_ENTITY_ID;
     this.selfDamage.sourceId = PLAYER_ENTITY_ID;
@@ -139,6 +174,24 @@ export class Match {
 
     this.range = new TargetRange(this.damage, deps.bus, deps.healthConfig);
     deps.scene.add(this.range.group);
+
+    // The director bakes the navmesh, so it is built once here rather than per match.
+    this.bots = new BotDirector({
+      world: deps.world,
+      mapDef: deps.mapDef,
+      bus: deps.bus,
+      damage: this.damage,
+      movement: deps.movementConfig,
+      healthConfig: deps.healthConfig,
+      weaponDef: deps.weaponDef,
+      viewmodelConfig: deps.viewmodelConfig,
+      tiers: deps.tiers,
+      perceptionConfig: deps.perceptionConfig,
+      scheduler: deps.schedulerConfig,
+      player: this.playerCombatant,
+      seed: deps.seed,
+    });
+    deps.scene.add(this.bots.group);
 
     this.fx = new Fx(deps.anisotropy);
     deps.scene.add(this.fx.group);
@@ -166,7 +219,24 @@ export class Match {
   setActive(on: boolean): void {
     this.active = on;
     this.hud.setVisible(on);
-    if (on) this.anim.reset(this.deps.input.yaw, this.deps.input.pitch);
+    if (!on) return;
+    this.anim.reset(this.deps.input.yaw, this.deps.input.pitch);
+    // Deferred to the first time a match actually starts rather than done at construction:
+    // the harness wants a different roster and gets to set it before anyone spawns.
+    if (this.bots.botCount === 0) this.populateDefault();
+  }
+
+  /** The default firefight. The bot-match harness replaces this with its own roster. */
+  populateDefault(): void {
+    this.bots.populate(DEFAULT_TEAM_A_BOTS, DEFAULT_TEAM_B_BOTS, DEFAULT_TIER_MIX);
+  }
+
+  get isPlayerDead(): boolean {
+    return this.playerDead;
+  }
+
+  get playerRespawnSeconds(): number {
+    return this.playerRespawnTimer;
   }
 
   get isActive(): boolean {
@@ -192,22 +262,51 @@ export class Match {
 
   /** One sim tick. Called from Game.simulate after the player has stepped. */
   simulate(cmd: InputCommand): void {
-    const sim = this.deps.player.sim;
-
     this.playerHealth.step();
-    // The player's own rig follows the capsule so M3 can shoot back without new plumbing.
-    this.playerTarget.rig.setTransform(sim.x, sim.y, sim.z, sim.yaw);
+    // The rig follows the capsule on the *tick*, and before anything resolves a shot
+    // against it, so a bot's round is tested against where the player was when it fired.
+    this.playerCombatant.syncRig();
 
-    this.weapons.step(cmd, sim);
+    if (!this.playerDead) {
+      const sim = this.deps.player.sim;
+      this.weapons.step(cmd, sim);
 
-    // The residual half of each recoil kick is a real aim change, so it goes where mouse
-    // movement goes rather than into a separate offset the player cannot fight.
-    if (this.weapons.takeViewResidual(this.residual)) {
-      this.deps.input.addViewOffset(this.residual.yaw, this.residual.pitch);
+      // The residual half of each recoil kick is a real aim change, so it goes where mouse
+      // movement goes rather than into a separate offset the player cannot fight.
+      if (this.weapons.takeViewResidual(this.residual)) {
+        this.deps.input.addViewOffset(this.residual.yaw, this.residual.pitch);
+      }
     }
 
     this.range.step();
+    this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
+    this.stepPlayerRespawn();
     this.latency.expire(performance.now());
+  }
+
+  /**
+   * The player's side of S6.9. Same timer and the same spawn selector the bots use, so
+   * "never within 15 m of a living enemy" is one rule with one implementation rather than
+   * one for them and a different one for you.
+   */
+  private stepPlayerRespawn(): void {
+    if (!this.playerDead) return;
+    this.playerRespawnTimer = Math.max(0, this.playerRespawnTimer - DT);
+    if (this.playerRespawnTimer > 0) return;
+    this.respawnPlayer();
+  }
+
+  private respawnPlayer(): void {
+    const choice = this.spawnChoice;
+    if (this.bots.selectSpawn(PLAYER_TEAM, PLAYER_ENTITY_ID, choice)) {
+      this.deps.player.spawn(choice.x, choice.y + 0.05, choice.z, choice.yaw);
+      this.deps.input.setView(choice.yaw, 0);
+    }
+    this.playerHealth.reset();
+    this.weapons.reset();
+    this.playerCombatant.syncRig();
+    this.playerDead = false;
+    this.playerRespawnTimer = 0;
   }
 
   /**
@@ -247,7 +346,11 @@ export class Match {
     this.anim.update(drive, this.deps.viewmodelConfig, dt);
 
     this.range.updateVisuals(alpha, camera);
+    this.bots.updateVisuals(alpha, dt);
     this.fx.update(dt);
+
+    // A dead player is not holding a rifle.
+    this.model.root.visible = !this.playerDead;
 
     const state = this.hudState;
     state.mag = weapon.mag;
@@ -259,6 +362,10 @@ export class Match {
     state.viewportHeight = window.innerHeight;
     state.reloading = weapon.reloading;
     state.reloadFraction = this.visual.reloadFraction;
+    state.health = this.playerHealth.current;
+    state.healthMax = this.playerHealth.max;
+    state.dead = this.playerDead;
+    state.respawnSeconds = this.playerRespawnTimer;
     this.hud.update(state, dt);
 
     this.flushDamageNumbers(camera);
@@ -270,6 +377,8 @@ export class Match {
   }
 
   dispose(): void {
+    this.bots.dispose();
+    this.deps.scene.remove(this.bots.group);
     this.range.dispose();
     this.deps.scene.remove(this.range.group);
     this.fx.dispose();
@@ -287,9 +396,13 @@ export class Match {
 
     bus.on(EV.WeaponFired, (p) => {
       const def = this.weapons.definition;
+      // Flash, tracer and report belong to whoever fired, wherever they are standing.
       this.fx.fireMuzzleFlash(p.x, p.y, p.z, def.muzzleFlashScale);
       if (p.tracer) this.fx.spawnTracer(p.x, p.y, p.z, p.endX, p.endY, p.endZ);
       this.weaponAudio.playGunshot(p.x, p.y, p.z, def.voice);
+      // Everything below is about the local player's own hands and must not fire for a
+      // bot: a bot shooting across the room shaking your camera is the classic tell.
+      if (p.sourceId !== PLAYER_ENTITY_ID) return;
       cameraRig.shake.add(def.shakePerShot);
       this.latency.armFromPress(input.takeFirePress());
       this.shotSinceRender = true;
@@ -301,7 +414,14 @@ export class Match {
     });
 
     bus.on(EV.DamageDealt, (p) => {
-      if (p.sourceId !== PLAYER_ENTITY_ID || p.targetId === PLAYER_ENTITY_ID) return;
+      if (p.targetId === PLAYER_ENTITY_ID) {
+        this.onPlayerHurt(p.sourceId, p.amount);
+        return;
+      }
+      // A round landing on a body is a sound in the room no matter who fired it (S6.8).
+      this.weaponAudio.playFleshImpact(p.x, p.y, p.z, p.zone === 'head');
+      if (p.sourceId !== PLAYER_ENTITY_ID) return;
+
       // Timestamped here, at the moment the damage was applied, so the hitmarker latency
       // reported in the overlay is hit-to-visual and not visual-to-visual.
       this.hud.showHitmarker(p.lethal, performance.now());
@@ -316,20 +436,86 @@ export class Match {
       this.queueDamageNumber(p.x, p.y, p.z, p.amount, p.zone);
     });
 
-    bus.on(EV.WeaponDryFired, () => {
-      const sim = this.deps.player.sim;
-      this.weaponAudio.playDryFire(sim.x, sim.y + sim.eyeHeight, sim.z);
+    bus.on(EV.EntityKilled, (p) => {
+      if (p.targetId === PLAYER_ENTITY_ID) {
+        this.onPlayerKilled();
+        return;
+      }
+      const victim = this.bots.get(p.targetId);
+      if (victim === undefined) return;
+      // Slightly off the floor: the sound is the body arriving, not the feet.
+      this.weaponAudio.playDeath(victim.px, victim.py + 0.4, victim.pz);
+    });
+
+    bus.on(EV.WeaponDryFired, (p) => {
+      const at = this.sourcePosition(p.sourceId);
+      this.weaponAudio.playDryFire(at.x, at.y, at.z);
     });
 
     bus.on(EV.WeaponReloadStep, (p) => {
-      const sim = this.deps.player.sim;
-      this.weaponAudio.playReloadStep(sim.x, sim.y + sim.eyeHeight, sim.z, p.step);
+      const at = this.sourcePosition(p.sourceId);
+      this.weaponAudio.playReloadStep(at.x, at.y, at.z, p.step);
     });
 
     bus.on(EV.WeaponAdsChanged, (p) => {
-      const sim = this.deps.player.sim;
-      this.weaponAudio.playAdsRustle(sim.x, sim.y + sim.eyeHeight, sim.z, p.aiming);
+      const at = this.sourcePosition(p.sourceId);
+      this.weaponAudio.playAdsRustle(at.x, at.y, at.z, p.aiming);
     });
+  }
+
+  /**
+   * The player took a round. The vignette says how hard, the chevron says from where —
+   * and the chevron is the important one, because being shot from off-screen with no
+   * indication of the direction is the single most frustrating way to die.
+   */
+  private onPlayerHurt(sourceId: number, amount: number): void {
+    this.hud.showHurt(amount, this.playerHealth.max);
+    cameraShakeForHit(this.deps.cameraRig, amount, this.playerHealth.max);
+
+    const shooter = this.bots.get(sourceId);
+    if (shooter === undefined) return;
+    const sim = this.deps.player.sim;
+    const worldYaw = Math.atan2(-(shooter.px - sim.x), -(shooter.pz - sim.z));
+    // Screen-relative: 0 is straight ahead, positive to the right. The view yaw grows
+    // anticlockwise, so the bearing is the negated delta.
+    this.hud.showHitDirection(-angleDelta(sim.yaw, worldYaw));
+  }
+
+  private onPlayerKilled(): void {
+    if (this.playerDead) return;
+    this.playerDead = true;
+    this.playerRespawnTimer = PLAYER_RESPAWN_SECONDS;
+    const sim = this.deps.player.sim;
+    this.weaponAudio.playDeath(sim.x, sim.y + 0.4, sim.z);
+    this.deps.cameraRig.shake.add(0.45);
+  }
+
+  /**
+   * Where an entity's weapon sounds should come from. The player's own mechanical noises
+   * sit at their eye; a bot's sit at the bot, which is what makes hearing one reload
+   * behind a crate a usable piece of information rather than a confusing one.
+   */
+  private sourcePosition(sourceId: number): { x: number; y: number; z: number } {
+    if (sourceId === PLAYER_ENTITY_ID) {
+      const sim = this.deps.player.sim;
+      sourceAt.x = sim.x;
+      sourceAt.y = sim.y + sim.eyeHeight;
+      sourceAt.z = sim.z;
+      return sourceAt;
+    }
+    const bot = this.bots.get(sourceId);
+    if (bot !== undefined) {
+      sourceAt.x = bot.px;
+      sourceAt.y = bot.py + bot.eyeHeight;
+      sourceAt.z = bot.pz;
+      return sourceAt;
+    }
+    // Unregistered source (a range dummy). Put it at the listener so it stays audible
+    // rather than being panned to the origin of the world.
+    sourceAt.x = this.listenerX;
+    sourceAt.y = this.listenerY;
+    sourceAt.z = this.listenerZ;
+    return sourceAt;
   }
 
   private queueDamageNumber(x: number, y: number, z: number, amount: number, zone: HitZone): void {
@@ -374,4 +560,14 @@ export class Match {
   get aimPitchRad(): number {
     return this.visual.aimPitch * DEG2RAD;
   }
+}
+
+/**
+ * A jolt proportional to the round that caused it, capped well below the landing shake.
+ * Being shot has to register in the body without taking the aim away from the player —
+ * a hit that throws the camera is a hit the player cannot answer.
+ */
+function cameraShakeForHit(rig: CameraRig, amount: number, maxHealth: number): void {
+  const severity = Math.min(1, amount / Math.max(maxHealth * 0.3, 1));
+  rig.shake.add(0.08 + severity * 0.16);
 }

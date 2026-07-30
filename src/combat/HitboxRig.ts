@@ -98,6 +98,17 @@ export class HitboxRig {
   z = 0;
   yaw = 0;
 
+  /**
+   * Vertical scale, 1 = standing.
+   *
+   * Added in M3. Without it a crouching character's hitboxes stay at standing height,
+   * and a bot with a clear line over a 1 m barrier hits the chest of someone who is
+   * plainly ducked behind it — cover that does not cover. Boxes scale in offset and in
+   * height, so zones, widths and every multiplier verified in M2 are untouched; only how
+   * far off the ground each box sits changes.
+   */
+  heightScale = 1;
+
   private cos = 1;
   private sin = 0;
 
@@ -118,7 +129,12 @@ export class HitboxRig {
 
   /** World-space centre of the bounding sphere. */
   get boundCenterY(): number {
-    return this.y + this.layout.boundY;
+    return this.y + this.layout.boundY * this.heightScale;
+  }
+
+  /** Height of this rig's silhouette right now, metres. */
+  get standingHeight(): number {
+    return this.layout.height * this.heightScale;
   }
 
   /**
@@ -167,19 +183,20 @@ export class HitboxRig {
     let bestAxis = 0;
     let bestSign = 0;
 
+    const scale = this.heightScale;
     const boxes = this.layout.boxes;
     for (let i = 0; i < boxes.length; i++) {
       const box = boxes[i];
       if (box === undefined) continue;
       const t = raySlab(
         lox - box.ox,
-        ry - box.oy,
+        ry - box.oy * scale,
         loz - box.oz,
         ldx,
         dy,
         ldz,
         box.sx * 0.5,
-        box.sy * 0.5,
+        box.sy * 0.5 * scale,
         box.sz * 0.5,
         bestT,
       );
@@ -216,14 +233,15 @@ export class HitboxRig {
     const boxes = this.layout.boxes;
     const cs = this.cos;
     const sn = this.sin;
+    const scale = this.heightScale;
     let w = 0;
     for (const box of boxes) {
       const hx = box.sx * 0.5;
-      const hy = box.sy * 0.5;
+      const hy = box.sy * 0.5 * scale;
       const hz = box.sz * 0.5;
       for (let corner = 0; corner < 8; corner++) {
         const lx = box.ox + ((corner & 1) === 0 ? -hx : hx);
-        const ly = box.oy + ((corner & 2) === 0 ? -hy : hy);
+        const ly = box.oy * scale + ((corner & 2) === 0 ? -hy : hy);
         const lz = box.oz + ((corner & 4) === 0 ? -hz : hz);
         if (w + 3 > out.length) return w;
         out[w++] = this.x + lx * cs + lz * sn;

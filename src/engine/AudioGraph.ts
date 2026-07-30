@@ -44,7 +44,24 @@ interface Voice {
 }
 
 /** Preallocated to cover sustained automatic fire plus footsteps and impacts. */
-const VOICE_POOL_SIZE = 64;
+const VOICE_POOL_SIZE = 128;
+
+/**
+ * Hard ceiling on voices sounding at once (M3).
+ *
+ * M2 sized the pool for one shooter. Ten bots at 700 RPM are a different problem: four
+ * layers a shot, several bots firing at once, and every voice released on a timestamp
+ * taken from `AudioContext.currentTime` — which advances in *wall clock*. The moment the
+ * simulation runs faster than real time, which is exactly what S7's harness speed
+ * multiplier does, sounds are created faster than they can possibly expire and the pool
+ * grows without bound. The ten-minute soak found it: 64 voices to 81,117.
+ *
+ * A ceiling makes that impossible from either direction. Past it a new sound is dropped
+ * rather than allocated, and dropping a gunshot while a hundred are already sounding is
+ * inaudible — where an unbounded pool is a leak and, because `update` scans the active
+ * list every frame, eventually a frame-time problem too.
+ */
+const MAX_ACTIVE_VOICES = 112;
 
 /** Cutoff applied when the spatial-hash raycaster says geometry is in the way. */
 const OCCLUDED_CUTOFF = 750;
@@ -75,6 +92,8 @@ export class AudioGraph {
 
   /** Diagnostics: one-shot source nodes started since load. A rate, not a leak. */
   sourcesStarted = 0;
+  /** Sounds refused because `MAX_ACTIVE_VOICES` was already sounding. Reported in F1. */
+  voicesDropped = 0;
 
   get isRunning(): boolean {
     return this.ctx !== null && this.ctx.state === 'running';
@@ -243,6 +262,12 @@ export class AudioGraph {
     const pool = this.pool;
     const noise = this.noise;
     if (ctx === null || pool === null || noise === null) return;
+    // A suspended context's `currentTime` is frozen, so nothing could ever be recycled.
+    if (ctx.state !== 'running') return;
+    if (this.active.length >= MAX_ACTIVE_VOICES) {
+      this.voicesDropped++;
+      return;
+    }
 
     const v = pool.acquire();
     const now = ctx.currentTime;
@@ -278,6 +303,12 @@ export class AudioGraph {
     const ctx = this.ctx;
     const pool = this.pool;
     if (ctx === null || pool === null) return;
+    // See `noiseBurst`: no voice may be acquired while the clock that frees it is stopped.
+    if (ctx.state !== 'running') return;
+    if (this.active.length >= MAX_ACTIVE_VOICES) {
+      this.voicesDropped++;
+      return;
+    }
 
     const v = pool.acquire();
     const now = ctx.currentTime;

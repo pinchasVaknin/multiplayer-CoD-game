@@ -28,15 +28,15 @@ import { capsuleHeightFor, eyeHeightFor, isLegalStanceTransition, type StanceId 
  * "payloads are transient" contract is what makes that safe.
  */
 
-const evSpawned = { x: 0, y: 0, z: 0, yaw: 0 };
-const evStance = { from: 'STAND' as StanceId, to: 'STAND' as StanceId, tick: 0 };
-const evJump = { x: 0, y: 0, z: 0, horizontalSpeed: 0 };
-const evLand = { x: 0, y: 0, z: 0, impactSpeed: 0, stance: 'STAND' as StanceId, material: 0 };
-const evStep = { x: 0, y: 0, z: 0, speed: 0, heavy: false, material: 0 };
-const evSlideStart = { x: 0, y: 0, z: 0, entrySpeed: 0 };
-const evSlideEnd = { reason: 'expired' as SlideEndReason, exitSpeed: 0, tick: 0 };
-const evMantleStart = { x: 0, y: 0, z: 0, ledgeHeight: 0 };
-const evMantleEnd = { x: 0, y: 0, z: 0, endStance: 'STAND' as StanceId };
+const evSpawned = { entityId: 0, x: 0, y: 0, z: 0, yaw: 0 };
+const evStance = { entityId: 0, from: 'STAND' as StanceId, to: 'STAND' as StanceId, tick: 0 };
+const evJump = { entityId: 0, x: 0, y: 0, z: 0, horizontalSpeed: 0 };
+const evLand = { entityId: 0, x: 0, y: 0, z: 0, impactSpeed: 0, stance: 'STAND' as StanceId, material: 0 };
+const evStep = { entityId: 0, x: 0, y: 0, z: 0, speed: 0, heavy: false, quiet: false, material: 0 };
+const evSlideStart = { entityId: 0, x: 0, y: 0, z: 0, entrySpeed: 0 };
+const evSlideEnd = { entityId: 0, reason: 'expired' as SlideEndReason, exitSpeed: 0, tick: 0 };
+const evMantleStart = { entityId: 0, x: 0, y: 0, z: 0, ledgeHeight: 0 };
+const evMantleEnd = { entityId: 0, x: 0, y: 0, z: 0, endStance: 'STAND' as StanceId };
 
 const mantleTarget = makeMantleTarget();
 
@@ -54,10 +54,16 @@ export class PlayerController {
   private strafeInput = 0;
   private crouchHeldThisTick = false;
 
+  /**
+   * `entityId` stamps every event this controller emits. It defaults to the local player
+   * because M1 and M2 only ever had one of these; from M3 each bot owns one too, and the
+   * id is how a subscriber tells "the player landed" from "something landed over there".
+   */
   constructor(
     private cfg: MovementConfig,
     private readonly world: CollisionWorld,
     private readonly bus: GameBus,
+    readonly entityId: number = 0,
   ) {}
 
   setConfig(cfg: MovementConfig): void {
@@ -71,6 +77,7 @@ export class PlayerController {
     this.sim.reset(x, y, z, yaw, cfg.standHeight, cfg.standEye);
     this.sim.writeSnapshot(this.curr, 0);
     copySnapshot(this.curr, this.prev);
+    evSpawned.entityId = this.entityId;
     evSpawned.x = x;
     evSpawned.y = y;
     evSpawned.z = z;
@@ -106,6 +113,7 @@ export class PlayerController {
       const finished = stepMantle(sim, cfg);
       sim.capsuleHeight = capsuleHeightFor(cfg, sim.stance);
       if (finished) {
+        evMantleEnd.entityId = this.entityId;
         evMantleEnd.x = sim.x;
         evMantleEnd.y = sim.y;
         evMantleEnd.z = sim.z;
@@ -149,6 +157,7 @@ export class PlayerController {
     } else if (crouchPressed && sprintHeld && canStartSlide(sim, cfg)) {
       const entry = beginSlide(sim, cfg, wishX, wishZ);
       this.setStance('SLIDE');
+      evSlideStart.entityId = this.entityId;
       evSlideStart.x = sim.x;
       evSlideStart.y = sim.y;
       evSlideStart.z = sim.z;
@@ -199,6 +208,7 @@ export class PlayerController {
     }
 
     if (sim.justLanded) {
+      evLand.entityId = this.entityId;
       evLand.x = sim.x;
       evLand.y = sim.y;
       evLand.z = sim.z;
@@ -220,6 +230,7 @@ export class PlayerController {
         this.setStance('MANTLE');
         sim.capsuleHeight = capsuleHeightFor(cfg, 'MANTLE');
         sim.jumpBuffer = 0;
+        evMantleStart.entityId = this.entityId;
         evMantleStart.x = sim.x;
         evMantleStart.y = sim.y;
         evMantleStart.z = sim.z;
@@ -330,6 +341,7 @@ export class PlayerController {
     sim.airSpeedCap = Math.max(sim.speed, cfg.sprintSpeed);
     this.setStance('AIRBORNE');
 
+    evJump.entityId = this.entityId;
     evJump.x = sim.x;
     evJump.y = sim.y;
     evJump.z = sim.z;
@@ -364,6 +376,7 @@ export class PlayerController {
       this.setStance('STAND');
     }
 
+    evSlideEnd.entityId = this.entityId;
     evSlideEnd.reason = reason;
     evSlideEnd.exitSpeed = exitSpeed;
     evSlideEnd.tick = sim.tick;
@@ -392,6 +405,7 @@ export class PlayerController {
       console.warn(`[PlayerController] illegal stance transition ${sim.stance} -> ${next}`);
       return;
     }
+    evStance.entityId = this.entityId;
     evStance.from = sim.stance;
     evStance.to = next;
     evStance.tick = sim.tick;
@@ -417,11 +431,13 @@ export class PlayerController {
       const strideForStance = sim.stance === 'CROUCH' ? stride * 1.35 : stride;
       if (sim.distanceSinceStep >= strideForStance * 0.5) {
         sim.distanceSinceStep = 0;
+        evStep.entityId = this.entityId;
         evStep.x = sim.x;
         evStep.y = sim.y;
         evStep.z = sim.z;
         evStep.speed = speed;
         evStep.heavy = sim.tacSprintActive || sim.sprintActive;
+        evStep.quiet = sim.stance === 'CROUCH' || sim.stance === 'SLIDE';
         evStep.material = sim.groundMaterial;
         this.bus.emit(EV.PlayerFootstep, evStep);
       }

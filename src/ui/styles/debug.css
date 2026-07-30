@@ -208,3 +208,44 @@
   background: var(--c-line);
   border-radius: 4px;
 }
+
+/* ---- floating per-bot state labels (M3, S7) ---------------------------- */
+
+/*
+ * A layer over the canvas rather than sprites in the scene: a projected transform on an
+ * already-composited element costs nothing, where one canvas texture per bot would cost
+ * a texture upload per frame. Positioned only while the AI layer is on.
+ */
+.dbg-botlabels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.dbg-botlabels[hidden] {
+  display: none;
+}
+
+.dbg-botlabel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 2px var(--s-1);
+  white-space: nowrap;
+  color: var(--c-text);
+  background: rgba(7, 8, 10, 0.72);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  will-change: transform;
+}
+
+.dbg-botlabel--sel {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+.dbg-botlabel--dead {
+  opacity: 0.4;
+  border-color: var(--c-bad);
+}

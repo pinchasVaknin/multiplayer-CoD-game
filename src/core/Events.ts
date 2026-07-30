@@ -1,3 +1,6 @@
+import type { BotTeam } from '../ai/Combatant';
+import type { BotTier } from '../ai/DifficultyTiers';
+import type { BotState } from '../ai/BotStates';
 import type { HitZone } from '../combat/HitboxRig';
 import type { GameStateId } from '../GameStates';
 import type { StanceId } from '../player/Stance';
@@ -37,6 +40,9 @@ export const EV = {
   DamageDealt: 'damage.dealt',
   EntityKilled: 'entity.killed',
 
+  BotSpawned: 'bot.spawned',
+  BotStateChanged: 'bot.stateChanged',
+
   GameStateChanged: 'game.stateChanged',
   SettingsChanged: 'settings.changed',
 } as const;
@@ -55,14 +61,22 @@ export type ReloadStep = 'down' | 'magOut' | 'magIn' | 'raise' | 'charge';
  * for the duration of the dispatch — copy anything you intend to keep.
  */
 export type GameEvents = {
-  [EV.PlayerSpawned]: { x: number; y: number; z: number; yaw: number };
-  [EV.PlayerStanceChanged]: { from: StanceId; to: StanceId; tick: number };
-  [EV.PlayerJumped]: { x: number; y: number; z: number; horizontalSpeed: number };
+  /**
+   * Every `player.*` event carries `entityId` from M3 onward.
+   *
+   * These are emitted by `PlayerController`, and from M3 a bot owns one of those too — so
+   * "the player landed" became "somebody landed" and a subscriber that wants the camera to
+   * dip has to say whose landing it cares about. `PLAYER_ENTITY_ID` is 0.
+   */
+  [EV.PlayerSpawned]: { entityId: number; x: number; y: number; z: number; yaw: number };
+  [EV.PlayerStanceChanged]: { entityId: number; from: StanceId; to: StanceId; tick: number };
+  [EV.PlayerJumped]: { entityId: number; x: number; y: number; z: number; horizontalSpeed: number };
   /**
    * `impactSpeed` is downward velocity magnitude at the moment of contact, m/s.
    * `material` is the surface underfoot, so M2's audio can colour the sound by it.
    */
   [EV.PlayerLanded]: {
+    entityId: number;
     x: number;
     y: number;
     z: number;
@@ -70,18 +84,21 @@ export type GameEvents = {
     stance: StanceId;
     material: number;
   };
+  /** `quiet` is set while crouched or sliding: audible at 12 m rather than beyond (S6.3). */
   [EV.PlayerFootstep]: {
+    entityId: number;
     x: number;
     y: number;
     z: number;
     speed: number;
     heavy: boolean;
+    quiet: boolean;
     material: number;
   };
-  [EV.PlayerSlideStarted]: { x: number; y: number; z: number; entrySpeed: number };
-  [EV.PlayerSlideEnded]: { reason: SlideEndReason; exitSpeed: number; tick: number };
-  [EV.PlayerMantleStarted]: { x: number; y: number; z: number; ledgeHeight: number };
-  [EV.PlayerMantleEnded]: { x: number; y: number; z: number; endStance: StanceId };
+  [EV.PlayerSlideStarted]: { entityId: number; x: number; y: number; z: number; entrySpeed: number };
+  [EV.PlayerSlideEnded]: { entityId: number; reason: SlideEndReason; exitSpeed: number; tick: number };
+  [EV.PlayerMantleStarted]: { entityId: number; x: number; y: number; z: number; ledgeHeight: number };
+  [EV.PlayerMantleEnded]: { entityId: number; x: number; y: number; z: number; endStance: StanceId };
   [EV.PlayerHealthChanged]: { current: number; max: number; delta: number; regenerating: boolean };
 
   /**
@@ -97,6 +114,8 @@ export type GameEvents = {
    */
   [EV.WeaponFired]: {
     weaponId: string;
+    /** Who pulled the trigger. From M3 that is not always the player. */
+    sourceId: number;
     x: number;
     y: number;
     z: number;
@@ -113,12 +132,17 @@ export type GameEvents = {
     hitTarget: boolean;
     ammoInMag: number;
   };
-  [EV.WeaponDryFired]: { weaponId: string };
-  [EV.WeaponReloadStarted]: { weaponId: string; empty: boolean; duration: number };
-  [EV.WeaponReloadStep]: { weaponId: string; step: ReloadStep };
-  [EV.WeaponReloadFinished]: { weaponId: string; mag: number; reserve: number };
-  [EV.WeaponAdsChanged]: { weaponId: string; aiming: boolean };
-  [EV.WeaponAmmoChanged]: { weaponId: string; mag: number; reserve: number };
+  /**
+   * The mechanical vocabulary. Each carries `sourceId` from M3 for the same reason
+   * `weapon.fired` does: a bot working its charging handle across the room is a sound the
+   * player should hear *over there*, not at their own shoulder.
+   */
+  [EV.WeaponDryFired]: { weaponId: string; sourceId: number };
+  [EV.WeaponReloadStarted]: { weaponId: string; sourceId: number; empty: boolean; duration: number };
+  [EV.WeaponReloadStep]: { weaponId: string; sourceId: number; step: ReloadStep };
+  [EV.WeaponReloadFinished]: { weaponId: string; sourceId: number; mag: number; reserve: number };
+  [EV.WeaponAdsChanged]: { weaponId: string; sourceId: number; aiming: boolean };
+  [EV.WeaponAmmoChanged]: { weaponId: string; sourceId: number; mag: number; reserve: number };
 
   /** A round terminated on world geometry, or punched through it. */
   [EV.BulletImpact]: {
@@ -148,6 +172,19 @@ export type GameEvents = {
     lethal: boolean;
   };
   [EV.EntityKilled]: { targetId: number; sourceId: number; weaponId: string; zone: HitZone };
+
+  [EV.BotSpawned]: {
+    entityId: number;
+    team: BotTeam;
+    tier: BotTier;
+    x: number;
+    y: number;
+    z: number;
+    yaw: number;
+    /** Metres to the nearest living enemy at the moment of spawning (S6.9). */
+    nearestEnemy: number;
+  };
+  [EV.BotStateChanged]: { entityId: number; from: BotState; to: BotState; tier: BotTier };
 
   [EV.GameStateChanged]: { from: GameStateId; to: GameStateId };
   [EV.SettingsChanged]: { key: string };

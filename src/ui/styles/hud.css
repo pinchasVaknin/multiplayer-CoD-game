@@ -196,3 +196,120 @@
   color: var(--c-accent);
   font-size: var(--t-lead);
 }
+
+/* ---- taking damage (M3) ----------------------------------------------- */
+
+/*
+ * A rim, not a wash. The centre of the screen has to stay readable while you are being
+ * shot at, because that is precisely the moment you need to see what is shooting you.
+ */
+.hud-hurt {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  will-change: opacity;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(232, 96, 76, 0) 42%,
+    rgba(232, 96, 76, 0.26) 76%,
+    rgba(232, 96, 76, 0.54) 100%
+  );
+}
+
+.hud-dirs {
+  position: absolute;
+  inset: 0;
+}
+
+/*
+ * Each indicator is a zero-size layer pinned to the screen centre, so rotating it swings
+ * the chevron around the crosshair on a fixed radius at any aspect ratio.
+ */
+.hud-dir {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.hud-dir i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  width: 0;
+  height: 0;
+  /* Tapered chevron, pointing outward, 92px up the rotated axis. */
+  margin: -92px 0 0 -11px;
+  border-left: 11px solid transparent;
+  border-right: 11px solid transparent;
+  border-bottom: 13px solid var(--c-bad);
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.9));
+}
+
+/* ---- health ----------------------------------------------------------- */
+
+.hud-health {
+  position: absolute;
+  left: var(--s-8);
+  bottom: var(--s-6);
+  width: 168px;
+  height: 3px;
+  background: rgba(232, 234, 238, 0.16);
+  opacity: 0;
+  transition: opacity var(--dur-med) var(--ease);
+}
+
+.hud-health--on {
+  opacity: 1;
+}
+
+.hud-health i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--c-text);
+  transform-origin: left center;
+  will-change: transform;
+}
+
+.hud-health--critical i {
+  background: var(--c-bad);
+}
+
+/* ---- death ------------------------------------------------------------ */
+
+.hud-dead {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  background: rgba(7, 8, 10, 0.55);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-med) var(--ease), visibility var(--dur-med);
+}
+
+.hud-dead--on {
+  opacity: 1;
+  visibility: visible;
+}
+
+.hud-dead__label {
+  font-size: var(--t-body);
+  letter-spacing: var(--track-display);
+  color: var(--c-text-dim);
+}
+
+.hud-dead__count {
+  font-size: var(--t-display);
+  font-weight: var(--w-heavy);
+  line-height: 1;
+  color: var(--c-text);
+}
