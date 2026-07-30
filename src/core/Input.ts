@@ -114,6 +114,10 @@ export class Input {
   /** Set while a match is running; the lock is taken the moment fullscreen allows it. */
   private wantKeyboardLock = false;
 
+  /** Set while a match is live: a click re-acquires pointer lock. See `armPointerLock`. */
+  private wantPointerLock = false;
+  private lockRejectedWhileArmed = false;
+
   private lockListeners: Array<(locked: boolean) => void> = [];
   private escapeListeners: Array<() => void> = [];
 
@@ -169,9 +173,38 @@ export class Input {
     // Chrome 113+ returns a promise; older builds return undefined.
     if (result instanceof Promise) {
       result.catch((err: unknown) => {
+        // While armed the next click will try again, so a rejection is expected rather
+        // than exceptional — say so once and then stop filling the console with it.
+        if (this.wantPointerLock && this.lockRejectedWhileArmed) return;
+        if (this.wantPointerLock) this.lockRejectedWhileArmed = true;
         console.warn('[Input] pointer lock request rejected:', err);
       });
     }
+  }
+
+  /**
+   * Arm click-to-recapture (M5 hotfix).
+   *
+   * A bare `requestPointerLock` only succeeds from a user gesture, and Chrome additionally
+   * refuses one for a short window after the user has left the lock with Escape. That makes
+   * two ways to come back from the pause screen fail: resuming with Escape has no gesture at
+   * all, and resuming with the button can land inside the cooldown.
+   *
+   * So while armed, a click anywhere re-acquires the lock — and that click is *consumed*
+   * rather than passed on, for the same reason `MATCH` entry clears held buttons: the click
+   * that gets you back into the game must not also pull the trigger.
+   */
+  armPointerLock(on: boolean): void {
+    this.wantPointerLock = on;
+    if (!on) {
+      this.lockRejectedWhileArmed = false;
+      return;
+    }
+    this.requestPointerLock();
+  }
+
+  get pointerLockArmed(): boolean {
+    return this.wantPointerLock;
   }
 
   exitPointerLock(): void {
@@ -405,6 +438,14 @@ export class Input {
    */
   private readonly onMouseDown = (e: MouseEvent): void => {
     if (this.domFocusGuard) return;
+    // Armed and unlocked: this click is the gesture that gets the cursor back, and it is
+    // spent doing that. Passing it on as well would fire the weapon on the frame the player
+    // clicked to resume.
+    if (this.wantPointerLock && !this.locked) {
+      this.lockRejectedWhileArmed = false;
+      this.requestPointerLock();
+      return;
+    }
     if (e.button === 2) this.mouseButtons |= Btn.Ads;
     if (e.button === 0) {
       this.mouseButtons |= Btn.Fire;

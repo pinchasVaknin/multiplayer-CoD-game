@@ -44,8 +44,19 @@ export interface WeaponModel {
   readonly chargingHandle: THREE.Group;
   /** Muzzle flash is parented here so it tracks every animation the gun does. */
   readonly muzzle: THREE.Object3D;
-  /** Height of the sight line above the origin, metres. `ViewmodelConfig.adsY` cancels it. */
+  /**
+   * Height of the sight line above the origin **in the parent's space**, metres —
+   * `spec.sightHeight` with `spec.scale` already applied.
+   *
+   * The scale matters and was missed the first time: the root is scaled, so a weapon at
+   * 1.08 has a sight line 8% higher than its spec says, and the ADS compensation in
+   * `ViewmodelAnim` was cancelling the unscaled number. Measured error was up to 8.3 mm —
+   * about 2.5 degrees at the ADS distance, which is a visibly misaligned sight picture on
+   * the six weapons whose scale is not 1.
+   */
   readonly sightHeight: number;
+  /** Per-weapon correction to the shared ADS pose. See `WeaponModelSpec.adsOffsetZ`. */
+  readonly adsOffsetZ: number;
   readonly weaponId: string;
   dispose(): void;
 }
@@ -89,7 +100,8 @@ export function buildWeaponModel(weaponId: string, anisotropy: number): WeaponMo
     magazine,
     chargingHandle,
     muzzle,
-    sightHeight: spec.sightHeight,
+    sightHeight: spec.sightHeight * spec.scale,
+    adsOffsetZ: spec.adsOffsetZ,
     weaponId,
     dispose(): void {
       // Only the geometry is per model. The three materials and their textures are shared

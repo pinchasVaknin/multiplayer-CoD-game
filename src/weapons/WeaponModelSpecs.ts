@@ -50,6 +50,24 @@ export interface WeaponModelSpec {
   readonly pump: boolean;
   /** Overall scale. The pistol is the only weapon that is genuinely a different size. */
   readonly scale: number;
+
+  /**
+   * Per-weapon correction to the shared ADS pose, metres.
+   *
+   * `ViewmodelConfig.adsY` / `adsZ` are one pose for twelve weapons, and the sight-height
+   * compensation already handles the vertical difference — but it puts the *sight line* on
+   * the screen centre without saying anything about how much of the screen the rest of the
+   * weapon takes. A short weapon aimed at the same distance as a long one has its body and
+   * its hands much closer to the eye.
+   *
+   * Negative pushes the weapon further away. Zero on everything except the pistol.
+   *
+   * Z only, deliberately. A vertical correction was tried first and it moves the *sights*
+   * off the screen centre — the sight-height compensation in `ViewmodelAnim` has already
+   * put the sight line on the camera axis, and anything further in Y breaks the one thing
+   * ADS has to get right. Moving along Z leaves the axis alone.
+   */
+  readonly adsOffsetZ: number;
 }
 
 const AR_BASE: WeaponModelSpec = {
@@ -72,6 +90,7 @@ const AR_BASE: WeaponModelSpec = {
   bipod: false,
   pump: false,
   scale: 1,
+  adsOffsetZ: 0,
 };
 
 export const WEAPON_MODEL_SPECS: Readonly<Record<string, WeaponModelSpec>> = {
@@ -267,9 +286,21 @@ export const WEAPON_MODEL_SPECS: Readonly<Record<string, WeaponModelSpec>> = {
   },
 
   // -- pistol --------------------------------------------------------------
-  /** No stock, no handguard, magazine in the grip. Genuinely a different size. */
+  /**
+   * No stock, no handguard, magazine in the grip. Genuinely a different size.
+   *
+   * The only weapon that needs an ADS correction. At the shared pose its receiver centre
+   * sits where a rifle's does, which for a 0.17 m weapon puts the slide, the grip and both
+   * hands far closer to the eye than any rifle's — reported in playtesting as the pistol
+   * blocking the screen while aiming. Pushed 0.13 m further out; the sight
+   * line is unaffected because the sight-height compensation puts it on the camera axis and
+   * moving along that axis does not leave it. The other half of the fix is the two-handed
+   * grip in `WeaponMeshParts` — a rifle's support forearm reached forward past the pistol's
+   * muzzle and sat between the sights and the eye.
+   */
   pistol_talon: {
     ...AR_BASE,
+    adsOffsetZ: -0.13,
     receiverLength: 0.17,
     receiverHeight: 0.062,
     receiverWidth: 0.03,

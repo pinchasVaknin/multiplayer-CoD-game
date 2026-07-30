@@ -161,7 +161,10 @@ export class ViewmodelAnim {
     // there is one ADS pose and twelve sight heights, not twelve poses (M5).
     const sightOffset = this.model.sightHeight - REFERENCE_SIGHT_HEIGHT;
     let py = lerp(cfg.hipY, cfg.adsY - sightOffset, ads);
-    let pz = lerp(cfg.hipZ, cfg.adsZ, ads);
+    // `adsOffsetZ` is the weapon's own correction to the shared pose: the sight-height
+    // compensation puts the sight line on the camera axis but says nothing about how much
+    // of the screen a short weapon's body and hands take. Zero on everything but the pistol.
+    let pz = lerp(cfg.hipZ, cfg.adsZ + this.model.adsOffsetZ, ads);
     let rx = lerp(cfg.hipPitch, 0, ads);
     let ry = lerp(cfg.hipYaw, 0, ads);
     let rz = lerp(cfg.hipRoll, 0, ads);

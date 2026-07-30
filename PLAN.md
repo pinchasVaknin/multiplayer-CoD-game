@@ -1488,6 +1488,93 @@ The Browser pane composited for exactly one measurement window and was `visibili
    re-run since `equipment/` was added, and `MatchEquipment.dispose` is the new thing that
    could leak.
 
+## M5 hotfixes — reported in playtesting, fixed immediately after the milestone commit
+
+Three, and the first was a defect that had been latent since M1.
+
+### 1. The pause menu's buttons were unclickable — a CSS specificity bug
+
+`app.css` granted pointer events with `#ui-root > * { pointer-events: auto }`. That selector
+is specificity (1,0,0) and therefore silently outranked `.hud { pointer-events: none }` at
+(0,1,0) — so the HUD, which is a full-screen element, had been quietly *accepting* clicks for
+four milestones. Nothing was underneath it until M5 put the pause screen there.
+
+Measured before the fix, hit-testing the centre of the Resume button:
+
+    stack: [hud-dirs, hud-hurt, hud-low, hud-numbers, hud, op-btn, op-screen--pause, CANVAS]
+
+Five HUD layers above the button. Fixed by making interactive layers opt *in* by class
+(`.op-screen, .sb, .dbg-root`) rather than being granted by an ID selector, so a child that
+declares `pointer-events: none` is believed. `.op-screen` also gained `z-index: 10`, because
+a modal state overlay should be above the in-match UI and the HUD is appended to `#ui-root`
+later than the pause screen is.
+
+After: all three buttons hit-test to themselves, and `.hud` computes to `pointer-events: none`
+as its own rule always intended.
+
+### 2. Pointer lock did not come back on resume
+
+Two failure modes, one fix. Resuming with **Escape** has no user gesture at all, so
+`requestPointerLock` can only ever be rejected; resuming with the **button** does have one,
+but Chrome refuses a re-lock for a short window after the user has left the lock with Escape,
+so it lands inside the cooldown often enough to feel broken.
+
+`Input.armPointerLock(on)` now arms click-to-recapture for the whole time a match is live:
+while armed and unlocked, a click re-acquires the lock. That click is **consumed** rather than
+passed on — verified: magazine 30 before, 30 after, so the click that gets you back into the
+game does not also fire your weapon. Armed in MATCH, disarmed in PAUSED (a click there belongs
+to the buttons) and in MENU. The rejection warning is throttled to once per arming so a
+platform that refuses lock outright does not fill the console.
+
+### 3. The pistol filled the screen at ADS
+
+Two causes, and the second was the bigger one.
+
+- The shared ADS pose puts every weapon's receiver centre at the same distance. On a 0.17 m
+  pistol that is far closer to the eye, in useful terms, than on a 0.75 m rifle.
+- **The hands were a rifle's.** `bodyBoxes` placed a support hand and a 0.19 m forearm out on
+  the handguard — and the pistol's `handguardLength` is 0, so `supportZ` collapsed back to the
+  receiver and put a forearm between the sights and the camera.
+
+Fixed by giving `WeaponModelSpec` an `adsOffsetZ` (pistol: −0.13 m, zero on everything else)
+and by holding a weapon with no handguard in two hands *on the grip*. Measured at full ADS,
+nearest point of the weapon to the eye:
+
+| Weapon | Nearest point | Silhouette height |
+|---|---:|---:|
+| WASP 9 | 0.009 m | 0.330 m |
+| M4 CARBINE | 0.035 m | 0.349 m |
+| **TALON 9** | **0.134 m** | **0.318 m** |
+| MONOLITH 60 | 0.189 m | 0.518 m |
+
+The pistol is now further from the eye than seven of the other eleven weapons and has the
+smallest silhouette of the twelve.
+
+**A vertical correction was tried first and reverted.** `adsOffsetY: -0.012` moved the sights
+12 mm off the screen centre — about 5 degrees at that distance. The sight-height compensation
+has already put the sight line on the camera axis, and moving along that axis is the only
+correction that does not leave it. `adsOffsetZ` is Z-only for that reason.
+
+### A real bug the pistol measurement exposed
+
+Checking that the fix had not moved the sights turned up that **M5's sight-height compensation
+ignored `spec.scale`**. The viewmodel root is scaled, so a weapon at 1.08 has a sight line 8%
+higher than its spec says, and the compensation was cancelling the unscaled number. Measured
+error ran to 8.3 mm on the MONOLITH — roughly 2.5 degrees, a visibly misaligned sight picture
+on the six weapons whose scale is not 1. `WeaponModel.sightHeight` is now the *effective*
+height with scale applied; all twelve weapons now measure **−0.61 mm**, identically, which is
+the residual of `ViewmodelConfig.adsY` itself. One number to tune, twelve weapons following it.
+
+### Also
+
+Entering PAUSED hides the F1 overlay and remembers whether it was open, because a large
+interactive panel over a modal screen is the clash that was reported. The pause menu's DEBUG
+OVERLAY button brings it back deliberately, and resuming restores whatever the player last
+chose.
+
+`__operator.pointer()` reports `{ locked, armed, keyboardCapture }` — pointer-lock state is
+otherwise unobservable from a verification script.
+
 ## What Milestone 6 needs to know
 
 **A weapon is still only data.** Twelve exist and none of them is a subclass. If M6's loadout

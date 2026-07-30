@@ -538,3 +538,20 @@ opening F1 mid-match "breaks pointer lock"; it was not the key, it was that a cl
 also the fire button) could land on a slider and give it DOM focus, at which point
 `Input.domFocusGuard` correctly stops feeding the game keys. Paused, the cursor is free and
 every control works, which is why the pause menu has a button for the overlay.
+
+### Pointer lock, after the M5 hotfix
+
+```js
+__operator.pointer()   // { locked, armed, keyboardCapture }
+```
+
+`armed` is the thing worth knowing. A bare `requestPointerLock` only succeeds from a user
+gesture, and Chrome additionally refuses one for a short window after the user has left the
+lock with Escape — so resuming from the pause screen could not rely on it. While a match is
+live the input layer is *armed*: any click re-acquires the lock, and that click is consumed
+rather than passed on, so it cannot also fire the weapon. Armed in MATCH, disarmed in PAUSED
+(where a click belongs to the buttons) and in MENU.
+
+If `locked` is false while `armed` is true and clicking does nothing, the platform is
+refusing pointer lock outright — the embedded Browser pane does, because the canvas lives in
+a nested document (`WrongDocumentError`). The warning is throttled to once per arming.

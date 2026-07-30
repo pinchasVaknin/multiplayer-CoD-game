@@ -34,16 +34,33 @@ body.op-locked #viewport {
   pointer-events: none;
 }
 
-#ui-root > *,
-#debug-root > * {
+/*
+ * Interactive layers opt IN, by class.
+ *
+ * This was `#ui-root > * { pointer-events: auto }`, which is specificity (1,0,0) and
+ * therefore silently outranked `.hud { pointer-events: none }` at (0,1,0). The HUD is a
+ * full-screen element, so it was quietly swallowing every click aimed at anything appended
+ * to `#ui-root` before it — which nothing was, until M5 put the pause screen there and its
+ * buttons became unclickable. Granting pointer events from an ID selector means no child
+ * can ever refuse them; granting them by class means each layer decides for itself.
+ */
+.op-screen,
+.sb,
+.dbg-root {
   pointer-events: auto;
 }
 
-/* ---- Full-screen state overlays (BOOT / MENU / SUMMARY) ---------------- */
+/* ---- Full-screen state overlays (BOOT / MENU / PAUSED / SUMMARY) -------- */
 
 .op-screen {
   position: absolute;
   inset: 0;
+  /*
+   * Above the in-match UI. A state overlay is modal: the HUD is appended to `#ui-root`
+   * later than the pause screen (the world is built after the front end), so without this
+   * the crosshair and the vignettes paint over the top of it.
+   */
+  z-index: 10;
   display: flex;
   flex-direction: column;
   align-items: center;

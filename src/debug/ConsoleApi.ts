@@ -39,6 +39,12 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
     },
     attachmentDeltas: () => game.debugSuite?.arsenalHarness.measureAttachments(),
     equipment: () => game.activeMatch?.equipment,
+    /** Pointer-lock state, which is otherwise unobservable from a script. */
+    pointer: () => ({
+      locked: game.inputState.isLocked,
+      armed: game.inputState.pointerLockArmed,
+      keyboardCapture: game.inputState.keyboardCaptureActive,
+    }),
     equipmentConfig: game.equipmentConfig,
     secondaryDef: game.secondaryDef,
     match: () => game.activeMatch,

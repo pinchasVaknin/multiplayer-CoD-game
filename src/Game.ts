@@ -178,6 +178,8 @@ export class Game {
   private lastRenderMs = performance.now();
   /** Set when the mode declares the match over; SUMMARY is entered from the render pass. */
   private pendingSummary = false;
+  /** Whether F1 was open when the match was paused, so resuming can put it back. */
+  private overlayWasOpenBeforePause = false;
 
   constructor(canvas: HTMLCanvasElement, uiHost: HTMLElement, debugHost: HTMLElement) {
     this.settings = new SaveStore<Settings>('operator.settings', 2, DEFAULT_SETTINGS, (raw, from) => {
@@ -210,7 +212,11 @@ export class Game {
       onResume: () => this.resumeFromPause(),
       onToggleDebug: () => {
         const overlay = this.debug?.overlay;
-        overlay?.setVisible(!overlay.isVisible);
+        if (overlay === undefined) return;
+        overlay.setVisible(!overlay.isVisible);
+        // Once it has been opened on purpose it stays open through the resume, rather than
+        // being closed again by the pause handler's book-keeping.
+        this.overlayWasOpenBeforePause = overlay.isVisible;
       },
       onQuit: () => this.transitionTo('MENU'),
       statusLine: () => this.pauseStatusLine(),
@@ -269,6 +275,17 @@ export class Game {
   /** The per-match debug tooling, or null outside a match. */
   get debugSuite(): DebugSuite | null {
     return this.debug;
+  }
+
+  /**
+   * The input seam, for the console API and the verification scripts.
+   *
+   * Read-only in practice: nothing outside `Game` drives it, and the two things a script
+   * wants to know — whether the cursor is captured and whether a click would recapture it —
+   * are not observable any other way.
+   */
+  get inputState(): Input {
+    return this.input;
   }
 
   get activeBotHarness(): BotHarness | null {
@@ -350,13 +367,17 @@ export class Game {
         // a user gesture logs a rejection — which would put noise in the console the soak
         // run is there to prove is quiet.
         if (this.botHarness === null && !this.matchHarness.isRunning) {
-          this.input.requestPointerLock();
+          // Armed rather than merely requested: resuming from the pause screen with Escape
+          // has no user gesture, and resuming with the button can land inside Chrome's
+          // post-Escape cooldown. Armed, the next click gets the cursor back either way.
+          this.input.armPointerLock(true);
           // Only bites while the page is fullscreen; see Input.lockKeyboard and PLAN.md.
           this.input.lockKeyboard();
         }
       },
       exit: (to) => {
         this.input.unlockKeyboard();
+        this.input.armPointerLock(false);
         this.audio.setSlide(false, 0, 0, 0, 0);
         // Pausing keeps the match active and the world built: it is the same match, simply
         // not advancing. Only leaving for good deactivates it.
@@ -379,7 +400,14 @@ export class Game {
     this.states.set('PAUSED', {
       enter: () => {
         this.input.clearHeld();
+        // Disarmed while paused: a click belongs to the pause menu's buttons, not to
+        // recapturing the cursor the player just released.
+        this.input.armPointerLock(false);
         this.input.exitPointerLock();
+        // Everything else on screen goes away. The overlay is interactive DOM over a
+        // modal screen, which is exactly the clash the pause menu was reported for; the
+        // pause menu has a button to bring it back deliberately.
+        this.hideOverlayForPause();
         this.pauseMenu.show();
       },
       exit: (to) => {
@@ -742,6 +770,26 @@ export class Game {
   private resumeFromPause(): void {
     if (this.state !== 'PAUSED') return;
     this.transitionTo('MATCH');
+    this.restoreOverlayAfterPause();
+  }
+
+  /**
+   * Take the F1 overlay off screen for the duration of the pause.
+   *
+   * It is a large, interactive, full-screen panel and the pause screen is modal; two of
+   * those on top of each other is the "UI bugs" the pause menu was reported for. Whether
+   * it was open is remembered so resuming puts the player back where they were.
+   */
+  private hideOverlayForPause(): void {
+    const overlay = this.debug?.overlay;
+    if (overlay === undefined) return;
+    this.overlayWasOpenBeforePause = overlay.isVisible;
+    overlay.setVisible(false);
+  }
+
+  private restoreOverlayAfterPause(): void {
+    if (!this.overlayWasOpenBeforePause) return;
+    this.debug?.overlay.setVisible(true);
   }
 
   private pauseStatusLine(): string {

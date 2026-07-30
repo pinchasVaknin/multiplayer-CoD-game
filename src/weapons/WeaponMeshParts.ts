@@ -310,7 +310,15 @@ export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
 
   // -- hands ---------------------------------------------------------------
   // Grey-box, but a viewmodel with no hands reads as a floating prop.
-  const supportZ = spec.handguardLength > 0 ? front - spec.handguardLength * 0.45 : front - 0.02;
+  //
+  // A weapon with no handguard is held in two hands *on the grip*, not with a support hand
+  // reaching for furniture that does not exist. That distinction is not cosmetic: the
+  // rifle's support arm is a 0.2 m forearm box placed forward of the receiver, and on a
+  // 0.17 m pistol it ended up between the sights and the camera, filling most of the screen
+  // at ADS. See the M5 hotfix note in PLAN.md.
+  const twoHandedGrip = spec.handguardLength <= 0;
+
+  // Trigger hand and its forearm. Always present.
   out.push({
     surface: 'glove',
     x: 0.006,
@@ -331,6 +339,35 @@ export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
     d: 0.2,
     rx: -0.5,
   });
+
+  if (twoHandedGrip) {
+    // Support hand wrapped around the firing hand, and its forearm tucked in beside the
+    // first rather than reaching forward.
+    out.push({
+      surface: 'glove',
+      x: -0.03,
+      y: -spec.receiverHeight * 0.92,
+      z: back * 0.42,
+      w: 0.05,
+      h: 0.082,
+      d: 0.078,
+      rx: -0.28,
+    });
+    out.push({
+      surface: 'glove',
+      x: -0.05,
+      y: -0.172,
+      z: back * 0.42 + 0.13,
+      w: 0.066,
+      h: 0.072,
+      d: 0.19,
+      rx: -0.5,
+      rz: 0.18,
+    });
+    return out;
+  }
+
+  const supportZ = front - spec.handguardLength * 0.45;
   out.push({
     surface: 'glove',
     x: 0,
