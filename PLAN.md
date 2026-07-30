@@ -1202,6 +1202,15 @@ split next, along the world-lifecycle seam. `public/verify/*.js` still ship in a
 build — now five files. `voicesDropped` is cumulative for the page and only grows under
 fast-forward; it is not a per-match figure.
 
+### M4 Playtest Bugs & UX Feedback (Action Required in Next Milestone)
+**Lighting Adjustment:** The Foundry map is too dark. Please adjust the ambient/directional lighting intensity, shadow darkness, or ACES exposure settings to brighten the environment significantly.
+**Combat / Sliding:** Players currently cannot fire while sliding. 
+Please update the weapon state machine and stance constraints to explicitly allow firing your weapon while in the `SLIDE` stance.
+**Pause State & UI:** Pressing `ESC` currently quits the match entirely. This needs to be changed. 
+`ESC` must transition the game into a `PAUSED` state (freezing the simulation) and display an in-game Pause menu. 
+**Debug Overlay / Pointer Lock:** Pressing `F1` currently breaks pointer lock and causes control issues. 
+The Debug Overlay/Tuning Panel access should either gracefully handle pointer lock suspension, or ideally, be accessible as an option directly from the new Pause menu.
+
 ## What is playable right now
 
 Pick Team Deathmatch and Foundry from the menu and you drop into an industrial yard with a
