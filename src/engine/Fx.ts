@@ -76,7 +76,10 @@ export class Fx {
 
   private readonly muzzleLight = new THREE.PointLight(0xffd9a0, 0, MUZZLE_LIGHT_DISTANCE, 2);
   private flashMesh: THREE.Mesh | null = null;
+  /** The viewmodel flash: the local player's gun only. */
   private flashTimer = 0;
+  /** The world light: whoever fired, wherever they are. Timed separately for that reason. */
+  private lightTimer = 0;
   private flashScale = 1;
   private muzzleLightPeak = 0;
 
@@ -181,12 +184,22 @@ export class Fx {
 
   // -- spawning -------------------------------------------------------------
 
-  /** `scale` comes from the weapon's `muzzleFlashScale`. */
-  fireMuzzleFlash(worldX: number, worldY: number, worldZ: number, scale: number): void {
-    this.flashTimer = FLASH_SECONDS;
-    this.flashScale = scale;
+  /**
+   * A muzzle flash. `scale` comes from the weapon's `muzzleFlashScale`.
+   *
+   * `local` is load-bearing and was the M3 playtest bug. The flash *mesh* is parented to the
+   * player's own viewmodel muzzle (see `attachMuzzle`), so firing it for a bot's shot lit up
+   * the player's rifle every time anybody on the map pulled a trigger — a flash on a gun
+   * that was not shooting. The **light** is a world light and correctly belongs to whoever
+   * fired, wherever they are standing; the mesh belongs to the local player only.
+   */
+  fireMuzzleFlash(worldX: number, worldY: number, worldZ: number, scale: number, local: boolean): void {
     this.muzzleLight.position.set(worldX, worldY, worldZ);
     this.muzzleLightPeak = 9 * scale;
+    this.lightTimer = FLASH_SECONDS;
+    if (!local) return;
+    this.flashTimer = FLASH_SECONDS;
+    this.flashScale = scale;
   }
 
   spawnTracer(
@@ -410,11 +423,26 @@ export class Fx {
     if (dirty) mesh.instanceMatrix.needsUpdate = true;
   }
 
+  /**
+   * Two timers, because a muzzle flash is two things.
+   *
+   * The world light is fired by every shot on the map. The viewmodel mesh is fired only by
+   * the local player's, because that is the only gun it is attached to — running them off
+   * one timer is what made the player's rifle flash whenever a bot shot (see
+   * `fireMuzzleFlash`).
+   */
   private updateFlash(dt: number): void {
+    if (this.lightTimer > 0) {
+      this.lightTimer -= dt;
+      const lt = Math.max(0, this.lightTimer / FLASH_SECONDS);
+      this.muzzleLight.intensity = this.muzzleLightPeak * lt * lt;
+    } else if (this.muzzleLight.intensity !== 0) {
+      this.muzzleLight.intensity = 0;
+    }
+
     const mesh = this.flashMesh;
     if (this.flashTimer <= 0) {
       if (mesh !== null && mesh.visible) mesh.visible = false;
-      if (this.muzzleLight.intensity !== 0) this.muzzleLight.intensity = 0;
       return;
     }
     this.flashTimer -= dt;
@@ -430,7 +458,6 @@ export class Fx {
       mesh.scale.set(s, s, s * (frame === 0 ? 1.25 : 0.8));
       mesh.rotation.z = frame * 1.9 + this.flashScale;
     }
-    this.muzzleLight.intensity = this.muzzleLightPeak * t * t;
   }
 }
 

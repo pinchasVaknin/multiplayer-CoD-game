@@ -20,6 +20,15 @@ export interface Damageable {
   readonly displayName: string;
   readonly health: Health;
   readonly rig: HitboxRig;
+  /**
+   * Which side this target is on, or absent for anything that is not on one — M2's range
+   * dummies are damageable and belong to nobody.
+   *
+   * Written as the literal union rather than importing `BotTeam` from `ai/`: `combat/`
+   * sits below `ai/` and should not depend upward on it. The two are structurally
+   * identical, so a `Combatant` satisfies this without a cast.
+   */
+  readonly team?: 'A' | 'B';
 }
 
 export interface DamageRequest {
@@ -131,6 +140,18 @@ export class DamageSystem {
    * broadphase walks this every shot and a Map iterator would allocate.
    */
   readonly list: Damageable[] = [];
+
+  /**
+   * Whether a round may hurt a teammate (M4).
+   *
+   * Off in TDM, which is the CoD default for a core playlist and the only setting that
+   * makes a team score mean anything: with it on, ten bots in a corridor spend the match
+   * killing each other. It lives here because this is the one door damage goes through, and
+   * `Ballistics` reads it to skip friendly rigs during target selection so the round passes
+   * *through* a teammate rather than stopping harmlessly in one.
+   */
+  friendlyFire = false;
+
   private readonly entities = new Map<number, Damageable>();
 
   constructor(private readonly bus: GameBus) {}
@@ -160,6 +181,13 @@ export class DamageSystem {
   apply(req: DamageRequest): number {
     const target = this.entities.get(req.targetId);
     if (target === undefined || !target.health.alive) return 0;
+    if (!this.friendlyFire && req.sourceId !== req.targetId) {
+      // The gate for every damage source, not just ballistics — which filters friendly
+      // rigs out of target selection, so this is the one that will still be here when
+      // grenades and killstreaks arrive with their own way of asking.
+      const source = this.entities.get(req.sourceId);
+      if (source !== undefined && source.team !== undefined && source.team === target.team) return 0;
+    }
 
     const def = req.weapon;
     const base = damageAtRange(def, req.distance);

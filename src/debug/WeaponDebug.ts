@@ -45,6 +45,7 @@ const LATENCY_H = 70;
 export class WeaponDebug {
   private readonly latencyCanvas: CanvasRenderingContext2D;
   private readonly plots: WeaponPlots;
+  private readonly unsubscribe: Array<() => void> = [];
 
   private readonly fAmmo: Field;
   private readonly fState: Field;
@@ -95,7 +96,7 @@ export class WeaponDebug {
     );
     hits.addNode(
       this.toggle('Damage numbers', false, (on) => {
-        this.match.hud.damageNumbersEnabled = on;
+        this.match.ui.hud.damageNumbersEnabled = on;
       }),
     );
 
@@ -120,7 +121,7 @@ export class WeaponDebug {
     this.fPools = pools.addField('Fx / audio');
     pools.addNode(
       this.button('Reset targets', () => {
-        this.match.range.resetAll();
+        this.match.range?.resetAll();
       }),
     );
     pools.addNode(
@@ -178,12 +179,16 @@ export class WeaponDebug {
       () => this.onWeaponChanged(),
     );
 
-    bus.on(EV.WeaponFired, (p) => {
-      this.plots.record(p.dx, p.dy, p.dz, p.shotIndex);
-      const now = performance.now();
-      this.shotTimes.push(now);
-      if (this.shotTimes.length > 24) this.shotTimes.shift();
-    });
+    // The unsubscribe is retained from M4: this panel is built and destroyed with each match,
+    // and a live subscription would keep it — and through it the whole `Match` — alive for the
+    // life of the page. One of the two leaks the multi-match heap run found.
+    this.unsubscribe.push(
+      bus.on(EV.WeaponFired, (p) => {
+        this.plots.record(p.dx, p.dy, p.dz, p.shotIndex);
+        this.shotTimes.push(performance.now());
+        if (this.shotTimes.length > 24) this.shotTimes.shift();
+      }),
+    );
 
     overlay.addTextHook(() => this.refreshText());
     overlay.addGraphHook(() => this.refreshGraphs());
@@ -192,6 +197,8 @@ export class WeaponDebug {
   }
 
   dispose(): void {
+    for (const off of this.unsubscribe) off();
+    this.unsubscribe.length = 0;
     window.removeEventListener('keydown', this.onKeyDown);
   }
 
@@ -256,7 +263,7 @@ export class WeaponDebug {
       set(this.fHitLoss, '-');
     }
 
-    const markerMs = match.hud.lastHitLatencyMs;
+    const markerMs = match.ui.hud.lastHitLatencyMs;
     set(this.fMarker, markerMs < 0 ? '-' : `${markerMs.toFixed(1)} ms (budget 30)`);
 
     latency.recompute();

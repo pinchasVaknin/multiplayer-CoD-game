@@ -7,7 +7,6 @@ import {
   type PerceptionConfig,
   type TierTable,
 } from './ai/DifficultyTiers';
-import { PLAYER_ENTITY_ID } from './combat/DamageSystem';
 import { EV, createGameBus, type GameBus } from './core/Events';
 import { Input } from './core/Input';
 import type { InputCommand } from './core/InputCommand';
@@ -19,53 +18,72 @@ import { CameraRig, type CameraDrive } from './engine/CameraRig';
 import { ProceduralAudio } from './engine/ProceduralAudio';
 import { ProceduralTextures } from './engine/ProceduralTextures';
 import { Renderer } from './engine/Renderer';
-import { AiDebug } from './debug/AiDebug';
-import { AiPanel } from './debug/AiPanel';
 import { BotHarness, parseHarnessOptions } from './debug/BotHarness';
-import { CollisionDebug } from './debug/CollisionDebug';
-import { DebugOverlay } from './debug/DebugOverlay';
+import { DebugSuite } from './debug/DebugSuite';
+import { FrameStats } from './debug/FrameStats';
+import { installConsoleApi } from './debug/ConsoleApi';
 import { Harness } from './debug/Harness';
-import { HitboxDebug } from './debug/HitboxDebug';
-import { WeaponDebug } from './debug/WeaponDebug';
-import { WeaponHarness } from './debug/WeaponHarness';
+import { MatchHarness } from './debug/MatchHarness';
+import { Speedometer } from './debug/Speedometer';
 import { isLegalGameTransition, type GameStateId } from './GameStates';
 import { Match } from './Match';
+import { PLAYER_TEAM } from './Match';
+import type { GameModeId } from './modes/GameMode';
+import { DEFAULT_MAP_ID, DEFAULT_MODE_ID, findMap, findMode } from './modes/ModeRegistry';
 import { DEFAULT_CAMERA_CONFIG, FOV_MAX, FOV_MIN, type CameraConfig } from './player/CameraConfig';
 import { DEFAULT_HEALTH_CONFIG, type HealthConfig } from './player/Health';
 import { DEFAULT_MOVEMENT_CONFIG, cloneMovementConfig, type MovementConfig } from './player/MovementConfig';
 import { PlayerController } from './player/PlayerController';
 import { ViewmodelLayer } from './player/Viewmodel';
-import { Screens } from './ui/Screens';
+import { EndOfMatch } from './ui/EndOfMatch';
+import { Menus, type MenuSelection } from './ui/Menus';
 import { AR_DEFAULT, cloneWeaponDef, type WeaponDef } from './weapons/WeaponDefs';
 import { cloneViewmodelConfig, DEFAULT_VIEWMODEL_CONFIG, type ViewmodelConfig } from './weapons/ViewmodelConfig';
 import { applyAmbient, loadMap, type LoadedMap } from './world/MapLoader';
-import { GREYBOX_MAP } from './world/maps/greybox';
 
 /**
- * Application root and the top-level state machine (S3): BOOT -> MENU -> MATCH.
+ * Application root and the top-level state machine (S6.3): BOOT -> MENU -> MATCH -> SUMMARY.
  *
- * LOADOUT and SUMMARY are declared in GameStates.ts because the shape is fixed, but
- * they have no handler registered in M1 and `transitionTo` refuses to enter a state
- * that nothing implements. That is deliberate: an empty state handler that silently
- * does nothing is the kind of scaffolding this project does not ship.
+ * `LOADOUT` is declared in `GameStates.ts` because the shape is fixed but has no handler
+ * until M6; `transitionTo` refuses to enter a state that nothing implements rather than
+ * silently doing nothing.
+ *
+ * ## The world is per-match, and that is the whole point
+ *
+ * M1-M3 built the map, the player and the match once at boot and kept them for the life of
+ * the page, because there was only ever one of each. M4 has a map *choice* and a summary
+ * screen you come back from, so the world is built on entering MATCH and **fully disposed on
+ * leaving SUMMARY** — S6.3's "loading a map twice must not double anything".
+ *
+ * That is a real constraint on this file, and it is why `buildWorld` and `teardownWorld` are
+ * exact mirrors: every field one sets, the other clears; every group one adds to the scene,
+ * the other removes. What survives a match is only what is genuinely process-wide — the
+ * renderer, the textures, the audio graph, the input listener, the frame-stats buffer and the
+ * config objects the tuning panel holds references to. `MatchHarness` runs the cycle
+ * repeatedly and logs the heap at each boundary, which is the test that this is true.
  */
 
 interface Settings extends Versioned {
-  version: 1;
+  version: 2;
   fov: number;
   sensitivity: number;
   invertY: boolean;
   masterVolume: number;
   renderScale: number;
+  /** M4: remembered menu selection. */
+  modeId: GameModeId;
+  mapId: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  version: 1,
+  version: 2,
   fov: DEFAULT_CAMERA_CONFIG.fov,
   sensitivity: 1,
   invertY: false,
   masterVolume: 0.8,
   renderScale: 1,
+  modeId: DEFAULT_MODE_ID,
+  mapId: DEFAULT_MAP_ID,
 };
 
 interface StateHandlers {
@@ -88,13 +106,16 @@ export class Game {
   readonly weaponDef: WeaponDef = cloneWeaponDef(AR_DEFAULT);
   readonly viewmodelConfig: ViewmodelConfig = cloneViewmodelConfig(DEFAULT_VIEWMODEL_CONFIG);
   readonly healthConfig: HealthConfig = { ...DEFAULT_HEALTH_CONFIG };
-  /**
-   * M3 config. These are held here and handed to `Match` by reference, so a slider in the
-   * debug panel retunes the live bots rather than the next ones to spawn.
-   */
   readonly tiers: TierTable = cloneTierTable(DEFAULT_TIERS);
   readonly perceptionConfig: PerceptionConfig = { ...DEFAULT_PERCEPTION };
   readonly schedulerConfig: SchedulerConfig = { ...DEFAULT_SCHEDULER };
+
+  /**
+   * Frame statistics and the speedometer outlive a match deliberately: the three-match heap
+   * run needs one continuous frame-time history across the boundaries it is measuring.
+   */
+  readonly stats = new FrameStats();
+  readonly speedo = new Speedometer();
 
   private readonly scene = new THREE.Scene();
   private readonly renderer: Renderer;
@@ -102,26 +123,28 @@ export class Game {
   private readonly viewmodel: ViewmodelLayer;
   private readonly cameraRig: CameraRig;
   private readonly audio = new ProceduralAudio();
-  private readonly screens: Screens;
+  private readonly menus: Menus;
+  private readonly summary: EndOfMatch;
   private readonly uiHost: HTMLElement;
+  private readonly debugHost: HTMLElement;
   private readonly settings: SaveStore<Settings>;
   private readonly transport: INetworkTransport = new LocalBotTransport(64);
   private readonly input: Input;
   private readonly loop: Loop;
+  private readonly selection: MenuSelection;
 
+  // ---- per-match. Every one of these is nulled by `teardownWorld` ---------
   private map: LoadedMap | null = null;
   private player: PlayerController | null = null;
   private match: Match | null = null;
-  private collisionDebug: CollisionDebug | null = null;
-  private hitboxDebug: HitboxDebug | null = null;
-  private aiDebug: AiDebug | null = null;
-  private aiPanel: AiPanel | null = null;
-  private overlay: DebugOverlay | null = null;
-  /** Retained so its window-level key handler can be removed on teardown. */
-  private weaponDebug: WeaponDebug | null = null;
-  private harness: Harness | null = null;
-  private weaponHarness: WeaponHarness | null = null;
+  /** The F1 overlay and every visualiser and panel that hangs off it. */
+  private debug: DebugSuite | null = null;
   private botHarness: BotHarness | null = null;
+  private matchEndedSubscription: (() => void) | null = null;
+
+  // ---- process-wide -------------------------------------------------------
+  private readonly harness: Harness;
+  private readonly matchHarness: MatchHarness;
 
   private readonly states = new Map<GameStateId, StateHandlers>();
   private state: GameStateId = 'BOOT';
@@ -136,22 +159,41 @@ export class Game {
     adsViewmodelFovScale: 1,
   };
   private lastRenderMs = performance.now();
+  /** Set when the mode declares the match over; SUMMARY is entered from the render pass. */
+  private pendingSummary = false;
 
   constructor(canvas: HTMLCanvasElement, uiHost: HTMLElement, debugHost: HTMLElement) {
-    this.settings = new SaveStore<Settings>('operator.settings', 1, DEFAULT_SETTINGS, (raw, from) => {
-      console.warn(`[Game] settings v${from} has no migration path; falling back to defaults.`, raw);
+    this.settings = new SaveStore<Settings>('operator.settings', 2, DEFAULT_SETTINGS, (raw, from) => {
+      console.info(`[Game] settings v${from} predates the mode/map selection; using defaults.`, raw);
       return null;
     });
     this.cameraConfig.fov = clampFov(this.settings.value.fov);
+    this.selection = {
+      modeId: this.settings.value.modeId,
+      mapId: this.settings.value.mapId,
+    };
 
     this.renderer = new Renderer(canvas);
     this.renderer.setSize(window.innerWidth, window.innerHeight, this.settings.value.renderScale);
     this.textures = new ProceduralTextures(this.renderer.three);
     this.uiHost = uiHost;
+    this.debugHost = debugHost;
     this.viewmodel = new ViewmodelLayer(this.cameraConfig);
     this.viewmodel.resize(this.renderer.aspect);
     this.cameraRig = new CameraRig(this.cameraConfig, this.renderer.aspect);
-    this.screens = new Screens(uiHost);
+
+    this.menus = new Menus({
+      host: uiHost,
+      selection: this.selection,
+      onLaunch: () => this.transitionTo('MATCH'),
+      statusLine: () => this.statusLine(),
+    });
+    this.summary = new EndOfMatch({
+      // Sized to the largest roster any map asks for, so the board never has to grow.
+      rowsPerTeam: 8,
+      onContinue: () => this.transitionTo('MENU'),
+    });
+    uiHost.appendChild(this.summary.element);
 
     this.input = new Input({
       canvas,
@@ -168,7 +210,14 @@ export class Game {
       onFrame: (sample) => this.onFrame(sample),
     });
 
-    this.registerStates(debugHost);
+    this.harness = new Harness(this.movementConfig);
+    this.matchHarness = new MatchHarness({
+      game: this,
+      loop: this.loop,
+      stats: this.stats,
+    });
+
+    this.registerStates();
     window.addEventListener('resize', this.onResize);
     window.addEventListener('pagehide', this.onPageHide);
   }
@@ -177,7 +226,38 @@ export class Game {
     return this.state;
   }
 
-  /** Kick the machine. BOOT builds the map, then hands over to MENU. */
+  get activeMatch(): Match | null {
+    return this.match;
+  }
+
+  get menuSelection(): MenuSelection {
+    return this.selection;
+  }
+
+  get loadedMap(): LoadedMap | null {
+    return this.map;
+  }
+
+  /** The per-match debug tooling, or null outside a match. */
+  get debugSuite(): DebugSuite | null {
+    return this.debug;
+  }
+
+  get activeBotHarness(): BotHarness | null {
+    return this.botHarness;
+  }
+
+  /** The live player simulation state, or undefined outside a match. */
+  get playerSim(): PlayerController['sim'] | undefined {
+    return this.player?.sim;
+  }
+
+  /** Debug lever: burn this many milliseconds inside every frame (S7). */
+  setSyntheticLoad(ms: number): void {
+    this.loop.syntheticLoadMs = ms;
+  }
+
+  /** Kick the machine. BOOT starts the loop, then hands over to MENU. */
   start(): void {
     this.enterState('BOOT');
   }
@@ -205,15 +285,18 @@ export class Game {
 
   // -- state wiring --------------------------------------------------------
 
-  private registerStates(debugHost: HTMLElement): void {
+  private registerStates(): void {
     this.states.set('BOOT', {
       enter: () => {
-        this.screens.showBoot('Building map…');
-        // Give the boot screen one paint before the synchronous bake. Deliberately a
-        // timeout rather than requestAnimationFrame: rAF never fires in a background
-        // tab, and booting into a tab the user has not focused yet would hang forever.
+        this.menus.showBoot('Loading…');
+        // The loop runs from boot so the menu is composited and the frame source is live
+        // before any map exists. Deliberately a timeout rather than requestAnimationFrame:
+        // rAF never fires in a background tab, and booting into a tab the user has not
+        // focused yet would hang forever.
+        this.loop.start();
+        this.transport.open();
+        installConsoleApi(this, this.harness, this.matchHarness);
         window.setTimeout(() => {
-          this.buildWorld(debugHost);
           this.transitionTo('MENU');
           this.startBotHarnessIfRequested();
         }, 32);
@@ -222,37 +305,61 @@ export class Game {
 
     this.states.set('MENU', {
       enter: () => {
-        const stats = this.map?.stats;
-        const detail =
-          stats === undefined
-            ? 'Testbed'
-            : `Testbed · ${stats.colliders} colliders · ${stats.drawCalls} draws · built in ${stats.buildMs.toFixed(0)} ms`;
-        this.screens.showMenu(detail, () => this.transitionTo('MATCH'));
+        this.menus.show();
         this.input.clearHeld();
       },
-      exit: () => this.screens.hide(),
+      exit: () => this.menus.hide(),
     });
 
     this.states.set('MATCH', {
       enter: () => {
         this.audio.start();
+        this.buildWorld();
         this.match?.setActive(true);
         // The click that started the match must not also pull the trigger.
         this.input.clearHeld();
         // The AFK harness has nobody to capture the cursor for, and asking for it without
         // a user gesture logs a rejection — which would put noise in the console the soak
         // run is there to prove is quiet.
-        if (this.botHarness === null) {
+        if (this.botHarness === null && !this.matchHarness.isRunning) {
           this.input.requestPointerLock();
           // Only bites while the page is fullscreen; see Input.lockKeyboard and PLAN.md.
           this.input.lockKeyboard();
         }
       },
-      exit: () => {
+      exit: (to) => {
         this.input.exitPointerLock();
         this.input.unlockKeyboard();
         this.match?.setActive(false);
         this.audio.setSlide(false, 0, 0, 0, 0);
+        // Going back to the menu without a result (Esc) tears down here; going to SUMMARY
+        // keeps the world alive so the scene is still behind the summary screen.
+        if (to === 'MENU') this.teardownWorld();
+      },
+    });
+
+    this.states.set('SUMMARY', {
+      enter: () => {
+        const match = this.match;
+        const result = match?.flow.result;
+        if (match === null || match === undefined || result === undefined || result === null) {
+          // Nothing to summarise: this can only happen if SUMMARY is entered by hand.
+          this.transitionTo('MENU');
+          return;
+        }
+        this.summary.setColumns(match.mode.getScoreboardColumns(), match.mode.name, this.mapEntry().name);
+        this.summary.show(
+          result.winner,
+          PLAYER_TEAM,
+          result.reason,
+          result.scoreA,
+          result.scoreB,
+          match.score,
+        );
+      },
+      exit: () => {
+        this.summary.hide();
+        this.teardownWorld();
       },
     });
   }
@@ -264,8 +371,22 @@ export class Game {
 
   // -- world ---------------------------------------------------------------
 
-  private buildWorld(debugHost: HTMLElement): void {
-    const map = loadMap(GREYBOX_MAP, this.textures);
+  private mapEntry(): ReturnType<typeof findMap> {
+    return findMap(this.selection.mapId);
+  }
+
+  /**
+   * Build everything a match needs. The exact mirror of `teardownWorld`.
+   *
+   * Called on entering MATCH, so the map the player picked is the map that loads and a second
+   * match starts from nothing rather than from whatever the first one left behind.
+   */
+  private buildWorld(): void {
+    if (this.map !== null) return;
+    const mapEntry = this.mapEntry();
+    const modeEntry = findMode(this.selection.modeId);
+
+    const map = loadMap(mapEntry.def, this.textures);
     this.map = map;
     this.scene.add(map.root);
     applyAmbient(this.scene, map.def);
@@ -279,15 +400,12 @@ export class Game {
     player.spawn(spawn.position.x, spawn.position.y, spawn.position.z, spawn.facingYaw);
     this.input.setView(spawn.facingYaw, 0);
 
-    const collisionDebug = new CollisionDebug(map.collision);
-    this.collisionDebug = collisionDebug;
-    this.scene.add(collisionDebug.group);
-
     const match = new Match({
       bus: this.bus,
       scene: this.scene,
       viewmodel: this.viewmodel,
       cameraRig: this.cameraRig,
+      cameraConfig: this.cameraConfig,
       audio: this.audio,
       input: this.input,
       world: map.collision,
@@ -298,7 +416,8 @@ export class Game {
       healthConfig: this.healthConfig,
       uiHost: this.uiHost,
       anisotropy: this.textures.anisotropy,
-      mapDef: map.def,
+      map: mapEntry,
+      mode: modeEntry,
       tiers: this.tiers,
       perceptionConfig: this.perceptionConfig,
       schedulerConfig: this.schedulerConfig,
@@ -306,91 +425,94 @@ export class Game {
     });
     this.match = match;
 
-    const hitboxDebug = new HitboxDebug(match.damage);
-    this.hitboxDebug = hitboxDebug;
-    this.scene.add(hitboxDebug.group);
+    // The match declaring itself over is what moves the state machine on. Deferred to the
+    // render pass rather than transitioned from inside a sim tick: tearing the HUD down
+    // half-way through the tick that produced the winning kill is how you get a null
+    // dereference in the middle of an event dispatch.
+    this.matchEndedSubscription = this.bus.on(EV.MatchEnded, () => {
+      this.pendingSummary = true;
+    });
 
-    this.harness = new Harness(this.movementConfig);
-    this.weaponHarness = new WeaponHarness(this.movementConfig, this.weaponDef, this.viewmodelConfig, this.healthConfig);
-
-    const overlay = new DebugOverlay(debugHost, {
+    this.debug = new DebugSuite({
+      host: this.debugHost,
       bus: this.bus,
       loop: this.loop,
       renderer: this.renderer,
+      scene: this.scene,
+      audio: this.audio,
       player,
       cameraRig: this.cameraRig,
-      collisionDebug,
-      audio: this.audio,
+      map,
+      mapEntry,
+      match,
       movementConfig: this.movementConfig,
       cameraConfig: this.cameraConfig,
-      mapStats: map.stats,
+      weaponDef: this.weaponDef,
+      viewmodelConfig: this.viewmodelConfig,
+      healthConfig: this.healthConfig,
+      tiers: this.tiers,
+      perceptionConfig: this.perceptionConfig,
+      schedulerConfig: this.schedulerConfig,
+      stats: this.stats,
+      speedo: this.speedo,
+      matchHarness: this.matchHarness,
       onConfigChanged: () => this.onConfigChanged(),
+      onWeaponConfigChanged: () => this.onWeaponConfigChanged(),
     });
-    this.overlay = overlay;
+  }
 
-    const aiDebug = new AiDebug(match.bots);
-    this.aiDebug = aiDebug;
-    this.scene.add(aiDebug.group);
-    this.aiPanel = new AiPanel(
-      overlay,
-      match.bots,
-      aiDebug,
-      this.tiers,
-      this.perceptionConfig,
-      this.schedulerConfig,
-      debugHost,
-    );
+  /**
+   * Take the world apart. The exact mirror of `buildWorld`.
+   *
+   * Order matters only in that the debug tooling holds references to the match and the map,
+   * so it goes first. Everything that was added to the scene is removed and everything with
+   * a `dispose` gets it — including the map's geometries and materials, which are the largest
+   * thing a match allocates.
+   */
+  private teardownWorld(): void {
+    this.pendingSummary = false;
 
-    this.weaponDebug = new WeaponDebug(
-      overlay,
-      match,
-      this.weaponDef,
-      this.viewmodelConfig,
-      this.healthConfig,
-      hitboxDebug,
-      this.audio,
-      this.bus,
-      () => this.onWeaponConfigChanged(),
-    );
+    this.matchEndedSubscription?.();
+    this.matchEndedSubscription = null;
 
-    // From M3 these fire for bots too, which is exactly how you hear one coming. The
-    // *camera* dip is the one part that is not shared: only the local player's own
-    // landing moves the local player's view.
-    this.bus.on(EV.PlayerLanded, (p) => {
-      if (p.entityId === PLAYER_ENTITY_ID) {
-        this.cameraRig.applyLanding(this.cameraConfig, p.impactSpeed);
-      }
-      this.audio.playLanding(p.x, p.y, p.z, p.impactSpeed, p.material);
-    });
-    this.bus.on(EV.PlayerFootstep, (p) => {
-      this.audio.playFootstep(p.x, p.y, p.z, p.speed, p.heavy, p.material);
-    });
+    this.debug?.dispose();
+    this.debug = null;
+    this.botHarness?.stop();
+    this.botHarness = null;
 
-    this.transport.open();
-    this.loop.start();
-    this.exposeDebugApi();
+    this.match?.dispose();
+    this.match = null;
+    this.player = null;
+
+    if (this.map !== null) {
+      this.scene.remove(this.map.root);
+      this.map.dispose();
+      this.map = null;
+    }
+    this.scene.fog = null;
+    this.scene.background = null;
+    this.speedo.reset();
   }
 
   /**
    * `?harness=botmatch` boots straight into an AFK bot match (S7).
    *
-   * The roster is populated *before* entering MATCH so `Match.setActive` sees a non-empty
-   * one and skips the default firefight — otherwise seven bots would be built and thrown
+   * The roster is populated *before* the flow starts so `Match.setActive` sees a non-empty
+   * one and skips the default firefight — otherwise a full roster would be built and thrown
    * away on the same frame.
    */
   private startBotHarnessIfRequested(): void {
     const options = parseHarnessOptions(window.location.search);
     if (options === null) return;
+    if (options.map !== null) this.selection.mapId = options.map;
+
+    this.transitionTo('MATCH');
     const match = this.match;
     if (match === null) return;
 
-    const overlay = this.overlay;
-    if (overlay === null) return;
-
-    const harness = new BotHarness(options, match, this.loop, overlay.stats);
+    const harness = new BotHarness(options, match, this.loop, this.stats);
     this.botHarness = harness;
     harness.start();
-    this.transitionTo('MATCH');
   }
 
   private onConfigChanged(): void {
@@ -403,7 +525,7 @@ export class Game {
   private onWeaponConfigChanged(): void {
     this.match?.weapons.setDefinition(this.weaponDef);
     this.match?.playerHealth.setConfig(this.healthConfig);
-    for (const dummy of this.match?.range.dummies ?? []) {
+    for (const dummy of this.match?.range?.dummies ?? []) {
       dummy.health.setConfig(this.healthConfig);
       dummy.markLabelDirty();
     }
@@ -438,16 +560,21 @@ export class Game {
       // fire rate and reload timing are as frame-rate independent as movement is (S4.1).
       this.match?.simulate(drained);
     }
-    this.collisionDebug?.update(player.sim, this.movementConfig);
+    this.debug?.simulate(player, this.movementConfig);
   }
 
   private draw(alpha: number): void {
-    const player = this.player;
-    if (player === null) return;
-
     const now = performance.now();
     const dt = Math.max(0, (now - this.lastRenderMs) / 1000);
     this.lastRenderMs = now;
+
+    const player = this.player;
+    if (player === null) {
+      // No world: the menu is DOM over an empty canvas, and the canvas still has to be
+      // cleared or it holds the last frame of the previous match behind the front end.
+      this.renderer.clear();
+      return;
+    }
 
     const sim = player.sim;
     const match = this.match;
@@ -494,25 +621,30 @@ export class Game {
     this.audio.update();
 
     match?.render(alpha, cam, dt, yaw, pitch);
-    this.hitboxDebug?.update();
-    this.aiDebug?.update();
-    this.aiPanel?.updateLabels(cam, alpha);
+    this.debug?.render(cam, alpha, dt);
 
     this.renderer.render(this.scene, cam, this.viewmodel);
-    this.overlay?.update(dt);
+    this.debug?.update(dt);
+
+    // The match ended during a sim tick this frame. Transition now, between frames, with
+    // nothing part-way through a dispatch.
+    if (this.pendingSummary && this.state === 'MATCH') {
+      this.pendingSummary = false;
+      this.transitionTo('SUMMARY');
+    }
   }
 
   private onFrame(sample: FrameSample): void {
-    this.overlay?.recordFrame(
-      sample.frameMs,
-      sample.simMs,
-      sample.renderMs,
-      sample.steps,
-      sample.starved,
-    );
+    this.stats.push(sample.frameMs, sample.simMs, sample.renderMs, sample.steps, sample.starved);
+    this.stats.pushBreakdown(this.match?.lastModeMs ?? 0, this.match?.ui.lastUpdateMs ?? 0);
   }
 
   // -- events --------------------------------------------------------------
+
+  private statusLine(): string {
+    const map = this.mapEntry();
+    return `${map.name} · ${map.def.brushes.length} brushes · ${map.def.props.length} props`;
+  }
 
   private onPointerLockChange(locked: boolean): void {
     if (locked) return;
@@ -528,43 +660,10 @@ export class Game {
   };
 
   private readonly onPageHide = (): void => {
+    this.settings.patch({ modeId: this.selection.modeId, mapId: this.selection.mapId });
     this.settings.flush();
     this.audio.suspend();
   };
-
-  /**
-   * Console surface for the acceptance-criteria measurements. Documented in DEBUG.md.
-   * Read-only handles plus the headless harness; nothing here mutates gameplay.
-   */
-  private exposeDebugApi(): void {
-    const api = {
-      game: this,
-      harness: this.harness,
-      weaponHarness: this.weaponHarness,
-      weaponDebug: () => this.weaponDebug,
-      match: () => this.match,
-      weapon: () => this.match?.weapons,
-      weaponDef: this.weaponDef,
-      viewmodelConfig: this.viewmodelConfig,
-      speedometer: () => this.overlay?.speedo,
-      stats: () => this.overlay?.stats,
-      latency: () => this.match?.latency,
-      sim: () => this.player?.sim,
-      setSyntheticLoad: (ms: number) => {
-        this.loop.syntheticLoadMs = ms;
-      },
-      report: () => this.harness?.report(),
-      weaponReport: () => this.weaponHarness?.report(),
-      bots: () => this.match?.bots,
-      botReport: () => this.match?.bots.report(),
-      botHarness: () => this.botHarness,
-      harnessReport: () => this.botHarness?.report(),
-      tiers: this.tiers,
-      perceptionConfig: this.perceptionConfig,
-      schedulerConfig: this.schedulerConfig,
-    };
-    Object.defineProperty(window, '__operator', { value: api, configurable: true });
-  }
 }
 
 function clampFov(v: number): number {

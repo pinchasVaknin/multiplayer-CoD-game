@@ -56,6 +56,35 @@ const SEPARATION_RADIUS = 1.15;
 /** How far ahead a strafe direction is validated against the navmesh, metres. */
 const STRAFE_PROBE = 0.8;
 
+/**
+ * Seconds a committed flank is allowed to run before the bot reconsiders (M4).
+ *
+ * `decide` runs at 4 Hz and re-derives everything, and `tryFlank` is gated on the tier's
+ * `flankChance` — so a bot already flanking dropped the plan on the *next* decision unless the
+ * dice came up again. At Regular's 0.15 that is a mean commitment of about a third of a second,
+ * which is why no flank on Foundry ever arrived anywhere and, in particular, why no bot ever
+ * finished walking up a ramp: measured, bots set ten deck-level flank goals in 216 simulated
+ * seconds and reached none of them.
+ *
+ * A plan re-rolled eight times before it completes is not a plan. Ammo and being badly hurt
+ * still interrupt; a wobble in the tactical picture no longer does.
+ */
+const FLANK_COMMIT_SECONDS = 5.0;
+
+/**
+ * How far above itself a bot looks for a flank route, metres (M4).
+ *
+ * On a map with a catwalk, "get around the side of them" and "get above them" are the same
+ * manoeuvre, and a flank search that only ever samples the bot's own level can never find the
+ * second one. Foundry's deck is 4 m up, so probing 4 m above finds it where it exists and
+ * finds nothing where it does not.
+ */
+const HIGH_FLANK_PROBE = 4.0;
+/** Chance a flank takes the high route when one exists. Not always: predictability is death. */
+const HIGH_FLANK_CHANCE = 0.45;
+/** A flank target has to be genuinely above the bot to count as the high route. */
+const HIGH_FLANK_MIN_RISE = 1.5;
+
 export class BotBrain {
   state: BotState = 'IDLE';
   /** Seconds in the current state. */
@@ -140,6 +169,17 @@ export class BotBrain {
       if (seeing && this.trySeekCover(bot)) return;
       this.wantsReloadPress = true;
       this.transition(bot, 'RELOAD');
+      return;
+    }
+
+    // A flank already under way is a commitment, not a suggestion. Ammo and a bad wound above
+    // still take priority; the tactical picture merely changing no longer does.
+    if (
+      this.state === 'FLANK' &&
+      bot.path.active &&
+      this.stateTime < FLANK_COMMIT_SECONDS &&
+      !hurt
+    ) {
       return;
     }
 
@@ -442,7 +482,22 @@ export class BotBrain {
       const angle = base + side * sweep * DEG2RAD;
       const x = bb.lastKnownX + Math.cos(angle) * radius;
       const z = bb.lastKnownZ + Math.sin(angle) * radius;
-      const cell = nav.cellAt(x, z);
+      /**
+       * The flank is around the target — and, on a map with a deck, sometimes *above* it.
+       *
+       * `cellAtY` at the bot's own height is the level route; probing `HIGH_FLANK_PROBE`
+       * above finds the catwalk where there is one. Taking it less than half the time keeps
+       * the manoeuvre from becoming a tell, and a bot that finds no deck simply flanks on the
+       * flat as it always did.
+       */
+      const level = nav.cellAtY(x, bot.py, z);
+      const above = nav.cellAtY(x, bot.py + HIGH_FLANK_PROBE, z);
+      const highRoute =
+        above >= 0 &&
+        above !== level &&
+        nav.heightAt(above) > bot.py + HIGH_FLANK_MIN_RISE &&
+        bot.rng.chance(HIGH_FLANK_CHANCE);
+      const cell = highRoute ? above : level;
       if (cell < 0) continue;
       this.setGoal('FLANK', nav.centerX(nav.indexOfX(cell)), nav.heightAt(cell), nav.centerZ(nav.indexOfZ(cell)));
       this.transition(bot, 'FLANK');
@@ -543,9 +598,10 @@ export class BotBrain {
   /** Would a step of `STRAFE_PROBE` in this direction leave the navmesh? */
   private canStep(bot: Bot, dx: number, dz: number): boolean {
     const nav = this.deps.nav;
-    const cell = nav.cellAt(bot.px + dx * STRAFE_PROBE, bot.pz + dz * STRAFE_PROBE);
+    const cell = nav.cellAtY(bot.px + dx * STRAFE_PROBE, bot.py, bot.pz + dz * STRAFE_PROBE);
     if (cell < 0) return false;
-    // Refuse a step that is also a fall: the pit lip is walkable on both sides.
+    // Refuse a step that is also a fall: the pit lip and a catwalk edge are both walkable
+    // on one side and four metres of air on the other.
     return Math.abs(nav.heightAt(cell) - bot.py) < 0.5;
   }
 

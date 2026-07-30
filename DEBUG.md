@@ -12,8 +12,14 @@ building a second overlay.
 | `F1` | Toggle the debug overlay |
 | `F2` | Toggle collision visualisation (wireframe capsule, contact normals, queried hash cells) |
 | `F3` | Reset the frame-time histogram and the speed measurement |
-| `F4` | Toggle hitbox-rig visualisation (M2) |
+| `F4` | Toggle the AI layer: navmesh, paths, sight lines, cover, spawn scores (M3/M4) |
+| `Tab` | Hold for the scoreboard (M4) |
 | `Esc` | Release pointer lock (drops back to the menu) |
+
+**The overlay is per-match from M4.** The world — map, player, match, and all of the tooling that
+holds a reference to them — is built on entering MATCH and disposed on leaving SUMMARY, so `F1`
+does nothing in the menu. `FrameStats` and the `Speedometer` deliberately outlive a match: the
+multi-match heap run needs one continuous frame-time history across the boundaries it measures.
 
 Gameplay keys are listed on the menu screen.
 
@@ -242,6 +248,130 @@ that have been hidden for about five minutes, which clamps the substituted frame
 and makes every wall-clock number in the script meaningless — the tick counter crawls and
 the soak reports nonsense. A reload resets the grace period; the script finishes well
 inside it.
+
+---
+
+## The M4 mode panels
+
+`debug/ModePanel.ts` adds four sections to the left column, all refreshed on the overlay's own
+15 Hz text hook.
+
+### Mode
+
+Phase and round (`WARMUP` / `LIVE` / `ROUND_END` / `MATCH_END`, plus `SWAPPED` when the ends have
+changed), team scores against the limit, the match clock and the phase countdown, whether the
+respawn gate is open and how many lives are left, and the local player's own line.
+
+**`Phase` is the field to watch when the match seems stuck.** Kills only count while the round is
+`LIVE`, and nobody respawns during `ROUND_END` or `MATCH_END` — so a match that appears frozen is
+usually a flow phase, not a broken mode.
+
+### Spawns
+
+Safe / hidden / least-bad tallies, the minimum enemy distance any selection has produced, and the
+cone and visible violation counts. **The two violation counters mean different things**: inside a
+cone is unavoidable on a map smaller than `visionRange`, and *visible* is the one that should be
+zero.
+
+`Spawn score visualisation` draws every candidate spawn as a point coloured by the tier the
+selector would put it in right now — green safe, amber hidden, red least-bad, grey for the other
+end's zones — with brightness carrying the score inside the tier. It needs the F4 layer visible,
+and it rescores at 4 Hz through `SpawnSelector.inspect`, which is the same `measure` call the
+selector itself uses. A visualisation that recomputed the score its own way would be a picture of
+a second spawn selector.
+
+### Lanes & objectives
+
+`Measure lane timings` runs the **real** A\* from each team's lane spawn to the point in that lane
+where the two teams meet, measures the smoothed path and divides by sprint speed. It prints a
+table and caches the result on `__operator.laneReport()`. This is what acceptance criterion 3 is
+read from; a hand-measured straight line would report the distance the author intended rather than
+the distance a player walks around the cover the author placed.
+
+`Objectives on minimap` turns on the Domination flags and S\&D bomb sites. **Off by default**:
+they are authored for M7 and drawing them during Team Deathmatch is noise. The list underneath
+shows every objective's kind, label, position and radius whether or not the minimap is drawing it.
+
+### Killfeed log
+
+The last twelve kills as `KILLER [team] → VICTIM [team] (weapon)`, newest first, from
+`killfeed.entry`. Useful when the on-screen feed has faded and you want to know what just happened.
+
+### Match harness
+
+`Run 3 matches (heap)` and `Run 10 matches (heap)` are one click each; `Swap sides now` exercises
+the round abstraction's side swap, which Team Deathmatch never triggers by itself.
+
+---
+
+## The match harness
+
+`debug/MatchHarness.ts` plays whole matches back to back with a full teardown between them and
+logs the heap at every boundary (S7).
+
+```js
+await __operator.runMatches(3)     // or 10
+__operator.matchReport()           // the boundaries again, without re-running
+```
+
+The M3 harness proved a *firefight* does not leak. This proves a **match** does not, which is a
+different question: M4 builds and destroys the map, the navmesh, the collision hash, every mesh
+and material, the bot roster, the HUD, the scoreboard and a dozen subscriptions on every cycle,
+and any one of them held past `teardownWorld` is a step in `usedJSHeapSize` that a single long
+match would never show.
+
+Three things make the number trustworthy:
+
+- **The match is driven to its real end**, not cut short. `MatchFlow` decides when it is over
+  exactly as it would for a player, and the harness waits for the state machine to reach SUMMARY.
+- **The clock is compressed by adding ticks, never by changing `DT`.** `Loop.simSpeed` runs the
+  same 1/60 s simulation more times per frame (S4.1).
+- **The heap is provoked before it is sampled.** `usedJSHeapSize` straight after a teardown is
+  mostly uncollected garbage. Six consecutive matches once came back 51.9, 50.9, 65.3, 70.1, 56.9,
+  60.1 MB — a 19 MB spread with no trend, which is V8 deciding when to collect rather than
+  anything the game did. `window.gc` only exists behind `--expose-gc`, so the harness allocates
+  and drops ~48 MB to force a cycle, then waits, then reads. What survives that is what is
+  actually retained.
+
+Each boundary also carries that match's frame percentiles and the peak mode and HUD milliseconds,
+so a match that got slower is visible next to the heap that did or did not grow.
+
+---
+
+## `verify/tdm.js`
+
+```js
+fetch('/verify/tdm.js').then(r => r.text()).then(eval)
+await __verifyTdm.all()          // every criterion, in order
+__verifyTdm.lanes()              // 3 — lane timings
+__verifyTdm.clearanceAudit()     // 2 — gaps too narrow to walk through
+await __verifyTdm.snagSweep()    // 2 — sprint every wall
+await __verifyTdm.botCoverage()  // 4, 5 — catwalks, cover, centre, spawn safety
+await __verifyTdm.frameProfile() // 8 — frame, AI, mode and HUD milliseconds
+await __verifyTdm.hudCheck()     // 6 — the HUD against the systems behind it
+await __verifyTdm.fixedRate()    // 9 — the match clock under CPU load
+await __verifyTdm.matchCycle(3)  // 1, 7 — matches back to back, heap at each boundary
+__verifyTdm.results              // everything measured so far, stashed
+```
+
+**The frame source is a `MessageChannel`, not a `setTimeout`.** M1's `framerate.js` uses a timer
+because its whole point is to *pace* frames at a chosen interval. That is the wrong tool here:
+Chrome clamps timers in a tab that is not visible, and the first run of this suite got 348 sim
+ticks out of nineteen wall seconds — it was measuring the browser's throttling. A `MessagePort`
+callback is a macrotask that is not clamped, so the loop runs as fast as the work allows and the
+sim holds a measured 60.0 Hz.
+
+Two notes on reading the output:
+
+- **`snagSweep` defines a snag as failure to make progress**, not as being blocked. Sliding along a
+  wall is blocked on every tick and is exactly what should happen, so each pass tracks how far it
+  has advanced *along its run* and flags a window of 20 ticks that gained less than 0.15 m. Wall
+  runs are driven from both sides and the side with no wall is discarded; a wall with no completed
+  pass is reported as untested rather than passing by silence.
+- **`clearanceAudit` is the data check `snagSweep` cannot be.** The sweep finds a pinch only if a
+  run line happens to pass through one. The audit takes every standing collider's footprint and
+  reports any pair separated on one axis by less than a capsule diameter while overlapping on the
+  other — which is the whole bug class, found in one pass.
 
 ---
 

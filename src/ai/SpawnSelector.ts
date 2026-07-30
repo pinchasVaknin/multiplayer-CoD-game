@@ -2,7 +2,7 @@ import { DEG2RAD } from '../core/MathUtil';
 import type { Rng } from '../core/Rng';
 import type { NavGrid } from '../world/Navmesh';
 import type { SpawnZone } from '../world/maps/types';
-import type { BotTeam, Combatant } from './Combatant';
+import { opposingTeam, type BotTeam, type Combatant } from './Combatant';
 import type { PerceptionConfig } from './DifficultyTiers';
 import type { Perception } from './Perception';
 
@@ -87,6 +87,34 @@ interface Candidate {
   lastUsedTick: number;
 }
 
+/** One candidate, scored, for the debug visualisation. Reused; never allocated per point. */
+export interface SpawnInspection {
+  x: number;
+  y: number;
+  z: number;
+  /** False when this candidate belongs to the other team's zones. */
+  eligible: boolean;
+  score: number;
+  distance: number;
+  cone: boolean;
+  visible: boolean;
+  tier: SpawnTier;
+}
+
+export function makeSpawnInspection(): SpawnInspection {
+  return {
+    x: 0,
+    y: 0,
+    z: 0,
+    eligible: false,
+    score: 0,
+    distance: 0,
+    cone: false,
+    visible: false,
+    tier: 'safe',
+  };
+}
+
 export class SpawnSelector {
   readonly stats: SpawnStats = {
     selections: 0,
@@ -98,7 +126,15 @@ export class SpawnSelector {
     minEnemyDistance: Infinity,
   };
 
-  private readonly candidates: Candidate[] = [];
+  private readonly candidateList: Candidate[] = [];
+  /**
+   * When set, each team draws from the other team's zones (M4).
+   *
+   * This is what a mode's `swapSidesAfterRound` actually *does* in this build: spawns are the
+   * only side-dependent thing a match owns, so changing ends means changing which set of
+   * candidates a team is scored against. TDM never triggers it; `MatchFlow.swapSides` does.
+   */
+  private swapped = false;
 
   constructor(
     zones: readonly SpawnZone[],
@@ -117,7 +153,7 @@ export class SpawnSelector {
         const z = zone.position.z + Math.sin(angle) * radius;
         const cell = nav.nearestCell(x, zone.position.y, z, 6);
         if (cell < 0) continue;
-        this.candidates.push({
+        this.candidateList.push({
           x: nav.centerX(nav.indexOfX(cell)),
           y: nav.heightAt(cell),
           z: nav.centerZ(nav.indexOfZ(cell)),
@@ -130,7 +166,68 @@ export class SpawnSelector {
   }
 
   get candidateCount(): number {
-    return this.candidates.length;
+    return this.candidateList.length;
+  }
+
+  setSideSwap(on: boolean): void {
+    this.swapped = on;
+  }
+
+  get sidesSwapped(): boolean {
+    return this.swapped;
+  }
+
+  /** Read-only view of the candidate pool, for the S7 spawn visualisation. */
+  get candidates(): readonly Readonly<Candidate>[] {
+    return this.candidateList;
+  }
+
+  /**
+   * Score one candidate exactly as `select` would, without selecting it (S7).
+   *
+   * Deliberately the same `measure` call and the same arithmetic: a visualisation that
+   * recomputed the score its own way would be a picture of a second spawn selector. Writes
+   * into `out` and returns it.
+   */
+  inspect(
+    index: number,
+    team: BotTeam,
+    roster: readonly Combatant[],
+    selfId: number,
+    tick: number,
+    out: SpawnInspection,
+  ): boolean {
+    const c = this.candidateList[index];
+    if (c === undefined) return false;
+    const drawFrom = this.swapped ? opposingTeam(team) : team;
+    out.eligible = c.team === drawFrom || c.team === 'FFA';
+    out.x = c.x;
+    out.y = c.y;
+    out.z = c.z;
+    if (!out.eligible) {
+      out.score = 0;
+      out.distance = 0;
+      out.cone = false;
+      out.visible = false;
+      out.tier = 'leastBad';
+      return true;
+    }
+
+    this.measure(c, roster, selfId, team);
+    const recent = tick - c.lastUsedTick < 240 ? 9 : 0;
+    out.distance = measuredDistance;
+    out.cone = measuredCone;
+    out.visible = measuredVisible;
+    out.score = Math.min(measuredDistance, 40) - recent - Math.abs(measuredFriendly - 9) * 0.25;
+    out.tier =
+      measuredDistance < MIN_ENEMY_DISTANCE
+        ? 'leastBad'
+        : !measuredCone
+          ? 'safe'
+          : measuredVisible
+            ? 'leastBad'
+            : 'hidden';
+    return true;
   }
 
   resetStats(): void {
@@ -166,11 +263,13 @@ export class SpawnSelector {
     let safeDistance = 0;
     let hiddenDistance = 0;
     let hiddenCone = false;
+    // Which end this team is playing from. Identical to `team` unless sides have swapped.
+    const drawFrom = this.swapped ? opposingTeam(team) : team;
 
-    for (let i = 0; i < this.candidates.length; i++) {
-      const c = this.candidates[i];
+    for (let i = 0; i < this.candidateList.length; i++) {
+      const c = this.candidateList[i];
       if (c === undefined) continue;
-      if (c.team !== team && c.team !== 'FFA') continue;
+      if (c.team !== drawFrom && c.team !== 'FFA') continue;
 
       this.measure(c, roster, selfId, team);
       const distance = measuredDistance;
@@ -228,7 +327,7 @@ export class SpawnSelector {
     }
     if (at < 0) return false;
 
-    const chosen = this.candidates[at];
+    const chosen = this.candidateList[at];
     if (chosen === undefined) return false;
     chosen.lastUsedTick = tick;
 

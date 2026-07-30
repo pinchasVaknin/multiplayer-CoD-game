@@ -135,6 +135,65 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     stepQ: 0.65,
     stepLevel: 0.72,
   },
+
+  // ---- M4 -----------------------------------------------------------------
+
+  /**
+   * Fired brick. Slightly cheaper per metre than poured concrete and much louder to walk
+   * on than either, which is what makes Foundry's shell read as a different building from
+   * its interior even with the lights off.
+   */
+  brick: {
+    penetrationDensity: 0.88,
+    impactColor: 0xa2705c,
+    impactSpark: 0.0,
+    decalStrength: 0.8,
+    decalRadius: 0.085,
+    impactFreq: 1400,
+    impactQ: 1.4,
+    impactDecay: 0.12,
+    stepFreq: 1250,
+    stepQ: 1.1,
+    stepLevel: 1.05,
+  },
+
+  /**
+   * Corroded container plate. Thinner and pitted, so it costs less per metre than clean
+   * steel and a round gets through a container wall with damage left — which is the point
+   * of stacking them in a lane.
+   */
+  rust: {
+    penetrationDensity: 1.35,
+    impactColor: 0xc08a4e,
+    impactSpark: 0.75,
+    decalStrength: 0.68,
+    decalRadius: 0.06,
+    impactFreq: 2600,
+    impactQ: 3.4,
+    impactDecay: 0.19,
+    stepFreq: 2100,
+    stepQ: 2.2,
+    stepLevel: 1.15,
+  },
+
+  /**
+   * Catwalk grating. Mostly holes, so it is the cheapest metal on the map to shoot
+   * through — the deck above you is cover you can be killed through, and it should sound
+   * like it: bright, ringing, and the loudest thing to run across.
+   */
+  grate: {
+    penetrationDensity: 0.72,
+    impactColor: 0xffd9a4,
+    impactSpark: 1.0,
+    decalStrength: 0.45,
+    decalRadius: 0.045,
+    impactFreq: 3800,
+    impactQ: 7.0,
+    impactDecay: 0.22,
+    stepFreq: 2900,
+    stepQ: 3.4,
+    stepLevel: 1.24,
+  },
 };
 
 /** Indexed by the same integer `ColliderSet.materialAt` returns. */

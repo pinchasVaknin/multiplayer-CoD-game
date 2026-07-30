@@ -258,7 +258,10 @@ export class AiPanel {
     set(this.fSearches, `${pf.searchesCompleted} / ${pf.searchesFailed}`);
 
     const nav = d.navStats;
-    set(this.fNav, `${nav.walkable}/${nav.cells} cells · ${nav.links} links · ${nav.bakeMs.toFixed(0)}ms`);
+    set(
+      this.fNav,
+      `${nav.walkable}/${nav.cells} nodes · ${nav.links} links · ${nav.stacked} stacked · ${nav.bakeMs.toFixed(0)}ms`,
+    );
     set(this.fCover, `${d.cover.occupiedCount} / ${d.cover.count} (${nav.coverRejected} rejected)`);
 
     const sp = d.spawns.stats;

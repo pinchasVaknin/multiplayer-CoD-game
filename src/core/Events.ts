@@ -43,9 +43,38 @@ export const EV = {
   BotSpawned: 'bot.spawned',
   BotStateChanged: 'bot.stateChanged',
 
+  // M4: the match, as opposed to the firefight.
+  MatchStarted: 'match.started',
+  MatchEnded: 'match.ended',
+  RoundStarted: 'round.started',
+  RoundEnded: 'round.ended',
+  SidesSwapped: 'match.sidesSwapped',
+  ScoreChanged: 'score.changed',
+  KillfeedEntry: 'killfeed.entry',
+  AnnouncerCue: 'announcer.cue',
+
   GameStateChanged: 'game.stateChanged',
   SettingsChanged: 'settings.changed',
 } as const;
+
+/**
+ * The announcer's whole vocabulary (S6.5).
+ *
+ * Cues, not words: these are synthesised filtered-noise stings, because speech synthesis of
+ * actual lines is both out of reach without assets and worse than nothing when it lands
+ * badly. The mix ducks under each one.
+ */
+export type AnnouncerCue =
+  | 'matchStart'
+  | 'fight'
+  | 'twoMinutes'
+  | 'oneMinute'
+  | 'thirtySeconds'
+  | 'leadTaken'
+  | 'leadLost'
+  | 'victory'
+  | 'defeat'
+  | 'draw';
 
 export type SlideEndReason = 'expired' | 'jumpCancel' | 'crouchReleased' | 'tooSlow' | 'blocked';
 
@@ -185,6 +214,42 @@ export type GameEvents = {
     nearestEnemy: number;
   };
   [EV.BotStateChanged]: { entityId: number; from: BotState; to: BotState; tier: BotTier };
+
+  /**
+   * M4. A match is not a firefight: it has a mode, a clock, rounds and an outcome, and the
+   * HUD, the scoreboard, the announcer and the summary screen all learn about it from here
+   * rather than by reaching into `MatchFlow`.
+   */
+  [EV.MatchStarted]: { modeId: string; modeName: string; mapId: string; mapName: string; roundsToWin: number };
+  [EV.MatchEnded]: {
+    winner: BotTeam | 'DRAW';
+    reason: string;
+    scoreA: number;
+    scoreB: number;
+    /** True when the local player's side won. Drives the announcer cue and the summary. */
+    localWon: boolean;
+  };
+  [EV.RoundStarted]: { round: number; roundsToWin: number };
+  [EV.RoundEnded]: { round: number; winner: BotTeam | 'DRAW'; reason: string };
+  [EV.SidesSwapped]: { afterRound: number };
+  [EV.ScoreChanged]: { teamA: number; teamB: number; limit: number };
+  /**
+   * One line for the killfeed. Names rather than ids, because the feed is text and
+   * resolving an id to a name in the presentation layer means the presentation layer needs
+   * the roster.
+   */
+  [EV.KillfeedEntry]: {
+    killerName: string;
+    victimName: string;
+    killerTeam: BotTeam | 'NONE';
+    victimTeam: BotTeam | 'NONE';
+    weaponId: string;
+    headshot: boolean;
+    suicide: boolean;
+    /** True when the local player killed or was killed. The feed brightens those rows. */
+    involvesLocal: boolean;
+  };
+  [EV.AnnouncerCue]: { cue: AnnouncerCue };
 
   [EV.GameStateChanged]: { from: GameStateId; to: GameStateId };
   [EV.SettingsChanged]: { key: string };

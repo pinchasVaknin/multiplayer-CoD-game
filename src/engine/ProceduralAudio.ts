@@ -1,3 +1,4 @@
+import type { AnnouncerCue } from '../core/Events';
 import { surfaceAtIndex } from '../world/maps/materials';
 import { AudioGraph } from './AudioGraph';
 
@@ -12,7 +13,126 @@ import { AudioGraph } from './AudioGraph';
  * The bus architecture, the single convolver and the voice pool are all inherited from
  * `AudioGraph`, unchanged since M1.
  */
-export type { BusName, NoiseSpec, OcclusionTest, OscSpec } from './AudioSpecs';
+export type { BusName, NoiseSpec, OcclusionTest, OscSpec, ReverbSpec } from './AudioSpecs';
+
+/** One formant-shaped noise band. `at` is seconds from the start of the phrase. */
+interface Syllable {
+  readonly at: number;
+  readonly freq: number;
+  readonly freqEnd: number;
+  readonly q: number;
+  readonly level: number;
+  readonly decay: number;
+}
+
+interface AnnouncerPhrase {
+  readonly syllables: readonly Syllable[];
+  /** Overall level, so an urgent call can be louder than a routine one. */
+  readonly level: number;
+  /** The low body under the phrase, Hz. */
+  readonly bodyFrom: number;
+  readonly bodyTo: number;
+}
+
+/**
+ * The announcer's phrase book.
+ *
+ * Every call is two or three formant bands and a low body. What separates them is *shape* —
+ * a rising pair reads as good news, a falling triple as bad, three short bright ones as
+ * urgency. These are the numbers to move if a call lands wrong; there is no other lever.
+ */
+const ANNOUNCER_PHRASES: Readonly<Record<AnnouncerCue, AnnouncerPhrase>> = {
+  matchStart: {
+    syllables: [
+      { at: 0, freq: 520, freqEnd: 700, q: 5.5, level: 0.5, decay: 0.16 },
+      { at: 0.2, freq: 640, freqEnd: 480, q: 6, level: 0.44, decay: 0.2 },
+    ],
+    level: 0.9,
+    bodyFrom: 128,
+    bodyTo: 96,
+  },
+  fight: {
+    syllables: [{ at: 0, freq: 780, freqEnd: 1180, q: 7, level: 0.62, decay: 0.19 }],
+    level: 1,
+    bodyFrom: 170,
+    bodyTo: 104,
+  },
+  twoMinutes: {
+    syllables: [
+      { at: 0, freq: 600, freqEnd: 760, q: 6, level: 0.42, decay: 0.13 },
+      { at: 0.17, freq: 700, freqEnd: 560, q: 6, level: 0.4, decay: 0.16 },
+    ],
+    level: 0.78,
+    bodyFrom: 118,
+    bodyTo: 92,
+  },
+  oneMinute: {
+    syllables: [
+      { at: 0, freq: 680, freqEnd: 880, q: 6.5, level: 0.46, decay: 0.12 },
+      { at: 0.15, freq: 820, freqEnd: 640, q: 6.5, level: 0.44, decay: 0.15 },
+    ],
+    level: 0.86,
+    bodyFrom: 130,
+    bodyTo: 98,
+  },
+  thirtySeconds: {
+    syllables: [
+      { at: 0, freq: 820, freqEnd: 1020, q: 7, level: 0.48, decay: 0.1 },
+      { at: 0.12, freq: 960, freqEnd: 1140, q: 7, level: 0.46, decay: 0.1 },
+      { at: 0.24, freq: 1100, freqEnd: 820, q: 7, level: 0.5, decay: 0.15 },
+    ],
+    level: 0.94,
+    bodyFrom: 150,
+    bodyTo: 108,
+  },
+  leadTaken: {
+    syllables: [
+      { at: 0, freq: 560, freqEnd: 760, q: 5.5, level: 0.4, decay: 0.13 },
+      { at: 0.14, freq: 780, freqEnd: 1000, q: 6, level: 0.42, decay: 0.17 },
+    ],
+    level: 0.72,
+    bodyFrom: 120,
+    bodyTo: 150,
+  },
+  leadLost: {
+    syllables: [
+      { at: 0, freq: 720, freqEnd: 560, q: 5.5, level: 0.4, decay: 0.14 },
+      { at: 0.14, freq: 520, freqEnd: 380, q: 6, level: 0.42, decay: 0.19 },
+    ],
+    level: 0.72,
+    bodyFrom: 140,
+    bodyTo: 90,
+  },
+  victory: {
+    syllables: [
+      { at: 0, freq: 560, freqEnd: 720, q: 5, level: 0.5, decay: 0.18 },
+      { at: 0.2, freq: 760, freqEnd: 960, q: 5.5, level: 0.52, decay: 0.2 },
+      { at: 0.42, freq: 1000, freqEnd: 1320, q: 6, level: 0.56, decay: 0.3 },
+    ],
+    level: 1,
+    bodyFrom: 110,
+    bodyTo: 180,
+  },
+  defeat: {
+    syllables: [
+      { at: 0, freq: 620, freqEnd: 500, q: 5, level: 0.46, decay: 0.2 },
+      { at: 0.22, freq: 470, freqEnd: 370, q: 5.5, level: 0.46, decay: 0.24 },
+      { at: 0.48, freq: 340, freqEnd: 250, q: 6, level: 0.5, decay: 0.36 },
+    ],
+    level: 1,
+    bodyFrom: 130,
+    bodyTo: 62,
+  },
+  draw: {
+    syllables: [
+      { at: 0, freq: 600, freqEnd: 600, q: 6, level: 0.46, decay: 0.2 },
+      { at: 0.24, freq: 600, freqEnd: 540, q: 6, level: 0.46, decay: 0.28 },
+    ],
+    level: 0.9,
+    bodyFrom: 112,
+    bodyTo: 100,
+  },
+};
 
 export class ProceduralAudio extends AudioGraph {
   /**
@@ -114,6 +234,107 @@ export class ProceduralAudio extends AudioGraph {
     const surface = surfaceAtIndex(material);
     const level = active ? Math.min(0.42, 0.1 + speed * 0.045) * surface.stepLevel : 0;
     this.setSustainedBed(active, x, y, z, level, surface.stepFreq * 0.4);
+  }
+
+  /**
+   * An announcer sting (brief S6.5).
+   *
+   * Filtered noise bands in the vocal formant range, sequenced on the audio clock — not
+   * speech. Speech synthesis of actual lines is out of reach without assets and worse than
+   * nothing when it lands badly, so what the player hears is the *shape* of a call: two
+   * short syllables for a time warning, three rising ones for a win, three falling for a
+   * loss. A band-passed noise burst with a formant sweep and a Q around six is recognisably
+   * voice-shaped without pretending to be a word.
+   *
+   * Everything goes on the `ui` bus, which is routed around the world's low-pass and the
+   * duck — so a call still cuts through when you are on 12 HP and the world has gone woolly.
+   * The world ducks under it for the length of the phrase.
+   */
+  playAnnouncer(cue: AnnouncerCue): void {
+    if (!this.hasContext) return;
+    const phrase = ANNOUNCER_PHRASES[cue];
+    let span = 0;
+
+    for (const syllable of phrase.syllables) {
+      const spec = this.noiseScratch;
+      spec.x = 0;
+      spec.y = 0;
+      spec.z = 0;
+      spec.positional = false;
+      spec.bus = 'ui';
+      spec.filter = 'bandpass';
+      spec.freq = syllable.freq;
+      spec.freqEnd = syllable.freqEnd;
+      spec.q = syllable.q;
+      spec.level = syllable.level * phrase.level;
+      spec.attack = 0.012;
+      spec.decay = syllable.decay;
+      spec.wet = 0;
+      spec.rate = 1;
+      this.noiseBurst(spec, syllable.at);
+      span = Math.max(span, syllable.at + syllable.decay);
+    }
+
+    // A low body under the phrase, so a call has authority rather than sounding like static.
+    const body = this.oscScratch;
+    body.x = 0;
+    body.y = 0;
+    body.z = 0;
+    body.positional = false;
+    body.bus = 'ui';
+    body.type = 'sine';
+    body.freq = phrase.bodyFrom;
+    body.freqEnd = phrase.bodyTo;
+    body.level = 0.3 * phrase.level;
+    body.attack = 0.01;
+    body.decay = Math.max(0.18, span * 0.7);
+    body.wet = 0;
+    body.filterFreq = 700;
+    body.filterQ = 0.7;
+    this.oscHit(body);
+
+    this.duckWorld(span + 0.3);
+  }
+
+  /**
+   * One heartbeat: lub, then dub (brief S6.4).
+   *
+   * On the `ui` bus and non-positional, because it is inside the player's head rather than
+   * somewhere in the room — which is also why it is the one sound that gets *louder* as the
+   * world gets quieter. `intensity` is 0..1 and comes from how far below the low-health
+   * threshold the player is.
+   */
+  playHeartbeat(intensity: number): void {
+    if (!this.hasContext) return;
+    const t = Math.max(0, Math.min(1, intensity));
+    const level = 0.34 + 0.4 * t;
+
+    const beat = this.oscScratch;
+    beat.x = 0;
+    beat.y = 0;
+    beat.z = 0;
+    beat.positional = false;
+    beat.bus = 'ui';
+    beat.type = 'sine';
+    beat.filterFreq = 220;
+    beat.filterQ = 0.9;
+    beat.wet = 0;
+
+    beat.freq = 58;
+    beat.freqEnd = 36;
+    beat.level = level;
+    beat.attack = 0.008;
+    beat.decay = 0.17;
+    this.oscHit(beat);
+
+    // The second beat is quieter and closer than a listener expects, which is what makes
+    // two thumps read as one heart rather than two drums.
+    beat.freq = 50;
+    beat.freqEnd = 32;
+    beat.level = level * 0.72;
+    beat.attack = 0.008;
+    beat.decay = 0.14;
+    this.oscHit(beat, 0.155);
   }
 
   /** Short sine sweep. The UI vocabulary (S6.7). */

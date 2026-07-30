@@ -303,18 +303,15 @@ export class Pathfinder {
       spent++;
       this.expansionsThisSearch++;
 
-      const ix = grid.indexOfX(current);
-      const iz = grid.indexOfZ(current);
       const gHere = this.gScore[current] ?? 0;
 
       for (let d = 0; d < 8; d++) {
-        if (!grid.linked(current, d)) continue;
         const dir = NAV_DIRS[d];
         if (dir === undefined) continue;
-        const jx = ix + dir.dx;
-        const jz = iz + dir.dz;
-        if (!grid.inBounds(jx, jz)) continue;
-        const next = grid.index(jx, jz);
+        // The grid resolves which *layer* of the neighbour column the link lands on, so
+        // stepping onto a catwalk and walking underneath it are different edges.
+        const next = grid.neighbour(current, d);
+        if (next < 0) continue;
         this.touch(next);
         if (this.nodeState[next] === 2) continue;
 

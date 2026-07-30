@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Bot } from '../ai/Bot';
 import type { BotDirector } from '../ai/BotDirector';
 import { MAX_WAYPOINTS } from '../ai/Pathing';
+import { makeSpawnInspection, type SpawnInspection } from '../ai/SpawnSelector';
 import type { NavGrid } from '../world/Navmesh';
 
 /**
@@ -33,6 +34,24 @@ const COLOR_LOS_MEMORY = new THREE.Color(0x6e5a44);
 const COLOR_COVER_FREE = new THREE.Color(0x6fd08c);
 const COLOR_COVER_TAKEN = new THREE.Color(0xe8604c);
 
+/**
+ * Spawn candidates, coloured by the tier the selector would put them in (S7): green safe,
+ * amber hidden, red least-bad, and dim grey for a candidate belonging to the other end.
+ */
+const COLOR_SPAWN_SAFE = new THREE.Color(0x6fd08c);
+const COLOR_SPAWN_HIDDEN = new THREE.Color(0xffb340);
+const COLOR_SPAWN_BAD = new THREE.Color(0xe8604c);
+const COLOR_SPAWN_OTHER = new THREE.Color(0x2b313b);
+
+/**
+ * Rate the spawn cloud is rescored at, Hz.
+ *
+ * Scoring every candidate means a distance test per living enemy and a raycast wherever the
+ * cone test passes. That is cheap but not free, and a visualisation that cost frames would
+ * misreport the frame times sitting next to it — so it runs at 4 Hz rather than 60.
+ */
+const SPAWN_VIZ_HZ = 4;
+
 export class AiDebug {
   readonly group = new THREE.Group();
 
@@ -48,8 +67,15 @@ export class AiDebug {
   private readonly coverPos: Float32Array;
   private readonly coverCol: Float32Array;
 
+  private readonly spawnPoints: THREE.Points;
+  private readonly spawnPos: Float32Array;
+  private readonly spawnCol: Float32Array;
+  private readonly inspection: SpawnInspection = makeSpawnInspection();
+
   private readonly disposables: Array<{ dispose(): void }> = [];
   private enabled = false;
+  private spawnVizEnabled = false;
+  private spawnVizTimer = 0;
 
   constructor(private readonly director: BotDirector) {
     this.group.name = 'ai-debug';
@@ -105,6 +131,35 @@ export class AiDebug {
     this.coverPoints.frustumCulled = false;
     this.disposables.push(coverGeo, coverMat);
     this.group.add(this.coverPoints);
+
+    // ---- spawn candidates (M4) --------------------------------------------
+    const spawnCount = Math.max(1, director.spawns.candidateCount);
+    this.spawnPos = new Float32Array(spawnCount * 3);
+    this.spawnCol = new Float32Array(spawnCount * 3);
+    const candidates = director.spawns.candidates;
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      if (c === undefined) continue;
+      this.spawnPos[i * 3] = c.x;
+      // Waist height: a spawn marker on the floor is invisible from standing eye level.
+      this.spawnPos[i * 3 + 1] = c.y + 0.9;
+      this.spawnPos[i * 3 + 2] = c.z;
+    }
+    const spawnGeo = new THREE.BufferGeometry();
+    spawnGeo.setAttribute('position', new THREE.BufferAttribute(this.spawnPos, 3));
+    spawnGeo.setAttribute('color', new THREE.BufferAttribute(this.spawnCol, 3));
+    const spawnMat = new THREE.PointsMaterial({
+      size: 0.42,
+      vertexColors: true,
+      depthTest: false,
+      transparent: true,
+    });
+    this.spawnPoints = new THREE.Points(spawnGeo, spawnMat);
+    this.spawnPoints.renderOrder = 903;
+    this.spawnPoints.frustumCulled = false;
+    this.spawnPoints.visible = false;
+    this.disposables.push(spawnGeo, spawnMat);
+    this.group.add(this.spawnPoints);
   }
 
   get isEnabled(): boolean {
@@ -116,12 +171,66 @@ export class AiDebug {
     this.group.visible = on;
   }
 
+  get isSpawnVizEnabled(): boolean {
+    return this.spawnVizEnabled;
+  }
+
+  /**
+   * Show every spawn candidate, coloured by the tier the selector would assign it *right
+   * now* (S7). Independent of the F4 layer's own toggle because it answers a different
+   * question, but it still needs the layer visible to be seen.
+   */
+  setSpawnVizEnabled(on: boolean): void {
+    this.spawnVizEnabled = on;
+    this.spawnPoints.visible = on;
+    this.spawnVizTimer = 0;
+    if (on) this.updateSpawnViz();
+  }
+
   /** Rebuild the dynamic buffers. Called once per rendered frame, skipped while off. */
-  update(): void {
+  update(dt = 0): void {
     if (!this.enabled) return;
     this.updatePaths();
     this.updateLos();
     this.updateCover();
+    if (!this.spawnVizEnabled) return;
+    this.spawnVizTimer -= dt;
+    if (this.spawnVizTimer > 0) return;
+    this.spawnVizTimer = 1 / SPAWN_VIZ_HZ;
+    this.updateSpawnViz();
+  }
+
+  /**
+   * Rescore the cloud from the player's own team's point of view.
+   *
+   * The player is the one whose spawns matter to the person looking at the screen, and the
+   * scoring is `SpawnSelector.inspect` — the same `measure` the selector uses, not a
+   * reimplementation of it.
+   */
+  private updateSpawnViz(): void {
+    const spawns = this.director.spawns;
+    const roster = this.director.roster;
+    const count = spawns.candidateCount;
+    for (let i = 0; i < count; i++) {
+      if (!spawns.inspect(i, 'A', roster, 0, this.director.currentTick, this.inspection)) continue;
+      const colour = !this.inspection.eligible
+        ? COLOR_SPAWN_OTHER
+        : this.inspection.tier === 'safe'
+          ? COLOR_SPAWN_SAFE
+          : this.inspection.tier === 'hidden'
+            ? COLOR_SPAWN_HIDDEN
+            : COLOR_SPAWN_BAD;
+      // Brightness carries the score on top of the tier's hue, so the best safe candidate is
+      // distinguishable from a merely adequate one.
+      const strength = this.inspection.eligible
+        ? 0.35 + 0.65 * Math.min(1, Math.max(0, this.inspection.score / 40))
+        : 1;
+      this.spawnCol[i * 3] = colour.r * strength;
+      this.spawnCol[i * 3 + 1] = colour.g * strength;
+      this.spawnCol[i * 3 + 2] = colour.b * strength;
+    }
+    const attr = this.spawnPoints.geometry.getAttribute('color');
+    attr.needsUpdate = true;
   }
 
   dispose(): void {

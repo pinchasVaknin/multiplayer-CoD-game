@@ -58,7 +58,10 @@ export class CoverIndex {
   constructor(points: readonly CoverPoint[], nav: NavGrid) {
     let rejected = 0;
     for (const p of points) {
-      const cell = nav.cellAt(p.position.x, p.position.z);
+      // By height, not just in plan: Foundry's catwalk railings are cover four metres
+      // above cover that is also authored on the floor below them, and a lookup that only
+      // knows where a point is in plan would silently move one onto the other.
+      const cell = nav.cellAtY(p.position.x, p.position.y, p.position.z);
       if (cell < 0) {
         rejected++;
         continue;

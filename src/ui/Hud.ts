@@ -1,18 +1,28 @@
-import { clamp01, DEG2RAD, RAD2DEG } from '../core/MathUtil';
 import type { HitZone } from '../combat/HitboxRig';
+import type { GameEvents } from '../core/Events';
+import { clamp01, DEG2RAD, RAD2DEG } from '../core/MathUtil';
+import type { MapDef } from '../world/maps/types';
+import { HudBanner, makeBannerState, type BannerState } from './HudBanner';
+import { KillfeedView } from './Killfeed';
+import { Minimap } from './Minimap';
 
 /**
- * The in-match HUD (brief S6.5). Crosshair, hitmarker, ammo. Nothing else — S9 puts the
- * rest of the HUD in later milestones and this one stays honest about that.
+ * The in-match HUD (brief S6.4).
+ *
+ * M2 built the crosshair, the hitmarker and the ammo counter; M3 added health, the hurt
+ * vignette and the directional indicators. M4 completes it: score banner, round timer,
+ * killfeed, minimap, and the low-health state. The four pieces that are big enough to own
+ * themselves — banner, killfeed, minimap — are separate classes this one composes, so no
+ * single file owns the whole screen and `dispose` is still one call.
  *
  * DOM and CSS over the canvas (S2). Every per-frame write here is a `transform` or an
  * `opacity` on an element that is already composited, and text is only written when the
- * string actually changed, so the HUD cannot show up in the frame budget it is sitting
- * next to.
+ * string actually changed, so the HUD cannot show up in the frame budget it is sitting next
+ * to. `lastUpdateMs` measures exactly that and is reported in F1 (S7).
  *
- * The hitmarker is the single most important piece of feedback in the game (S6.5), so it
- * is measured: `lastHitLatencyMs` is the time from the damage being applied in the sim to
- * this class making the marker visible.
+ * The hitmarker is the single most important piece of feedback in the game (S6.5), so it is
+ * measured: `lastHitLatencyMs` is the time from the damage being applied in the sim to this
+ * class making the marker visible.
  */
 
 const DAMAGE_NUMBER_POOL = 14;
@@ -29,6 +39,15 @@ const HURT_FLASH_SECONDS = 0.42;
 /** Crosshair line length in px; must match `--hud-cross-len` in hud.css. */
 const LINE_LENGTH = 7;
 const MIN_GAP = 3;
+
+/**
+ * Health at which the low-health state begins (brief S6.4).
+ *
+ * Below this the rim goes red and stays red, the world goes behind a low-pass and a heartbeat
+ * starts. It is deliberately a hard threshold rather than a ramp from full health: the whole
+ * value of the state is that crossing it is a *fact* the player can act on.
+ */
+export const LOW_HEALTH_THRESHOLD = 35;
 
 export interface HudState {
   mag: number;
@@ -47,6 +66,13 @@ export interface HudState {
   healthMax: number;
   dead: boolean;
   respawnSeconds: number;
+
+  /** M4: where the player is, so the minimap can rotate around them. */
+  playerX: number;
+  playerZ: number;
+  playerYaw: number;
+  /** M4: the score banner and the round clock. */
+  banner: BannerState;
 }
 
 export function makeHudState(): HudState {
@@ -64,6 +90,10 @@ export function makeHudState(): HudState {
     healthMax: 100,
     dead: false,
     respawnSeconds: 0,
+    playerX: 0,
+    playerZ: 0,
+    playerYaw: 0,
+    banner: makeBannerState(),
   };
 }
 
@@ -81,11 +111,25 @@ interface HitDirection {
   active: boolean;
 }
 
+export interface HudDeps {
+  readonly host: HTMLElement;
+  /** The minimap is drawn from this, never from an image (S6.4). */
+  readonly mapDef: MapDef;
+  /** Teammate markers to preallocate on the minimap. */
+  readonly maxFriendlies: number;
+}
+
 export class Hud {
   /** Hit-to-visual latency for the last hitmarker, ms. Reported in the debug overlay. */
   lastHitLatencyMs = -1;
   /** Damage numbers are off by default (S6.5). */
   damageNumbersEnabled = false;
+  /** Wall time spent inside the last `update`, ms. Reported in F1 (S7). */
+  lastUpdateMs = 0;
+
+  readonly banner = new HudBanner();
+  readonly feed = new KillfeedView();
+  readonly minimap: Minimap;
 
   private readonly root: HTMLElement;
   private readonly crosshair: HTMLElement;
@@ -102,10 +146,14 @@ export class Hud {
   private readonly healthFill: HTMLElement;
   private readonly deadOverlay: HTMLElement;
   private readonly deadCount: HTMLElement;
+  private readonly lowVignette: HTMLElement;
 
   private hurtTimer = 0;
   private hurtPeak = 0;
   private lastVignette = -1;
+  private lastLowVignette = -1;
+  /** 0 when healthy, rising to 1 at zero health. Read by Match for audio. */
+  private lowHealth = 0;
   private lastHealthScale = -1;
   private healthShown = false;
   private deadShown = false;
@@ -124,7 +172,9 @@ export class Hud {
   private lowAmmo = false;
   private reloadShown = false;
 
-  constructor(host: HTMLElement) {
+  constructor(deps: HudDeps) {
+    this.minimap = new Minimap(deps.mapDef, deps.maxFriendlies);
+
     this.root = document.createElement('div');
     this.root.className = 'hud';
     this.root.hidden = true;
@@ -176,6 +226,14 @@ export class Hud {
     this.root.appendChild(numberLayer);
 
     // ---- M3: taking damage ------------------------------------------------
+    //
+    // Two rims, deliberately. The hurt flash is a *moment* — it spikes on a hit and decays
+    // — and the low-health rim is a *state* that stays until you heal. One element doing
+    // both would either flash weakly or hold at full brightness, and neither reads.
+    this.lowVignette = document.createElement('div');
+    this.lowVignette.className = 'hud-low';
+    this.root.appendChild(this.lowVignette);
+
     this.hurtVignette = document.createElement('div');
     this.hurtVignette.className = 'hud-hurt';
     this.root.appendChild(this.hurtVignette);
@@ -208,12 +266,30 @@ export class Hud {
     this.deadOverlay.append(deadLabel, this.deadCount);
     this.root.appendChild(this.deadOverlay);
 
-    host.appendChild(this.root);
+    // ---- M4 ---------------------------------------------------------------
+    this.root.append(
+      this.banner.element,
+      this.banner.phaseElement,
+      this.feed.element,
+      this.minimap.element,
+    );
+
+    deps.host.appendChild(this.root);
   }
 
   setVisible(on: boolean): void {
     this.root.hidden = !on;
     if (!on) this.clearMarkers();
+  }
+
+  /** 0 while healthy, rising to 1 at zero health. Drives the muffle and the heartbeat. */
+  get lowHealthIntensity(): number {
+    return this.lowHealth;
+  }
+
+  /** Add a killfeed line. Called from the `killfeed.entry` subscription. */
+  pushKillfeed(entry: GameEvents['killfeed.entry']): void {
+    this.feed.push(entry);
   }
 
   /**
@@ -288,6 +364,7 @@ export class Hud {
 
   /** Called once per rendered frame, after the sim has advanced. */
   update(state: HudState, dt: number): void {
+    const t0 = performance.now();
     this.updateCrosshair(state);
     this.updateAmmo(state);
     this.updateMarkers(dt);
@@ -295,10 +372,28 @@ export class Hud {
     this.updateHurt(dt);
     this.updateDirections(dt);
     this.updateHealth(state);
+    this.updateLowHealth(state);
     this.updateDead(state);
+    this.banner.update(state.banner);
+    this.feed.update(dt);
+    this.minimap.update(state.playerX, state.playerZ, state.playerYaw, dt);
+    this.lastUpdateMs = performance.now() - t0;
+  }
+
+  /** Wipe every per-match trace. Called on teardown so a second match starts clean. */
+  resetForMatch(): void {
+    this.clearMarkers();
+    this.feed.clear();
+    this.minimap.clearPings();
+    this.banner.reset();
+    this.lowHealth = 0;
+    this.lastLowVignette = -1;
+    this.lowVignette.style.opacity = '0';
+    this.lastHitLatencyMs = -1;
   }
 
   dispose(): void {
+    this.minimap.dispose();
     this.root.remove();
   }
 
@@ -452,6 +547,28 @@ export class Hud {
     if (show === this.healthShown) return;
     this.healthShown = show;
     this.healthBar.classList.toggle('hud-health--on', show);
+  }
+
+  /**
+   * The low-health state (brief S6.4).
+   *
+   * A hard threshold at 35 HP, then intensity rises the closer to zero the player gets. The
+   * rim is here; the muffle and the heartbeat are audio and are driven from the same number
+   * in `Match`, so what you see and what you hear cannot disagree about how much trouble you
+   * are in.
+   */
+  private updateLowHealth(state: HudState): void {
+    const health = state.dead ? state.healthMax : state.health;
+    const intensity =
+      health >= LOW_HEALTH_THRESHOLD ? 0 : clamp01((LOW_HEALTH_THRESHOLD - health) / LOW_HEALTH_THRESHOLD);
+    this.lowHealth = intensity;
+
+    // Never fully opaque: the centre of the screen has to stay readable at 5 HP, because
+    // that is the moment the player most needs to see what is shooting them.
+    const alpha = Math.round(intensity * 0.72 * 100) / 100;
+    if (alpha === this.lastLowVignette) return;
+    this.lastLowVignette = alpha;
+    this.lowVignette.style.opacity = alpha.toFixed(2);
   }
 
   private updateDead(state: HudState): void {

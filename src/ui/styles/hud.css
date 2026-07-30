@@ -313,3 +313,255 @@
   line-height: 1;
   color: var(--c-text);
 }
+
+/* ---- low health (M4) --------------------------------------------------- */
+
+/*
+ * A state, not a moment. Sits *under* the hurt flash so a hit while already low reads as a
+ * spike on top of a condition rather than replacing it. Tighter and darker than the hurt
+ * rim, because it is on screen for seconds at a time and has to be survivable to look at.
+ */
+.hud-low {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  will-change: opacity;
+  transition: opacity 140ms linear;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(150, 26, 20, 0) 34%,
+    rgba(150, 26, 20, 0.34) 70%,
+    rgba(120, 16, 12, 0.78) 100%
+  );
+}
+
+/* ---- score banner + round timer (M4) ---------------------------------- */
+
+.hud-banner {
+  position: absolute;
+  top: var(--s-3);
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: 128px auto 128px;
+  align-items: start;
+  gap: var(--s-5);
+  padding: var(--s-2) var(--s-4);
+  background: linear-gradient(rgba(7, 8, 10, 0.72), rgba(7, 8, 10, 0.34));
+  border-bottom: 1px solid var(--c-line);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.hud-banner__team {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.hud-banner__team--friendly {
+  align-items: flex-end;
+}
+
+.hud-banner__score {
+  font-size: var(--t-title);
+  font-weight: var(--w-heavy);
+  line-height: 1;
+  color: var(--c-text);
+}
+
+.hud-banner__track {
+  width: 100%;
+  height: 2px;
+  background: rgba(232, 234, 238, 0.16);
+  overflow: hidden;
+}
+
+.hud-banner__track i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: left center;
+  transform: scaleX(0);
+  will-change: transform;
+}
+
+/* The two sides are told apart by position and by one accent, not by two hues fighting. */
+.hud-banner__team--friendly .hud-banner__track i {
+  background: var(--c-good);
+  transform-origin: right center;
+}
+
+.hud-banner__team--hostile .hud-banner__track i {
+  background: var(--c-bad);
+}
+
+.hud-banner__centre {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 72px;
+}
+
+.hud-banner__clock {
+  font-size: var(--t-lead);
+  font-weight: var(--w-heavy);
+  letter-spacing: 0.04em;
+  line-height: 1;
+  color: var(--c-text);
+}
+
+.hud-banner__clock--urgent {
+  color: var(--c-accent);
+}
+
+.hud-banner__rounds {
+  font-size: var(--t-micro);
+  color: var(--c-text-faint);
+}
+
+/* Warm-up / round-over caption, over the crosshair rather than in the banner. */
+.hud-phase {
+  position: absolute;
+  left: 50%;
+  top: 34%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-med) var(--ease), visibility var(--dur-med);
+}
+
+.hud-phase--on {
+  opacity: 1;
+  visibility: visible;
+}
+
+.hud-phase span {
+  font-family: var(--font-ui);
+  font-size: var(--t-title);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-display);
+  text-transform: uppercase;
+  color: var(--c-accent);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.95);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- killfeed (M4) ----------------------------------------------------- */
+
+.hud-feed {
+  position: absolute;
+  top: 68px;
+  right: var(--s-6);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.hud-feed__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 2px var(--s-2);
+  background: rgba(7, 8, 10, 0.5);
+  border-left: 2px solid transparent;
+  opacity: 0;
+  will-change: opacity;
+}
+
+.hud-feed__row--local {
+  border-left-color: var(--c-accent);
+  background: rgba(20, 23, 28, 0.72);
+}
+
+.hud-feed__name {
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+.hud-feed__name--friendly {
+  color: var(--c-good);
+}
+
+.hud-feed__name--hostile {
+  color: var(--c-bad);
+}
+
+.hud-feed__name--neutral {
+  color: var(--c-text-faint);
+}
+
+.hud-feed__name--bright {
+  color: var(--c-text);
+}
+
+.hud-feed__icon {
+  display: flex;
+  align-items: center;
+  font-size: var(--t-micro);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  color: var(--c-text-dim);
+}
+
+.hud-feed__icon-svg {
+  width: 42px;
+  height: 14px;
+  fill: var(--c-text);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.9));
+}
+
+.hud-feed__hs {
+  display: flex;
+  align-items: center;
+}
+
+.hud-feed__hs-svg {
+  width: 11px;
+  height: 11px;
+  fill: var(--c-accent);
+}
+
+/* ---- minimap (M4) ------------------------------------------------------ */
+
+.hud-map {
+  position: absolute;
+  top: 68px;
+  left: var(--s-6);
+  width: 168px;
+  height: 168px;
+}
+
+.hud-map__canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 50%;
+}
+
+/* One ring, one accent tick at the top so "up is where you are looking" is stated. */
+.hud-map__ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid var(--c-line-hi);
+  box-shadow: inset 0 0 12px rgba(7, 8, 10, 0.8);
+  pointer-events: none;
+}
+
+.hud-map__ring::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  width: 2px;
+  height: 6px;
+  margin-left: -1px;
+  background: var(--c-accent);
+}

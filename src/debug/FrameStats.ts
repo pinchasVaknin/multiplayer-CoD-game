@@ -33,6 +33,19 @@ export class FrameStats {
   lastSteps = 0;
   starvedFrames = 0;
 
+  /**
+   * M4 breakdown (brief S7): time inside the game mode, and time inside the HUD.
+   *
+   * Both are carved out of the numbers above rather than added to them — mode time is part of
+   * `simMs` and HUD time is part of `renderMs`. They are broken out because they are the two
+   * costs M4 introduced that are easy to get wrong: a mode that walks the roster every tick,
+   * and DOM writes that happen every frame instead of only on change.
+   */
+  lastModeMs = 0;
+  lastHudMs = 0;
+  peakModeMs = 0;
+  peakHudMs = 0;
+
   push(frameMs: number, simMs: number, renderMs: number, steps: number, starved: boolean): void {
     this.frames[this.head] = frameMs;
     this.sim[this.head] = simMs;
@@ -49,6 +62,14 @@ export class FrameStats {
     // Long exponential average: the headline FPS should not flicker.
     const instant = frameMs > 0 ? 1000 / frameMs : 0;
     this.fps = this.fps === 0 ? instant : this.fps + (instant - this.fps) * 0.08;
+  }
+
+  /** The M4 sub-costs for this frame. Peaks are held until `reset`. */
+  pushBreakdown(modeMs: number, hudMs: number): void {
+    this.lastModeMs = modeMs;
+    this.lastHudMs = hudMs;
+    if (modeMs > this.peakModeMs) this.peakModeMs = modeMs;
+    if (hudMs > this.peakHudMs) this.peakHudMs = hudMs;
   }
 
   /** Recompute percentiles. Sorts a copy; call at a few Hz, not per frame. */
@@ -87,6 +108,8 @@ export class FrameStats {
     this.worst = 0;
     this.mean = 0;
     this.overBudget = 0;
+    this.peakModeMs = 0;
+    this.peakHudMs = 0;
   }
 
   get sampleCount(): number {

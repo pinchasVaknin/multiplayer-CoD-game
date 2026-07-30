@@ -125,6 +125,25 @@
   margin-top: var(--s-1);
 }
 
+/* Event logs (M4): the killfeed trace and the objective list. Newest first, monospaced. */
+.dbg-log {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: var(--s-1);
+  max-height: 148px;
+  overflow: hidden;
+}
+
+.dbg-log__line {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--c-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .dbg-toggle {
   display: flex;
   align-items: center;

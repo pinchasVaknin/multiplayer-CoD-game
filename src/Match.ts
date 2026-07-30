@@ -2,27 +2,32 @@ import * as THREE from 'three';
 import type { SchedulerConfig } from './ai/AiScheduler';
 import { BotDirector } from './ai/BotDirector';
 import type { BotTeam } from './ai/Combatant';
-import type { BotTier, PerceptionConfig, TierTable } from './ai/DifficultyTiers';
+import type { PerceptionConfig, TierTable } from './ai/DifficultyTiers';
 import { PlayerCombatant } from './ai/PlayerCombatant';
 import { makeSpawnChoice, type SpawnChoice } from './ai/SpawnSelector';
 import { DamageSystem, makeDamageRequest, PLAYER_ENTITY_ID, type DamageRequest } from './combat/DamageSystem';
-import type { HitZone } from './combat/HitboxRig';
+import { ScoreSystem } from './combat/ScoreSystem';
 import { TargetRange } from './combat/TargetRange';
-import { EV, type GameBus } from './core/Events';
+import type { GameBus } from './core/Events';
 import type { Input } from './core/Input';
-import type { InputCommand } from './core/InputCommand';
+import { Btn, isDown, type InputCommand } from './core/InputCommand';
 import { DT } from './core/Loop';
-import { angleDelta, DEG2RAD } from './core/MathUtil';
-import type { MapDef } from './world/maps/types';
+import { DEG2RAD } from './core/MathUtil';
 import type { CameraRig } from './engine/CameraRig';
+import type { CameraConfig } from './player/CameraConfig';
 import { Fx } from './engine/Fx';
 import type { ProceduralAudio } from './engine/ProceduralAudio';
 import { LatencyProbe } from './debug/LatencyProbe';
+import { MatchFeedback } from './MatchFeedback';
+import type { GameMode } from './modes/GameMode';
+import { MatchFlow } from './modes/MatchFlow';
+import type { MapEntry, ModeEntry } from './modes/ModeRegistry';
 import { Health, type HealthConfig } from './player/Health';
 import type { MovementConfig } from './player/MovementConfig';
 import type { PlayerController } from './player/PlayerController';
 import type { ViewmodelLayer } from './player/Viewmodel';
-import { Hud, makeHudState, type HudState } from './ui/Hud';
+import { LOW_HEALTH_THRESHOLD } from './ui/Hud';
+import { MatchHud } from './ui/MatchHud';
 import type { CollisionWorld } from './world/CollisionWorld';
 import { makeRayHit, type RayHit } from './world/Geometry';
 import { ViewmodelAnim, makeViewmodelDrive, type ViewmodelDrive } from './weapons/ViewmodelAnim';
@@ -36,17 +41,22 @@ import { WeaponSystem, type WeaponSnapshot } from './weapons/WeaponSystem';
  * Composition root for the MATCH state.
  *
  * `Game.ts` is the state machine; this is everything a match is made of, in one place, so
- * that neither file drifts past the size the architecture allows. It owns the wiring —
- * and wiring is all it does. Every connection here is an EventBus subscription, because
- * S3 says systems must not reach into each other, and the systems that fire, resolve and
- * present a shot genuinely do not know about one another:
+ * that neither file drifts past the size the architecture allows. It owns the wiring — and
+ * wiring is all it does. Every connection here is an EventBus subscription, because S3 says
+ * systems must not reach into each other, and the systems that fire, resolve and present a
+ * shot genuinely do not know about one another:
  *
  *   WeaponSystem --weapon.fired--> flash, tracer, gunshot, camera shake, latency probe
  *   Ballistics   --bullet.impact-> debris, decal, impact report
  *   DamageSystem --damage.dealt--> hitmarker, hit audio, damage numbers, target read-out
+ *   MatchFlow    --killfeed/score/announcer--> the HUD
  *
- * That is also what lets the headless harness fire a full magazine with no renderer, no
- * audio context and no DOM: nothing downstream of the sim is required for the sim to run.
+ * That is also what lets the headless harness run a full match with no renderer, no audio
+ * context and no DOM: nothing downstream of the sim is required for the sim to run.
+ *
+ * M4 added the mode above it. `ScoreSystem`, the `GameMode` and `MatchFlow` are constructed
+ * here and the flow's respawn gate is handed to both the bot director and the player's own
+ * respawn timer, so "nobody comes back once the match is over" is one rule.
  */
 
 export interface MatchDeps {
@@ -54,6 +64,7 @@ export interface MatchDeps {
   readonly scene: THREE.Scene;
   readonly viewmodel: ViewmodelLayer;
   readonly cameraRig: CameraRig;
+  readonly cameraConfig: CameraConfig;
   readonly audio: ProceduralAudio;
   readonly input: Input;
   readonly world: CollisionWorld;
@@ -64,57 +75,48 @@ export interface MatchDeps {
   readonly healthConfig: HealthConfig;
   readonly uiHost: HTMLElement;
   readonly anisotropy: number;
-  /** M3: the director bakes a navmesh and reads `spawns` and `coverPoints` from this. */
-  readonly mapDef: MapDef;
+  /** M4: the map and mode this match is. The director bakes a navmesh from the map def. */
+  readonly map: MapEntry;
+  readonly mode: ModeEntry;
   readonly tiers: TierTable;
   readonly perceptionConfig: PerceptionConfig;
   readonly schedulerConfig: SchedulerConfig;
   readonly seed: number;
 }
 
-interface PendingNumber {
-  x: number;
-  y: number;
-  z: number;
-  amount: number;
-  zone: HitZone;
-}
-
-const NUMBER_QUEUE = 8;
-
 /** The player's side. Bots added to 'A' fight alongside them, 'B' against. */
 export const PLAYER_TEAM: BotTeam = 'A';
+
+export const PLAYER_NAME = 'OPERATOR';
 
 /** Seconds the player spends dead. Matches the bots' timer, because it is the same rule. */
 const PLAYER_RESPAWN_SECONDS = 4.5;
 
-/** The default firefight: three alongside the player, four against. */
-const DEFAULT_TEAM_A_BOTS = 3;
-const DEFAULT_TEAM_B_BOTS = 4;
-
-const DEFAULT_TIER_MIX: readonly BotTier[] = ['REGULAR', 'HARDENED', 'RECRUIT', 'REGULAR'];
-
-/** Reusable position record for "where did that sound come from". Zero allocation. */
-const sourceAt = { x: 0, y: 0, z: 0 };
+/** Heartbeat rate at the low-health threshold and at zero, beats per minute (S6.4). */
+const HEARTBEAT_BPM_CALM = 74;
+const HEARTBEAT_BPM_PANIC = 152;
 
 export class Match {
   readonly damage: DamageSystem;
   readonly weapons: WeaponSystem;
-  readonly range: TargetRange;
+  /** Only on the grey-box testbed: a firing range does not belong on a TDM map. */
+  readonly range: TargetRange | null;
   readonly fx: Fx;
-  readonly hud: Hud;
   readonly weaponAudio: WeaponAudio;
   readonly model: WeaponModel;
   readonly anim: ViewmodelAnim;
   readonly latency = new LatencyProbe();
   readonly playerHealth: Health;
-  /**
-   * The player, as the AI sees it. This replaces M2's local `PlayerTarget`: it is still
-   * the same `Damageable` with the same rig, plus the team, facing and stance that
-   * perception and spawn safety need. One object, so there is no second pose to drift.
-   */
   readonly playerCombatant: PlayerCombatant;
   readonly bots: BotDirector;
+
+  // ---- M4: the match, as opposed to the firefight -------------------------
+  readonly score: ScoreSystem;
+  readonly mode: GameMode;
+  readonly flow: MatchFlow;
+  readonly ui: MatchHud;
+  /** Turns the events a shot produces into what the player sees and hears. */
+  readonly feedback: MatchFeedback;
 
   /** Interpolated weapon state for this frame. Read by Game for the camera. */
   readonly visual: WeaponSnapshot = {
@@ -127,25 +129,23 @@ export class Match {
     reloadFraction: 0,
   };
 
+  /** Wall time inside the last `flow.simulate`, ms. Reported in F1 (S7). */
+  lastModeMs = 0;
+
   private readonly deps: MatchDeps;
   private readonly drive: ViewmodelDrive = makeViewmodelDrive();
-  private readonly hudState: HudState = makeHudState();
   private readonly residual = { yaw: 0, pitch: 0 };
   private readonly selfDamage: DamageRequest;
   private readonly occlusionRay: RayHit = makeRayHit();
-  private readonly projectScratch = new THREE.Vector3();
-  private readonly numberQueue: PendingNumber[] = [];
-  private numberCount = 0;
+  private readonly listenerAt = { x: 0, y: 0, z: 0 };
 
   private readonly spawnChoice: SpawnChoice = makeSpawnChoice();
 
-  private listenerX = 0;
-  private listenerY = 0;
-  private listenerZ = 0;
-  private shotSinceRender = false;
   private active = false;
   private playerDead = false;
   private playerRespawnTimer = 0;
+  private heartbeatTimer = 0;
+  private rosterRegistered = false;
 
   constructor(deps: MatchDeps) {
     this.deps = deps;
@@ -172,13 +172,13 @@ export class Match {
       deps.movementConfig.walkSpeed,
     );
 
-    this.range = new TargetRange(this.damage, deps.bus, deps.healthConfig);
-    deps.scene.add(this.range.group);
+    this.range = deps.map.targetRange ? new TargetRange(this.damage, deps.bus, deps.healthConfig) : null;
+    if (this.range !== null) deps.scene.add(this.range.group);
 
     // The director bakes the navmesh, so it is built once here rather than per match.
     this.bots = new BotDirector({
       world: deps.world,
-      mapDef: deps.mapDef,
+      mapDef: deps.map.def,
       bus: deps.bus,
       damage: this.damage,
       movement: deps.movementConfig,
@@ -193,6 +193,24 @@ export class Match {
     });
     deps.scene.add(this.bots.group);
 
+    // ---- the mode ---------------------------------------------------------
+    this.score = new ScoreSystem(deps.bus);
+    this.mode = deps.mode.create({ bus: deps.bus, score: this.score, roster: this.bots.roster });
+    this.flow = new MatchFlow({
+      bus: deps.bus,
+      score: this.score,
+      roster: this.bots.roster,
+      mode: this.mode,
+      mapId: deps.map.id,
+      mapName: deps.map.name,
+      localTeam: PLAYER_TEAM,
+      onSidesSwapped: (swapped) => this.bots.spawns.setSideSwap(swapped),
+    });
+    this.bots.respawnPolicy = {
+      allowed: (id) => this.flow.respawnAllowed(id),
+      noted: (id) => this.flow.noteRespawn(id),
+    };
+
     this.fx = new Fx(deps.anisotropy);
     deps.scene.add(this.fx.group);
 
@@ -201,34 +219,90 @@ export class Match {
     this.fx.attachMuzzle(this.model.muzzle);
     this.anim = new ViewmodelAnim(this.model);
 
-    this.hud = new Hud(deps.uiHost);
+    this.ui = new MatchHud({
+      bus: deps.bus,
+      uiHost: deps.uiHost,
+      mapDef: deps.map.def,
+      mapName: deps.map.name,
+      modeName: this.mode.name,
+      columns: this.mode.getScoreboardColumns(),
+      score: this.score,
+      audio: deps.audio,
+      localTeam: PLAYER_TEAM,
+      roster: this.bots.roster,
+      teamSize: deps.map.teamSize,
+    });
     this.weaponAudio = new WeaponAudio(deps.audio);
 
-    for (let i = 0; i < NUMBER_QUEUE; i++) {
-      this.numberQueue.push({ x: 0, y: 0, z: 0, amount: 0, zone: 'torso' });
-    }
+    this.feedback = new MatchFeedback({
+      bus: deps.bus,
+      cameraRig: deps.cameraRig,
+      cameraConfig: deps.cameraConfig,
+      audio: deps.audio,
+      input: deps.input,
+      player: deps.player,
+      playerHealth: this.playerHealth,
+      weapons: this.weapons,
+      weaponAudio: this.weaponAudio,
+      fx: this.fx,
+      hud: this.ui.hud,
+      bots: this.bots,
+      latency: this.latency,
+      onPlayerKilled: () => this.onPlayerKilled(),
+      listener: () => this.listenerAt,
+    });
 
     // Occlusion low-pass through the same spatial-hash raycaster the sim uses (S6.7).
     deps.audio.setOccluder((x, y, z) =>
-      !deps.world.segmentClear(x, y, z, this.listenerX, this.listenerY, this.listenerZ, this.occlusionRay),
+      !deps.world.segmentClear(
+        x,
+        y,
+        z,
+        this.listenerAt.x,
+        this.listenerAt.y,
+        this.listenerAt.z,
+        this.occlusionRay,
+      ),
     );
-
-    this.subscribe();
+    // The room, into the one convolver that already exists (S6.6).
+    deps.audio.setReverb(deps.map.def.reverb ?? null);
   }
 
+  /**
+   * Bring the match up. Builds the roster on the first activation, registers everybody with
+   * the score system, and starts the flow's clock.
+   */
   setActive(on: boolean): void {
     this.active = on;
-    this.hud.setVisible(on);
+    this.ui.setVisible(on);
     if (!on) return;
     this.anim.reset(this.deps.input.yaw, this.deps.input.pitch);
     // Deferred to the first time a match actually starts rather than done at construction:
     // the harness wants a different roster and gets to set it before anyone spawns.
     if (this.bots.botCount === 0) this.populateDefault();
+    this.registerRoster();
+    if (this.flow.currentPhase === 'WARMUP' && this.flow.round === 1 && this.score.rows.length > 0) {
+      this.flow.start();
+    }
   }
 
-  /** The default firefight. The bot-match harness replaces this with its own roster. */
+  /** The default firefight: the map's team size, the player counting as one of their side. */
   populateDefault(): void {
-    this.bots.populate(DEFAULT_TEAM_A_BOTS, DEFAULT_TEAM_B_BOTS, DEFAULT_TIER_MIX);
+    const size = this.deps.map.teamSize;
+    this.bots.populate(Math.max(0, size - 1), size, this.deps.map.tierMix);
+  }
+
+  /**
+   * Put every roster member on the scoreboard.
+   *
+   * Deferred until the roster exists and done once: the bots are built by `populate`, which
+   * the harness may call with its own numbers before the match goes live.
+   */
+  registerRoster(): void {
+    if (this.rosterRegistered) return;
+    this.rosterRegistered = true;
+    this.score.register(PLAYER_ENTITY_ID, PLAYER_NAME, PLAYER_TEAM);
+    for (const bot of this.bots.bots) this.score.register(bot.entityId, bot.displayName, bot.team);
   }
 
   get isPlayerDead(): boolean {
@@ -278,21 +352,32 @@ export class Match {
       }
     }
 
-    this.range.step();
+    this.range?.step();
     this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
     this.stepPlayerRespawn();
+    this.stepLowHealthAudio();
+
+    // The mode clock is a gameplay timer and runs on ticks like everything else (S4.1).
+    const t0 = performance.now();
+    this.flow.simulate(cmd.tickIndex);
+    this.lastModeMs = performance.now() - t0;
+
+    // Held Tab, read from the command rather than from the DOM (S4.2).
+    this.ui.setScoreboardOpen(isDown(cmd.buttons, Btn.Scoreboard));
+
     this.latency.expire(performance.now());
   }
 
   /**
-   * The player's side of S6.9. Same timer and the same spawn selector the bots use, so
-   * "never within 15 m of a living enemy" is one rule with one implementation rather than
-   * one for them and a different one for you.
+   * The player's side of S6.9. Same timer and the same spawn selector the bots use, and the
+   * same respawn gate — so "nobody comes back once the match is over" is one rule with one
+   * implementation rather than one for them and a different one for you.
    */
   private stepPlayerRespawn(): void {
     if (!this.playerDead) return;
     this.playerRespawnTimer = Math.max(0, this.playerRespawnTimer - DT);
     if (this.playerRespawnTimer > 0) return;
+    if (!this.flow.respawnAllowed(PLAYER_ENTITY_ID)) return;
     this.respawnPlayer();
   }
 
@@ -307,6 +392,30 @@ export class Match {
     this.playerCombatant.syncRig();
     this.playerDead = false;
     this.playerRespawnTimer = 0;
+    this.flow.noteRespawn(PLAYER_ENTITY_ID);
+  }
+
+  /**
+   * The audible half of the low-health state (brief S6.4).
+   *
+   * Driven from the same intensity the vignette uses, so what you see and what you hear
+   * cannot disagree. The muffle is a state and is set every tick; the heartbeat is an event
+   * and is scheduled on a tick timer that speeds up as health falls — 74 BPM at the
+   * threshold, 152 at nothing left.
+   */
+  private stepLowHealthAudio(): void {
+    const intensity = this.playerDead ? 0 : this.ui.lowHealthIntensity;
+    this.deps.audio.setMuffle(intensity);
+
+    if (intensity <= 0) {
+      this.heartbeatTimer = 0;
+      return;
+    }
+    const bpm = HEARTBEAT_BPM_CALM + (HEARTBEAT_BPM_PANIC - HEARTBEAT_BPM_CALM) * intensity;
+    this.heartbeatTimer -= DT;
+    if (this.heartbeatTimer > 0) return;
+    this.heartbeatTimer = 60 / bpm;
+    this.deps.audio.playHeartbeat(intensity);
   }
 
   /**
@@ -323,9 +432,9 @@ export class Match {
     const weapon = this.weapons.weapon;
     const def = weapon.definition;
 
-    this.listenerX = camera.position.x;
-    this.listenerY = camera.position.y;
-    this.listenerZ = camera.position.z;
+    this.listenerAt.x = camera.position.x;
+    this.listenerAt.y = camera.position.y;
+    this.listenerAt.z = camera.position.z;
 
     const drive = this.drive;
     drive.raise = this.visual.raise;
@@ -345,14 +454,14 @@ export class Match {
     drive.pitch = pitch;
     this.anim.update(drive, this.deps.viewmodelConfig, dt);
 
-    this.range.updateVisuals(alpha, camera);
+    this.range?.updateVisuals(alpha, camera);
     this.bots.updateVisuals(alpha, dt);
     this.fx.update(dt);
 
     // A dead player is not holding a rifle.
     this.model.root.visible = !this.playerDead;
 
-    const state = this.hudState;
+    const state = this.ui.state;
     state.mag = weapon.mag;
     state.reserve = weapon.reserve;
     state.magSize = def.magSize;
@@ -366,121 +475,41 @@ export class Match {
     state.healthMax = this.playerHealth.max;
     state.dead = this.playerDead;
     state.respawnSeconds = this.playerRespawnTimer;
-    this.hud.update(state, dt);
-
-    this.flushDamageNumbers(camera);
-
-    if (this.shotSinceRender) {
-      this.shotSinceRender = false;
-      this.latency.notePresented(performance.now());
-    }
+    this.ui.update(this.flow, sim.x, sim.z, sim.yaw, dt);
+    this.feedback.render(camera);
   }
 
+  /**
+   * Take the match apart.
+   *
+   * Everything constructed in the constructor is undone here, in the reverse order, and
+   * every subscription is dropped — this is the method acceptance criterion 1 and the heap
+   * harness are really testing. Anything added to `Match` that is not released here shows up
+   * as a step in `usedJSHeapSize` at the next match boundary.
+   */
   dispose(): void {
+    this.feedback.dispose();
+    this.flow.dispose();
+    this.score.dispose();
+    this.ui.dispose();
     this.bots.dispose();
     this.deps.scene.remove(this.bots.group);
-    this.range.dispose();
-    this.deps.scene.remove(this.range.group);
+    if (this.range !== null) {
+      this.range.dispose();
+      this.deps.scene.remove(this.range.group);
+    }
     this.fx.dispose();
     this.deps.scene.remove(this.fx.group);
     this.deps.viewmodel.remove(this.model.root);
     this.model.dispose();
-    this.hud.dispose();
     this.deps.audio.setOccluder(null);
-  }
-
-  // -- wiring ----------------------------------------------------------------
-
-  private subscribe(): void {
-    const { bus, cameraRig, input } = this.deps;
-
-    bus.on(EV.WeaponFired, (p) => {
-      const def = this.weapons.definition;
-      // Flash, tracer and report belong to whoever fired, wherever they are standing.
-      this.fx.fireMuzzleFlash(p.x, p.y, p.z, def.muzzleFlashScale);
-      if (p.tracer) this.fx.spawnTracer(p.x, p.y, p.z, p.endX, p.endY, p.endZ);
-      this.weaponAudio.playGunshot(p.x, p.y, p.z, def.voice);
-      // Everything below is about the local player's own hands and must not fire for a
-      // bot: a bot shooting across the room shaking your camera is the classic tell.
-      if (p.sourceId !== PLAYER_ENTITY_ID) return;
-      cameraRig.shake.add(def.shakePerShot);
-      this.latency.armFromPress(input.takeFirePress());
-      this.shotSinceRender = true;
-    });
-
-    bus.on(EV.BulletImpact, (p) => {
-      this.fx.spawnImpact(p.x, p.y, p.z, p.nx, p.ny, p.nz, p.material, p.penetrated);
-      this.weaponAudio.playImpact(p.x, p.y, p.z, p.material, p.penetrated);
-    });
-
-    bus.on(EV.DamageDealt, (p) => {
-      if (p.targetId === PLAYER_ENTITY_ID) {
-        this.onPlayerHurt(p.sourceId, p.amount);
-        return;
-      }
-      // A round landing on a body is a sound in the room no matter who fired it (S6.8).
-      this.weaponAudio.playFleshImpact(p.x, p.y, p.z, p.zone === 'head');
-      if (p.sourceId !== PLAYER_ENTITY_ID) return;
-
-      // Timestamped here, at the moment the damage was applied, so the hitmarker latency
-      // reported in the overlay is hit-to-visual and not visual-to-visual.
-      this.hud.showHitmarker(p.lethal, performance.now());
-      this.weaponAudio.playHitmarker(p.lethal);
-      // Debris comes back along the shot, so the puff faces the shooter.
-      const sim = this.deps.player.sim;
-      const bx = sim.x - p.x;
-      const by = sim.y + sim.eyeHeight - p.y;
-      const bz = sim.z - p.z;
-      const inv = 1 / Math.max(1e-4, Math.hypot(bx, by, bz));
-      this.fx.spawnHitPuff(p.x, p.y, p.z, bx * inv, by * inv, bz * inv);
-      this.queueDamageNumber(p.x, p.y, p.z, p.amount, p.zone);
-    });
-
-    bus.on(EV.EntityKilled, (p) => {
-      if (p.targetId === PLAYER_ENTITY_ID) {
-        this.onPlayerKilled();
-        return;
-      }
-      const victim = this.bots.get(p.targetId);
-      if (victim === undefined) return;
-      // Slightly off the floor: the sound is the body arriving, not the feet.
-      this.weaponAudio.playDeath(victim.px, victim.py + 0.4, victim.pz);
-    });
-
-    bus.on(EV.WeaponDryFired, (p) => {
-      const at = this.sourcePosition(p.sourceId);
-      this.weaponAudio.playDryFire(at.x, at.y, at.z);
-    });
-
-    bus.on(EV.WeaponReloadStep, (p) => {
-      const at = this.sourcePosition(p.sourceId);
-      this.weaponAudio.playReloadStep(at.x, at.y, at.z, p.step);
-    });
-
-    bus.on(EV.WeaponAdsChanged, (p) => {
-      const at = this.sourcePosition(p.sourceId);
-      this.weaponAudio.playAdsRustle(at.x, at.y, at.z, p.aiming);
-    });
+    this.deps.audio.resetMatchState();
   }
 
   /**
-   * The player took a round. The vignette says how hard, the chevron says from where —
-   * and the chevron is the important one, because being shot from off-screen with no
-   * indication of the direction is the single most frustrating way to die.
+   * The local player died. Owned here rather than in `MatchFeedback` because what follows is
+   * gameplay: the respawn timer, and the respawn gate the mode controls.
    */
-  private onPlayerHurt(sourceId: number, amount: number): void {
-    this.hud.showHurt(amount, this.playerHealth.max);
-    cameraShakeForHit(this.deps.cameraRig, amount, this.playerHealth.max);
-
-    const shooter = this.bots.get(sourceId);
-    if (shooter === undefined) return;
-    const sim = this.deps.player.sim;
-    const worldYaw = Math.atan2(-(shooter.px - sim.x), -(shooter.pz - sim.z));
-    // Screen-relative: 0 is straight ahead, positive to the right. The view yaw grows
-    // anticlockwise, so the bearing is the negated delta.
-    this.hud.showHitDirection(-angleDelta(sim.yaw, worldYaw));
-  }
-
   private onPlayerKilled(): void {
     if (this.playerDead) return;
     this.playerDead = true;
@@ -488,68 +517,9 @@ export class Match {
     const sim = this.deps.player.sim;
     this.weaponAudio.playDeath(sim.x, sim.y + 0.4, sim.z);
     this.deps.cameraRig.shake.add(0.45);
-  }
-
-  /**
-   * Where an entity's weapon sounds should come from. The player's own mechanical noises
-   * sit at their eye; a bot's sit at the bot, which is what makes hearing one reload
-   * behind a crate a usable piece of information rather than a confusing one.
-   */
-  private sourcePosition(sourceId: number): { x: number; y: number; z: number } {
-    if (sourceId === PLAYER_ENTITY_ID) {
-      const sim = this.deps.player.sim;
-      sourceAt.x = sim.x;
-      sourceAt.y = sim.y + sim.eyeHeight;
-      sourceAt.z = sim.z;
-      return sourceAt;
-    }
-    const bot = this.bots.get(sourceId);
-    if (bot !== undefined) {
-      sourceAt.x = bot.px;
-      sourceAt.y = bot.py + bot.eyeHeight;
-      sourceAt.z = bot.pz;
-      return sourceAt;
-    }
-    // Unregistered source (a range dummy). Put it at the listener so it stays audible
-    // rather than being panned to the origin of the world.
-    sourceAt.x = this.listenerX;
-    sourceAt.y = this.listenerY;
-    sourceAt.z = this.listenerZ;
-    return sourceAt;
-  }
-
-  private queueDamageNumber(x: number, y: number, z: number, amount: number, zone: HitZone): void {
-    if (this.numberCount >= NUMBER_QUEUE) return;
-    const slot = this.numberQueue[this.numberCount];
-    if (slot === undefined) return;
-    slot.x = x;
-    slot.y = y;
-    slot.z = z;
-    slot.amount = amount;
-    slot.zone = zone;
-    this.numberCount++;
-  }
-
-  /** Projection needs the camera, which only exists during the render pass. */
-  private flushDamageNumbers(camera: THREE.PerspectiveCamera): void {
-    if (this.numberCount === 0) return;
-    if (this.hud.damageNumbersEnabled) {
-      const halfW = window.innerWidth * 0.5;
-      const halfH = window.innerHeight * 0.5;
-      for (let i = 0; i < this.numberCount; i++) {
-        const n = this.numberQueue[i];
-        if (n === undefined) continue;
-        this.projectScratch.set(n.x, n.y, n.z).project(camera);
-        if (this.projectScratch.z > 1) continue;
-        this.hud.showDamageNumber(
-          halfW + this.projectScratch.x * halfW,
-          halfH - this.projectScratch.y * halfH,
-          n.amount,
-          n.zone,
-        );
-      }
-    }
-    this.numberCount = 0;
+    // Dying clears the low-health state: the muffle belongs to being nearly dead, not to being
+    // dead, and holding it through a respawn is state leaking across a life.
+    this.deps.audio.setMuffle(0);
   }
 
   /** Radians of interpolated aim recoil, for the camera. */
@@ -560,14 +530,9 @@ export class Match {
   get aimPitchRad(): number {
     return this.visual.aimPitch * DEG2RAD;
   }
-}
 
-/**
- * A jolt proportional to the round that caused it, capped well below the landing shake.
- * Being shot has to register in the body without taking the aim away from the player —
- * a hit that throws the camera is a hit the player cannot answer.
- */
-function cameraShakeForHit(rig: CameraRig, amount: number, maxHealth: number): void {
-  const severity = Math.min(1, amount / Math.max(maxHealth * 0.3, 1));
-  rig.shake.add(0.08 + severity * 0.16);
+  /** The threshold the low-health state begins at. Exposed for the debug read-out. */
+  get lowHealthThreshold(): number {
+    return LOW_HEALTH_THRESHOLD;
+  }
 }

@@ -75,6 +75,18 @@ const evBotSpawn = {
   nearestEnemy: 0,
 };
 
+/**
+ * Whether somebody may come back, and a note when they do (M4).
+ *
+ * Implemented by `MatchFlow`. It is the one gate for bots and the player alike, so "no
+ * respawns once the match is over" is a single rule rather than two that can drift — and it
+ * is what stops a bot respawning behind the post-match summary screen.
+ */
+export interface RespawnPolicy {
+  allowed(entityId: number): boolean;
+  noted(entityId: number): void;
+}
+
 export interface BotDirectorDeps {
   readonly world: CollisionWorld;
   readonly mapDef: MapDef;
@@ -97,6 +109,8 @@ export interface NavStats {
   walkable: number;
   pruned: number;
   links: number;
+  /** Columns carrying two walkable surfaces. Non-zero means the map is multi-level. */
+  stacked: number;
   bakeMs: number;
   patrolPoints: number;
   coverPoints: number;
@@ -105,6 +119,12 @@ export interface NavStats {
 }
 
 export class BotDirector {
+  /**
+   * Set by `Match` once the mode exists. Null means "always allowed", which is what the M3
+   * harness and the bot-only soak want: they have no match flow to ask.
+   */
+  respawnPolicy: RespawnPolicy | null = null;
+
   readonly group = new THREE.Group();
   readonly nav: NavGrid;
   readonly perception: Perception;
@@ -170,6 +190,7 @@ export class BotDirector {
       walkable: this.nav.stats.walkable,
       pruned: this.nav.stats.pruned,
       links: this.nav.stats.links,
+      stacked: this.nav.stats.stacked,
       bakeMs: this.nav.stats.bakeMs,
       patrolPoints: patrolCells.length,
       coverPoints: this.cover.count,
@@ -284,7 +305,8 @@ export class BotDirector {
       bot.beginTick();
 
       if (!bot.health.alive) {
-        if (bot.respawnTimer <= 0 && bot.deadTime > 1.2) this.spawnBot(bot);
+        const mayReturn = this.respawnPolicy?.allowed(bot.entityId) ?? true;
+        if (mayReturn && bot.respawnTimer <= 0 && bot.deadTime > 1.2) this.spawnBot(bot);
         continue;
       }
 
@@ -334,6 +356,7 @@ export class BotDirector {
       return;
     }
     bot.spawn(this.choice.x, this.choice.y + 0.05, this.choice.z, this.choice.yaw);
+    this.respawnPolicy?.noted(bot.entityId);
     evBotSpawn.entityId = bot.entityId;
     evBotSpawn.team = bot.team;
     evBotSpawn.tier = bot.tierName;
@@ -508,6 +531,16 @@ export class BotDirector {
   /** Simulated seconds elapsed since the director started. Derived from ticks. */
   get simSeconds(): number {
     return this.tick * DT;
+  }
+
+  /** The tick the director last simulated. Read by the spawn visualisation. */
+  get currentTick(): number {
+    return this.tick;
+  }
+
+  /** Sprint speed from the shared movement config, for the lane-timing measurement. */
+  get sprintSpeed(): number {
+    return this.deps.movement.sprintSpeed;
   }
 }
 

@@ -141,5 +141,264 @@ body.op-locked #viewport {
   align-self: center;
 }
 
+.op-btn--primary {
+  border-color: var(--c-accent);
+  background: var(--c-accent-glow);
+  font-size: var(--t-lead);
+  padding: var(--s-3) var(--s-12);
+}
+
+.op-btn--quiet {
+  border-color: var(--c-line-hi);
+  color: var(--c-text-dim);
+}
+
+.op-actions {
+  display: flex;
+  gap: var(--s-4);
+  align-items: center;
+}
+
+/* ---- mode / map pickers (M4) ------------------------------------------- */
+
+.op-pickers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 280px));
+  gap: var(--s-8);
+}
+
+.op-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.op-option {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: var(--s-3) var(--s-4);
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-left: 2px solid var(--c-line-hi);
+  border-radius: var(--radius);
+  color: var(--c-text-dim);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.op-option:hover,
+.op-option:focus-visible {
+  background: var(--c-surface-hi);
+  outline: none;
+}
+
+/* Selection is one accent edge and a brighter name — not a second colour. */
+.op-option--on {
+  border-left-color: var(--c-accent);
+  background: var(--c-surface-hi);
+}
+
+.op-option__name {
+  font-size: var(--t-body);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--c-text-faint);
+}
+
+.op-option--on .op-option__name {
+  color: var(--c-accent);
+}
+
+.op-option__blurb {
+  font-size: var(--t-small);
+  color: var(--c-text-faint);
+}
+
+/* ---- scoreboard (M4) --------------------------------------------------- */
+
+.sb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1040px, 94vw);
+  padding: var(--s-5) var(--s-6);
+  background: rgba(7, 8, 10, 0.9);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-fast) var(--ease), visibility var(--dur-fast);
+}
+
+.sb--on {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Embedded in the summary screen: flows with the page instead of floating over it. */
+.sb--embedded {
+  position: static;
+  transform: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  width: min(1040px, 92vw);
+}
+
+.sb__title {
+  font-size: var(--t-small);
+  color: var(--c-text-faint);
+  margin-bottom: var(--s-4);
+}
+
+.sb__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-8);
+}
+
+.sb__head,
+.sb__row {
+  display: grid;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: 3px var(--s-2);
+}
+
+.sb__head {
+  border-bottom: 1px solid var(--c-line);
+  margin-bottom: var(--s-1);
+}
+
+.sb__col {
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--c-text-faint);
+}
+
+.sb__col--right,
+.sb__cell--right {
+  text-align: right;
+}
+
+.sb__team--friendly .sb__col--name {
+  color: var(--c-good);
+}
+
+.sb__team--hostile .sb__col--name {
+  color: var(--c-bad);
+}
+
+.sb__row[hidden] {
+  display: none;
+}
+
+.sb__row:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.022);
+}
+
+/* The player's own row gets the one accent edge. Nothing else is highlighted. */
+.sb__row--local {
+  border-left: 2px solid var(--c-accent);
+  background: rgba(255, 179, 64, 0.08);
+}
+
+.sb__name {
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--c-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sb__cell {
+  font-size: var(--t-small);
+  color: var(--c-text-dim);
+}
+
+/* ---- end of match (M4) ------------------------------------------------- */
+
+.eom {
+  gap: var(--s-5);
+  overflow-y: auto;
+  padding: var(--s-8) 0;
+  justify-content: flex-start;
+}
+
+.eom[hidden] {
+  display: none;
+}
+
+.eom__outcome {
+  font-size: var(--t-display);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-display);
+  text-transform: uppercase;
+  margin: 0;
+  line-height: 1;
+  color: var(--c-text);
+}
+
+.eom__outcome--win {
+  color: var(--c-good);
+}
+
+.eom__outcome--loss {
+  color: var(--c-bad);
+}
+
+.eom__personal {
+  display: grid;
+  grid-auto-flow: column;
+  gap: var(--s-8);
+  padding: var(--s-4) var(--s-6);
+  background: var(--c-surface);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+}
+
+.eom__stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.eom__stat-value {
+  font-size: var(--t-title);
+  font-weight: var(--w-heavy);
+  line-height: 1;
+  color: var(--c-text);
+}
+
+/*
+ * The XP breakdown's home. M6 fills it; until then it is `hidden` and this rule is the
+ * whole contract — a laid-out, styled slot rather than a fake bar animating to a made-up
+ * number.
+ */
+.eom__xp {
+  width: min(1040px, 92vw);
+  min-height: 48px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+}
+
+.eom__xp[hidden] {
+  display: none;
+}
+
 /* M1's placeholder reticle dot lived here. M2 replaced it with the real dynamic
  * crosshair in ui/Hud.ts and ui/styles/hud.css. */

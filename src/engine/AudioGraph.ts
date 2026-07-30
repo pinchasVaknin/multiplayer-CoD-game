@@ -3,6 +3,7 @@ import { Rng } from '../core/Rng';
 import {
   buildImpulseResponse,
   buildNoiseBuffer,
+  DEFAULT_REVERB,
   makeNoiseSpec,
   makeOscSpec,
   NOISE_SECONDS,
@@ -10,6 +11,7 @@ import {
   type NoiseSpec,
   type OcclusionTest,
   type OscSpec,
+  type ReverbSpec,
 } from './AudioSpecs';
 
 /**
@@ -67,6 +69,20 @@ const MAX_ACTIVE_VOICES = 112;
 const OCCLUDED_CUTOFF = 750;
 const OPEN_CUTOFF = 20000;
 
+/**
+ * The world low-pass, fully muffled (brief S6.4).
+ *
+ * Below 35 HP the whole world goes behind a wall of wool while your own heartbeat and the
+ * announcer stay in front of it. 620 Hz is far enough down that gunfire loses its crack —
+ * which is the point: the muffle has to be information, not decoration.
+ */
+const MUFFLED_CUTOFF = 620;
+
+/** How far the world is pulled down under an announcer sting, and how fast. */
+const DUCK_FLOOR = 0.34;
+const DUCK_ATTACK = 0.04;
+const DUCK_RELEASE = 0.22;
+
 const noiseScratch = makeNoiseSpec();
 const oscScratch = makeOscSpec();
 
@@ -78,6 +94,14 @@ export class AudioGraph {
   private master: GainNode | null = null;
   private readonly buses = new Map<BusName, GainNode>();
   private reverbSend: GainNode | null = null;
+  /** The one convolver, retained so a map can swap its buffer without a second one. */
+  private convolver: ConvolverNode | null = null;
+  /** World duck, automated under announcer stings. `ui` bypasses it deliberately. */
+  private duckGain: GainNode | null = null;
+  /** World low-pass, for the low-health muffle. Also bypassed by `ui`. */
+  private worldFilter: BiquadFilterNode | null = null;
+  private duckUntil = 0;
+  private muffle = 0;
 
   private pool: ObjectPool<Voice> | null = null;
   private readonly active: Voice[] = [];
@@ -150,23 +174,48 @@ export class AudioGraph {
     master.connect(ctx.destination);
     this.master = master;
 
+    /**
+     * Two nodes sit between the world and the master, and `ui` is routed around both:
+     *
+     *   sfx --------+-> worldFilter -> duck -> master
+     *   reverbReturn +
+     *   music -----------------------------> master
+     *   ui --------------------------------> master
+     *
+     * `worldFilter` is the low-health muffle and `duck` is the announcer duck, so a sting
+     * and your own heartbeat stay in front of a world that has gone quiet and woolly. Both
+     * are built once here — there is no per-source filtering added by either (S4.5).
+     */
+    const duckGain = ctx.createGain();
+    duckGain.gain.value = 1;
+    duckGain.connect(master);
+    this.duckGain = duckGain;
+
+    const worldFilter = ctx.createBiquadFilter();
+    worldFilter.type = 'lowpass';
+    worldFilter.frequency.value = OPEN_CUTOFF;
+    worldFilter.Q.value = 0.5;
+    worldFilter.connect(duckGain);
+    this.worldFilter = worldFilter;
+
     for (const name of ['sfx', 'music', 'ui'] as const) {
       const bus = ctx.createGain();
       bus.gain.value = 1;
-      bus.connect(master);
+      bus.connect(name === 'sfx' ? worldFilter : master);
       this.buses.set(name, bus);
     }
 
     // The one and only convolver, on a send.
     const convolver = ctx.createConvolver();
-    convolver.buffer = buildImpulseResponse(ctx, this.rng, 1.35, 2.6);
+    convolver.buffer = buildImpulseResponse(ctx, this.rng, DEFAULT_REVERB);
+    this.convolver = convolver;
     const reverbSend = ctx.createGain();
     reverbSend.gain.value = 1;
     const reverbReturn = ctx.createGain();
     reverbReturn.gain.value = 0.5;
     reverbSend.connect(convolver);
     convolver.connect(reverbReturn);
-    reverbReturn.connect(master);
+    reverbReturn.connect(worldFilter);
     this.reverbSend = reverbSend;
 
     this.noise = buildNoiseBuffer(ctx, this.rng, NOISE_SECONDS);
@@ -207,6 +256,61 @@ export class AudioGraph {
   setBusVolume(bus: BusName, v: number): void {
     const node = this.buses.get(bus);
     if (node !== undefined) node.gain.value = Math.max(0, Math.min(1, v));
+  }
+
+  /**
+   * Swap the room the single convolver is modelling (brief S6.6).
+   *
+   * Assigns a new buffer to the convolver that already exists. This is the whole mechanism
+   * for per-map reverb, and it is the reason `MAX_ACTIVE_VOICES` and the one-convolver rule
+   * survive a map change: nothing is constructed.
+   */
+  setReverb(spec: ReverbSpec | null): void {
+    const ctx = this.ctx;
+    const convolver = this.convolver;
+    if (ctx === null || convolver === null) return;
+    convolver.buffer = buildImpulseResponse(ctx, this.rng, spec ?? DEFAULT_REVERB);
+  }
+
+  /**
+   * Duck the world for `seconds` (brief S6.5).
+   *
+   * Overlapping stings extend the hold rather than restarting the ramp, so two cues 200 ms
+   * apart are one duck and not an audible pump.
+   */
+  duckWorld(seconds: number): void {
+    const ctx = this.ctx;
+    const duck = this.duckGain;
+    if (ctx === null || duck === null) return;
+    const now = ctx.currentTime;
+    const until = now + Math.max(0.05, seconds);
+    if (until <= this.duckUntil) return;
+    this.duckUntil = until;
+    duck.gain.cancelScheduledValues(now);
+    duck.gain.setTargetAtTime(DUCK_FLOOR, now, DUCK_ATTACK);
+    duck.gain.setTargetAtTime(1, until, DUCK_RELEASE);
+  }
+
+  /**
+   * Muffle the world, 0..1 (brief S6.4).
+   *
+   * Driven per frame from the player's health rather than fired as an event, because it is a
+   * *state* and not a moment: a linear cutoff sweep on one filter, exponential in frequency
+   * so the change is audible across the whole range rather than only near the top.
+   */
+  setMuffle(amount: number): void {
+    const filter = this.worldFilter;
+    const ctx = this.ctx;
+    if (filter === null || ctx === null) return;
+    const clamped = Math.max(0, Math.min(1, amount));
+    if (Math.abs(clamped - this.muffle) < 0.01) return;
+    this.muffle = clamped;
+    const cutoff = OPEN_CUTOFF * Math.pow(MUFFLED_CUTOFF / OPEN_CUTOFF, clamped);
+    filter.frequency.setTargetAtTime(cutoff, ctx.currentTime, 0.12);
+  }
+
+  get muffleAmount(): number {
+    return this.muffle;
   }
 
   /** Update the listener each frame from the camera. `forward` and `up` are unit. */
@@ -256,8 +360,14 @@ export class AudioGraph {
 
   // -- the two primitives ----------------------------------------------------
 
-  /** Filtered noise burst with an optional filter sweep. The workhorse. */
-  noiseBurst(spec: NoiseSpec): void {
+  /**
+   * Filtered noise burst with an optional filter sweep. The workhorse.
+   *
+   * `delay` schedules the whole voice — envelope, sweep and source — `delay` seconds into
+   * the future on the audio clock. That is what lets a multi-syllable announcer sting be
+   * three calls rather than three `setTimeout`s racing the render loop.
+   */
+  noiseBurst(spec: NoiseSpec, delay = 0): void {
     const ctx = this.ctx;
     const pool = this.pool;
     const noise = this.noise;
@@ -270,7 +380,7 @@ export class AudioGraph {
     }
 
     const v = pool.acquire();
-    const now = ctx.currentTime;
+    const now = ctx.currentTime + Math.max(0, delay);
     const decay = Math.max(spec.decay, 0.005);
 
     v.filter.type = spec.filter;
@@ -299,7 +409,7 @@ export class AudioGraph {
   }
 
   /** Oscillator with a pitch sweep. Body thumps, mechanical clicks, UI blips. */
-  oscHit(spec: OscSpec): void {
+  oscHit(spec: OscSpec, delay = 0): void {
     const ctx = this.ctx;
     const pool = this.pool;
     if (ctx === null || pool === null) return;
@@ -311,7 +421,7 @@ export class AudioGraph {
     }
 
     const v = pool.acquire();
-    const now = ctx.currentTime;
+    const now = ctx.currentTime + Math.max(0, delay);
     const decay = Math.max(spec.decay, 0.005);
 
     v.filter.type = 'lowpass';
@@ -368,7 +478,29 @@ export class AudioGraph {
     this.slideGain = null;
     this.slidePanner = null;
     this.slideFilter = null;
+    this.convolver = null;
+    this.duckGain = null;
+    this.worldFilter = null;
     this.started = false;
+  }
+
+  /**
+   * Reset the per-match audio state without touching the graph.
+   *
+   * Called on match teardown. The muffle and the duck are *match* state — leaving a 620 Hz
+   * low-pass on the world because the player happened to die on 12 HP is exactly the kind of
+   * leaked state S6.3 is warning about.
+   */
+  resetMatchState(): void {
+    const ctx = this.ctx;
+    this.duckUntil = 0;
+    this.muffle = 0;
+    if (ctx === null) return;
+    const now = ctx.currentTime;
+    this.duckGain?.gain.cancelScheduledValues(now);
+    if (this.duckGain !== null) this.duckGain.gain.setValueAtTime(1, now);
+    this.worldFilter?.frequency.cancelScheduledValues(now);
+    this.worldFilter?.frequency.setValueAtTime(OPEN_CUTOFF, now);
   }
 
   // -- internals -------------------------------------------------------------

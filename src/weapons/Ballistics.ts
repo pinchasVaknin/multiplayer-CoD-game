@@ -250,6 +250,10 @@ export class Ballistics {
     excludeId: number,
   ): number {
     const list = this.damage.list;
+    // With friendly fire off a round passes *through* a teammate rather than stopping
+    // harmlessly in one, so the filter belongs in target selection and not only in
+    // `DamageSystem.apply`. Resolved once per pass, not once per candidate.
+    const friendlyTeam = this.damage.friendlyFire ? undefined : this.damage.get(excludeId)?.team;
     let bestT = maxT;
     let bestId = -1;
     for (let i = 0; i < list.length; i++) {
@@ -257,6 +261,7 @@ export class Ballistics {
       if (entity === undefined) continue;
       if (entity.entityId === excludeId) continue;
       if (!entity.health.alive) continue;
+      if (friendlyTeam !== undefined && entity.team === friendlyTeam) continue;
       this.lastRigTests++;
       if (!entity.rig.raycast(ox, oy, oz, dx, dy, dz, bestT, this.rigHit)) continue;
       if (this.rigHit.t >= bestT) continue;

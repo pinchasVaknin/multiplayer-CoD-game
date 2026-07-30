@@ -63,6 +63,17 @@ export class Renderer {
     }
   }
 
+  /**
+   * Clear to the background colour and draw nothing.
+   *
+   * `autoClear` is off (the two-pass draw controls its own clears), so without this the
+   * canvas holds the last frame it rendered — which from M4 means the final frame of the
+   * previous match sitting behind the main menu.
+   */
+  clear(): void {
+    this.three.clear(true, true, false);
+  }
+
   get info(): THREE.WebGLInfo {
     return this.three.info;
   }

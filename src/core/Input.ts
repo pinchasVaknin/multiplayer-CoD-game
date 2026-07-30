@@ -33,6 +33,7 @@ const BUTTON_BINDINGS: readonly KeyBinding[] = [
   { code: 'KeyC', bit: Btn.Crouch },
   { code: 'ShiftLeft', bit: Btn.Sprint },
   { code: 'KeyR', bit: Btn.Reload },
+  { code: 'Tab', bit: Btn.Scoreboard },
 ];
 
 const MOVEMENT_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD'] as const;

@@ -49,6 +49,14 @@ export interface DebugContext {
   movementConfig: MovementConfig;
   cameraConfig: CameraConfig;
   mapStats: MapStats;
+  /**
+   * Owned by `Game` from M4, not by the overlay.
+   *
+   * The overlay is built and destroyed with each match; the frame-time history is not, because
+   * the three-match heap run needs one continuous buffer across the boundaries it measures.
+   */
+  stats: FrameStats;
+  speedo: Speedometer;
   onConfigChanged: () => void;
 }
 
@@ -92,13 +100,14 @@ export class DebugSection {
 }
 
 export class DebugOverlay {
-  readonly stats = new FrameStats();
-  readonly speedo = new Speedometer();
+  readonly stats: FrameStats;
+  readonly speedo: Speedometer;
 
   private readonly root: HTMLElement;
   private readonly ctx: DebugContext;
   private readonly sections: DebugSection[] = [];
   private readonly panels: TuningPanel[] = [];
+  private readonly unsubscribe: Array<() => void> = [];
   private readonly textHooks: Array<() => void> = [];
   private readonly graphHooks: Array<() => void> = [];
   private readonly left: HTMLElement;
@@ -121,6 +130,7 @@ export class DebugOverlay {
   private fWorst: Field;
   private fDraws: Field;
   private fBudget: Field;
+  private fBreakdown: Field;
 
   // Player fields
   private fPos: Field;
@@ -142,6 +152,8 @@ export class DebugOverlay {
 
   constructor(host: HTMLElement, ctx: DebugContext) {
     this.ctx = ctx;
+    this.stats = ctx.stats;
+    this.speedo = ctx.speedo;
 
     this.root = document.createElement('div');
     this.root.className = 'dbg-root';
@@ -177,6 +189,7 @@ export class DebugOverlay {
     this.fWorst = perf.addField('Worst / mean');
     this.fBudget = perf.addField('Over 16.7ms');
     this.fDraws = perf.addField('Draws / tris');
+    this.fBreakdown = perf.addField('Mode / HUD ms');
 
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'dbg-graph';
@@ -276,7 +289,12 @@ export class DebugOverlay {
 
     // A spawn teleports the player. Integrating that jump as distance travelled would
     // put a 90 m/s peak in the measurement panel and make the whole readout useless.
-    ctx.bus.on(EV.PlayerSpawned, () => this.speedo.reset());
+    //
+    // The unsubscribe is retained from M4: the overlay is built and destroyed with each match,
+    // and a subscription that outlives it keeps the whole overlay — and through `ctx`, the
+    // player, the collision world and the map's stats — alive for the life of the page. This
+    // was one of two leaks the multi-match heap run found.
+    this.unsubscribe.push(ctx.bus.on(EV.PlayerSpawned, () => this.speedo.reset()));
 
     host.appendChild(this.root);
     window.addEventListener('keydown', this.onKeyDown);
@@ -363,6 +381,8 @@ export class DebugOverlay {
   }
 
   dispose(): void {
+    for (const off of this.unsubscribe) off();
+    this.unsubscribe.length = 0;
     window.removeEventListener('keydown', this.onKeyDown);
     this.root.remove();
   }
@@ -386,6 +406,11 @@ export class DebugOverlay {
     set(this.fWorst, `${stats.worst.toFixed(2)} / ${stats.mean.toFixed(2)} ms`);
     set(this.fBudget, `${stats.overBudget} / ${stats.sampleCount}`);
     set(this.fDraws, `${info.render.calls} / ${info.render.triangles}`);
+    set(
+      this.fBreakdown,
+      `${stats.lastModeMs.toFixed(3)} / ${stats.lastHudMs.toFixed(2)} ` +
+        `(peak ${stats.peakModeMs.toFixed(2)} / ${stats.peakHudMs.toFixed(2)})`,
+    );
 
     set(this.fPos, `${sim.x.toFixed(2)} ${sim.y.toFixed(2)} ${sim.z.toFixed(2)}`);
     set(this.fVel, `${sim.vx.toFixed(2)} ${sim.vy.toFixed(2)} ${sim.vz.toFixed(2)}`);

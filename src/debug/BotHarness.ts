@@ -33,9 +33,11 @@ export interface BotHarnessOptions {
   readonly speed: number;
   /** A single tier for every bot, or 'MIX' for the default spread. */
   readonly tier: BotTier | 'MIX';
+  /** Map id to load, or null to use whatever the menu had selected. */
+  readonly map: string | null;
 }
 
-const DEFAULT_OPTIONS: BotHarnessOptions = { bots: 10, speed: 1, tier: 'MIX' };
+const DEFAULT_OPTIONS: BotHarnessOptions = { bots: 10, speed: 1, tier: 'MIX', map: null };
 
 const MIX: readonly BotTier[] = ['RECRUIT', 'REGULAR', 'HARDENED', 'VETERAN'];
 
@@ -56,8 +58,9 @@ export function parseHarnessOptions(search: string): BotHarnessOptions | null {
 
   const raw = (params.get('tier') ?? '').toUpperCase();
   const tier: BotTier | 'MIX' = isTier(raw) ? raw : 'MIX';
+  const map = params.get('map');
 
-  return { bots, speed, tier };
+  return { bots, speed, tier, map };
 }
 
 export interface BotHarnessReport {

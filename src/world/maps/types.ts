@@ -20,7 +20,16 @@ export interface Box {
   max: Vec3Lit;
 }
 
-/** Procedural material identifiers. Resolved to CanvasTextures by ProceduralTextures. */
+/**
+ * Procedural material identifiers. Resolved to CanvasTextures by ProceduralTextures.
+ *
+ * The first seven are M1's. `brick`, `rust` and `grate` are M4's, added because Foundry
+ * needs its shell, its container stacks and its catwalk decks to read as three different
+ * things at a glance — and because the M2 penetration system consumes a density per
+ * material, so "distinct material" and "shoots through differently" are the same
+ * statement. Append only: `materialIndex` is an index into this list and `ColliderSet`
+ * stores it.
+ */
 export const MATERIAL_KEYS = [
   'concrete',
   'concreteDark',
@@ -29,6 +38,9 @@ export const MATERIAL_KEYS = [
   'hazard',
   'accent',
   'rubber',
+  'brick',
+  'rust',
+  'grate',
 ] as const;
 
 export type MaterialKey = (typeof MATERIAL_KEYS)[number];
@@ -69,7 +81,19 @@ export interface PropPart {
   solid: boolean;
 }
 
-export type PropShapeId = 'crate' | 'crateTall' | 'pillar' | 'barrier' | 'lightBox';
+export type PropShapeId =
+  | 'crate'
+  | 'crateTall'
+  | 'pillar'
+  | 'barrier'
+  | 'lightBox'
+  // M4, for Foundry.
+  | 'container'
+  | 'machine'
+  | 'barrels'
+  | 'girder'
+  | 'ladle'
+  | 'spool';
 
 export interface PropShapeDef {
   id: PropShapeId;
@@ -143,6 +167,8 @@ export interface ObjectiveDef {
   kind: ObjectiveKind;
   position: Vec3Lit;
   radius: number;
+  /** One or two characters, drawn on the minimap and the objective debug panel. */
+  label: string;
 }
 
 export interface MapDef {
@@ -156,8 +182,35 @@ export interface MapDef {
 
   /** Populated from M3 (bots) onward. */
   coverPoints: CoverPoint[];
-  /** Populated from M5 (modes) onward. */
+  /**
+   * Populated from M4. Authored ahead of the modes that consume them: Domination arrives
+   * in M7, and moving three flags after the lanes have been balanced means re-balancing
+   * the lanes.
+   */
   objectives: ObjectiveDef[];
-  /** Bounds of playable space; also sizes the collision grid. */
+  /** Bounds of playable space; also sizes the collision grid and the navmesh bake. */
   navBounds: Box;
+  /**
+   * The reverberant character of this space, for the single convolver's impulse response
+   * (S6.6). Absent means the default room.
+   */
+  reverb?: ReverbDef;
+}
+
+/**
+ * A room, as the audio graph hears it. Consumed by `buildImpulseResponse` at load and
+ * swapped into the one `ConvolverNode` — never a second convolver (S4.5).
+ */
+export interface ReverbDef {
+  /** Tail length, seconds. */
+  seconds: number;
+  /** Decay exponent. Higher is a faster, drier fall-off. */
+  decay: number;
+  /**
+   * Brightness of the early part, 0..1. High reads as bare steel and concrete, low as a
+   * furnished space.
+   */
+  brightness: number;
+  /** Discrete early reflections: delay in seconds and amplitude, 0..1. */
+  earlyTaps: readonly Readonly<{ delay: number; gain: number }>[];
 }

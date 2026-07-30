@@ -28,6 +28,12 @@ export const Btn = {
   /** Left mouse. Held, not edge-triggered: the weapon decides what auto fire means. */
   Fire: 1 << 4,
   Reload: 1 << 5,
+  /**
+   * Tab, held. The scoreboard is presentation rather than gameplay, but it rides the same
+   * bitfield as everything else so there is still exactly one input path (S4.2) — the
+   * alternative is a DOM listener in the UI layer that the harness cannot drive.
+   */
+  Scoreboard: 1 << 6,
 } as const;
 
 export type ButtonBit = (typeof Btn)[keyof typeof Btn];

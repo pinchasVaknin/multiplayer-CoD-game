@@ -83,6 +83,19 @@ export class ProceduralTextures {
         paintRubber(ctx, rng);
         worldScale = 1;
         break;
+      case 'brick':
+        paintBrick(ctx, rng);
+        // 2 m per repeat gives four courses of brick a metre, which reads at running speed.
+        worldScale = 2;
+        break;
+      case 'rust':
+        paintRust(ctx, rng);
+        worldScale = 2.4;
+        break;
+      case 'grate':
+        paintGrate(ctx, rng);
+        worldScale = 1;
+        break;
     }
 
     const texture = new THREE.CanvasTexture(canvas);
@@ -212,6 +225,109 @@ function paintRubber(ctx: CanvasRenderingContext2D, rng: Rng): void {
       disc(ctx, (x + 0.5) * pitch - 0.7, (y + 0.5) * pitch - 0.7, pitch * 0.16);
     }
   }
+}
+
+/**
+ * Running bond brickwork, eight courses to the tile.
+ *
+ * Every brick is tinted individually from the seeded stream, which is what stops a
+ * repeating texture from reading as a repeating texture: the eye finds the wrong-coloured
+ * brick before it finds the tile boundary.
+ */
+function paintBrick(ctx: CanvasRenderingContext2D, rng: Rng): void {
+  fill(ctx, 0x4a3a34);
+  const courses = 8;
+  const courseH = TEX_SIZE / courses;
+  const brickW = TEX_SIZE / 4;
+  const mortar = 2;
+
+  for (let row = 0; row < courses; row++) {
+    const y = row * courseH;
+    // Running bond: alternate courses shift by half a brick.
+    const offset = row % 2 === 0 ? 0 : brickW * 0.5;
+    for (let col = -1; col < 5; col++) {
+      const x = col * brickW + offset;
+      const shade = rng.range(0.78, 1.18);
+      const warm = rng.chance(0.22);
+      const r = Math.round((warm ? 150 : 118) * shade);
+      const g = Math.round((warm ? 92 : 82) * shade);
+      const b = Math.round((warm ? 70 : 72) * shade);
+      ctx.fillStyle = `rgb(${clamp255(r)},${clamp255(g)},${clamp255(b)})`;
+      ctx.fillRect(x + mortar, y + mortar, brickW - mortar * 2, courseH - mortar * 2);
+    }
+  }
+  // Soot and damp, heavier low down: an industrial wall is dirtiest at its base.
+  const grad = ctx.createLinearGradient(0, 0, 0, TEX_SIZE);
+  grad.addColorStop(0, 'rgba(12,14,17,0.04)');
+  grad.addColorStop(1, 'rgba(12,14,17,0.30)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+  blotches(ctx, rng, 14, 26, 74, 0.07);
+  grainNoise(ctx, rng, 0.09);
+  speckle(ctx, rng, 500, 0.28, 1.5);
+}
+
+/** Corroded container plate: ribs, bloom rust, and paint that lost the argument. */
+function paintRust(ctx: CanvasRenderingContext2D, rng: Rng): void {
+  fill(ctx, 0x6d4a35);
+  blotches(ctx, rng, 22, 20, 64, 0.12);
+
+  // Vertical corrugation. The ribs are what make a container a container.
+  const pitch = TEX_SIZE / 8;
+  for (let i = 0; i < 8; i++) {
+    const x = i * pitch;
+    ctx.fillStyle = 'rgba(255,255,255,0.055)';
+    ctx.fillRect(x, 0, pitch * 0.34, TEX_SIZE);
+    ctx.fillStyle = 'rgba(0,0,0,0.20)';
+    ctx.fillRect(x + pitch * 0.62, 0, pitch * 0.30, TEX_SIZE);
+  }
+
+  // Rust bloom: warm patches eating through, with darker pitting inside them.
+  for (let i = 0; i < 34; i++) {
+    const x = rng.float() * TEX_SIZE;
+    const y = rng.float() * TEX_SIZE;
+    const r = rng.range(6, 26);
+    ctx.fillStyle = `rgba(${Math.round(rng.range(120, 176))},${Math.round(rng.range(62, 96))},34,${rng.range(0.18, 0.42).toFixed(3)})`;
+    disc(ctx, x, y, r);
+    ctx.fillStyle = 'rgba(46,26,16,0.30)';
+    disc(ctx, x + rng.spread() * r * 0.4, y + rng.spread() * r * 0.4, r * 0.35);
+  }
+  grainNoise(ctx, rng, 0.13);
+  speckle(ctx, rng, 900, 0.4, 2.2);
+}
+
+/**
+ * Catwalk grating: a steel lattice over near-black.
+ *
+ * Painted rather than modelled with holes, because the collision scheme is capsule versus
+ * oriented box (S4.3) and a deck whose silhouette disagreed with what you can stand on
+ * would be worse than an opaque one. What the holes buy is the *read*: you can tell you are
+ * above something.
+ */
+function paintGrate(ctx: CanvasRenderingContext2D, rng: Rng): void {
+  fill(ctx, 0x101317);
+  const bars = 8;
+  const pitch = TEX_SIZE / bars;
+  // Load-bearing bars: thicker, brighter on their top edge.
+  for (let i = 0; i < bars; i++) {
+    const x = i * pitch;
+    ctx.fillStyle = 'rgba(122,130,142,0.92)';
+    ctx.fillRect(x, 0, pitch * 0.30, TEX_SIZE);
+    ctx.fillStyle = 'rgba(198,206,218,0.35)';
+    ctx.fillRect(x, 0, pitch * 0.10, TEX_SIZE);
+  }
+  // Cross ties: thinner, and set back so the lattice reads as having depth.
+  for (let i = 0; i < bars; i++) {
+    const y = i * pitch;
+    ctx.fillStyle = 'rgba(88,95,106,0.80)';
+    ctx.fillRect(0, y, TEX_SIZE, pitch * 0.16);
+  }
+  // Frame edge, so a deck panel has a boundary rather than fading into the next one.
+  ctx.strokeStyle = 'rgba(140,148,160,0.55)';
+  ctx.lineWidth = 3;
+  strokeRect(ctx, 2, 2, TEX_SIZE - 4, TEX_SIZE - 4);
+  grainNoise(ctx, rng, 0.1);
+  speckle(ctx, rng, 400, 0.35, 1.8);
 }
 
 // -- primitives -------------------------------------------------------------

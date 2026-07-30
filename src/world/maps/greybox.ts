@@ -1,4 +1,5 @@
-import type { Brush, CoverPoint, MapDef, PropDef, PropShapeId, SpawnZone } from './types';
+import { deriveCoverPoints, emitCoverPoint } from './cover';
+import type { Brush, CoverPoint, MapDef, PropDef, SpawnZone } from './types';
 
 /**
  * MP_TESTBED - the M1 grey-box room (brief S5.6).
@@ -230,94 +231,27 @@ function props(): PropDef[] {
 }
 
 /**
- * Cover profiles, keyed by prop shape (brief S6.5).
+ * Cover (brief S6.5).
  *
- * `coverPoints` has been in the map schema since M1 and unused until now. Rather than
- * hand-listing sixty positions that would silently rot the first time a crate moved,
- * cover is *derived* from the placements above: each shape declares how deep it is and
- * which of its local faces are worth standing behind, and the generator emits a standing
- * spot on each of those faces facing back through the object.
- *
- * `offsets` are the local face directions. A 1 m cube is cover from every side; a
- * barrier is 2 m wide and 0.4 m deep, so only its broad faces are.
- *
- * Whether a generated point is actually standable is not decided here — the navmesh
- * bake answers that, and `ai/Cover.ts` discards any point the grid says is unreachable.
+ * M3 derived cover from the prop placements above rather than hand-listing sixty positions
+ * that would rot the first time a crate moved, and kept the profile table in this file.
+ * M4 moved the table and the generator to `maps/cover.ts` because a profile is a property
+ * of the *shape*, not of the map placing it, and Foundry needed the same code. The numbers
+ * are M3's unchanged, so this room derives exactly the cover it derived before.
  */
-interface CoverProfile {
-  /** Half-depth along each offered face direction, metres. */
-  readonly halfDepth: number;
-  readonly height: CoverPoint['height'];
-  /** Local face normals to place cover behind. */
-  readonly faces: readonly Readonly<{ x: number; z: number }>[];
-}
-
-const FOUR_SIDES = [
-  { x: 0, z: -1 },
-  { x: 0, z: 1 },
-  { x: -1, z: 0 },
-  { x: 1, z: 0 },
-] as const;
-
-const BROAD_FACES = [
-  { x: 0, z: -1 },
-  { x: 0, z: 1 },
-] as const;
-
-const COVER_PROFILES: Partial<Record<PropShapeId, CoverProfile>> = {
-  crate: { halfDepth: 0.5, height: 'low', faces: FOUR_SIDES },
-  crateTall: { halfDepth: 0.55, height: 'high', faces: FOUR_SIDES },
-  pillar: { halfDepth: 0.35, height: 'high', faces: FOUR_SIDES },
-  barrier: { halfDepth: 0.2, height: 'low', faces: BROAD_FACES },
-};
-
-/** How far clear of the object's face a bot stands. Capsule radius plus breathing room. */
-const COVER_STANDOFF = 0.62;
-
 function coverPoints(placements: readonly PropDef[]): CoverPoint[] {
-  const out: CoverPoint[] = [];
-
-  const emit = (
-    cx: number,
-    cz: number,
-    yaw: number,
-    faceX: number,
-    faceZ: number,
-    depth: number,
-    height: CoverPoint['height'],
-  ): void => {
-    const c = Math.cos(yaw);
-    const s = Math.sin(yaw);
-    // Local face normal into world space, same yaw convention the prop mesher uses.
-    const wx = faceX * c + faceZ * s;
-    const wz = -faceX * s + faceZ * c;
-    const reach = depth + COVER_STANDOFF;
-    out.push({
-      position: { x: cx + wx * reach, y: 0, z: cz + wz * reach },
-      // The cover protects from the far side of the object, which is back through it.
-      facingYaw: Math.atan2(-wx, -wz),
-      height,
-    });
-  };
-
-  for (const p of placements) {
-    const profile = COVER_PROFILES[p.shape];
-    if (profile === undefined) continue;
-    for (const face of profile.faces) {
-      emit(p.position.x, p.position.z, p.rotationY, face.x, face.z, profile.halfDepth, profile.height);
-    }
-  }
+  const out = deriveCoverPoints(placements);
 
   // The two angled barricades and the penetration-bay panels are brushes rather than
   // props, so they are listed by hand — but they are the only four that are.
-  emit(-4, 12, Math.PI / 6, 0, -1, 0.2, 'high');
-  emit(-4, 12, Math.PI / 6, 0, 1, 0.2, 'high');
-  emit(4, 15, -Math.PI / 5, 0, -1, 0.2, 'high');
-  emit(4, 15, -Math.PI / 5, 0, 1, 0.2, 'high');
-  emit(17.5, -13.9, Math.PI / 2, 0, -1, 0.03, 'high');
-  emit(17.5, -13.9, Math.PI / 2, 0, 1, 0.03, 'high');
-  emit(17.5, -11.0, Math.PI / 2, 0, -1, 0.3, 'high');
-  emit(17.5, -11.0, Math.PI / 2, 0, 1, 0.3, 'high');
+  emitCoverPoint(out, -4, 12, Math.PI / 6, 0, -1, 0.2, 'high');
+  emitCoverPoint(out, -4, 12, Math.PI / 6, 0, 1, 0.2, 'high');
+  emitCoverPoint(out, 4, 15, -Math.PI / 5, 0, -1, 0.2, 'high');
+  emitCoverPoint(out, 4, 15, -Math.PI / 5, 0, 1, 0.2, 'high');
+  emitCoverPoint(out, 17.5, -13.9, Math.PI / 2, 0, -1, 0.03, 'high');
+  emitCoverPoint(out, 17.5, -13.9, Math.PI / 2, 0, 1, 0.03, 'high');
+  emitCoverPoint(out, 17.5, -11.0, Math.PI / 2, 0, -1, 0.3, 'high');
+  emitCoverPoint(out, 17.5, -11.0, Math.PI / 2, 0, 1, 0.3, 'high');
 
   return out;
 }
