@@ -1210,6 +1210,8 @@ Please update the weapon state machine and stance constraints to explicitly allo
 `ESC` must transition the game into a `PAUSED` state (freezing the simulation) and display an in-game Pause menu. 
 **Debug Overlay / Pointer Lock:** Pressing `F1` currently breaks pointer lock and causes control issues. 
 The Debug Overlay/Tuning Panel access should either gracefully handle pointer lock suspension, or ideally, be accessible as an option directly from the new Pause menu.
+**Scoreboard during Death:** The scoreboard (`Tab` key) is currently inaccessible while the player is in the `DEAD` state waiting to respawn. 
+Players must be able to view the scoreboard at any time, especially during the death screen.
 
 ## What is playable right now
 
