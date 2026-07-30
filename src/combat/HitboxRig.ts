@@ -27,6 +27,15 @@ export interface HitboxDef {
   readonly sx: number;
   readonly sy: number;
   readonly sz: number;
+  /**
+   * Upper half of the torso — the chest, as opposed to the abdomen (M5).
+   *
+   * S6.1 asks the snipers to one-shot "upper torso and head", and the torso zone alone
+   * cannot express that. This is a flag on the box rather than a fifth `HitZone` on
+   * purpose: every zone multiplier M2 verified is still applied to the same set of boxes,
+   * and a weapon that does not set `upperTorsoMult` behaves exactly as it did in M2.
+   */
+  readonly upper?: boolean;
 }
 
 export interface RigLayout {
@@ -42,6 +51,8 @@ export interface RigHit {
   t: number;
   zone: HitZone;
   boxIndex: number;
+  /** True when the box hit is flagged `upper` — the chest, not the abdomen. */
+  upper: boolean;
   /** World-space surface normal at the hit. */
   nx: number;
   ny: number;
@@ -49,7 +60,7 @@ export interface RigHit {
 }
 
 export function makeRigHit(): RigHit {
-  return { t: 0, zone: 'torso', boxIndex: -1, nx: 0, ny: 0, nz: 0 };
+  return { t: 0, zone: 'torso', boxIndex: -1, upper: false, nx: 0, ny: 0, nz: 0 };
 }
 
 /**
@@ -60,7 +71,7 @@ export function makeRigHit(): RigHit {
 export const HUMANOID_RIG: RigLayout = buildLayout('humanoid', [
   { name: 'head', zone: 'head', ox: 0, oy: 1.645, oz: 0, sx: 0.22, sy: 0.25, sz: 0.23 },
   { name: 'neck', zone: 'head', ox: 0, oy: 1.5, oz: 0, sx: 0.13, sy: 0.1, sz: 0.13 },
-  { name: 'chest', zone: 'torso', ox: 0, oy: 1.26, oz: 0, sx: 0.46, sy: 0.4, sz: 0.27 },
+  { name: 'chest', zone: 'torso', ox: 0, oy: 1.26, oz: 0, sx: 0.46, sy: 0.4, sz: 0.27, upper: true },
   { name: 'abdomen', zone: 'torso', ox: 0, oy: 0.94, oz: 0, sx: 0.4, sy: 0.28, sz: 0.24 },
   { name: 'armL', zone: 'arm', ox: -0.31, oy: 1.16, oz: 0, sx: 0.14, sy: 0.62, sz: 0.16 },
   { name: 'armR', zone: 'arm', ox: 0.31, oy: 1.16, oz: 0, sx: 0.14, sy: 0.62, sz: 0.16 },
@@ -214,6 +225,7 @@ export class HitboxRig {
     out.t = bestT;
     out.zone = hitBox.zone;
     out.boxIndex = bestIndex;
+    out.upper = hitBox.upper === true;
 
     // Local -> world for the normal (inverse yaw rotation).
     const nlx = bestAxis === 0 ? bestSign : 0;

@@ -34,6 +34,11 @@ const BUTTON_BINDINGS: readonly KeyBinding[] = [
   { code: 'ShiftLeft', bit: Btn.Sprint },
   { code: 'KeyR', bit: Btn.Reload },
   { code: 'Tab', bit: Btn.Scoreboard },
+  { code: 'KeyQ', bit: Btn.SwapWeapon },
+  { code: 'KeyG', bit: Btn.Lethal },
+  { code: 'KeyF', bit: Btn.Tactical },
+  { code: 'Digit1', bit: Btn.Slot1 },
+  { code: 'Digit2', bit: Btn.Slot2 },
 ];
 
 const MOVEMENT_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD'] as const;
@@ -110,6 +115,7 @@ export class Input {
   private wantKeyboardLock = false;
 
   private lockListeners: Array<(locked: boolean) => void> = [];
+  private escapeListeners: Array<() => void> = [];
 
   /** Set true while a DOM control (a tuning slider, a menu button) has focus. */
   private domFocusGuard = false;
@@ -152,6 +158,7 @@ export class Input {
     document.removeEventListener('focusin', this.onFocusIn);
     document.removeEventListener('focusout', this.onFocusOut);
     this.lockListeners = [];
+    this.escapeListeners = [];
   }
 
   // -- pointer lock -------------------------------------------------------
@@ -201,6 +208,17 @@ export class Input {
 
   onLockChange(fn: (locked: boolean) => void): void {
     this.lockListeners.push(fn);
+  }
+
+  /**
+   * Escape was pressed (M5).
+   *
+   * Only fires when the browser did *not* consume the key to release pointer lock — that
+   * case arrives through `onLockChange` instead. So one of the two always fires and never
+   * both, which is what makes "Esc pauses, Esc resumes" a single rule.
+   */
+  onEscape(fn: () => void): void {
+    this.escapeListeners.push(fn);
   }
 
   // -- settings -----------------------------------------------------------
@@ -305,6 +323,27 @@ export class Input {
     return cmd;
   }
 
+  /**
+   * A dead player's command: neutral, except that Tab still gets through (M5).
+   *
+   * M4 shipped `sampleNeutral` for the dead player, which was right about movement and
+   * wrong about the scoreboard — the death screen is exactly when you want to look at it.
+   * `Btn.Scoreboard` is presentation and drives nothing in the sim, so passing it costs
+   * nothing and closes the M4 playtest note.
+   */
+  sampleSpectating(tickIndex: number, nowMs: number): InputCommand {
+    const cmd = this.ring.next();
+    cmd.seq = this.seq++;
+    cmd.tickIndex = tickIndex;
+    cmd.moveX = 0;
+    cmd.moveZ = 0;
+    cmd.yaw = this.yawRad;
+    cmd.pitch = this.pitchRad;
+    cmd.buttons = (this.buttons | this.mouseButtons) & Btn.Scoreboard;
+    cmd.sampledAtMs = nowMs;
+    return cmd;
+  }
+
   /** Drop every held key. Called on blur and on state changes. */
   clearHeld(): void {
     this.held.clear();
@@ -316,6 +355,13 @@ export class Input {
   // -- handlers -----------------------------------------------------------
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
+    // Escape is never bound to a game action and never prevented — the browser owns it —
+    // but the state machine wants to know. Announced before the focus guard so it works
+    // from a paused screen where a button has focus.
+    if (e.code === 'Escape' && !e.repeat) {
+      for (const fn of this.escapeListeners) fn();
+      return;
+    }
     // While a debug slider has focus the page belongs to the DOM, so only the overlay's
     // own function keys are taken; everything else behaves like an ordinary web page.
     const guarded = this.domFocusGuard && !ALWAYS_PREVENT.has(e.code);

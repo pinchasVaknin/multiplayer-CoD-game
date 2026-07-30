@@ -31,6 +31,15 @@ export interface ViewmodelDrive {
 
   tacSprint: boolean;
   slide: boolean;
+  /**
+   * A weapon swap is under way (M5, S6.4).
+   *
+   * `raise` already carries the *timing* of a put-away and a take-out, because `Inventory`
+   * drives it. This says which lowered pose to use: a sprint carries the weapon across the
+   * body diagonally, a swap drops it straight down and rolls it out of frame. Same value,
+   * two keyframed destinations.
+   */
+  swapping: boolean;
 
   /** Head-bob phase from the player sim, so the gun and the camera share a footfall. */
   bobPhase: number;
@@ -55,6 +64,7 @@ export function makeViewmodelDrive(): ViewmodelDrive {
     visualLateral: 0,
     tacSprint: false,
     slide: false,
+    swapping: false,
     bobPhase: 0,
     speed: 0,
     speedRef: 6.9,
@@ -67,6 +77,14 @@ export function makeViewmodelDrive(): ViewmodelDrive {
 /** Keyframe times as a fraction of the reload, matching WeaponBase's tracks. */
 const TACTICAL_TIMES = { down: 0.17, magOut: 0.36, magIn: 0.5, magSeated: 0.66, raise: 0.78 };
 const EMPTY_TIMES = { down: 0.15, magOut: 0.34, magIn: 0.42, magSeated: 0.58, raise: 0.86 };
+/**
+ * The sight height `ViewmodelConfig.adsY` was tuned against — the M2 carbine's.
+ *
+ * Every other weapon's ADS pose is derived from it by the difference in sight height, so
+ * retuning `adsY` moves all twelve together and nothing has to be re-authored per weapon.
+ */
+const REFERENCE_SIGHT_HEIGHT = 0.0915;
+
 const CHARGE_PULL = 0.68;
 const CHARGE_PEAK = 0.75;
 const CHARGE_HOME = 0.81;
@@ -85,7 +103,29 @@ export class ViewmodelAnim {
   private idlePhase = 0;
   private primed = false;
 
-  constructor(private readonly model: WeaponModel) {}
+  private model: WeaponModel;
+
+  constructor(model: WeaponModel) {
+    this.model = model;
+  }
+
+  /**
+   * Point the animator at a different weapon (M5).
+   *
+   * A swap changes which mesh is on screen, and every pose this class writes is written
+   * into that mesh's transforms — so the animator has to move with it rather than each
+   * weapon owning an animator. The pose state itself carries over deliberately: sway and
+   * the idle phase belong to the *hands*, and resetting them on a swap would make every
+   * weapon arrive perfectly still.
+   */
+  setModel(model: WeaponModel): void {
+    this.model = model;
+  }
+
+  /** The sight height of the weapon currently posed, so ADS can cancel it. */
+  get sightHeight(): number {
+    return this.model.sightHeight;
+  }
 
   reset(yaw: number, pitch: number): void {
     this.swayX = 0;
@@ -115,7 +155,12 @@ export class ViewmodelAnim {
 
     // ---- base pose: hip -> ADS, then blended toward the lowered pose -------
     let px = lerp(cfg.hipX, 0, ads);
-    let py = lerp(cfg.hipY, cfg.adsY, ads);
+    // `adsY` was tuned against the carbine's sight line. A weapon whose sights sit higher
+    // has to be held correspondingly lower for them to land on the screen centre, so the
+    // difference is applied here rather than being a second tuned constant per weapon —
+    // there is one ADS pose and twelve sight heights, not twelve poses (M5).
+    const sightOffset = this.model.sightHeight - REFERENCE_SIGHT_HEIGHT;
+    let py = lerp(cfg.hipY, cfg.adsY - sightOffset, ads);
     let pz = lerp(cfg.hipZ, cfg.adsZ, ads);
     let rx = lerp(cfg.hipPitch, 0, ads);
     let ry = lerp(cfg.hipYaw, 0, ads);
@@ -124,7 +169,16 @@ export class ViewmodelAnim {
     // `raise` is the sprint-to-fire value. Eased so the gun swings rather than slides,
     // but the timing is untouched: at raise = 1 it is exactly on the base pose.
     const lowered = easeInOutQuad(1 - clamp01(drive.raise));
-    if (lowered > 0) {
+    if (lowered > 0 && drive.swapping) {
+      // Put-away / take-out (S6.4): straight down and rolled out of frame, which reads as
+      // "this weapon is going away" rather than "this weapon is being carried".
+      px = lerp(px, cfg.swapX, lowered);
+      py = lerp(py, cfg.swapY, lowered);
+      pz = lerp(pz, cfg.swapZ, lowered);
+      rx = lerp(rx, cfg.swapPitch, lowered);
+      ry = lerp(ry, 0, lowered);
+      rz = lerp(rz, cfg.swapRoll, lowered);
+    } else if (lowered > 0) {
       let sy = cfg.sprintY;
       let sp = cfg.sprintPitch;
       let sr = cfg.sprintRoll;

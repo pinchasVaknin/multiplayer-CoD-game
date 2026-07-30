@@ -402,3 +402,25 @@ body.op-locked #viewport {
 
 /* M1's placeholder reticle dot lived here. M2 replaced it with the real dynamic
  * crosshair in ui/Hud.ts and ui/styles/hud.css. */
+
+/* ---- pause screen (M5) -------------------------------------------------- */
+
+/*
+ * The pause screen sits over a live-but-frozen world rather than over nothing, so it is
+ * darkened glass instead of the opaque field the main menu uses. You can still see where
+ * you were standing, which is most of the point of pausing rather than quitting.
+ */
+.op-screen--pause {
+  background: rgba(7, 8, 10, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.op-actions--stack {
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 240px;
+}
+
+.op-actions--stack .op-btn {
+  width: 100%;
+}

@@ -37,7 +37,13 @@ import { PlayerController } from './player/PlayerController';
 import { ViewmodelLayer } from './player/Viewmodel';
 import { EndOfMatch } from './ui/EndOfMatch';
 import { Menus, type MenuSelection } from './ui/Menus';
-import { AR_DEFAULT, cloneWeaponDef, type WeaponDef } from './weapons/WeaponDefs';
+import { PauseMenu } from './ui/PauseMenu';
+import {
+  cloneEquipmentConfig,
+  DEFAULT_EQUIPMENT_CONFIG,
+  type EquipmentConfig,
+} from './equipment/EquipmentConfig';
+import { AR_DEFAULT, cloneWeaponDef, PISTOL_DEFAULT, type WeaponDef } from './weapons/WeaponDefs';
 import { cloneViewmodelConfig, DEFAULT_VIEWMODEL_CONFIG, type ViewmodelConfig } from './weapons/ViewmodelConfig';
 import { applyAmbient, loadMap, type LoadedMap } from './world/MapLoader';
 
@@ -103,9 +109,19 @@ export class Game {
   readonly bus: GameBus = createGameBus();
   readonly movementConfig: MovementConfig = cloneMovementConfig(DEFAULT_MOVEMENT_CONFIG);
   readonly cameraConfig: CameraConfig = { ...DEFAULT_CAMERA_CONFIG };
+  /**
+   * The live primary and secondary.
+   *
+   * These are *mutable clones* the tuning panel writes into, which is why they are fields
+   * rather than the shipped defs. M5's weapon picker replaces their contents wholesale by
+   * copying a different `WeaponDef` over them (`setPrimary`), so the tuning panel keeps
+   * pointing at the same two objects across a weapon change and nothing has to resubscribe.
+   */
   readonly weaponDef: WeaponDef = cloneWeaponDef(AR_DEFAULT);
+  readonly secondaryDef: WeaponDef = cloneWeaponDef(PISTOL_DEFAULT);
   readonly viewmodelConfig: ViewmodelConfig = cloneViewmodelConfig(DEFAULT_VIEWMODEL_CONFIG);
   readonly healthConfig: HealthConfig = { ...DEFAULT_HEALTH_CONFIG };
+  readonly equipmentConfig: EquipmentConfig = cloneEquipmentConfig(DEFAULT_EQUIPMENT_CONFIG);
   readonly tiers: TierTable = cloneTierTable(DEFAULT_TIERS);
   readonly perceptionConfig: PerceptionConfig = { ...DEFAULT_PERCEPTION };
   readonly schedulerConfig: SchedulerConfig = { ...DEFAULT_SCHEDULER };
@@ -124,6 +140,7 @@ export class Game {
   private readonly cameraRig: CameraRig;
   private readonly audio = new ProceduralAudio();
   private readonly menus: Menus;
+  private readonly pauseMenu: PauseMenu;
   private readonly summary: EndOfMatch;
   private readonly uiHost: HTMLElement;
   private readonly debugHost: HTMLElement;
@@ -188,6 +205,16 @@ export class Game {
       onLaunch: () => this.transitionTo('MATCH'),
       statusLine: () => this.statusLine(),
     });
+    this.pauseMenu = new PauseMenu({
+      host: uiHost,
+      onResume: () => this.resumeFromPause(),
+      onToggleDebug: () => {
+        const overlay = this.debug?.overlay;
+        overlay?.setVisible(!overlay.isVisible);
+      },
+      onQuit: () => this.transitionTo('MENU'),
+      statusLine: () => this.pauseStatusLine(),
+    });
     this.summary = new EndOfMatch({
       // Sized to the largest roster any map asks for, so the board never has to grow.
       rowsPerTeam: 8,
@@ -201,6 +228,7 @@ export class Game {
       invertY: this.settings.value.invertY,
     });
     this.input.onLockChange((locked) => this.onPointerLockChange(locked));
+    this.input.onEscape(() => this.onEscape());
 
     this.audio.setMasterVolume(this.settings.value.masterVolume);
 
@@ -328,13 +356,38 @@ export class Game {
         }
       },
       exit: (to) => {
-        this.input.exitPointerLock();
         this.input.unlockKeyboard();
-        this.match?.setActive(false);
         this.audio.setSlide(false, 0, 0, 0, 0);
-        // Going back to the menu without a result (Esc) tears down here; going to SUMMARY
-        // keeps the world alive so the scene is still behind the summary screen.
+        // Pausing keeps the match active and the world built: it is the same match, simply
+        // not advancing. Only leaving for good deactivates it.
+        if (to === 'PAUSED') return;
+        this.input.exitPointerLock();
+        this.match?.setActive(false);
+        // Going back to the menu without a result tears down here; going to SUMMARY keeps
+        // the world alive so the scene is still behind the summary screen.
         if (to === 'MENU') this.teardownWorld();
+      },
+    });
+
+    /**
+     * PAUSED (M5). The world stays built and `simulate` stops advancing it.
+     *
+     * Deliberately not a `Loop.stop()`: the render pass still has to run so the pause
+     * screen is composited over a live scene, and `FrameStats` should keep sampling so the
+     * histogram does not develop a hole every time somebody pauses.
+     */
+    this.states.set('PAUSED', {
+      enter: () => {
+        this.input.clearHeld();
+        this.input.exitPointerLock();
+        this.pauseMenu.show();
+      },
+      exit: (to) => {
+        this.pauseMenu.hide();
+        if (to === 'MENU') {
+          this.match?.setActive(false);
+          this.teardownWorld();
+        }
       },
     });
 
@@ -412,8 +465,10 @@ export class Game {
       player,
       movementConfig: this.movementConfig,
       weaponDef: this.weaponDef,
+      secondaryDef: this.secondaryDef,
       viewmodelConfig: this.viewmodelConfig,
       healthConfig: this.healthConfig,
+      equipmentConfig: this.equipmentConfig,
       uiHost: this.uiHost,
       anisotropy: this.textures.anisotropy,
       map: mapEntry,
@@ -450,6 +505,7 @@ export class Game {
       weaponDef: this.weaponDef,
       viewmodelConfig: this.viewmodelConfig,
       healthConfig: this.healthConfig,
+      equipmentConfig: this.equipmentConfig,
       tiers: this.tiers,
       perceptionConfig: this.perceptionConfig,
       schedulerConfig: this.schedulerConfig,
@@ -540,16 +596,25 @@ export class Game {
   private simulate(tick: number): void {
     const player = this.player;
     if (player === null) return;
+    // A paused match does not advance. The render pass still runs, so the pause screen is
+    // composited over a live scene and the frame histogram keeps sampling.
+    if (this.state === 'PAUSED') return;
 
     // Input crosses the netcode boundary even in single player: the sim only ever
     // sees command data, which is what keeps INetworkTransport real (S4.2).
     //
     // A dead player submits neutral commands rather than being skipped: the sim still
     // runs for them, the corpse still collides, and the seam stays honest — which is
-    // exactly what a real server would send while waiting on a respawn.
+    // exactly what a real server would send while waiting on a respawn. Tab is the one
+    // exception, so the scoreboard is reachable from the death screen (M5).
     const now = performance.now();
-    const live = this.state === 'MATCH' && this.match?.isPlayerDead !== true;
-    const cmd = live ? this.input.sample(tick, now) : this.input.sampleNeutral(tick, now);
+    const inMatch = this.state === 'MATCH';
+    const dead = this.match?.isPlayerDead === true;
+    const cmd = !inMatch
+      ? this.input.sampleNeutral(tick, now)
+      : dead
+        ? this.input.sampleSpectating(tick, now)
+        : this.input.sample(tick, now);
     this.transport.submit(cmd);
     const count = this.transport.drain(this.drainBuffer, MAX_STEPS_PER_FRAME);
     for (let i = 0; i < count; i++) {
@@ -627,7 +692,8 @@ export class Game {
     this.debug?.update(dt);
 
     // The match ended during a sim tick this frame. Transition now, between frames, with
-    // nothing part-way through a dispatch.
+    // nothing part-way through a dispatch. A paused match cannot end, so PAUSED is not a
+    // case here; the flag survives until the match resumes.
     if (this.pendingSummary && this.state === 'MATCH') {
       this.pendingSummary = false;
       this.transitionTo('SUMMARY');
@@ -646,11 +712,43 @@ export class Game {
     return `${map.name} · ${map.def.brushes.length} brushes · ${map.def.props.length} props`;
   }
 
+  /**
+   * The cursor was released — almost always Esc (M5, from the M4 playtest notes).
+   *
+   * M4 quit the match outright here, which is why Esc lost your game. It now pauses: the
+   * world stays built, the sim stops, and the pause screen goes over the top. Quitting is a
+   * button on that screen rather than a side effect of a key the browser owns.
+   */
   private onPointerLockChange(locked: boolean): void {
     if (locked) return;
-    // Esc released the cursor. Drop back to MENU so re-clicking re-acquires lock
-    // without the view jumping (acceptance criterion 1).
-    if (this.state === 'MATCH') this.transitionTo('MENU');
+    if (this.state === 'MATCH') this.transitionTo('PAUSED');
+  }
+
+  /**
+   * Escape, when the browser did *not* consume it to release pointer lock.
+   *
+   * That is the paused case, and the un-paused-but-not-locked case (the AFK harness, or a
+   * player who clicked away). Pausing from a locked match arrives through
+   * `onPointerLockChange` instead, so exactly one of the two fires.
+   */
+  private onEscape(): void {
+    if (this.state === 'PAUSED') {
+      this.resumeFromPause();
+      return;
+    }
+    if (this.state === 'MATCH' && !this.input.isLocked) this.transitionTo('PAUSED');
+  }
+
+  private resumeFromPause(): void {
+    if (this.state !== 'PAUSED') return;
+    this.transitionTo('MATCH');
+  }
+
+  private pauseStatusLine(): string {
+    const match = this.match;
+    if (match === null) return this.mapEntry().name;
+    const mode = match.mode;
+    return `${mode.name} · ${this.mapEntry().name} · ${mode.teamScore('A')} – ${mode.teamScore('B')}`;
   }
 
   private readonly onResize = (): void => {

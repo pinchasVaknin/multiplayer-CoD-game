@@ -1,5 +1,5 @@
 ﻿import type { TunableMeta } from '../player/MovementConfig';
-import type { RecoilPattern, SpreadProfile, WeaponDef, WeaponVoice } from './WeaponDefs';
+import type { RecoilPattern, ScopeProfile, SpreadProfile, WeaponDef, WeaponVoice } from './WeaponDefs';
 
 /**
  * The live tuning surface for a `WeaponDef` (brief S7).
@@ -29,8 +29,26 @@ type FalloffKey = `falloff.${NumberKeysOf<WeaponDef['damageFalloff']>}`;
 type SpreadKey = `spread.${NumberKeysOf<SpreadProfile>}`;
 type RecoilKey = `recoil.${NumberKeysOf<RecoilPattern>}`;
 type VoiceKey = `voice.${NumberKeysOf<WeaponVoice>}`;
+/**
+ * The scope's numbers are derived the same way, but from `ScopeProfile` directly rather
+ * than through `WeaponDef` — `scope` is optional, so `NumberKeysOf<WeaponDef>` cannot see
+ * inside it. Reading a scope key off an unscoped weapon returns 0 and writing one is a
+ * no-op; `WeaponDebug` hides the whole group when `def.scope` is undefined rather than
+ * showing sliders that do nothing.
+ */
+type ScopeKey = `scope.${NumberKeysOf<ScopeProfile>}`;
 
-export type WeaponNumberKey = TopKey | DamageKey | FalloffKey | SpreadKey | RecoilKey | VoiceKey;
+export type WeaponNumberKey =
+  | TopKey
+  | DamageKey
+  | FalloffKey
+  | SpreadKey
+  | RecoilKey
+  | VoiceKey
+  | ScopeKey;
+
+/** Keys that only mean anything on a weapon with a `scope`. */
+export const SCOPE_KEY_PREFIX = 'scope.';
 
 export const WEAPON_TUNABLES: Readonly<Record<WeaponNumberKey, TunableMeta>> = {
   'damage.near': { label: 'Near', group: 'Damage', min: 5, max: 120, step: 1, unit: '' },
@@ -39,7 +57,10 @@ export const WEAPON_TUNABLES: Readonly<Record<WeaponNumberKey, TunableMeta>> = {
   'falloff.end': { label: 'Falloff end', group: 'Damage', min: 4, max: 140, step: 0.5, unit: 'm' },
   headshotMult: { label: 'Headshot', group: 'Damage', min: 1, max: 4, step: 0.05, unit: 'x' },
   limbMult: { label: 'Limb', group: 'Damage', min: 0.4, max: 1.5, step: 0.05, unit: 'x' },
+  upperTorsoMult: { label: 'Upper torso', group: 'Damage', min: 0.8, max: 2, step: 0.01, unit: 'x' },
   penetration: { label: 'Penetration', group: 'Damage', min: 0, max: 2, step: 0.01, unit: 'm' },
+  pellets: { label: 'Pellets', group: 'Damage', min: 1, max: 16, step: 1, unit: '' },
+  pelletSpread: { label: 'Pellet cone', group: 'Damage', min: 0, max: 10, step: 0.05, unit: '°' },
 
   rpm: { label: 'RPM', group: 'Handling', min: 60, max: 1400, step: 5, unit: '' },
   magSize: { label: 'Mag size', group: 'Handling', min: 1, max: 200, step: 1, unit: '' },
@@ -48,6 +69,8 @@ export const WEAPON_TUNABLES: Readonly<Record<WeaponNumberKey, TunableMeta>> = {
   reloadEmptyTime: { label: 'Reload empty', group: 'Handling', min: 0.4, max: 8, step: 0.05, unit: 's' },
   adsTime: { label: 'ADS time', group: 'Handling', min: 0.05, max: 1.2, step: 0.01, unit: 's' },
   sprintOutTime: { label: 'Sprint to fire', group: 'Handling', min: 0, max: 1, step: 0.01, unit: 's' },
+  swapInTime: { label: 'Swap in', group: 'Handling', min: 0.1, max: 1.5, step: 0.01, unit: 's' },
+  swapOutTime: { label: 'Swap out', group: 'Handling', min: 0.1, max: 1.5, step: 0.01, unit: 's' },
 
   'spread.hipStand': { label: 'Hip standing', group: 'Spread', min: 0, max: 8, step: 0.05, unit: '°' },
   'spread.hipMove': { label: 'Hip moving', group: 'Spread', min: 0, max: 12, step: 0.05, unit: '°' },
@@ -80,13 +103,22 @@ export const WEAPON_TUNABLES: Readonly<Record<WeaponNumberKey, TunableMeta>> = {
   'voice.bodyFreq': { label: 'Body freq', group: 'Voice', min: 200, max: 4000, step: 25, unit: 'Hz' },
   'voice.bodyQ': { label: 'Body Q', group: 'Voice', min: 0.2, max: 12, step: 0.05, unit: '' },
   'voice.bodyDecay': { label: 'Body decay', group: 'Voice', min: 0.02, max: 0.4, step: 0.005, unit: 's' },
+  'voice.bodyRatio': { label: 'Body sweep', group: 'Voice', min: 0.08, max: 0.9, step: 0.01, unit: 'x' },
   'voice.tailDecay': { label: 'Tail decay', group: 'Voice', min: 0.05, max: 1.2, step: 0.01, unit: 's' },
   'voice.tailLevel': { label: 'Tail level', group: 'Voice', min: 0, max: 1, step: 0.01, unit: '' },
+  'voice.tailFreq': { label: 'Tail cutoff', group: 'Voice', min: 600, max: 6000, step: 50, unit: 'Hz' },
   'voice.clickFreq': { label: 'Click freq', group: 'Voice', min: 1000, max: 12000, step: 100, unit: 'Hz' },
   'voice.clickLevel': { label: 'Click level', group: 'Voice', min: 0, max: 1.5, step: 0.02, unit: '' },
   'voice.thumpFreq': { label: 'Thump freq', group: 'Voice', min: 30, max: 300, step: 1, unit: 'Hz' },
   'voice.thumpLevel': { label: 'Thump level', group: 'Voice', min: 0, max: 1.5, step: 0.02, unit: '' },
   'voice.wet': { label: 'Reverb send', group: 'Voice', min: 0, max: 1, step: 0.01, unit: '' },
+
+  'scope.swayDeg': { label: 'Sway', group: 'Scope', min: 0, max: 2, step: 0.01, unit: '°' },
+  'scope.swayRate': { label: 'Breath rate', group: 'Scope', min: 0.1, max: 2, step: 0.01, unit: 'Hz' },
+  'scope.breathSeconds': { label: 'Hold', group: 'Scope', min: 0.5, max: 8, step: 0.1, unit: 's' },
+  'scope.breathRecovery': { label: 'Recover', group: 'Scope', min: 0.5, max: 12, step: 0.1, unit: 's' },
+  'scope.breathHoldScale': { label: 'Held sway x', group: 'Scope', min: 0, max: 1, step: 0.01, unit: 'x' },
+  'scope.magnification': { label: 'Magnification', group: 'Scope', min: 1, max: 10, step: 0.1, unit: 'x' },
 };
 
 export const WEAPON_NUMBER_KEYS = Object.keys(WEAPON_TUNABLES) as WeaponNumberKey[];
@@ -105,8 +137,14 @@ export function readWeaponNumber(def: WeaponDef, key: WeaponNumberKey): number {
       return def.headshotMult;
     case 'limbMult':
       return def.limbMult;
+    case 'upperTorsoMult':
+      return def.upperTorsoMult;
     case 'penetration':
       return def.penetration;
+    case 'pellets':
+      return def.pellets;
+    case 'pelletSpread':
+      return def.pelletSpread;
     case 'rpm':
       return def.rpm;
     case 'magSize':
@@ -121,6 +159,10 @@ export function readWeaponNumber(def: WeaponDef, key: WeaponNumberKey): number {
       return def.adsTime;
     case 'sprintOutTime':
       return def.sprintOutTime;
+    case 'swapInTime':
+      return def.swapInTime;
+    case 'swapOutTime':
+      return def.swapOutTime;
     case 'spread.hipStand':
       return def.spread.hipStand;
     case 'spread.hipMove':
@@ -177,10 +219,14 @@ export function readWeaponNumber(def: WeaponDef, key: WeaponNumberKey): number {
       return def.voice.bodyQ;
     case 'voice.bodyDecay':
       return def.voice.bodyDecay;
+    case 'voice.bodyRatio':
+      return def.voice.bodyRatio;
     case 'voice.tailDecay':
       return def.voice.tailDecay;
     case 'voice.tailLevel':
       return def.voice.tailLevel;
+    case 'voice.tailFreq':
+      return def.voice.tailFreq;
     case 'voice.clickFreq':
       return def.voice.clickFreq;
     case 'voice.clickLevel':
@@ -191,6 +237,18 @@ export function readWeaponNumber(def: WeaponDef, key: WeaponNumberKey): number {
       return def.voice.thumpLevel;
     case 'voice.wet':
       return def.voice.wet;
+    case 'scope.swayDeg':
+      return def.scope?.swayDeg ?? 0;
+    case 'scope.swayRate':
+      return def.scope?.swayRate ?? 0;
+    case 'scope.breathSeconds':
+      return def.scope?.breathSeconds ?? 0;
+    case 'scope.breathRecovery':
+      return def.scope?.breathRecovery ?? 0;
+    case 'scope.breathHoldScale':
+      return def.scope?.breathHoldScale ?? 0;
+    case 'scope.magnification':
+      return def.scope?.magnification ?? 1;
   }
 }
 
@@ -214,8 +272,17 @@ export function writeWeaponNumber(def: WeaponDef, key: WeaponNumberKey, v: numbe
     case 'limbMult':
       def.limbMult = v;
       return;
+    case 'upperTorsoMult':
+      def.upperTorsoMult = v;
+      return;
     case 'penetration':
       def.penetration = v;
+      return;
+    case 'pellets':
+      def.pellets = v;
+      return;
+    case 'pelletSpread':
+      def.pelletSpread = v;
       return;
     case 'rpm':
       def.rpm = v;
@@ -237,6 +304,12 @@ export function writeWeaponNumber(def: WeaponDef, key: WeaponNumberKey, v: numbe
       return;
     case 'sprintOutTime':
       def.sprintOutTime = v;
+      return;
+    case 'swapInTime':
+      def.swapInTime = v;
+      return;
+    case 'swapOutTime':
+      def.swapOutTime = v;
       return;
     case 'spread.hipStand':
       def.spread.hipStand = v;
@@ -322,11 +395,17 @@ export function writeWeaponNumber(def: WeaponDef, key: WeaponNumberKey, v: numbe
     case 'voice.bodyDecay':
       def.voice.bodyDecay = v;
       return;
+    case 'voice.bodyRatio':
+      def.voice.bodyRatio = v;
+      return;
     case 'voice.tailDecay':
       def.voice.tailDecay = v;
       return;
     case 'voice.tailLevel':
       def.voice.tailLevel = v;
+      return;
+    case 'voice.tailFreq':
+      def.voice.tailFreq = v;
       return;
     case 'voice.clickFreq':
       def.voice.clickFreq = v;
@@ -343,6 +422,26 @@ export function writeWeaponNumber(def: WeaponDef, key: WeaponNumberKey, v: numbe
     case 'voice.wet':
       def.voice.wet = v;
       return;
+    // Writing a scope number on a weapon that has no scope is a no-op rather than an
+    // error: the panel hides the group, but the copy-config path walks every key.
+    case 'scope.swayDeg':
+      if (def.scope !== undefined) def.scope.swayDeg = v;
+      return;
+    case 'scope.swayRate':
+      if (def.scope !== undefined) def.scope.swayRate = v;
+      return;
+    case 'scope.breathSeconds':
+      if (def.scope !== undefined) def.scope.breathSeconds = v;
+      return;
+    case 'scope.breathRecovery':
+      if (def.scope !== undefined) def.scope.breathRecovery = v;
+      return;
+    case 'scope.breathHoldScale':
+      if (def.scope !== undefined) def.scope.breathHoldScale = v;
+      return;
+    case 'scope.magnification':
+      if (def.scope !== undefined) def.scope.magnification = v;
+      return;
   }
 }
 
@@ -352,6 +451,8 @@ export function weaponDefToSource(def: WeaponDef): string {
   let lastGroup = '';
   for (const key of WEAPON_NUMBER_KEYS) {
     const meta = WEAPON_TUNABLES[key];
+    // A pistol has no scope numbers to paste back.
+    if (def.scope === undefined && key.startsWith(SCOPE_KEY_PREFIX)) continue;
     if (meta.group !== lastGroup) {
       if (lastGroup !== '') lines.push('');
       lines.push(`  // -- ${meta.group.toLowerCase()} --`);

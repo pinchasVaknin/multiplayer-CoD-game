@@ -19,60 +19,76 @@ import { buildDummyMaterials, TargetDummy, type DummyMaterials, type DummySpec }
 
 /** Entity ids. 0 is the player (see DamageSystem.PLAYER_ENTITY_ID). */
 export const DUMMY_IDS = {
-  near: 1,
-  popup: 2,
-  strafe: 3,
-  falloff: 4,
-  penThin: 5,
-  penThick: 6,
+  r5: 1,
+  r15: 2,
+  r25: 3,
+  r40: 4,
+  popup: 5,
+  strafe: 6,
+  penThin: 7,
+  penThick: 8,
 } as const;
 
 const FACING_WEST = Math.PI / 2;
 
-const SPECS: readonly DummySpec[] = [
-  {
-    id: DUMMY_IDS.near,
-    name: 'A · CLOSE',
-    behaviour: 'static',
-    x: -15,
+/** Where the player stands to shoot. The grey-box room's marked firing line. */
+export const FIRING_LINE = { x: -20, z: -14 } as const;
+
+/**
+ * The four measurement ranges the balance table is authored at (S6.5, S7).
+ *
+ * Each dummy is offset laterally so they do not shadow each other in a line, and its `x`
+ * is then solved so the *straight-line* distance from the firing line is exactly the
+ * stated range rather than approximately it. A range marked 25 m that is really 25.4 m
+ * would put the falloff read-outs a metre out, which is the whole thing this range exists
+ * to measure.
+ */
+const MEASURED: readonly Readonly<{ id: number; range: number; lateral: number }>[] = [
+  { id: DUMMY_IDS.r5, range: 5, lateral: -1.4 },
+  { id: DUMMY_IDS.r15, range: 15, lateral: 2.2 },
+  { id: DUMMY_IDS.r25, range: 25, lateral: -2.6 },
+  { id: DUMMY_IDS.r40, range: 40, lateral: 4.6 },
+];
+
+function measuredSpecs(): DummySpec[] {
+  return MEASURED.map((m) => ({
+    id: m.id,
+    name: `${m.range} M`,
+    behaviour: 'static' as const,
+    x: FIRING_LINE.x + Math.sqrt(Math.max(0, m.range * m.range - m.lateral * m.lateral)),
     y: 0,
-    z: -12.8,
+    z: FIRING_LINE.z + m.lateral,
     yaw: FACING_WEST,
-  },
+  }));
+}
+
+const SPECS: readonly DummySpec[] = [
+  ...measuredSpecs(),
   {
     id: DUMMY_IDS.popup,
-    name: 'B · POP-UP',
+    name: 'POP-UP',
     behaviour: 'popup',
     x: -11,
     y: 0,
-    z: -16.2,
+    z: -17.0,
     yaw: FACING_WEST,
     upTime: 3.0,
     downTime: 2.0,
   },
   {
     id: DUMMY_IDS.strafe,
-    name: 'C · STRAFE',
+    name: 'STRAFE',
     behaviour: 'strafe',
     x: -4,
     y: 0,
-    z: -10.5,
+    z: -9.4,
     yaw: FACING_WEST,
     travel: 2.2,
     speed: 2.6,
   },
   {
-    id: DUMMY_IDS.falloff,
-    name: 'D · FALLOFF',
-    behaviour: 'static',
-    x: 6,
-    y: 0,
-    z: -16.4,
-    yaw: FACING_WEST,
-  },
-  {
     id: DUMMY_IDS.penThin,
-    name: 'E · BEHIND THIN',
+    name: 'BEHIND THIN',
     behaviour: 'static',
     x: 22.5,
     y: 0,
@@ -81,7 +97,7 @@ const SPECS: readonly DummySpec[] = [
   },
   {
     id: DUMMY_IDS.penThick,
-    name: 'F · BEHIND THICK',
+    name: 'BEHIND THICK',
     behaviour: 'static',
     x: 22.5,
     y: 0,

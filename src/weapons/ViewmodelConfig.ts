@@ -39,6 +39,20 @@ export interface ViewmodelConfig {
   slideExtraY: number;
   slideExtraRoll: number;
 
+  // -- swap pose (M5, S6.4) ----------------------------------------------
+  /**
+   * Where a weapon goes while being put away or taken out.
+   *
+   * Deliberately not the sprint pose: a sprint carries the weapon across the body and a
+   * swap takes it out of frame downward. `raise` supplies the timing for both, so this is
+   * only the destination.
+   */
+  swapX: number;
+  swapY: number;
+  swapZ: number;
+  swapPitch: number;
+  swapRoll: number;
+
   // -- sway --------------------------------------------------------------
   /** Metres of lag per radian/second of look movement. */
   swayPosition: number;
@@ -108,6 +122,12 @@ export const DEFAULT_VIEWMODEL_CONFIG: ViewmodelConfig = {
   slideExtraY: -0.05,
   slideExtraRoll: 9,
 
+  swapX: 0.02,
+  swapY: -0.32,
+  swapZ: 0.06,
+  swapPitch: -34,
+  swapRoll: 16,
+
   swayPosition: 0.028,
   swayRotation: 2.4,
   swayMax: 0.05,
@@ -162,6 +182,12 @@ export const VIEWMODEL_TUNABLES: Readonly<Record<keyof ViewmodelConfig, TunableM
   tacSprintExtraPitch: { label: 'Tac extra pitch', group: 'Sprint pose', min: -40, max: 10, step: 0.5, unit: '°' },
   slideExtraY: { label: 'Slide extra Y', group: 'Sprint pose', min: -0.3, max: 0.1, step: 0.005, unit: 'm' },
   slideExtraRoll: { label: 'Slide extra roll', group: 'Sprint pose', min: -30, max: 30, step: 0.5, unit: '°' },
+
+  swapX: { label: 'Swap X', group: 'Swap pose', min: -0.3, max: 0.3, step: 0.005, unit: 'm' },
+  swapY: { label: 'Swap Y', group: 'Swap pose', min: -0.6, max: 0.1, step: 0.005, unit: 'm' },
+  swapZ: { label: 'Swap Z', group: 'Swap pose', min: -0.3, max: 0.3, step: 0.005, unit: 'm' },
+  swapPitch: { label: 'Swap pitch', group: 'Swap pose', min: -80, max: 20, step: 0.5, unit: '°' },
+  swapRoll: { label: 'Swap roll', group: 'Swap pose', min: -45, max: 45, step: 0.5, unit: '°' },
 
   swayPosition: { label: 'Sway position', group: 'Sway', min: 0, max: 0.12, step: 0.001, unit: 'm' },
   swayRotation: { label: 'Sway rotation', group: 'Sway', min: 0, max: 12, step: 0.1, unit: '°' },

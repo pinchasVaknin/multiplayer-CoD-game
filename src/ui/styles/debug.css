@@ -268,3 +268,97 @@
   opacity: 0.4;
   border-color: var(--c-bad);
 }
+
+/*
+ * While the cursor is captured the overlay is a read-out, not a control panel (M5).
+ *
+ * M4 playtesting reported that opening F1 mid-match "breaks pointer lock and causes
+ * control issues". It was not the key: it was that a click, which is also the fire button,
+ * could land on a slider and give it DOM focus — at which point `Input.domFocusGuard`
+ * correctly stops feeding the game keys, and the player is standing still wondering why.
+ *
+ * Locked, the panel ignores the pointer entirely. Paused, the cursor is free and every
+ * control works — which is why the pause menu has a button for it.
+ */
+body.op-locked .dbg-root {
+  pointer-events: none;
+}
+
+/* ---- M5 arsenal panel --------------------------------------------------- */
+
+/* Chip rows: weapon and attachment selection. Same button language as .dbg-btn. */
+.dbg-chips {
+  display: flex;
+  gap: var(--s-1);
+  margin: var(--s-1) 0;
+}
+
+.dbg-chips--wrap {
+  flex-wrap: wrap;
+}
+
+.dbg-chip {
+  appearance: none;
+  border: 1px solid var(--c-line);
+  background: var(--c-surface);
+  color: var(--c-text-faint);
+  font-family: var(--font-ui);
+  font-size: var(--t-micro);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  padding: 3px var(--s-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dbg-chip:hover {
+  border-color: var(--c-line-hi);
+  color: var(--c-text);
+}
+
+.dbg-chip.is-on {
+  border-color: var(--c-accent-dim);
+  background: var(--c-accent-glow);
+  color: var(--c-accent);
+}
+
+/* An attachment with no slot on this weapon. Visible, and visibly unavailable. */
+.dbg-chip.is-off {
+  opacity: 0.35;
+  text-decoration: line-through;
+}
+
+.dbg-chip--action {
+  border-style: dashed;
+}
+
+/* Free-text notes: the resolved-def diff, the attachment costs, status lines. */
+.dbg-note {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  line-height: 1.45;
+  color: var(--c-text-dim);
+  white-space: pre-wrap;
+  margin: var(--s-1) 0;
+}
+
+.dbg-note--table {
+  color: var(--c-text);
+  background: rgba(7, 8, 10, 0.5);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  padding: var(--s-2);
+  max-height: 190px;
+  overflow: auto;
+}
+
+.dbg-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: var(--s-2) 0;
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+}

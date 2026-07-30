@@ -1,135 +1,87 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Rng } from '../core/Rng';
+import {
+  bodyBoxes,
+  bodyTubes,
+  barrelY,
+  chargingBoxes,
+  magazineBoxes,
+  magazineTubes,
+  muzzleZ,
+  type BoxPart,
+  type SurfaceKey,
+  type TubePart,
+} from './WeaponMeshParts';
+import { modelSpecFor } from './WeaponModelSpecs';
 
 /**
- * The assault rifle, built from primitives in code (brief S2: zero external assets).
+ * Viewmodels, built from primitives in code (brief S2: zero external assets).
  *
- * Geometry is merged per material so the whole viewmodel is five draw calls: three for
- * the static body and two for the parts that have to move on their own — the magazine
- * and the charging handle, which the reload sequence animates independently.
+ * M2 hand-placed the AR's boxes. M5 needs twelve, and twelve hand-placed weapons is twelve
+ * lists of coordinates that drift apart the first time the sight height changes — so the
+ * geometry is now a *function* of a `WeaponModelSpec` and the specs are the content. The
+ * carbine's spec reproduces M2's proportions; everything else varies from it.
  *
- * Local space matches the viewmodel camera: +X right, +Y up, **-Z forward**, origin at
- * the centre of the receiver. The iron sights are authored so that a line through the
- * rear notch and the front post sits at `SIGHT_HEIGHT` above the origin; that is the
- * number `ViewmodelConfig.adsY` has to cancel for the sights to land on the screen
- * centre when aimed.
+ * Geometry is merged per material, so a whole weapon is five draw calls: three for the
+ * static body and two for the parts that move on their own — the magazine and the charging
+ * handle (or the pump), which the reload sequence animates independently.
+ *
+ * Local space matches the viewmodel camera: +X right, +Y up, **-Z forward**, origin at the
+ * centre of the receiver. The sights are authored so a line through them sits at
+ * `spec.sightHeight` above the origin; that is the number `ViewmodelConfig.adsY` cancels
+ * for the sights to land on the screen centre when aimed.
+ *
+ * Textures are built once per *process* and shared by every model — twelve weapons each
+ * generating three 128px canvases would be thirty-six canvases for three distinct images.
  */
-
-/** Height of the sight line above the weapon origin, metres. */
-export const SIGHT_HEIGHT = 0.0915;
-
-/** Where the muzzle flash is anchored, in weapon-local space. */
-export const MUZZLE_LOCAL = { x: 0, y: 0.011, z: -0.585 } as const;
 
 export interface WeaponModel {
   readonly root: THREE.Group;
   /** Slides out of the well and drops away during a reload. */
   readonly magazine: THREE.Group;
-  /** Pulled and released on the empty reload. */
+  /** Pulled and released on the empty reload. On a shotgun this is the pump. */
   readonly chargingHandle: THREE.Group;
   /** Muzzle flash is parented here so it tracks every animation the gun does. */
   readonly muzzle: THREE.Object3D;
+  /** Height of the sight line above the origin, metres. `ViewmodelConfig.adsY` cancels it. */
+  readonly sightHeight: number;
+  readonly weaponId: string;
   dispose(): void;
 }
 
-type SurfaceKey = 'gunmetal' | 'polymer' | 'glove';
-
-interface BoxPart {
-  readonly surface: SurfaceKey;
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  readonly w: number;
-  readonly h: number;
-  readonly d: number;
-  readonly rx?: number;
-  readonly ry?: number;
-  readonly rz?: number;
-}
-
-interface TubePart {
-  readonly surface: SurfaceKey;
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  readonly radius: number;
-  readonly length: number;
-  readonly sides?: number;
-}
-
-const BODY_BOXES: readonly BoxPart[] = [
-  // -- receiver group, metal ---------------------------------------------
-  { surface: 'gunmetal', x: 0, y: 0, z: 0, w: 0.058, h: 0.082, d: 0.3 },
-  { surface: 'gunmetal', x: 0, y: 0.05, z: -0.02, w: 0.036, h: 0.022, d: 0.3 },
-  { surface: 'gunmetal', x: 0.031, y: 0.018, z: -0.045, w: 0.005, h: 0.03, d: 0.07 },
-  { surface: 'gunmetal', x: 0, y: 0.004, z: 0.2, w: 0.032, h: 0.036, d: 0.14 },
-  { surface: 'gunmetal', x: 0, y: -0.038, z: 0.038, w: 0.008, h: 0.024, d: 0.01 },
-  { surface: 'gunmetal', x: 0, y: 0.042, z: -0.352, w: 0.032, h: 0.038, d: 0.045 },
-
-  // -- iron sights --------------------------------------------------------
-  { surface: 'gunmetal', x: 0, y: 0.058, z: -0.352, w: 0.03, h: 0.026, d: 0.032 },
-  { surface: 'gunmetal', x: 0, y: 0.079, z: -0.352, w: 0.007, h: 0.03, d: 0.007 },
-  { surface: 'gunmetal', x: 0, y: 0.062, z: 0.062, w: 0.034, h: 0.02, d: 0.028 },
-  { surface: 'gunmetal', x: -0.0135, y: 0.081, z: 0.062, w: 0.008, h: 0.026, d: 0.024 },
-  { surface: 'gunmetal', x: 0.0135, y: 0.081, z: 0.062, w: 0.008, h: 0.026, d: 0.024 },
-
-  // -- polymer furniture ---------------------------------------------------
-  { surface: 'polymer', x: 0, y: 0.004, z: -0.255, w: 0.056, h: 0.062, d: 0.25 },
-  { surface: 'polymer', x: 0, y: -0.088, z: 0.075, w: 0.036, h: 0.12, d: 0.055, rx: -0.28 },
-  { surface: 'polymer', x: 0, y: -0.012, z: 0.265, w: 0.05, h: 0.095, d: 0.055 },
-  { surface: 'polymer', x: 0, y: 0.03, z: 0.195, w: 0.036, h: 0.03, d: 0.11 },
-  { surface: 'polymer', x: 0, y: -0.048, z: 0.028, w: 0.03, h: 0.008, d: 0.052 },
-
-  // -- hands. Grey-box, but a viewmodel with no hands reads as a floating prop.
-  { surface: 'glove', x: 0.006, y: -0.072, z: 0.072, w: 0.058, h: 0.085, d: 0.088, rx: -0.28 },
-  { surface: 'glove', x: 0.036, y: -0.166, z: 0.196, w: 0.072, h: 0.078, d: 0.2, rx: -0.5 },
-  { surface: 'glove', x: 0, y: -0.03, z: -0.262, w: 0.064, h: 0.076, d: 0.1 },
-  { surface: 'glove', x: -0.056, y: -0.132, z: -0.168, w: 0.076, h: 0.076, d: 0.19, rx: 0.42, rz: -0.5 },
-];
-
-const BODY_TUBES: readonly TubePart[] = [
-  { surface: 'gunmetal', x: 0, y: 0.011, z: -0.44, radius: 0.0105, length: 0.2 },
-  { surface: 'gunmetal', x: 0, y: 0.011, z: -0.556, radius: 0.017, length: 0.052, sides: 10 },
-];
-
-const MAGAZINE_BOXES: readonly BoxPart[] = [
-  { surface: 'polymer', x: 0, y: -0.105, z: -0.012, w: 0.03, h: 0.155, d: 0.078, rx: 0.12 },
-  { surface: 'polymer', x: 0, y: -0.184, z: -0.002, w: 0.036, h: 0.014, d: 0.086, rx: 0.12 },
-];
-
-const CHARGING_BOXES: readonly BoxPart[] = [
-  { surface: 'gunmetal', x: 0, y: 0.047, z: 0.152, w: 0.058, h: 0.016, d: 0.03 },
-  { surface: 'gunmetal', x: 0, y: 0.047, z: 0.128, w: 0.02, h: 0.012, d: 0.05 },
-];
-
-export function buildWeaponModel(anisotropy: number): WeaponModel {
-  const surfaces = buildSurfaces(anisotropy);
-  const disposables: Array<{ dispose(): void }> = [];
-  for (const material of surfaces.values()) {
-    disposables.push(material);
-    const map = material.map;
-    if (map !== null) disposables.push(map);
-  }
+/**
+ * Build one weapon.
+ *
+ * `anisotropy` reaches the shared textures on first use only; later calls reuse them, which
+ * is why it is not part of the cache key. Every model in a match is built with the same
+ * value in practice.
+ */
+export function buildWeaponModel(weaponId: string, anisotropy: number): WeaponModel {
+  const spec = modelSpecFor(weaponId);
+  const surfaces = sharedSurfaces(anisotropy);
 
   const root = new THREE.Group();
-  root.name = 'viewmodel:ar';
+  root.name = `viewmodel:${weaponId}`;
+  root.scale.setScalar(spec.scale);
 
-  addMerged(root, BODY_BOXES, BODY_TUBES, surfaces, disposables, 'body');
+  const disposables: Array<{ dispose(): void }> = [];
+
+  addMerged(root, bodyBoxes(spec), bodyTubes(spec), surfaces, disposables, 'body');
 
   const magazine = new THREE.Group();
   magazine.name = 'viewmodel:magazine';
-  addMerged(magazine, MAGAZINE_BOXES, [], surfaces, disposables, 'mag');
+  addMerged(magazine, magazineBoxes(spec), magazineTubes(spec), surfaces, disposables, 'mag');
   root.add(magazine);
 
   const chargingHandle = new THREE.Group();
   chargingHandle.name = 'viewmodel:charging';
-  addMerged(chargingHandle, CHARGING_BOXES, [], surfaces, disposables, 'charge');
+  addMerged(chargingHandle, chargingBoxes(spec), [], surfaces, disposables, 'charge');
   root.add(chargingHandle);
 
   const muzzle = new THREE.Object3D();
   muzzle.name = 'viewmodel:muzzle';
-  muzzle.position.set(MUZZLE_LOCAL.x, MUZZLE_LOCAL.y, MUZZLE_LOCAL.z);
+  muzzle.position.set(0, barrelY(spec), muzzleZ(spec));
   root.add(muzzle);
 
   return {
@@ -137,7 +89,11 @@ export function buildWeaponModel(anisotropy: number): WeaponModel {
     magazine,
     chargingHandle,
     muzzle,
+    sightHeight: spec.sightHeight,
+    weaponId,
     dispose(): void {
+      // Only the geometry is per model. The three materials and their textures are shared
+      // for the life of the process and are released by `disposeWeaponSurfaces`.
       for (const d of disposables) d.dispose();
       root.clear();
     },
@@ -173,8 +129,8 @@ function addMerged(
 
   for (const part of tubes) {
     const g = new THREE.CylinderGeometry(part.radius, part.radius, part.length, part.sides ?? 12, 1);
-    // CylinderGeometry runs along +Y; the barrel runs along Z.
-    g.rotateX(Math.PI / 2);
+    // CylinderGeometry runs along +Y; barrels run along Z.
+    if (part.vertical !== true) g.rotateX(Math.PI / 2);
     g.translate(part.x, part.y, part.z);
     push(part.surface, g);
   }
@@ -197,7 +153,17 @@ function addMerged(
 
 // -- surfaces ---------------------------------------------------------------
 
-function buildSurfaces(anisotropy: number): Map<SurfaceKey, THREE.MeshStandardMaterial> {
+/**
+ * The three materials, built once for the process.
+ *
+ * M2 built them per model, which was correct when there was one model. Twelve weapons and a
+ * per-match rebuild would be thirty-six 128px canvases generated for three distinct images,
+ * and every one of them a GPU upload on the frame the match starts.
+ */
+let cachedSurfaces: Map<SurfaceKey, THREE.MeshStandardMaterial> | null = null;
+
+function sharedSurfaces(anisotropy: number): Map<SurfaceKey, THREE.MeshStandardMaterial> {
+  if (cachedSurfaces !== null) return cachedSurfaces;
   const out = new Map<SurfaceKey, THREE.MeshStandardMaterial>();
 
   // A viewmodel is the one place in this project worth a real BRDF: it is a handful of
@@ -235,7 +201,18 @@ function buildSurfaces(anisotropy: number): Map<SurfaceKey, THREE.MeshStandardMa
       metalness: 0,
     }),
   );
+  cachedSurfaces = out;
   return out;
+}
+
+/** Release the process-wide materials. Only the page teardown has any business calling it. */
+export function disposeWeaponSurfaces(): void {
+  if (cachedSurfaces === null) return;
+  for (const material of cachedSurfaces.values()) {
+    material.map?.dispose();
+    material.dispose();
+  }
+  cachedSurfaces = null;
 }
 
 const TEX = 128;

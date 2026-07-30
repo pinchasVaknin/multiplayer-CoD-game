@@ -1,9 +1,14 @@
-﻿/**
+/**
  * Weapon data (brief S6.1). Plain objects, no subclass per weapon.
  *
- * M5 adds eleven more entries to this file and writes no new classes to do it: every
- * behavioural difference between weapons has to be expressible as a number here, which
- * is the constraint that keeps the weapon *system* the deliverable rather than the AR.
+ * M2 said "M5 adds eleven more entries to this file and writes no new classes to do it".
+ * That held: the eleven new weapons are data, and the only new *code* in M5's weapon layer
+ * is the pellet loop, the scope, the swap and the attachment resolver — none of which is a
+ * subclass and all of which are driven from the fields below.
+ *
+ * The data itself moved to `defs/`, one file per class, because twelve authored recoil
+ * patterns is four hundred lines of content on its own. This file is the schema, the
+ * registry and the helpers.
  *
  * Angles are in degrees throughout, because that is the unit these get tuned in.
  * Conversion happens once, at the point of use.
@@ -12,7 +17,17 @@
  * these types rather than hand-listed alongside them.
  */
 
+import { ASSAULT_RIFLES } from './defs/assaultRifles';
+import { LMGS } from './defs/lmgs';
+import { PISTOLS } from './defs/pistols';
+import { SHOTGUNS } from './defs/shotguns';
+import { SMGS } from './defs/smgs';
+import { SNIPERS } from './defs/snipers';
+
 export type WeaponClass = 'AR' | 'SMG' | 'LMG' | 'MARKSMAN' | 'SNIPER' | 'SHOTGUN' | 'PISTOL' | 'LAUNCHER';
+
+/** Which inventory slot a weapon occupies (S6.4). */
+export type WeaponSlot = 'primary' | 'secondary';
 
 export type AttachmentSlot =
   | 'optic'
@@ -75,16 +90,28 @@ export interface SpreadProfile {
   recover: number;
 }
 
-/** Synthesis parameters for this weapon's voice (S6.7). */
+/**
+ * Synthesis parameters for this weapon's voice (S6.7).
+ *
+ * The three character controls the brief names — filter cutoff, body resonance and tail
+ * length — are `bodyFreq`, `bodyQ` and `tailDecay`. `bodyRatio` and `tailFreq` were added
+ * in M5: with twelve weapons sharing one synthesis path, a fixed sweep target and a fixed
+ * tail cutoff made the big guns and the small guns converge on the same shape no matter
+ * what the other numbers said.
+ */
 export interface WeaponVoice {
   level: number;
   /** Body noise band centre, Hz. The single biggest character control. */
   bodyFreq: number;
   bodyQ: number;
   bodyDecay: number;
+  /** Where the body sweeps down to, as a fraction of `bodyFreq`. */
+  bodyRatio: number;
   /** Tail length, seconds. Long tails read as big rooms and big calibres. */
   tailDecay: number;
   tailLevel: number;
+  /** Tail low-pass starting cutoff, Hz. Bright tails crack, dark tails boom. */
+  tailFreq: number;
   clickFreq: number;
   clickLevel: number;
   thumpFreq: number;
@@ -93,16 +120,48 @@ export interface WeaponVoice {
   wet: number;
 }
 
+/**
+ * A telescopic sight (S6.1, snipers).
+ *
+ * Present only on weapons that have one. Everything else aims with irons or a red dot and
+ * uses `adsTime` alone.
+ */
+export interface ScopeProfile {
+  /** Idle breath sway amplitude at full scope, degrees. */
+  swayDeg: number;
+  /** Breath cycles per second. */
+  swayRate: number;
+  /** Seconds of held breath available from full. */
+  breathSeconds: number;
+  /** Seconds to refill the breath meter from empty. */
+  breathRecovery: number;
+  /** Sway multiplier while the breath is held. */
+  breathHoldScale: number;
+  /** Magnification, for the FOV pull and the scope overlay. */
+  magnification: number;
+  /** Whether the objective lens throws a glint an enemy can see. */
+  glint: boolean;
+}
+
 export interface WeaponDef {
   id: string;
   name: string;
   class: WeaponClass;
+  slot: WeaponSlot;
 
   damage: { near: number; far: number };
   /** Metres. Damage is `near` at or below `start` and `far` at or beyond `end`. */
   damageFalloff: { start: number; end: number };
   headshotMult: number;
   limbMult: number;
+  /**
+   * Multiplier for a hit on the chest specifically, as opposed to the abdomen.
+   *
+   * M2 had one torso zone and one multiplier of exactly 1, and every M2 number was verified
+   * against that. This is added rather than substituted: 1.0 reproduces M2 exactly, and only
+   * the snipers move off it — which is the whole of "one-shot to upper torso" (S6.1).
+   */
+  upperTorsoMult: number;
 
   rpm: number;
   magSize: number;
@@ -113,6 +172,18 @@ export interface WeaponDef {
   adsTime: number;
   /** Sprint-to-fire, seconds. A core balance lever (S6.6). */
   sprintOutTime: number;
+  /** Seconds to bring this weapon up when swapped to (S6.4). */
+  swapInTime: number;
+  /** Seconds to put this weapon away when swapping off it. */
+  swapOutTime: number;
+
+  /**
+   * Hitscan rays per trigger pull. 1 for everything but the shotgun, which fires 8 and
+   * resolves each one against the hitbox rig separately (S6.1).
+   */
+  pellets: number;
+  /** Extra cone applied to pellets 2..n, degrees of half-angle. 0 for a single ray. */
+  pelletSpread: number;
 
   spread: SpreadProfile;
   recoil: RecoilPattern;
@@ -137,127 +208,54 @@ export interface WeaponDef {
   /** Muzzle rise felt as a kick on the weapon's own axis; scales the flash too. */
   muzzleFlashScale: number;
 
+  /** False once a suppressor is fitted: firing stops pinging the minimap (S6.2). */
+  minimapPing: boolean;
+  /** True once a laser is fitted: the dot is visible to enemies while aimed (S6.2). */
+  laserVisible: boolean;
+
+  scope?: ScopeProfile;
+
   voice: WeaponVoice;
 }
 
 /**
- * The M2 arsenal. One assault rifle.
+ * The arsenal (S6.1). Twelve weapons across five classes plus a sidearm.
  *
- * 3-shot kill inside 26 m, 4-shot beyond 42 m, 700 RPM: a 0.17 s best-case TTK, which
- * is the CoD band this whole project is aiming at.
+ * Order is the order they appear in the debug picker and the range read-out, which is
+ * class by class rather than by power.
  */
-export const AR_DEFAULT: WeaponDef = {
-  id: 'ar_default',
-  name: 'M4 CARBINE',
-  class: 'AR',
+export const ALL_WEAPONS: readonly WeaponDef[] = [
+  ...ASSAULT_RIFLES,
+  ...SMGS,
+  ...SHOTGUNS,
+  ...LMGS,
+  ...SNIPERS,
+  ...PISTOLS,
+];
 
-  damage: { near: 34, far: 25 },
-  damageFalloff: { start: 26, end: 42 },
-  headshotMult: 2.0,
-  limbMult: 0.9,
+export const WEAPON_DEFS: Readonly<Record<string, WeaponDef>> = Object.fromEntries(
+  ALL_WEAPONS.map((def) => [def.id, def]),
+);
 
-  rpm: 700,
-  magSize: 30,
-  reserveAmmo: 240,
-  reloadTime: 2.05,
-  reloadEmptyTime: 2.85,
-  adsTime: 0.28,
-  sprintOutTime: 0.22,
+/** The AR the project has shipped since M2. Still the baseline every other gun is read against. */
+export const AR_DEFAULT: WeaponDef = requireWeapon('ar_carbine');
 
-  spread: {
-    hipStand: 1.9,
-    hipMove: 3.4,
-    ads: 0.18,
-    crouchScale: 0.74,
-    airScale: 2.1,
-    perShot: 0.085,
-    perShotMax: 1.4,
-    recover: 3.6,
-  },
+/** The default secondary. Every loadout carries one. */
+export const PISTOL_DEFAULT: WeaponDef = requireWeapon('pistol_talon');
 
-  recoil: {
-    // Learnable and counterable (S6.2): a steep, controllable vertical climb for the
-    // first five, then a lateral S that starts on shot 6 and reverses twice. Anyone who
-    // has learned it can hold a 30-round spray on a torso; anyone who has not cannot.
-    kicks: [
-      { x: 0.0, y: 0.62 },
-      { x: 0.05, y: 0.58 },
-      { x: -0.06, y: 0.55 },
-      { x: 0.08, y: 0.52 },
-      { x: -0.05, y: 0.48 },
-      { x: 0.14, y: 0.42 },
-      { x: 0.22, y: 0.38 },
-      { x: 0.28, y: 0.34 },
-      { x: 0.3, y: 0.3 },
-      { x: 0.26, y: 0.27 },
-      { x: 0.14, y: 0.25 },
-      { x: -0.06, y: 0.23 },
-      { x: -0.22, y: 0.22 },
-      { x: -0.3, y: 0.21 },
-      { x: -0.32, y: 0.2 },
-      { x: -0.24, y: 0.19 },
-      { x: -0.1, y: 0.18 },
-      { x: 0.06, y: 0.18 },
-      { x: 0.18, y: 0.17 },
-      { x: 0.24, y: 0.17 },
-      { x: 0.2, y: 0.16 },
-      { x: 0.1, y: 0.16 },
-      { x: -0.02, y: 0.15 },
-      { x: -0.14, y: 0.15 },
-      { x: -0.2, y: 0.14 },
-      { x: -0.18, y: 0.14 },
-      { x: -0.08, y: 0.14 },
-      { x: 0.04, y: 0.13 },
-      { x: 0.14, y: 0.13 },
-      { x: 0.18, y: 0.12 },
-    ],
-    verticalScale: 1.0,
-    horizontalScale: 1.0,
-    firstShotScale: 1.15,
-    recoverFraction: 0.82,
-    recoverRate: 9.5,
-    // Longer than the 0.086 s shot interval at 700 RPM, on purpose: a sustained spray
-    // must keep climbing, and recovery is what a player earns by letting go.
-    recoverDelay: 0.12,
-    adsScale: 0.78,
+export function requireWeapon(id: string): WeaponDef {
+  const def = WEAPON_DEFS[id];
+  if (def === undefined) throw new Error(`Unknown weapon id "${id}"`);
+  return def;
+}
 
-    visualScale: 1.0,
-    visualAttack: 0.028,
-    visualSettle: 0.13,
-  },
-
-  penetration: 0.28,
-
-  unlockLevel: 1,
-  attachmentSlots: ['optic', 'muzzle', 'barrel', 'underbarrel', 'magazine', 'stock'],
-
-  adsFovScale: 0.76,
-  adsViewmodelFovScale: 0.82,
-  tracerFraction: 0.34,
-  shakePerShot: 0.055,
-  muzzleFlashScale: 1.0,
-
-  voice: {
-    level: 0.62,
-    bodyFreq: 1150,
-    bodyQ: 0.85,
-    bodyDecay: 0.085,
-    tailDecay: 0.32,
-    tailLevel: 0.2,
-    clickFreq: 5200,
-    clickLevel: 0.4,
-    thumpFreq: 88,
-    thumpLevel: 0.5,
-    wet: 0.3,
-  },
-};
-
-export const WEAPON_DEFS: Readonly<Record<string, WeaponDef>> = {
-  [AR_DEFAULT.id]: AR_DEFAULT,
-};
+/** Every weapon of a class, in roster order. */
+export function weaponsOfClass(cls: WeaponClass): WeaponDef[] {
+  return ALL_WEAPONS.filter((def) => def.class === cls);
+}
 
 export function cloneWeaponDef(src: WeaponDef): WeaponDef {
-  return {
+  const out: WeaponDef = {
     ...src,
     damage: { ...src.damage },
     damageFalloff: { ...src.damageFalloff },
@@ -266,6 +264,8 @@ export function cloneWeaponDef(src: WeaponDef): WeaponDef {
     attachmentSlots: [...src.attachmentSlots],
     voice: { ...src.voice },
   };
+  if (src.scope !== undefined) out.scope = { ...src.scope };
+  return out;
 }
 
 /** Seconds between shots. */

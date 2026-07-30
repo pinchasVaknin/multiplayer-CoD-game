@@ -408,3 +408,133 @@ them in place. Toggling it on must not change the allocation behaviour of the fr
 is measuring, so grow the existing buffers rather than creating geometry per frame.
 `movementDebug` in `player/Movement.ts` is the capture hook: it is off by default and
 costs one branch per collision pass when off.
+
+---
+
+## The M5 arsenal panels
+
+### Keys
+
+`Q` swaps primary/secondary, `1` and `2` select a slot outright, `G` throws the lethal
+(hold to cook a frag), `F` throws the tactical, and `Shift` holds breath while scoped.
+`Esc` now **pauses** instead of quitting — see below.
+
+### `Arsenal` (left column)
+
+The weapon picker is the first thing you need: twelve weapons exist and without it only one
+is reachable. Two chip rows — slot, then weapon — then the five attachments. An attachment
+the weapon has no slot for is drawn struck through rather than hidden, so "this gun cannot
+take a foregrip" is visible rather than mysterious.
+
+**Base against resolved** prints only the rows that changed. A forty-row table where two
+rows moved hides the two rows.
+
+**The pattern plot draws all twelve traces in one space**, active one in the accent colour,
+on a shared scale. That is the only way to look at acceptance criterion 1 — "if two weapons
+feel the same, one of them is wrong" is a claim about the *relationship* between the
+patterns, and twelve separate plots cannot show it. The suite reports the same thing as a
+number: the closest pair by RMS distance in degrees.
+
+**The pellet plot** is drawn from a real measured shell, not from the cone's parameters:
+press MEASURE PELLET SPREAD and it fires one through `ArsenalHarness` and colours every
+pellet by the zone it actually found, against a chest-and-head silhouette and the cone bound
+at that range.
+
+**MEASURE BALANCE TABLE** runs the full 12 x 4 x 2 measurement (about 40 ms) and copies it
+to the clipboard as the Markdown that goes into `docs/BALANCE.md`.
+
+### `Equipment` (left column)
+
+Four read-out lines — the flash's angle curve evaluated at 0/45/90/180 degrees, the smoke
+field's query and rejection counts, the projectile pool, and the bot thrower's accept and
+reject tallies — plus two visualisations:
+
+- **Trajectory preview** draws where a throw would land, through the *real* integrator
+  against the *real* collision world. It is the same `previewTrajectory` the bots' safety
+  check calls, so the line and the grenade cannot disagree.
+- **Smoke occlusion** draws every live sight line between opposing combatants, green when
+  clear and red when the smoke field rejected it, with brightness carrying the accumulated
+  optical depth — so a line that is *nearly* blocked looks different from one in clear air.
+  Blue rings mark each cloud's current radius. This is acceptance criterion 6 as a picture.
+
+The equipment picker also *equips* what you pick, because a preview of something you are not
+holding is a diagram rather than a tool.
+
+`Equipment` also adds a generated slider set to the right column, with the same COPY CONFIG
+and RESET as every other config in the project.
+
+---
+
+## The arsenal harness
+
+`debug/ArsenalHarness.ts` is to the *arsenal* what `WeaponHarness` is to one weapon. Real
+`WeaponSystem`, real `Ballistics`, real `DamageSystem`, real `TargetDummy` wearing the shared
+rig; no renderer, no audio, no DOM.
+
+```js
+__operator.arsenal()                          // the harness
+__operator.balanceTable()                     // the TTK table as Markdown
+__operator.arsenalReport()                    // TTK + attachment deltas + purity checks
+__operator.attachmentDeltas()                 // what each attachment measurably costs
+__operator.arsenal().measureTtk(def, 25, 'head')
+__operator.arsenal().measurePelletSpread(def, 6)
+__operator.arsenal().measureSlideEntry(def)   // one slide into a room
+__operator.arsenal().measureSlideAggression(def, 30)  // the chained exploit
+__operator.weapons                            // every WeaponDef
+__operator.equipmentDefs                      // every EquipmentDef
+__operator.equipment()                        // the live MatchEquipment
+```
+
+**`measureTtk` zeroes spread and recoil and does not zero the pellet cone.** A TTK table
+answers "how fast can this kill", not "how likely is it to" — but a shotgun's spread *is* the
+weapon, and its dash at 25 m is the honest result. See `docs/BALANCE.md`.
+
+**`measureSlideAggression` is the criterion-8 instrument.** It runs the same adversarial
+chain `Harness.measureMaxSustained` uses with a real weapon stepping alongside, and reports
+`fireableFraction` — what proportion of a slide-cancel chain the weapon is actually up for.
+It measures 0.000, which is the finding: a player moving at 7.9 m/s is a player who cannot
+shoot.
+
+### `verify/arsenal.js`
+
+```js
+fetch('/verify/arsenal.js').then(r => r.text()).then(eval)
+await __verifyArsenal.all()        // every criterion, in order
+__verifyArsenal.patterns()         // 1 — twelve patterns, and the closest pair by RMS
+__verifyArsenal.voices()           // 1 — twelve voices, and the closest body-band pair
+__verifyArsenal.balance()          // 2 — the TTK table
+__verifyArsenal.purity()           // 3 — attachment resolution is pure
+__verifyArsenal.attachments()      // 4 — measured attachment costs
+__verifyArsenal.pellets()          // 5 — mixed head/torso pellet spread at four ranges
+await __verifyArsenal.smoke()      // 6 — smoke blocks bot perception
+__verifyArsenal.flash()            // 7 — flash magnitude by angle
+__verifyArsenal.slide()            // 8 — the slide-cancel retune
+await __verifyArsenal.frameTime()  // 9 — frame time with equipment live
+await __verifyArsenal.botAim()     // 8 — hit rates at the tuned ceiling
+__verifyArsenal.results            // everything measured so far, stashed
+```
+
+**Run `smoke()` a few seconds into a match.** It searches the roster for an enemy pair that
+can currently see each other and puts a cloud on the midpoint; immediately after the match
+builds, nobody has line of sight to anybody yet and it correctly reports that it found no
+pair to test.
+
+**`frameTime` is a deliberate over-load**: three grenades every 0.9 s on top of a live
+ten-bot firefight, which fills the smoke pool and is far more than ordinary play produces.
+Read `equipmentMs`, `peakModeMs` and `peakHudMs` rather than the frame percentiles — the
+percentiles under a substituted frame source are mostly the source (see PLAN.md).
+
+---
+
+## The pause state
+
+`Esc` enters `PAUSED` rather than quitting the match. The world stays built, `Game.simulate`
+returns early, and the render pass keeps running so the screen is composited over a live
+scene and `FrameStats` keeps sampling. `Esc` again resumes.
+
+**The debug overlay is a read-out while the cursor is captured and a control panel when it
+is not.** `body.op-locked .dbg-root { pointer-events: none }` — M4 playtesting reported that
+opening F1 mid-match "breaks pointer lock"; it was not the key, it was that a click (which is
+also the fire button) could land on a slider and give it DOM focus, at which point
+`Input.domFocusGuard` correctly stops feeding the game keys. Paused, the cursor is free and
+every control works, which is why the pause menu has a button for the overlay.

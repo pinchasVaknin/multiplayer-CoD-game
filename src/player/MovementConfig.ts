@@ -125,7 +125,22 @@ export const DEFAULT_MOVEMENT_CONFIG: MovementConfig = {
   slideEndSpeed: 2.0,
   slideCooldown: 1.2,
   slideMinSprintTime: 0.3,
-  slideTacLockout: 1.0,
+  /**
+   * 1.25, raised from 1.0 in M5's balance pass (S6.5).
+   *
+   * The brief asks whether sliding into a room beats the fastest ADS in the arsenal now
+   * that TTK exists, and to lengthen this if it does. Measured: it does, marginally — the
+   * WASP and the TALON come up 0.13 s and 0.12 s out of a slide against the WASP's 0.175 s
+   * ADS. Their `sprintOutTime` is where that 45 ms actually lives and both were raised to
+   * 0.18 s alongside this.
+   *
+   * This number is the *chaining* lever rather than the entry one, and the measurement says
+   * chaining was never the problem: over thirty adversarial seconds of slide-cancelling at
+   * 7.94 m/s the weapon is fireable on **zero** ticks. The extra quarter second is taken
+   * anyway, because a rule that only bites in a case that is already paid for is cheap, and
+   * the brief asked for it. See PLAN.md for the full measurement.
+   */
+  slideTacLockout: 1.25,
   slideSteer: 0.16,
   slideMinSpeed: 1.6,
 

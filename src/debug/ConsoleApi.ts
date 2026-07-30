@@ -1,4 +1,8 @@
+import { EQUIPMENT_DEFS } from '../equipment/EquipmentDefs';
 import type { Game } from '../Game';
+import { ATTACHMENTS } from '../weapons/Attachments';
+import { ALL_WEAPONS } from '../weapons/WeaponDefs';
+import { ttkTableToMarkdown } from './ArsenalHarness';
 import type { Harness } from './Harness';
 import type { MatchHarness } from './MatchHarness';
 
@@ -21,6 +25,22 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
     matchHarness,
     weaponHarness: () => game.debugSuite?.weaponHarness,
     weaponDebug: () => game.debugSuite?.weaponDebug,
+
+    // ---- M5 ---------------------------------------------------------------
+    /** The whole roster, so a verification script can walk it without importing modules. */
+    weapons: ALL_WEAPONS,
+    equipmentDefs: EQUIPMENT_DEFS,
+    attachments: ATTACHMENTS,
+    arsenal: () => game.debugSuite?.arsenalHarness,
+    arsenalReport: () => game.debugSuite?.arsenalHarness.report(),
+    balanceTable: () => {
+      const rows = game.debugSuite?.arsenalHarness.measureTtkTable();
+      return rows === undefined ? undefined : ttkTableToMarkdown(rows);
+    },
+    attachmentDeltas: () => game.debugSuite?.arsenalHarness.measureAttachments(),
+    equipment: () => game.activeMatch?.equipment,
+    equipmentConfig: game.equipmentConfig,
+    secondaryDef: game.secondaryDef,
     match: () => game.activeMatch,
     weapon: () => game.activeMatch?.weapons,
     weaponDef: game.weaponDef,

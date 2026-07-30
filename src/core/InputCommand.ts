@@ -34,7 +34,31 @@ export const Btn = {
    * alternative is a DOM listener in the UI layer that the harness cannot drive.
    */
   Scoreboard: 1 << 6,
+
+  // -- M5 ------------------------------------------------------------------
+  /** Q, or the mouse wheel. Toggles primary/secondary (S6.4). */
+  SwapWeapon: 1 << 7,
+  /** G, held to cook and released to throw: frag, semtex, claymore (S6.3). */
+  Lethal: 1 << 8,
+  /** F. Flashbang or smoke, depending on the loadout (S6.3). */
+  Tactical: 1 << 9,
+  /**
+   * Slot 1 and slot 2 as absolute selections rather than a toggle.
+   *
+   * Kept separate from `SwapWeapon` because "press 2 twice" must not put the rifle back —
+   * a toggle and a selection are different inputs even when they usually agree.
+   */
+  Slot1: 1 << 10,
+  Slot2: 1 << 11,
 } as const;
+
+/**
+ * Hold-breath (S6.1) rides `Btn.Sprint`, which is what the brief asks for: Shift.
+ *
+ * It is not a new bit because the two can never be live at once — a scoped sniper is not
+ * sprinting, and `PlayerController` already refuses to sprint while aimed.
+ */
+export const HOLD_BREATH_BIT = Btn.Sprint;
 
 export type ButtonBit = (typeof Btn)[keyof typeof Btn];
 

@@ -69,6 +69,28 @@ export interface TierConfig {
   coverHealthFraction: number;
   /** Seconds a lost contact stays worth investigating before the bot gives up. */
   memorySeconds: number;
+
+  // -- grenades (S6.7, arriving with M5) ----------------------------------
+  /**
+   * Chance per grenade evaluation of actually throwing, 0..1. Zero disables the tier.
+   *
+   * S6.7 lists grenade usage as a tiered property and M3 deliberately left it out rather
+   * than shipping a field nothing read. This is that field, now that there is something
+   * to throw.
+   */
+  grenadeChance: number;
+  /** Seconds between grenade evaluations for one bot. */
+  grenadeCooldown: number;
+  /**
+   * Closest a bot will let its own grenade land, metres.
+   *
+   * The hard half of "bots must not grenade themselves" is the trajectory check in
+   * `BotThrower`; this is the margin it checks against, and it is per tier because a
+   * Recruit should be more cautious than a Veteran, not more reckless.
+   */
+  grenadeSafeRadius: number;
+  /** Longest range a bot will throw, metres. Beyond it the arc is a guess. */
+  grenadeRange: number;
 }
 
 export type TierTable = Record<BotTier, TierConfig>;
@@ -107,6 +129,13 @@ export const DEFAULT_TIERS: TierTable = {
     strafePeriod: 1.3,
     coverHealthFraction: 0.8,
     memorySeconds: 3.0,
+    // A Recruit never throws. `EquipmentDef.minBotTier` gates *what* each tier may carry;
+    // this gates whether it uses it at all, and the two together are S6.3's "gated by
+    // difficulty tier".
+    grenadeChance: 0,
+    grenadeCooldown: 30,
+    grenadeSafeRadius: 8.5,
+    grenadeRange: 18,
   },
   REGULAR: {
     reactionMin: 0.32,
@@ -133,6 +162,10 @@ export const DEFAULT_TIERS: TierTable = {
     strafePeriod: 1.1,
     coverHealthFraction: 0.65,
     memorySeconds: 4.0,
+    grenadeChance: 0.35,
+    grenadeCooldown: 22,
+    grenadeSafeRadius: 8.0,
+    grenadeRange: 20,
   },
   HARDENED: {
     reactionMin: 0.22,
@@ -159,6 +192,10 @@ export const DEFAULT_TIERS: TierTable = {
     strafePeriod: 0.95,
     coverHealthFraction: 0.5,
     memorySeconds: 5.0,
+    grenadeChance: 0.55,
+    grenadeCooldown: 16,
+    grenadeSafeRadius: 7.5,
+    grenadeRange: 24,
   },
   VETERAN: {
     reactionMin: 0.15,
@@ -191,6 +228,10 @@ export const DEFAULT_TIERS: TierTable = {
     strafePeriod: 0.8,
     coverHealthFraction: 0.38,
     memorySeconds: 6.0,
+    grenadeChance: 0.75,
+    grenadeCooldown: 12,
+    grenadeSafeRadius: 7.0,
+    grenadeRange: 28,
   },
 };
 
@@ -222,6 +263,11 @@ export const TIER_TUNABLES: Readonly<Record<keyof TierConfig, TunableMeta>> = {
   strafePeriod: { label: 'Strafe period', group: 'Tactics', min: 0.2, max: 3, step: 0.05, unit: 's' },
   coverHealthFraction: { label: 'Break at HP', group: 'Tactics', min: 0, max: 1, step: 0.01, unit: 'x' },
   memorySeconds: { label: 'Memory', group: 'Tactics', min: 0.5, max: 15, step: 0.1, unit: 's' },
+
+  grenadeChance: { label: 'Throw chance', group: 'Grenades', min: 0, max: 1, step: 0.01, unit: 'x' },
+  grenadeCooldown: { label: 'Throw cooldown', group: 'Grenades', min: 2, max: 60, step: 0.5, unit: 's' },
+  grenadeSafeRadius: { label: 'Self-safe radius', group: 'Grenades', min: 3, max: 20, step: 0.1, unit: 'm' },
+  grenadeRange: { label: 'Throw range', group: 'Grenades', min: 4, max: 45, step: 0.5, unit: 'm' },
 };
 
 export const TIER_CONFIG_KEYS = Object.keys(DEFAULT_TIERS.REGULAR) as Array<keyof TierConfig>;

@@ -125,9 +125,47 @@ export interface PerceptionStats {
   sightings: number;
 }
 
+/**
+ * Anything that can block a sight line without being world geometry (M5).
+ *
+ * `SmokeField` is the only implementation. It is an interface rather than a direct
+ * dependency because `ai/` must not reach into `equipment/`, and because a perception
+ * system that works with no smoke in the world is the one every M3 measurement was taken
+ * against — a null occluder has to stay a legal state.
+ */
+export interface SightOccluder {
+  /** True when the segment is obscured enough that nobody can pick a target through it. */
+  blocksSight(ax: number, ay: number, az: number, bx: number, by: number, bz: number): boolean;
+}
+
+/**
+ * How blind a combatant is right now, 0..1 (M5). Above this, no target is acquired at all.
+ *
+ * Below it the bot still sees but shoots badly — `CombatBehaviour` widens the aim cone by
+ * the same figure — so a partial flash degrades rather than switching the bot off.
+ */
+export const BLIND_SIGHT_THRESHOLD = 0.35;
+
+/** What the flash field looks like from in here. Same reasoning as `SightOccluder`. */
+export interface BlindSource {
+  /** 0 = unaffected, 1 = fully blind. */
+  blindness(entityId: number): number;
+}
+
 export class Perception {
   readonly stats: PerceptionStats = { coneChecks: 0, losRays: 0, sightings: 0 };
   readonly noise = new NoiseField();
+
+  /**
+   * Set by the match once equipment exists. Both default to null and every M3 number was
+   * measured with them null, which is what makes "smoke changed this" a measurable claim
+   * rather than a rewrite.
+   */
+  occluder: SightOccluder | null = null;
+  blindSource: BlindSource | null = null;
+
+  /** Diagnostics: sightings that smoke prevented since the last reset (S7). */
+  smokeBlocked = 0;
 
   private readonly ray: RayHit = makeRayHit();
 
@@ -137,6 +175,7 @@ export class Perception {
     this.stats.coneChecks = 0;
     this.stats.losRays = 0;
     this.stats.sightings = 0;
+    this.smokeBlocked = 0;
   }
 
   /**
@@ -155,6 +194,17 @@ export class Perception {
     const eyeX = self.px;
     const eyeY = self.py + self.eyeHeight;
     const eyeZ = self.pz;
+
+    // A flashed bot does not look for targets at all until the worst of it has passed
+    // (S6.3: "AI blind for 3 s"). It keeps investigating and keeps hearing, which is what
+    // makes a flash a window rather than a kill.
+    const blind = this.blindSource?.blindness(self.entityId) ?? 0;
+    if (blind > BLIND_SIGHT_THRESHOLD) {
+      bb.visibleEnemies = 0;
+      bb.noteNoSighting();
+      this.hear(self, bb, cfg);
+      return;
+    }
 
     const halfCone = Math.cos(cfg.visionConeDeg * 0.5 * DEG2RAD);
     const fx = -Math.sin(self.yaw);
@@ -180,8 +230,9 @@ export class Perception {
       if (flat > cfg.visionRange) continue;
 
       this.stats.coneChecks++;
-      if (flat > cfg.proximityRadius && flat > 1e-4) {
+      if (flat > cfg.proximityRadius && flat > 1e-4 && !other.glinting) {
         // Cone test in the horizontal plane: pitch does not narrow peripheral vision.
+        // A scope glint skips it — noticing one is exactly the thing that makes you turn.
         const dot = (dx * fx + dz * fz) / flat;
         if (dot < halfCone) continue;
       }
@@ -201,6 +252,14 @@ export class Perception {
         hitY = headY - 0.1;
       }
       if (!clear) continue;
+
+      // Smoke is checked after the geometry ray, not instead of it: it is a *second*
+      // occluder over the same segment, and running it first would pay for a volume walk
+      // on every candidate a wall was going to reject anyway (S6.3).
+      if (this.occluder !== null && this.occluder.blocksSight(eyeX, eyeY, eyeZ, aimX, hitY, aimZ)) {
+        this.smokeBlocked++;
+        continue;
+      }
 
       visible++;
       // Nearest wins, with a bonus for the target already being engaged so a bot does

@@ -4,6 +4,7 @@ import type { BotState } from '../ai/BotStates';
 import type { HitZone } from '../combat/HitboxRig';
 import type { GameStateId } from '../GameStates';
 import type { StanceId } from '../player/Stance';
+import type { WeaponSlot } from '../weapons/WeaponDefs';
 import { EventBus } from './EventBus';
 
 /**
@@ -35,6 +36,16 @@ export const EV = {
   WeaponReloadFinished: 'weapon.reloadFinished',
   WeaponAdsChanged: 'weapon.adsChanged',
   WeaponAmmoChanged: 'weapon.ammoChanged',
+  /** M5: the active inventory slot changed hands. Fires at the hand-over, not the request. */
+  WeaponSwapped: 'weapon.swapped',
+
+  // M5: thrown equipment and the things it does to people (S6.3).
+  EquipmentThrown: 'equipment.thrown',
+  EquipmentBounced: 'equipment.bounced',
+  EquipmentArmed: 'equipment.armed',
+  EquipmentExploded: 'equipment.exploded',
+  EquipmentFlashed: 'equipment.flashed',
+  SmokeSpawned: 'equipment.smokeSpawned',
 
   BulletImpact: 'bullet.impact',
   DamageDealt: 'damage.dealt',
@@ -160,6 +171,18 @@ export type GameEvents = {
     tracer: boolean;
     hitTarget: boolean;
     ammoInMag: number;
+    /**
+     * M5. One trigger pull is one event even for a shotgun, so the pellet count and how
+     * many of them connected ride along — a second event per pellet would fire eight muzzle
+     * flashes and eight gunshots for one bang.
+     */
+    pellets: number;
+    pelletsHit: number;
+    /**
+     * False once a suppressor is fitted (S6.2). Carried on the event because only the
+     * shooter's *resolved* def knows, and the minimap has no way to ask.
+     */
+    minimapPing: boolean;
   };
   /**
    * The mechanical vocabulary. Each carries `sourceId` from M3 for the same reason
@@ -172,6 +195,63 @@ export type GameEvents = {
   [EV.WeaponReloadFinished]: { weaponId: string; sourceId: number; mag: number; reserve: number };
   [EV.WeaponAdsChanged]: { weaponId: string; sourceId: number; aiming: boolean };
   [EV.WeaponAmmoChanged]: { weaponId: string; sourceId: number; mag: number; reserve: number };
+  [EV.WeaponSwapped]: { fromId: string; toId: string; sourceId: number; slot: WeaponSlot };
+
+  /**
+   * M5 equipment (S6.3).
+   *
+   * Everything a grenade does to somebody arrives through one of these. The explosion is
+   * `equipment.exploded` plus the ordinary `damage.dealt` for each victim — there is still
+   * exactly one damage door (M3's note), and a grenade is a `WeaponDef`-shaped record like
+   * everything else.
+   */
+  [EV.EquipmentThrown]: {
+    equipmentId: string;
+    sourceId: number;
+    x: number;
+    y: number;
+    z: number;
+    /** Seconds the fuse had already been cooking when it left the hand. */
+    cooked: number;
+  };
+  [EV.EquipmentBounced]: {
+    equipmentId: string;
+    x: number;
+    y: number;
+    z: number;
+    /** Impact speed, m/s — the bounce is louder the harder it lands. */
+    speed: number;
+    material: number;
+    /** True when it stuck rather than bounced (semtex, claymore planting). */
+    stuck: boolean;
+  };
+  /** A claymore finished arming and is now watching its arc. */
+  [EV.EquipmentArmed]: { equipmentId: string; sourceId: number; x: number; y: number; z: number };
+  [EV.EquipmentExploded]: {
+    equipmentId: string;
+    sourceId: number;
+    x: number;
+    y: number;
+    z: number;
+    radius: number;
+    /** How many combatants took damage. */
+    victims: number;
+  };
+  /**
+   * Somebody was flashed. `intensity` is the final 0..1 effect after the angle and
+   * line-of-sight scaling S6.3 asks for, and both inputs are carried so the scaling can be
+   * reported rather than asserted.
+   */
+  [EV.EquipmentFlashed]: {
+    targetId: number;
+    sourceId: number;
+    intensity: number;
+    /** Degrees between the target's facing and the direction to the blast. */
+    angleDeg: number;
+    distance: number;
+    hadLos: boolean;
+  };
+  [EV.SmokeSpawned]: { x: number; y: number; z: number; radius: number; seconds: number };
 
   /** A round terminated on world geometry, or punched through it. */
   [EV.BulletImpact]: {

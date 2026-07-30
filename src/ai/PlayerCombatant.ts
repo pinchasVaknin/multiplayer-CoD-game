@@ -25,6 +25,15 @@ export class PlayerCombatant implements Combatant {
   /** Cleared for the AFK harness, where the human is a spectator. */
   active = true;
 
+  /**
+   * Written once a tick by `Match` from the player's own weapon system.
+   *
+   * A field rather than a getter because `PlayerCombatant` is built before the weapon is —
+   * the weapon needs the damage system, which needs this registered first — and a lazy
+   * back-reference to break that order would be a cycle for one boolean.
+   */
+  glinting = false;
+
   constructor(
     readonly health: Health,
     readonly team: BotTeam,

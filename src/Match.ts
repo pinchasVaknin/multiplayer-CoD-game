@@ -8,7 +8,7 @@ import { makeSpawnChoice, type SpawnChoice } from './ai/SpawnSelector';
 import { DamageSystem, makeDamageRequest, PLAYER_ENTITY_ID, type DamageRequest } from './combat/DamageSystem';
 import { ScoreSystem } from './combat/ScoreSystem';
 import { TargetRange } from './combat/TargetRange';
-import type { GameBus } from './core/Events';
+import { EV, type GameBus } from './core/Events';
 import type { Input } from './core/Input';
 import { Btn, isDown, type InputCommand } from './core/InputCommand';
 import { DT } from './core/Loop';
@@ -18,6 +18,9 @@ import type { CameraConfig } from './player/CameraConfig';
 import { Fx } from './engine/Fx';
 import type { ProceduralAudio } from './engine/ProceduralAudio';
 import { LatencyProbe } from './debug/LatencyProbe';
+import type { EquipmentConfig } from './equipment/EquipmentConfig';
+import { EquipmentSystem } from './equipment/EquipmentSystem';
+import { MatchEquipment } from './MatchEquipment';
 import { MatchFeedback } from './MatchFeedback';
 import type { GameMode } from './modes/GameMode';
 import { MatchFlow } from './modes/MatchFlow';
@@ -71,8 +74,11 @@ export interface MatchDeps {
   readonly player: PlayerController;
   readonly movementConfig: MovementConfig;
   readonly weaponDef: WeaponDef;
+  /** M5: the player's sidearm. Bots do not carry one — see `WeaponSystem`. */
+  readonly secondaryDef: WeaponDef;
   readonly viewmodelConfig: ViewmodelConfig;
   readonly healthConfig: HealthConfig;
+  readonly equipmentConfig: EquipmentConfig;
   readonly uiHost: HTMLElement;
   readonly anisotropy: number;
   /** M4: the map and mode this match is. The director bakes a navmesh from the map def. */
@@ -103,7 +109,10 @@ export class Match {
   readonly range: TargetRange | null;
   readonly fx: Fx;
   readonly weaponAudio: WeaponAudio;
-  readonly model: WeaponModel;
+  /** One per inventory slot; only the active one is visible. */
+  readonly models: WeaponModel[];
+  /** The visible one. Reassigned on a swap. */
+  model: WeaponModel;
   readonly anim: ViewmodelAnim;
   readonly latency = new LatencyProbe();
   readonly playerHealth: Health;
@@ -117,6 +126,8 @@ export class Match {
   readonly ui: MatchHud;
   /** Turns the events a shot produces into what the player sees and hears. */
   readonly feedback: MatchFeedback;
+  /** M5: grenades, smoke, flashes and the bots that throw them. */
+  readonly equipment: MatchEquipment;
 
   /** Interpolated weapon state for this frame. Read by Game for the camera. */
   readonly visual: WeaponSnapshot = {
@@ -127,6 +138,7 @@ export class Match {
     aimPitch: 0,
     aimYaw: 0,
     reloadFraction: 0,
+    swapFraction: 1,
   };
 
   /** Wall time inside the last `flow.simulate`, ms. Reported in F1 (S7). */
@@ -140,6 +152,7 @@ export class Match {
   private readonly listenerAt = { x: 0, y: 0, z: 0 };
 
   private readonly spawnChoice: SpawnChoice = makeSpawnChoice();
+  private swapSubscription: (() => void) | null = null;
 
   private active = false;
   private playerDead = false;
@@ -165,6 +178,7 @@ export class Match {
 
     this.weapons = new WeaponSystem(
       deps.weaponDef,
+      deps.secondaryDef,
       deps.world,
       this.damage,
       deps.bus,
@@ -214,8 +228,19 @@ export class Match {
     this.fx = new Fx(deps.anisotropy);
     deps.scene.add(this.fx.group);
 
-    this.model = buildWeaponModel(deps.anisotropy);
-    deps.viewmodel.add(this.model.root);
+    // One mesh per inventory slot, both built up front and toggled by visibility. Building
+    // on demand would put a geometry merge and a GPU upload on the frame the player presses
+    // the swap key, which is the one frame that must not stutter.
+    this.models = [
+      buildWeaponModel(deps.weaponDef.id, deps.anisotropy),
+      buildWeaponModel(deps.secondaryDef.id, deps.anisotropy),
+    ];
+    for (const model of this.models) {
+      deps.viewmodel.add(model.root);
+      model.root.visible = false;
+    }
+    this.model = this.requireModel(0);
+    this.model.root.visible = true;
     this.fx.attachMuzzle(this.model.muzzle);
     this.anim = new ViewmodelAnim(this.model);
 
@@ -250,6 +275,30 @@ export class Match {
       latency: this.latency,
       onPlayerKilled: () => this.onPlayerKilled(),
       listener: () => this.listenerAt,
+    });
+
+    // The mesh follows the inventory. `weapon.swapped` fires at the hand-over, which is the
+    // exact tick the old weapon has finished going down and the new one starts coming up.
+    this.swapSubscription = deps.bus.on(EV.WeaponSwapped, (p) => {
+      if (p.sourceId !== PLAYER_ENTITY_ID) return;
+      this.showSlot(this.weapons.inventory.activeSlotIndex);
+    });
+
+    // M5. Built after the HUD because it pushes the flash and the threat indicator into it,
+    // and after the director because it hands the smoke field to `Perception` as an occluder.
+    this.equipment = new MatchEquipment({
+      bus: deps.bus,
+      scene: deps.scene,
+      world: deps.world,
+      damage: this.damage,
+      bots: this.bots,
+      audio: deps.audio,
+      cameraRig: deps.cameraRig,
+      hud: this.ui.hud,
+      cfg: deps.equipmentConfig,
+      tiers: deps.tiers,
+      localTeam: PLAYER_TEAM,
+      seed: deps.seed,
     });
 
     // Occlusion low-pass through the same spatial-hash raycaster the sim uses (S6.7).
@@ -317,6 +366,53 @@ export class Match {
     return this.active;
   }
 
+  /** The live player simulation, for tooling that needs a pose and a facing. */
+  get playerSim(): PlayerController['sim'] {
+    return this.deps.player.sim;
+  }
+
+  /** The collision world this match is being played in. */
+  get world(): CollisionWorld {
+    return this.deps.world;
+  }
+
+  /**
+   * Put a different weapon in a slot (M5).
+   *
+   * Rebuilds that slot's mesh, because a weapon is its silhouette as much as its numbers.
+   * Used by the debug weapon picker; M6's loadout editor is the real caller.
+   */
+  equip(slotIndex: number, def: WeaponDef): void {
+    const old = this.models[slotIndex];
+    if (old === undefined) return;
+    const wasVisible = old.root.visible;
+    this.deps.viewmodel.remove(old.root);
+    old.dispose();
+
+    const model = buildWeaponModel(def.id, this.deps.anisotropy);
+    this.models[slotIndex] = model;
+    this.deps.viewmodel.add(model.root);
+    model.root.visible = wasVisible;
+
+    this.weapons.equip(slotIndex, def);
+    if (wasVisible) this.showSlot(slotIndex);
+  }
+
+  private showSlot(slotIndex: number): void {
+    const model = this.models[slotIndex];
+    if (model === undefined) return;
+    for (const m of this.models) m.root.visible = m === model;
+    this.model = model;
+    this.anim.setModel(model);
+    this.fx.attachMuzzle(model.muzzle);
+  }
+
+  private requireModel(index: number): WeaponModel {
+    const model = this.models[index];
+    if (model === undefined) throw new Error(`Match has no viewmodel for slot ${index}`);
+    return model;
+  }
+
   /** Debug hook: run real damage at the player so regeneration is exercised, not faked. */
   applySelfDamage(amount: number): void {
     const def = this.weapons.definition;
@@ -352,7 +448,13 @@ export class Match {
       }
     }
 
+    // The glint an enemy can see is a property of the weapon, and `PlayerCombatant` is
+    // built before the weapon exists — so it is stamped here, once a tick, before
+    // perception runs against it.
+    this.playerCombatant.glinting = !this.playerDead && this.weapons.glinting;
+
     this.range?.step();
+    this.equipment.simulate(cmd, this.deps.player.sim, !this.playerDead);
     this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
     this.stepPlayerRespawn();
     this.stepLowHealthAudio();
@@ -389,6 +491,8 @@ export class Match {
     }
     this.playerHealth.reset();
     this.weapons.reset();
+    // Equipment is per life (S6.3). `MatchEquipment` refills on `player.spawned`, which
+    // `PlayerController.spawn` above has already emitted.
     this.playerCombatant.syncRig();
     this.playerDead = false;
     this.playerRespawnTimer = 0;
@@ -446,6 +550,7 @@ export class Match {
     drive.visualLateral = this.visual.visualLateral;
     drive.tacSprint = sim.tacSprintActive;
     drive.slide = sim.slideActive;
+    drive.swapping = this.weapons.inventory.swapping;
     drive.bobPhase = sim.bobPhase;
     drive.speed = sim.speed;
     drive.speedRef = this.deps.movementConfig.sprintSpeed;
@@ -457,6 +562,7 @@ export class Match {
     this.range?.updateVisuals(alpha, camera);
     this.bots.updateVisuals(alpha, dt);
     this.fx.update(dt);
+    this.equipment.render(alpha, dt, camera);
 
     // A dead player is not holding a rifle.
     this.model.root.visible = !this.playerDead;
@@ -475,8 +581,39 @@ export class Match {
     state.healthMax = this.playerHealth.max;
     state.dead = this.playerDead;
     state.respawnSeconds = this.playerRespawnTimer;
+    this.fillTacticalState();
     this.ui.update(this.flow, sim.x, sim.z, sim.yaw, dt);
     this.feedback.render(camera);
+  }
+
+  /**
+   * The M5 half of the HUD state: which weapons are in hand, what equipment is left, the
+   * scope, and the cook timer. Read straight off the systems that own them.
+   */
+  private fillTacticalState(): void {
+    const tac = this.ui.state.tactical;
+    const inventory = this.weapons.inventory;
+    const def = inventory.active.definition;
+    const otherIndex = inventory.activeSlotIndex === 0 ? 1 : 0;
+
+    tac.weaponName = def.name;
+    tac.slotIndex = inventory.activeSlotIndex;
+    tac.otherName = inventory.at(otherIndex)?.definition.name ?? '';
+
+    const inv = this.equipment.inventory;
+    tac.lethalId = inv.lethal;
+    tac.lethalCount = inv.lethalCount;
+    tac.tacticalId = inv.tactical;
+    tac.tacticalCount = inv.tacticalCount;
+
+    const thrower = this.equipment.thrower;
+    tac.cookRemaining = thrower.remainingFuse(inv);
+    tac.cookTotal = EquipmentSystem.slotDef(inv, thrower.slot).fuseSeconds;
+
+    tac.hasScope = def.scope !== undefined;
+    tac.scopeFraction = tac.hasScope ? this.visual.adsFraction : 0;
+    tac.breath = this.weapons.scope.breath;
+    tac.breathHeld = this.weapons.scope.holding;
   }
 
   /**
@@ -488,6 +625,7 @@ export class Match {
    * as a step in `usedJSHeapSize` at the next match boundary.
    */
   dispose(): void {
+    this.equipment.dispose();
     this.feedback.dispose();
     this.flow.dispose();
     this.score.dispose();
@@ -500,8 +638,13 @@ export class Match {
     }
     this.fx.dispose();
     this.deps.scene.remove(this.fx.group);
-    this.deps.viewmodel.remove(this.model.root);
-    this.model.dispose();
+    this.swapSubscription?.();
+    this.swapSubscription = null;
+    for (const model of this.models) {
+      this.deps.viewmodel.remove(model.root);
+      model.dispose();
+    }
+    this.models.length = 0;
     this.deps.audio.setOccluder(null);
     this.deps.audio.resetMatchState();
   }

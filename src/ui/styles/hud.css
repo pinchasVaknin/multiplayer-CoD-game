@@ -565,3 +565,200 @@
   margin-left: -1px;
   background: var(--c-accent);
 }
+
+/* ---- M5: weapons, equipment, cook timer, threat, flash, scope ---------- */
+
+/*
+ * The weapon plate and the gear counters sit under the ammo readout in the bottom right,
+ * on the same 4px grid. Nothing here is coloured except the accent on the active weapon
+ * and the bad-state red on an empty slot — S4.6's one-accent rule holds.
+ */
+.hud-tac {
+  position: absolute;
+  right: var(--s-6);
+  bottom: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--s-2);
+  pointer-events: none;
+}
+
+.hud-tac__weapons {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.hud-tac__weapon {
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  color: var(--c-text);
+  text-shadow: 0 1px 3px rgba(7, 8, 10, 0.95);
+}
+
+.hud-tac__weapon--alt {
+  font-size: var(--t-micro);
+  font-weight: var(--w-medium);
+  color: var(--c-text-faint);
+}
+
+.hud-tac__gear {
+  display: flex;
+  gap: var(--s-3);
+}
+
+.hud-tac__slot {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-1);
+}
+
+.hud-tac__slot-label {
+  font-size: var(--t-micro);
+  font-weight: var(--w-medium);
+  letter-spacing: var(--track-label);
+  color: var(--c-text-faint);
+}
+
+.hud-tac__slot-count {
+  font-size: var(--t-body);
+  font-weight: var(--w-heavy);
+  color: var(--c-text);
+  min-width: 9px;
+  text-align: right;
+}
+
+.hud-tac__slot-count.is-empty {
+  color: var(--c-text-faint);
+}
+
+/* The cook timer sits just under the crosshair: you watch it while aiming, not in a corner. */
+.hud-cook {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 34px);
+  width: 84px;
+  height: 3px;
+  margin-left: -42px;
+  background: rgba(7, 8, 10, 0.72);
+  opacity: 0;
+  transition: opacity 90ms linear;
+  pointer-events: none;
+}
+
+.hud-cook > i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--c-accent);
+  transform-origin: left center;
+  transform: scaleX(1);
+}
+
+.hud-cook > i.is-critical {
+  background: var(--c-bad);
+}
+
+/* Breath meter for a scoped rifle. Same shape as the cook bar, other side of centre. */
+.hud-breath {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 46px);
+  width: 64px;
+  height: 2px;
+  margin-left: -32px;
+  background: rgba(7, 8, 10, 0.72);
+  opacity: 0;
+  transition: opacity 120ms linear;
+  pointer-events: none;
+}
+
+.hud-breath > i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--c-text-dim);
+  transform-origin: left center;
+}
+
+.hud-breath > i.is-held {
+  background: var(--c-accent);
+}
+
+/*
+ * Grenade indicator. A ring-mounted chevron rotated to the bearing, exactly the way the
+ * directional hit indicator works — one visual language for "something is over there".
+ */
+.hud-threat {
+  position: absolute;
+  inset: 0;
+  transition: opacity 120ms linear;
+  pointer-events: none;
+}
+
+.hud-threat > i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px;
+  transform: translateY(-104px);
+  border-left: 3px solid var(--c-bad);
+  border-top: 3px solid var(--c-bad);
+  rotate: 45deg;
+  filter: drop-shadow(0 0 5px rgba(232, 96, 76, 0.55));
+  animation: hud-threat-pulse 0.45s ease-in-out infinite alternate;
+}
+
+@keyframes hud-threat-pulse {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Flashbang. Pure white over everything, including the rest of the HUD. */
+.hud-flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  pointer-events: none;
+}
+
+/*
+ * Scope. A black tube with a soft inner edge and a thin reticle. The vignette is a radial
+ * gradient rather than a bitmap, so it costs one composited layer and no asset.
+ */
+.hud-scope {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(0, 0, 0, 0) 0,
+    rgba(0, 0, 0, 0) 26vh,
+    rgba(0, 0, 0, 0.92) 30vh,
+    #000 34vh
+  );
+}
+
+.hud-scope__reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 52vh;
+  height: 52vh;
+  margin-left: -26vh;
+  margin-top: -26vh;
+  border-radius: 50%;
+  border: 1px solid rgba(232, 234, 238, 0.16);
+  background:
+    linear-gradient(to right, transparent calc(50% - 0.5px), rgba(232, 234, 238, 0.5) calc(50% - 0.5px), rgba(232, 234, 238, 0.5) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(232, 234, 238, 0.5) calc(50% - 0.5px), rgba(232, 234, 238, 0.5) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+}

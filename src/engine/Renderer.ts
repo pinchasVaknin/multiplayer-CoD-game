@@ -28,7 +28,10 @@ export class Renderer {
     this.three.setClearColor(0x0c0e11, 1);
     this.three.outputColorSpace = THREE.SRGBColorSpace;
     this.three.toneMapping = THREE.ACESFilmicToneMapping;
-    this.three.toneMappingExposure = 1.05;
+    // Raised from 1.05 in M5. ACES rolls the shoulder off hard, and at 1.05 the mid-tones
+    // of a grey-box map — which is nearly all of it — were sitting in the part of the curve
+    // where everything converges on the same dark grey. See the M4 playtest note.
+    this.three.toneMappingExposure = 1.25;
     this.three.shadowMap.enabled = true;
     // PCFSoftShadowMap was deprecated in three r185 and silently falls back to
     // PCFShadowMap with a console warning. Ask for what we actually get; softness

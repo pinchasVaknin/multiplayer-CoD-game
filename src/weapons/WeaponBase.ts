@@ -78,6 +78,14 @@ export class Weapon {
   /** Shots owed to the caller this tick. */
   pendingShots = 0;
 
+  /**
+   * Overrides the raise/lower rate while non-zero, in seconds (M5).
+   *
+   * A swap's put-away and take-out are authored as durations rather than as a rate, and
+   * `Inventory` owns them. Zero means "use `sprintOutTime`", which is every other case.
+   */
+  handlingSeconds = 0;
+
   /** True on the tick the trigger was pulled with an empty magazine. */
   dryFiredThisTick = false;
   /** True on the tick a reload completed; the caller resets the recoil pattern. */
@@ -165,6 +173,23 @@ export class Weapon {
   }
 
   /**
+   * One tick for a weapon that is in the holster (M5).
+   *
+   * It still runs — a holstered weapon is not frozen, it is simply not being aimed — but
+   * it takes no trigger and no reload input, and its `raise` is driven to zero by the
+   * `lowering` flag the caller passes. Without this the secondary's ADS fraction would
+   * still be whatever it was when you swapped off it, and the swap back would start from a
+   * pose the player never left it in.
+   */
+  stepHolstered(input: WeaponInput): void {
+    this.pendingShots = 0;
+    this.dryFiredThisTick = false;
+    this.reloadFinishedThisTick = false;
+    this.stepRaise(true);
+    this.stepAds(input);
+  }
+
+  /**
    * Take one owed shot. Returns false once the tick's shots are spent, so the caller's
    * loop terminates on the weapon's authority rather than its own bookkeeping.
    */
@@ -202,9 +227,14 @@ export class Weapon {
   // -- internals -----------------------------------------------------------
 
   private stepRaise(lowering: boolean): void {
-    const perSecond = 1 / Math.max(this.def.sprintOutTime, 1e-3);
+    const swap = this.handlingSeconds > 0;
+    const seconds = swap ? this.handlingSeconds : this.def.sprintOutTime;
+    const perSecond = 1 / Math.max(seconds, 1e-3);
     if (lowering) {
-      this.raise = moveTowards(this.raise, 0, perSecond * LOWER_SPEED_SCALE * DT);
+      // A sprint drops the weapon faster than it brings it back; a swap's put-away is an
+      // authored duration and must land on it exactly.
+      const scale = swap ? 1 : LOWER_SPEED_SCALE;
+      this.raise = moveTowards(this.raise, 0, perSecond * scale * DT);
     } else {
       this.raise = moveTowards(this.raise, 1, perSecond * DT);
     }

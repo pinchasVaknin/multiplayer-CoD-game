@@ -45,6 +45,8 @@ export interface ShotTrace {
   hitTarget: boolean;
   targetId: number;
   zone: HitZone;
+  /** The torso hit was on the chest rather than the abdomen. */
+  upperTorso: boolean;
   damage: number;
   lethal: boolean;
 
@@ -69,6 +71,7 @@ export function makeShotTrace(): ShotTrace {
     hitTarget: false,
     targetId: -1,
     zone: 'torso',
+    upperTorso: false,
     damage: 0,
     lethal: false,
     surfacesPenetrated: 0,
@@ -120,6 +123,7 @@ export class Ballistics {
     out.hitTarget = false;
     out.targetId = -1;
     out.zone = 'torso';
+    out.upperTorso = false;
     out.damage = 0;
     out.lethal = false;
     out.surfacesPenetrated = 0;
@@ -152,12 +156,14 @@ export class Ballistics {
         out.hitTarget = true;
         out.targetId = targetId;
         out.zone = this.bestRig.zone;
+        out.upperTorso = this.bestRig.upper;
         out.nx = this.bestRig.nx;
         out.ny = this.bestRig.ny;
         out.nz = this.bestRig.nz;
 
         request.targetId = targetId;
         request.zone = this.bestRig.zone;
+        request.upperTorso = this.bestRig.upper;
         request.distance = total;
         request.penetrationRetain = out.penetrationRetain;
         request.x = out.endX;
@@ -270,6 +276,7 @@ export class Ballistics {
       this.bestRig.t = this.rigHit.t;
       this.bestRig.zone = this.rigHit.zone;
       this.bestRig.boxIndex = this.rigHit.boxIndex;
+      this.bestRig.upper = this.rigHit.upper;
       this.bestRig.nx = this.rigHit.nx;
       this.bestRig.ny = this.rigHit.ny;
       this.bestRig.nz = this.rigHit.nz;

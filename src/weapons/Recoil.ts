@@ -40,10 +40,19 @@ export interface AimSample {
   dz: number;
   /** The cone half-angle actually used, degrees. Drives the crosshair. */
   spreadDeg: number;
+  /**
+   * The tangent-space offset that produced `d`, in the view's right/up basis.
+   *
+   * Kept so a shotgun's pellets can be laid out *around* the aim point the spread cone
+   * already chose, rather than each pellet re-rolling the whole cone — which would turn
+   * eight rays into eight independent shots and lose the pattern entirely.
+   */
+  ax: number;
+  ay: number;
 }
 
 export function makeAimSample(): AimSample {
-  return { dx: 0, dy: 0, dz: -1, spreadDeg: 0 };
+  return { dx: 0, dy: 0, dz: -1, spreadDeg: 0, ax: 0, ay: 0 };
 }
 
 export class Recoil {
@@ -182,40 +191,97 @@ export class Recoil {
     rng: Rng,
     out: AimSample,
   ): void {
-    const cp = Math.cos(pitch);
-    const sp = Math.sin(pitch);
-    const sy = Math.sin(yaw);
-    const cy = Math.cos(yaw);
-
-    // Forward for this project's convention: yaw 0 looks down -Z.
-    let fx = -sy * cp;
-    let fy = sp;
-    let fz = -cy * cp;
-
-    out.spreadDeg = spreadDeg;
+    let ax = 0;
+    let ay = 0;
     if (spreadDeg > 1e-5) {
       const radius = Math.sqrt(rng.float()) * spreadDeg * DEG2RAD;
       const angle = rng.float() * TAU;
-      const ax = Math.tan(Math.cos(angle) * radius);
-      const ay = Math.tan(Math.sin(angle) * radius);
-
-      // Horizontal right, and the up vector that completes the view basis.
-      const rx = cy;
-      const rz = -sy;
-      const ux = -sy * -sp;
-      const uy = cp;
-      const uz = -cy * -sp;
-
-      fx += rx * ax + ux * ay;
-      fy += uy * ay;
-      fz += rz * ax + uz * ay;
+      ax = Math.tan(Math.cos(angle) * radius);
+      ay = Math.tan(Math.sin(angle) * radius);
     }
-
-    const inv = 1 / Math.hypot(fx, fy, fz);
-    out.dx = fx * inv;
-    out.dy = fy * inv;
-    out.dz = fz * inv;
+    out.spreadDeg = spreadDeg;
+    aimWithOffset(yaw, pitch, ax, ay, out);
   }
+}
+
+/**
+ * Build a direction from view angles plus a tangent-space offset.
+ *
+ * Split out of `sampleAim` in M5 so the pellet loop can reuse the same basis: a shotgun
+ * lays its pellets out deterministically around the point the spread cone chose, and doing
+ * that meant the "offset a view direction" half had to stop being private to the random
+ * half.
+ */
+export function aimWithOffset(
+  yaw: number,
+  pitch: number,
+  ax: number,
+  ay: number,
+  out: AimSample,
+): void {
+  const cp = Math.cos(pitch);
+  const sp = Math.sin(pitch);
+  const sy = Math.sin(yaw);
+  const cy = Math.cos(yaw);
+
+  // Forward for this project's convention: yaw 0 looks down -Z.
+  let fx = -sy * cp;
+  let fy = sp;
+  let fz = -cy * cp;
+
+  if (ax !== 0 || ay !== 0) {
+    // Horizontal right, and the up vector that completes the view basis.
+    const rx = cy;
+    const rz = -sy;
+    const ux = -sy * -sp;
+    const uy = cp;
+    const uz = -cy * -sp;
+
+    fx += rx * ax + ux * ay;
+    fy += uy * ay;
+    fz += rz * ax + uz * ay;
+  }
+
+  const inv = 1 / Math.hypot(fx, fy, fz);
+  out.dx = fx * inv;
+  out.dy = fy * inv;
+  out.dz = fz * inv;
+  out.ax = ax;
+  out.ay = ay;
+}
+
+/**
+ * Where pellet `index` of `count` sits inside the pellet cone, in tangent space.
+ *
+ * A sunflower lattice — golden-angle spiral, area-uniform radius — with the whole pattern
+ * rotated at random per shot. Independently rolling eight random offsets clumps: roughly
+ * one shot in five puts five of its eight pellets in the same quadrant, and the weapon
+ * reads as broken rather than as spread. The lattice keeps the *shape* consistent so the
+ * player can learn what six metres looks like, and the rotation keeps two shots from being
+ * identical.
+ *
+ * Pellet 0 is always dead centre, which is the same contract every other weapon makes: the
+ * round you aimed goes where you aimed.
+ */
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+export function pelletOffset(
+  index: number,
+  count: number,
+  spreadDeg: number,
+  rotation: number,
+  radiusJitter: number,
+  out: { ax: number; ay: number },
+): void {
+  if (index <= 0 || count <= 1 || spreadDeg <= 0) {
+    out.ax = 0;
+    out.ay = 0;
+    return;
+  }
+  const radius = Math.sqrt(index / (count - 1)) * spreadDeg * DEG2RAD * radiusJitter;
+  const angle = rotation + index * GOLDEN_ANGLE;
+  out.ax = Math.tan(Math.cos(angle) * radius);
+  out.ay = Math.tan(Math.sin(angle) * radius);
 }
 
 /**

@@ -5,22 +5,35 @@
  * a circular import.
  */
 
-export type GameStateId = 'BOOT' | 'MENU' | 'LOADOUT' | 'MATCH' | 'SUMMARY';
+export type GameStateId = 'BOOT' | 'MENU' | 'LOADOUT' | 'MATCH' | 'PAUSED' | 'SUMMARY';
 
-export const GAME_STATES: readonly GameStateId[] = ['BOOT', 'MENU', 'LOADOUT', 'MATCH', 'SUMMARY'];
+export const GAME_STATES: readonly GameStateId[] = [
+  'BOOT',
+  'MENU',
+  'LOADOUT',
+  'MATCH',
+  'PAUSED',
+  'SUMMARY',
+];
 
 /**
  * BOOT -> MENU -> LOADOUT -> MATCH -> SUMMARY, plus the back-edges that a real
- * front end needs. M1 only ever walks BOOT -> MENU -> MATCH -> MENU; LOADOUT and
- * SUMMARY are declared here because the shape is fixed, but they have no state
- * handler registered yet and `Game.transitionTo` will refuse to enter them with a
- * loud error rather than silently doing nothing. See PLAN.md.
+ * front end needs. M1 only ever walked BOOT -> MENU -> MATCH -> MENU; LOADOUT is
+ * declared here because the shape is fixed, but it has no state handler registered
+ * yet and `Game.transitionTo` will refuse to enter it with a loud error rather than
+ * silently doing nothing. See PLAN.md.
+ *
+ * **PAUSED is new in M5** and is the fix for the M4 playtest note that Esc quit the match
+ * outright. It sits beside MATCH rather than replacing it: the world stays built, the
+ * simulation stops advancing, and MATCH is re-entered on resume — which is why the edge
+ * runs both ways and why PAUSED can also leave to MENU (quit) but never to SUMMARY.
  */
 const LEGAL_TRANSITIONS: Readonly<Record<GameStateId, readonly GameStateId[]>> = {
   BOOT: ['MENU'],
   MENU: ['LOADOUT', 'MATCH'],
   LOADOUT: ['MENU', 'MATCH'],
-  MATCH: ['SUMMARY', 'MENU'],
+  MATCH: ['SUMMARY', 'MENU', 'PAUSED'],
+  PAUSED: ['MATCH', 'MENU'],
   SUMMARY: ['MENU', 'LOADOUT'],
 };
 

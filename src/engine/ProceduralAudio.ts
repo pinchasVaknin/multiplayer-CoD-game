@@ -337,6 +337,35 @@ export class ProceduralAudio extends AudioGraph {
     this.oscHit(beat, 0.155);
   }
 
+  /**
+   * The ring after a flashbang (M5, S6.3).
+   *
+   * A long, quiet, very high sine on the `ui` bus, non-positional. It is inside the head
+   * like the heartbeat, and for the same reason it must not be routed through the world:
+   * the flash installs a low-pass on everything *else*, and a ring behind that low-pass
+   * would be the one sound the effect made inaudible.
+   */
+  playRing(intensity: number): void {
+    if (!this.hasContext) return;
+    const t = Math.max(0, Math.min(1, intensity));
+    const spec = this.oscScratch;
+    spec.x = 0;
+    spec.y = 0;
+    spec.z = 0;
+    spec.positional = false;
+    spec.bus = 'ui';
+    spec.type = 'sine';
+    spec.freq = 4200;
+    spec.freqEnd = 3100;
+    spec.level = 0.1 + 0.16 * t;
+    spec.attack = 0.02;
+    spec.decay = 1.2 + 2.4 * t;
+    spec.wet = 0;
+    spec.filterFreq = 12000;
+    spec.filterQ = 0.7;
+    this.oscHit(spec);
+  }
+
   /** Short sine sweep. The UI vocabulary (S6.7). */
   playUiSweep(from: number, to: number, level: number, decay: number): void {
     const spec = this.oscScratch;

@@ -136,6 +136,9 @@ export class Bot implements Combatant, PathClient {
     this.controller = new PlayerController(deps.movement, deps.world, deps.bus, spec.entityId);
     this.weapons = new WeaponSystem(
       deps.weaponDef,
+      // No secondary: nothing in `ai/` swaps weapons, and a holstered pistol a bot will
+      // never draw is a second magazine to keep in sync for nothing.
+      null,
       deps.world,
       deps.damage,
       deps.bus,
@@ -184,6 +187,9 @@ export class Bot implements Combatant, PathClient {
   }
   get participating(): boolean {
     return this.alive;
+  }
+  get glinting(): boolean {
+    return this.weapons.glinting;
   }
 
   // -- PathClient -----------------------------------------------------------

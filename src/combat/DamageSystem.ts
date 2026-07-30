@@ -35,6 +35,13 @@ export interface DamageRequest {
   sourceId: number;
   targetId: number;
   zone: HitZone;
+  /**
+   * The torso hit landed on the chest rather than the abdomen (M5).
+   *
+   * Only consulted for `zone === 'torso'`, and only meaningful for a weapon whose
+   * `upperTorsoMult` is not 1 — which is the two snipers and nothing else.
+   */
+  upperTorso: boolean;
   weapon: WeaponDef;
   /** Metres from muzzle to impact, along the whole traced path. */
   distance: number;
@@ -50,6 +57,7 @@ export interface LastHitReport {
   valid: boolean;
   targetName: string;
   zone: HitZone;
+  upperTorso: boolean;
   distance: number;
   baseDamage: number;
   zoneMultiplier: number;
@@ -72,6 +80,7 @@ export function makeDamageRequest(weapon: WeaponDef): DamageRequest {
     sourceId: PLAYER_ENTITY_ID,
     targetId: -1,
     zone: 'torso',
+    upperTorso: false,
     weapon,
     distance: 0,
     penetrationRetain: 1,
@@ -98,13 +107,19 @@ const evDamage = {
 
 const evKilled = { targetId: 0, sourceId: 0, weaponId: '', zone: 'torso' as HitZone };
 
-/** Damage multiplier for a zone, taken from the weapon rather than the rig. */
-export function zoneMultiplier(def: WeaponDef, zone: HitZone): number {
+/**
+ * Damage multiplier for a zone, taken from the weapon rather than the rig.
+ *
+ * `upperTorso` splits the torso in two from M5. A weapon with `upperTorsoMult === 1` — every
+ * weapon but the two snipers — is unaffected, which is what keeps M2's verified numbers
+ * verified.
+ */
+export function zoneMultiplier(def: WeaponDef, zone: HitZone, upperTorso: boolean): number {
   switch (zone) {
     case 'head':
       return def.headshotMult;
     case 'torso':
-      return 1;
+      return upperTorso ? def.upperTorsoMult : 1;
     case 'arm':
     case 'leg':
       return def.limbMult;
@@ -124,6 +139,7 @@ export class DamageSystem {
     valid: false,
     targetName: '',
     zone: 'torso',
+    upperTorso: false,
     distance: 0,
     baseDamage: 0,
     zoneMultiplier: 1,
@@ -191,7 +207,7 @@ export class DamageSystem {
 
     const def = req.weapon;
     const base = damageAtRange(def, req.distance);
-    const mult = zoneMultiplier(def, req.zone);
+    const mult = zoneMultiplier(def, req.zone, req.upperTorso);
     const beforePenetration = base * mult;
     const retain = clamp01(req.penetrationRetain);
     const amount = beforePenetration * retain;
@@ -202,6 +218,7 @@ export class DamageSystem {
     report.valid = true;
     report.targetName = target.displayName;
     report.zone = req.zone;
+    report.upperTorso = req.upperTorso;
     report.distance = req.distance;
     report.baseDamage = base;
     report.zoneMultiplier = mult;

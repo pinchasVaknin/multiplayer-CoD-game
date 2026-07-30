@@ -3,6 +3,7 @@ import type { GameEvents } from '../core/Events';
 import { clamp01, DEG2RAD, RAD2DEG } from '../core/MathUtil';
 import type { MapDef } from '../world/maps/types';
 import { HudBanner, makeBannerState, type BannerState } from './HudBanner';
+import { HudTactical, makeTacticalState, type TacticalState } from './HudTactical';
 import { KillfeedView } from './Killfeed';
 import { Minimap } from './Minimap';
 
@@ -73,6 +74,8 @@ export interface HudState {
   playerYaw: number;
   /** M4: the score banner and the round clock. */
   banner: BannerState;
+  /** M5: weapons, equipment, the flash, the grenade indicator and the scope. */
+  tactical: TacticalState;
 }
 
 export function makeHudState(): HudState {
@@ -94,6 +97,7 @@ export function makeHudState(): HudState {
     playerZ: 0,
     playerYaw: 0,
     banner: makeBannerState(),
+    tactical: makeTacticalState(),
   };
 }
 
@@ -130,6 +134,7 @@ export class Hud {
   readonly banner = new HudBanner();
   readonly feed = new KillfeedView();
   readonly minimap: Minimap;
+  readonly tactical = new HudTactical();
 
   private readonly root: HTMLElement;
   private readonly crosshair: HTMLElement;
@@ -171,6 +176,13 @@ export class Hud {
   private lastCrossOpacity = -1;
   private lowAmmo = false;
   private reloadShown = false;
+
+  // ---- M5: pushed from the sim rather than pulled through `HudState` -------
+  private flashIntensity = 0;
+  private threatActive = false;
+  private threatX = 0;
+  private threatY = 0;
+  private threatZ = 0;
 
   constructor(deps: HudDeps) {
     this.minimap = new Minimap(deps.mapDef, deps.maxFriendlies);
@@ -273,6 +285,10 @@ export class Hud {
       this.feed.element,
       this.minimap.element,
     );
+
+    // ---- M5. The scope tube goes in first so everything else draws over it, and the
+    // flash white-out goes in last so it covers the lot — being flashed hides the HUD.
+    this.root.append(...this.tactical.layers);
 
     deps.host.appendChild(this.root);
   }
@@ -377,7 +393,39 @@ export class Hud {
     this.banner.update(state.banner);
     this.feed.update(dt);
     this.minimap.update(state.playerX, state.playerZ, state.playerYaw, dt);
+    this.tactical.update(state.tactical, state.playerX, state.playerZ, state.playerYaw);
     this.lastUpdateMs = performance.now() - t0;
+  }
+
+  /**
+   * The flashbang white-out, 0..1 (M5, S6.3).
+   *
+   * Pushed rather than pulled through `HudState` because it is driven from the sim by
+   * `MatchEquipment` on the tick the flash lands, and a state field would delay it by a
+   * frame — on an effect whose entire job is to be instant.
+   */
+  setFlash(intensity: number): void {
+    this.flashIntensity = intensity;
+  }
+
+  /** Where the nearest live enemy grenade is, or nothing (S6.3). */
+  setThreat(active: boolean, x: number, y: number, z: number): void {
+    this.threatActive = active;
+    this.threatX = x;
+    this.threatY = y;
+    this.threatZ = z;
+  }
+
+  /** Read back by `MatchHud` when it composes the tactical state each frame. */
+  get pendingFlash(): number {
+    return this.flashIntensity;
+  }
+
+  readThreat(out: { active: boolean; x: number; y: number; z: number }): void {
+    out.active = this.threatActive;
+    out.x = this.threatX;
+    out.y = this.threatY;
+    out.z = this.threatZ;
   }
 
   /** Wipe every per-match trace. Called on teardown so a second match starts clean. */
@@ -386,10 +434,13 @@ export class Hud {
     this.feed.clear();
     this.minimap.clearPings();
     this.banner.reset();
+    this.tactical.reset();
     this.lowHealth = 0;
     this.lastLowVignette = -1;
     this.lowVignette.style.opacity = '0';
     this.lastHitLatencyMs = -1;
+    this.flashIntensity = 0;
+    this.threatActive = false;
   }
 
   dispose(): void {

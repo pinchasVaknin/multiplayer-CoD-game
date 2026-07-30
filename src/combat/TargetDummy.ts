@@ -59,6 +59,23 @@ export class TargetDummy implements Damageable {
   lastZone: HitZone = 'torso';
   lastDistance = 0;
 
+  /**
+   * Time-to-kill, measured on the dummy rather than calculated (M5, S7).
+   *
+   * The brief asks for a range where the balance table "can be measured rather than
+   * calculated", and this is the measuring instrument: ticks from the first round that
+   * lands on a full-health target to the one that drops it, plus how many rounds that
+   * took. It counts sim ticks, so the figure cannot vary with frame rate.
+   *
+   * `lastTtkSeconds` is -1 until a kill has been recorded, and survives the respawn so the
+   * board still shows what you did after the target comes back.
+   */
+  lastTtkSeconds = -1;
+  lastShotsToKill = 0;
+  private ttkTicks = 0;
+  private ttkShots = 0;
+  private ttkRunning = false;
+
   private readonly spec: DummySpec;
   private readonly body: THREE.Mesh;
   private readonly head: THREE.Mesh;
@@ -67,6 +84,18 @@ export class TargetDummy implements Damageable {
   private readonly labelCtx: CanvasRenderingContext2D;
   private readonly labelTexture: THREE.CanvasTexture;
   private readonly disposables: Array<{ dispose(): void }> = [];
+
+  /**
+   * The dummy's base position.
+   *
+   * Seeded from the spec and mutable from M5, because `ArsenalHarness` measures the same
+   * target at four ranges and a spec-fixed position meant every cell of the balance table
+   * was measured at whatever distance the spec happened to put it — which is exactly the
+   * bug the first run of the table produced.
+   */
+  private baseX: number;
+  private baseY: number;
+  private baseZ: number;
 
   private phase = 0;
   private respawnTimer = 0;
@@ -94,6 +123,9 @@ export class TargetDummy implements Damageable {
     this.entityId = spec.id;
     this.displayName = spec.name;
     this.health = new Health(healthConfig);
+    this.baseX = spec.x;
+    this.baseY = spec.y;
+    this.baseZ = spec.z;
 
     this.body = new THREE.Mesh(buildZoneGeometry(['torso', 'arm', 'leg']), materials.body);
     this.head = new THREE.Mesh(buildZoneGeometry(['head']), materials.head);
@@ -140,17 +172,54 @@ export class TargetDummy implements Damageable {
     return this.spec.behaviour;
   }
 
-  /** True when the target is standing and shootable. */
-  get exposed(): boolean {
-    return this.health.alive && this.currY > this.spec.y - POPUP_DEPTH * 0.75;
+  /**
+   * Move the target. Snaps: there is no interpolation across a teleport, and pretending
+   * otherwise would draw a dummy sliding across the map between balance-table cells.
+   */
+  setPosition(x: number, y: number, z: number): void {
+    this.baseX = x;
+    this.baseY = y;
+    this.baseZ = z;
+    this.strafeOffset = 0;
+    this.currX = x;
+    this.currY = y;
+    this.currZ = z;
+    this.prevX = x;
+    this.prevY = y;
+    this.prevZ = z;
+    this.group.position.set(x, y, z);
+    this.rig.setTransform(x, y, z, this.spec.yaw);
   }
 
-  /** Record a hit for the printed read-out. The damage itself came from DamageSystem. */
+  /** True when the target is standing and shootable. */
+  get exposed(): boolean {
+    return this.health.alive && this.currY > this.baseY - POPUP_DEPTH * 0.75;
+  }
+
+  /**
+   * Record a hit for the printed read-out. The damage itself came from `DamageSystem`.
+   *
+   * The TTK clock starts on the first round that lands while the target is at full health,
+   * which is the definition every balance table in this genre uses: shots into a target
+   * that is already regenerating are a different measurement.
+   */
   noteHit(amount: number, zone: HitZone, distance: number): void {
     this.lastDamage = amount;
     this.lastZone = zone;
     this.lastDistance = distance;
     this.totalDamage += amount;
+
+    if (!this.ttkRunning) {
+      this.ttkRunning = true;
+      this.ttkTicks = 0;
+      this.ttkShots = 0;
+    }
+    this.ttkShots++;
+    if (!this.health.alive) {
+      this.ttkRunning = false;
+      this.lastTtkSeconds = this.ttkTicks * DT;
+      this.lastShotsToKill = this.ttkShots;
+    }
     this.labelDirty = true;
   }
 
@@ -159,6 +228,11 @@ export class TargetDummy implements Damageable {
     this.totalDamage = 0;
     this.lastDamage = 0;
     this.respawnTimer = 0;
+    // The clock resets with the target, but the *result* is kept: the board's whole job is
+    // to still be showing what you did after the dummy stands back up.
+    this.ttkRunning = false;
+    this.ttkTicks = 0;
+    this.ttkShots = 0;
     this.labelDirty = true;
   }
 
@@ -169,6 +243,14 @@ export class TargetDummy implements Damageable {
     this.prevZ = this.currZ;
 
     this.health.step();
+
+    // The TTK clock counts sim ticks, so the figure cannot vary with frame rate (S4.1).
+    if (this.ttkRunning) {
+      this.ttkTicks++;
+      // Health back to full without a kill means the burst failed; stop the clock rather
+      // than letting the next shot inherit a stale start time.
+      if (this.health.current >= this.health.max) this.ttkRunning = false;
+    }
 
     if (!this.health.alive) {
       this.respawnTimer += DT;
@@ -183,9 +265,9 @@ export class TargetDummy implements Damageable {
     }
 
     const spec = this.spec;
-    let x = spec.x;
-    let y = spec.y;
-    let z = spec.z;
+    let x = this.baseX;
+    let y = this.baseY;
+    let z = this.baseZ;
 
     switch (spec.behaviour) {
       case 'static':
@@ -201,7 +283,7 @@ export class TargetDummy implements Damageable {
             ? smoothstep(0, POPUP_TRANSITION, this.phase)
             : 1 - smoothstep(up, up + POPUP_TRANSITION, this.phase)
           : 0;
-        y = spec.y - POPUP_DEPTH * (1 - clamp01(raised));
+        y = this.baseY - POPUP_DEPTH * (1 - clamp01(raised));
         break;
       }
       case 'strafe': {
@@ -216,8 +298,8 @@ export class TargetDummy implements Damageable {
           this.strafeDir = 1;
         }
         // The path is fixed in world space along the target's own right vector.
-        x = spec.x + Math.cos(spec.yaw) * this.strafeOffset;
-        z = spec.z - Math.sin(spec.yaw) * this.strafeOffset;
+        x = this.baseX + Math.cos(spec.yaw) * this.strafeOffset;
+        z = this.baseZ - Math.sin(spec.yaw) * this.strafeOffset;
         break;
       }
     }
@@ -285,6 +367,11 @@ export class TargetDummy implements Damageable {
       ctx.fillStyle = '#9aa1ad';
       ctx.font = `500 15px ${family}`;
       ctx.fillText(`TOTAL ${this.totalDamage.toFixed(1)}`, 12, 82);
+      if (this.lastTtkSeconds >= 0) {
+        ctx.fillStyle = '#ffb340';
+        ctx.font = `800 15px ${family}`;
+        ctx.fillText(`TTK ${this.lastTtkSeconds.toFixed(3)}s / ${this.lastShotsToKill}`, 108, 82);
+      }
     } else {
       ctx.fillStyle = this.lastZone === 'head' ? '#ffb340' : '#e8eaee';
       ctx.font = `800 34px ${family}`;
@@ -303,7 +390,11 @@ export class TargetDummy implements Damageable {
       ctx.fillText(`HP ${Math.round(this.health.current)}`, 12, 82);
       ctx.fillStyle = '#626a77';
       ctx.font = `500 13px ${family}`;
-      ctx.fillText(`TOTAL ${this.totalDamage.toFixed(1)}`, 92, 82);
+      if (this.lastTtkSeconds >= 0) {
+        ctx.fillText(`TTK ${this.lastTtkSeconds.toFixed(3)}s / ${this.lastShotsToKill}`, 92, 82);
+      } else {
+        ctx.fillText(`TOTAL ${this.totalDamage.toFixed(1)}`, 92, 82);
+      }
     }
 
     this.labelTexture.needsUpdate = true;

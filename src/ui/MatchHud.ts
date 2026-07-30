@@ -102,6 +102,16 @@ export class MatchHud {
     banner.phaseSeconds = flow.phaseSecondsRemaining;
     banner.phaseLabel = phaseLabel(flow);
 
+    // The flash and the threat are pushed into the HUD from the sim tick they happen on;
+    // fold them into the state here so `HudTactical` still sees one record per frame.
+    const tac = state.tactical;
+    tac.flash = this.hud.pendingFlash;
+    this.hud.readThreat(threatScratch);
+    tac.threatActive = threatScratch.active;
+    tac.threatX = threatScratch.x;
+    tac.threatY = threatScratch.y;
+    tac.threatZ = threatScratch.z;
+
     this.fillFriendlies();
     this.hud.update(state, dt);
     this.scoreboard.update(dt, this.deps.score);
@@ -187,9 +197,15 @@ export class MatchHud {
      * already drawn as a chevron and pinging them too turns the map into noise. This is the
      * one piece of information the minimap gives you about the enemy in M4 — the UAV that
      * shows them outright is M7.
+     *
+     * **M5: `minimapPing` is what a suppressor buys.** The flag rides on the event rather
+     * than being looked up from the weapon id, because the shooter's *resolved* def is the
+     * only thing that knows whether a can is fitted, and the resolved def lives inside
+     * their `WeaponSystem`.
      */
     this.unsubscribe.push(
       bus.on(EV.WeaponFired, (p) => {
+        if (!p.minimapPing) return;
         const shooter = this.findRoster(p.sourceId);
         if (shooter === undefined || shooter.team === this.deps.localTeam) return;
         this.hud.minimap.addPing(p.x, p.z);
@@ -204,6 +220,8 @@ export class MatchHud {
     return undefined;
   }
 }
+
+const threatScratch = { active: false, x: 0, y: 0, z: 0 };
 
 function phaseLabel(flow: MatchFlow): string {
   switch (flow.currentPhase) {

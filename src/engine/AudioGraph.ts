@@ -78,6 +78,14 @@ const OPEN_CUTOFF = 20000;
  */
 const MUFFLED_CUTOFF = 620;
 
+/**
+ * How far past the low-health muffle a full flashbang is allowed to push the same filter.
+ *
+ * 1.2 puts the cutoff at ~330 Hz, which is below anything the health state reaches — being
+ * flashed has to sound worse than being nearly dead or the effect reads as a bug.
+ */
+const FLASH_MUFFLE_OVERDRIVE = 1.2;
+
 /** How far the world is pulled down under an announcer sting, and how fast. */
 const DUCK_FLOOR = 0.34;
 const DUCK_ATTACK = 0.04;
@@ -101,7 +109,10 @@ export class AudioGraph {
   /** World low-pass, for the low-health muffle. Also bypassed by `ui`. */
   private worldFilter: BiquadFilterNode | null = null;
   private duckUntil = 0;
+  /** The applied value: the larger of the two contributions below. */
   private muffle = 0;
+  private healthMuffle = 0;
+  private flashMuffle = 0;
 
   private pool: ObjectPool<Voice> | null = null;
   private readonly active: Voice[] = [];
@@ -299,18 +310,37 @@ export class AudioGraph {
    * so the change is audible across the whole range rather than only near the top.
    */
   setMuffle(amount: number): void {
-    const filter = this.worldFilter;
-    const ctx = this.ctx;
-    if (filter === null || ctx === null) return;
-    const clamped = Math.max(0, Math.min(1, amount));
-    if (Math.abs(clamped - this.muffle) < 0.01) return;
-    this.muffle = clamped;
-    const cutoff = OPEN_CUTOFF * Math.pow(MUFFLED_CUTOFF / OPEN_CUTOFF, clamped);
-    filter.frequency.setTargetAtTime(cutoff, ctx.currentTime, 0.12);
+    this.healthMuffle = Math.max(0, Math.min(1, amount));
+    this.applyMuffle();
+  }
+
+  /**
+   * The flashbang's low-pass (M5, S6.3).
+   *
+   * A second contributor to the same filter rather than a second filter: two low-passes in
+   * series would compound into a cutoff neither of them asked for, and the two effects are
+   * genuinely "how muffled is the world", not two independent things. The larger wins, and
+   * a flash is allowed past 1 so it can reach a cutoff the low-health state never does —
+   * being flashed sounds worse than being nearly dead, which is right.
+   */
+  setFlashMuffle(amount: number): void {
+    this.flashMuffle = Math.max(0, Math.min(1, amount)) * FLASH_MUFFLE_OVERDRIVE;
+    this.applyMuffle();
   }
 
   get muffleAmount(): number {
     return this.muffle;
+  }
+
+  private applyMuffle(): void {
+    const filter = this.worldFilter;
+    const ctx = this.ctx;
+    if (filter === null || ctx === null) return;
+    const combined = Math.max(this.healthMuffle, this.flashMuffle);
+    if (Math.abs(combined - this.muffle) < 0.01) return;
+    this.muffle = combined;
+    const cutoff = OPEN_CUTOFF * Math.pow(MUFFLED_CUTOFF / OPEN_CUTOFF, combined);
+    filter.frequency.setTargetAtTime(cutoff, ctx.currentTime, 0.12);
   }
 
   /** Update the listener each frame from the camera. `forward` and `up` are unit. */
@@ -495,6 +525,8 @@ export class AudioGraph {
     const ctx = this.ctx;
     this.duckUntil = 0;
     this.muffle = 0;
+    this.healthMuffle = 0;
+    this.flashMuffle = 0;
     if (ctx === null) return;
     const now = ctx.currentTime;
     this.duckGain?.gain.cancelScheduledValues(now);

@@ -38,4 +38,12 @@ export interface Combatant extends Damageable {
   readonly quiet: boolean;
   /** False while dead or waiting to respawn. */
   readonly participating: boolean;
+  /**
+   * Holding a scope up with the objective lens catching the light (M5, S6.1).
+   *
+   * Perception treats a glint as a free contact: it bypasses the vision cone, because the
+   * whole point of a glint is that it is what makes you turn round. It does not bypass
+   * line of sight — you cannot see a glint through a wall.
+   */
+  readonly glinting: boolean;
 }

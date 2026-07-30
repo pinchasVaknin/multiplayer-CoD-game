@@ -448,12 +448,25 @@ export const FOUNDRY_MAP: MapDef = {
   ],
   props: [...ALL_PROPS, ...lightStrips()],
   spawns: spawns(),
+  /**
+   * Lighting, brightened in M5 from the M4 playtest note that Foundry was too dark.
+   *
+   * The problem was not the key light — it was the *fill*. A hemisphere at 0.78 with a
+   * near-black ground colour means anything facing away from the sun is lit by almost
+   * nothing, and on a map whose interesting spaces are all indoors that is most of it. The
+   * hemisphere is now 1.35 with a ground colour lifted out of the mud, so a wall in shadow
+   * still reads as a surface; the key came up a little to keep the contrast ratio, and the
+   * two ladles came up because a hall competing with brighter fill needs to.
+   *
+   * The fog also mattered more than it looked: `fogNear` at 38 m on a 62 m map was greying
+   * out the far half of every lane. Pushed back to 55.
+   */
   lights: [
-    { kind: 'hemisphere', skyColor: 0x8ea3bd, groundColor: 0x2b2420, intensity: 0.78 },
+    { kind: 'hemisphere', skyColor: 0x9db4d0, groundColor: 0x4a4038, intensity: 1.35 },
     {
       kind: 'directional',
-      color: 0xffd9b0,
-      intensity: 2.0,
+      color: 0xffe3c2,
+      intensity: 2.35,
       direction: { x: 0.38, y: -0.82, z: 0.42 },
       castShadow: true,
       // The ortho frustum is fitted to navBounds' centre, so this has to clear its half
@@ -462,15 +475,15 @@ export const FOUNDRY_MAP: MapDef = {
     },
     // The two ladles, lighting the hall from inside. No shadows: they exist to say the
     // centre of the map is a different place, not to double the shadow cost.
-    { kind: 'point', color: 0xff9a4a, intensity: 16, position: { x: -3.2, y: 2.6, z: -4.6 }, distance: 15, decay: 2 },
-    { kind: 'point', color: 0xff9a4a, intensity: 16, position: { x: 3.2, y: 2.6, z: 4.6 }, distance: 15, decay: 2 },
+    { kind: 'point', color: 0xffa860, intensity: 26, position: { x: -3.2, y: 2.6, z: -4.6 }, distance: 18, decay: 2 },
+    { kind: 'point', color: 0xffa860, intensity: 26, position: { x: 3.2, y: 2.6, z: 4.6 }, distance: 18, decay: 2 },
   ],
   ambient: {
-    skyColor: 0x8ea3bd,
-    groundColor: 0x2b2420,
-    fogColor: 0x191b21,
-    fogNear: 38,
-    fogFar: 130,
+    skyColor: 0x9db4d0,
+    groundColor: 0x4a4038,
+    fogColor: 0x272b33,
+    fogNear: 55,
+    fogFar: 150,
   },
 
   coverPoints: coverPoints(ALL_PROPS),

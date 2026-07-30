@@ -1,14 +1,17 @@
 import { makeDamageRequest, PLAYER_ENTITY_ID, type DamageRequest, type DamageSystem } from '../combat/DamageSystem';
+import type { HitZone } from '../combat/HitboxRig';
 import { EV, type GameBus } from '../core/Events';
 import { Btn, isDown, justPressed, type InputCommand } from '../core/InputCommand';
-import { clamp01, DEG2RAD, lerp } from '../core/MathUtil';
+import { clamp01, DEG2RAD, lerp, TAU } from '../core/MathUtil';
 import { Rng } from '../core/Rng';
 import type { PlayerSim } from '../player/PlayerState';
 import type { CollisionWorld } from '../world/CollisionWorld';
 import { Ballistics, makeShotTrace, type ShotTrace } from './Ballistics';
-import { makeAimSample, Recoil, type AimSample, type SpreadContext } from './Recoil';
+import { Inventory } from './Inventory';
+import { aimWithOffset, makeAimSample, pelletOffset, Recoil, type AimSample, type SpreadContext } from './Recoil';
+import { ScopeState } from './Scope';
 import type { ViewmodelConfig } from './ViewmodelConfig';
-import { makeWeaponInput, Weapon, type WeaponInput } from './WeaponBase';
+import { makeWeaponInput, type Weapon, type WeaponInput } from './WeaponBase';
 import type { WeaponDef } from './WeaponDefs';
 
 /**
@@ -23,6 +26,10 @@ import type { WeaponDef } from './WeaponDefs';
  * The one thing that leaves this class other than an event is the **view residual**: the
  * unrecovered part of each recoil kick, which has to reach the same place mouse movement
  * does. See `takeViewResidual`.
+ *
+ * M5 added three things and no new weapon classes: an `Inventory` of two slots with a swap
+ * between them, a pellet loop for the shotgun, and a `ScopeState` for the snipers. All three
+ * are driven from fields on the `WeaponDef`.
  */
 
 export interface WeaponSnapshot {
@@ -33,6 +40,8 @@ export interface WeaponSnapshot {
   aimPitch: number;
   aimYaw: number;
   reloadFraction: number;
+  /** 0 = holstered / mid-swap, 1 = the active weapon is the one being drawn. */
+  swapFraction: number;
 }
 
 function makeSnapshot(): WeaponSnapshot {
@@ -44,6 +53,7 @@ function makeSnapshot(): WeaponSnapshot {
     aimPitch: 0,
     aimYaw: 0,
     reloadFraction: 0,
+    swapFraction: 1,
   };
 }
 
@@ -61,6 +71,9 @@ export type MuzzleStyle = 'viewmodel' | 'world';
 const WORLD_MUZZLE_FORWARD = 0.44;
 const WORLD_MUZZLE_RIGHT = 0.16;
 const WORLD_MUZZLE_DOWN = 0.16;
+
+/** Ceiling on the pellet bookkeeping the debug panel reads back. */
+const MAX_PELLETS = 16;
 
 const evFired = {
   weaponId: '',
@@ -80,16 +93,38 @@ const evFired = {
   tracer: false,
   hitTarget: false,
   ammoInMag: 0,
+  pellets: 1,
+  pelletsHit: 0,
+  minimapPing: true,
 };
 
+/** Per-pellet record for the S8.5 read-out. Fixed length, written in place. */
+export interface PelletReport {
+  count: number;
+  hits: number;
+  damage: number;
+  readonly zones: HitZone[];
+  readonly targets: number[];
+}
+
 export class WeaponSystem {
-  readonly weapon: Weapon;
+  readonly inventory: Inventory;
   readonly recoil = new Recoil();
+  readonly scope = new ScopeState();
   readonly ballistics: Ballistics;
   readonly trace: ShotTrace = makeShotTrace();
 
   readonly prev: WeaponSnapshot = makeSnapshot();
   readonly curr: WeaponSnapshot = makeSnapshot();
+
+  /** The last trigger pull broken down by pellet (S8.5). */
+  readonly lastPellets: PelletReport = {
+    count: 0,
+    hits: 0,
+    damage: 0,
+    zones: new Array<HitZone>(MAX_PELLETS).fill('torso'),
+    targets: new Array<number>(MAX_PELLETS).fill(-1),
+  };
 
   /** Degrees of view change owed to the player's actual aim. Consumed once per tick. */
   private residualYaw = 0;
@@ -100,7 +135,10 @@ export class WeaponSystem {
 
   private readonly rng = new Rng(0x51e5_0b0a);
   private readonly input: WeaponInput = makeWeaponInput();
+  private readonly idleInput: WeaponInput = makeWeaponInput();
   private readonly aim: AimSample = makeAimSample();
+  private readonly pelletAim: AimSample = makeAimSample();
+  private readonly pelletOff = { ax: 0, ay: 0 };
   private readonly spreadCtx: SpreadContext = {
     moveFraction: 0,
     adsFraction: 0,
@@ -117,9 +155,13 @@ export class WeaponSystem {
    * sprint-to-fire, reloads, falloff, penetration — is shared, which is the point: a bot
    * that fired by calling `Ballistics` directly would be a bot that ignores every balance
    * number in the def.
+   *
+   * `secondary` is null for a bot. Nothing in `ai/` swaps weapons, and giving a bot a
+   * holstered pistol it will never draw is a second magazine to keep in sync for nothing.
    */
   constructor(
     def: WeaponDef,
+    secondary: WeaponDef | null,
     world: CollisionWorld,
     damage: DamageSystem,
     private readonly bus: GameBus,
@@ -128,20 +170,43 @@ export class WeaponSystem {
     readonly sourceId: number = PLAYER_ENTITY_ID,
     private readonly muzzleStyle: MuzzleStyle = 'viewmodel',
   ) {
-    this.weapon = new Weapon(def, bus, sourceId);
+    this.inventory = new Inventory(def, secondary, bus, sourceId);
     this.ballistics = new Ballistics(world, damage, bus);
     this.request = makeDamageRequest(def);
     this.request.sourceId = sourceId;
+    this.idleInput.lowering = true;
+  }
+
+  /** The weapon actually in the player's hands. */
+  get weapon(): Weapon {
+    return this.inventory.active;
   }
 
   get definition(): WeaponDef {
-    return this.weapon.definition;
+    return this.inventory.active.definition;
   }
 
-  /** Live retune from the debug panel. */
+  /** Live retune from the debug panel. Applies to the active slot. */
   setDefinition(def: WeaponDef): void {
-    this.weapon.setDefinition(def);
-    this.request.weapon = def;
+    this.inventory.retuneSlot(this.inventory.activeSlotIndex, def);
+  }
+
+  /** Put a different weapon in a slot: 0 primary, 1 secondary. */
+  equip(slotIndex: number, def: WeaponDef): void {
+    this.inventory.setSlot(slotIndex, def);
+    this.recoil.reset();
+    this.scope.reset();
+  }
+
+  /** Whether an enemy can currently see this shooter's scope glint (S6.1). */
+  get glinting(): boolean {
+    return ScopeState.glinting(this.definition, this.inventory.active.adsFraction);
+  }
+
+  /** Whether a laser dot is currently painted for enemies to see (S6.2). */
+  get laserVisible(): boolean {
+    const def = this.definition;
+    return def.laserVisible && this.inventory.active.adsFraction > 0.4;
   }
 
   /** Deterministic replay: the spread cone is seeded, never `Math.random` (S6.2). */
@@ -150,12 +215,16 @@ export class WeaponSystem {
   }
 
   reset(): void {
-    this.weapon.resetAmmo();
+    this.inventory.reset();
     this.recoil.reset();
+    this.scope.reset();
     this.residualYaw = 0;
     this.residualPitch = 0;
     this.prevButtons = 0;
     this.tracerCounter = 0;
+    this.lastPellets.count = 0;
+    this.lastPellets.hits = 0;
+    this.lastPellets.damage = 0;
     this.writeSnapshot(this.curr);
     this.writeSnapshot(this.prev);
   }
@@ -183,21 +252,33 @@ export class WeaponSystem {
     copySnapshot(this.curr, this.prev);
 
     const buttons = cmd.buttons;
-    const wi = this.input;
-    wi.fireHeld = isDown(buttons, Btn.Fire);
-    wi.firePressed = justPressed(buttons, this.prevButtons, Btn.Fire);
-    wi.adsHeld = isDown(buttons, Btn.Ads);
-    wi.reloadPressed = justPressed(buttons, this.prevButtons, Btn.Reload);
-    // Anything that puts the weapon out of the fight lowers it. Slides and mantles are
-    // included because a gun cannot be aimed through either.
-    wi.lowering = sim.sprintActive || sim.tacSprintActive || sim.slideActive || sim.mantleActive;
+    const prevButtons = this.prevButtons;
     this.prevButtons = buttons;
 
-    const weapon = this.weapon;
+    // The swap machine runs first so the weapon that steps below is the right one.
+    if (justPressed(buttons, prevButtons, Btn.SwapWeapon)) this.inventory.requestToggle();
+    if (justPressed(buttons, prevButtons, Btn.Slot1)) this.inventory.requestSwap(0);
+    if (justPressed(buttons, prevButtons, Btn.Slot2)) this.inventory.requestSwap(1);
+    const swapLower = this.inventory.step();
+
+    const wi = this.input;
+    wi.fireHeld = isDown(buttons, Btn.Fire);
+    wi.firePressed = justPressed(buttons, prevButtons, Btn.Fire);
+    wi.adsHeld = isDown(buttons, Btn.Ads);
+    wi.reloadPressed = justPressed(buttons, prevButtons, Btn.Reload);
+    // Anything that puts the weapon out of the fight lowers it. A slide no longer does:
+    // M4 playtesting called firing mid-slide missing, and it is — the cost is now a spread
+    // penalty in `SpreadContext` rather than a weapon you cannot use.
+    wi.lowering = sim.sprintActive || sim.tacSprintActive || sim.mantleActive || swapLower;
+
+    const weapon = this.inventory.active;
     const def = weapon.definition;
 
     weapon.step(wi);
+    this.inventory.stepIdle(weapon, this.idleInput);
     this.recoil.step(def);
+    // Hold-breath is Shift (S6.1), which is the sprint bit — see HOLD_BREATH_BIT.
+    this.scope.step(def, weapon.adsFraction, isDown(buttons, Btn.Sprint));
 
     // Releasing the trigger restarts the pattern; so does finishing a reload. Both are
     // "the player let go", and both are what make the pattern learnable rather than a
@@ -206,8 +287,8 @@ export class WeaponSystem {
 
     this.spreadCtx.moveFraction = clamp01(sim.speed / Math.max(this.walkSpeed, 0.1));
     this.spreadCtx.adsFraction = weapon.adsFraction;
-    this.spreadCtx.crouched = sim.stance === 'CROUCH' || sim.stance === 'SLIDE';
-    this.spreadCtx.airborne = !sim.grounded;
+    this.spreadCtx.crouched = sim.stance === 'CROUCH';
+    this.spreadCtx.airborne = !sim.grounded || sim.slideActive;
     this.spreadDeg = this.recoil.spreadDegrees(def, this.spreadCtx);
 
     while (weapon.pendingShots > 0) {
@@ -229,19 +310,21 @@ export class WeaponSystem {
     out.aimPitch = lerp(a.aimPitch, b.aimPitch, alpha);
     out.aimYaw = lerp(a.aimYaw, b.aimYaw, alpha);
     out.reloadFraction = lerp(a.reloadFraction, b.reloadFraction, alpha);
+    out.swapFraction = lerp(a.swapFraction, b.swapFraction, alpha);
   }
 
   // -- internals -------------------------------------------------------------
 
   private fireOne(cmd: InputCommand, sim: PlayerSim, def: WeaponDef): void {
     const recoil = this.recoil;
-    const ads = this.weapon.adsFraction;
+    const ads = this.inventory.active.adsFraction;
 
     // The shot uses the aim as it stands *before* this shot's kick: the first round out
     // of a rested weapon is dead on the crosshair, which is the contract every shooter
-    // makes with the player.
-    const yaw = cmd.yaw + recoil.aimYaw * DEG2RAD;
-    const pitch = cmd.pitch + recoil.aimPitch * DEG2RAD;
+    // makes with the player. Scope sway is part of where you are aiming, so it is in here
+    // and not a camera-only effect.
+    const yaw = cmd.yaw + (recoil.aimYaw + this.scope.swayYaw) * DEG2RAD;
+    const pitch = cmd.pitch + (recoil.aimPitch + this.scope.swayPitch) * DEG2RAD;
     recoil.sampleAim(yaw, pitch, this.spreadDeg, this.rng, this.aim);
 
     // Rounds leave the eye, not the barrel: a shot that originated at the viewmodel's
@@ -250,7 +333,61 @@ export class WeaponSystem {
     const eyeY = sim.y + sim.eyeHeight;
     const eyeZ = sim.z;
 
-    this.ballistics.fire(eyeX, eyeY, eyeZ, this.aim.dx, this.aim.dy, this.aim.dz, def, this.request, this.trace);
+    this.request.weapon = def;
+    const pellets = Math.max(1, Math.min(MAX_PELLETS, Math.round(def.pellets)));
+    const report = this.lastPellets;
+    report.count = pellets;
+    report.hits = 0;
+    report.damage = 0;
+
+    // Pellet 0 is the aim sample itself; the rest are laid out around it. The whole
+    // pattern is rotated per pull so two shots are never identical.
+    const rotation = this.rng.float() * TAU;
+    let anyHit = false;
+    for (let i = 0; i < pellets; i++) {
+      let dx = this.aim.dx;
+      let dy = this.aim.dy;
+      let dz = this.aim.dz;
+      if (i > 0) {
+        pelletOffset(i, pellets, def.pelletSpread, rotation, this.rng.range(0.86, 1.08), this.pelletOff);
+        aimWithOffset(
+          yaw,
+          pitch,
+          this.aim.ax + this.pelletOff.ax,
+          this.aim.ay + this.pelletOff.ay,
+          this.pelletAim,
+        );
+        dx = this.pelletAim.dx;
+        dy = this.pelletAim.dy;
+        dz = this.pelletAim.dz;
+      }
+
+      this.ballistics.fire(eyeX, eyeY, eyeZ, dx, dy, dz, def, this.request, this.trace);
+
+      if (this.trace.hitTarget) {
+        anyHit = true;
+        report.hits++;
+        report.damage += this.trace.damage;
+        report.zones[i] = this.trace.zone;
+        report.targets[i] = this.trace.targetId;
+      } else {
+        report.zones[i] = 'torso';
+        report.targets[i] = -1;
+      }
+
+      // The event carries the *first* pellet's terminus, which is the one the tracer and
+      // the impact report belong to. Every pellet already emitted its own `bullet.impact`
+      // from inside `Ballistics`, so the decals and debris are per pellet either way.
+      if (i === 0) {
+        evFired.endX = this.trace.endX;
+        evFired.endY = this.trace.endY;
+        evFired.endZ = this.trace.endZ;
+        evFired.distance = this.trace.distance;
+        evFired.dx = dx;
+        evFired.dy = dy;
+        evFired.dz = dz;
+      }
+    }
 
     const shotIndex = recoil.shotIndex;
     recoil.onShot(def, ads);
@@ -262,8 +399,8 @@ export class WeaponSystem {
     // Roughly one round in three draws a tracer (S6.5), counted rather than diced so the
     // spacing is even instead of clumping.
     this.tracerCounter++;
-    const every = Math.max(1, Math.round(1 / Math.max(def.tracerFraction, 0.01)));
-    const tracer = this.tracerCounter % every === 0;
+    const every = def.tracerFraction <= 0 ? 0 : Math.max(1, Math.round(1 / def.tracerFraction));
+    const tracer = every > 0 && this.tracerCounter % every === 0;
 
     const muzzle = this.muzzleWorld(cmd, sim);
     evFired.weaponId = def.id;
@@ -271,18 +408,14 @@ export class WeaponSystem {
     evFired.x = muzzle.x;
     evFired.y = muzzle.y;
     evFired.z = muzzle.z;
-    evFired.dx = this.aim.dx;
-    evFired.dy = this.aim.dy;
-    evFired.dz = this.aim.dz;
-    evFired.endX = this.trace.endX;
-    evFired.endY = this.trace.endY;
-    evFired.endZ = this.trace.endZ;
-    evFired.distance = this.trace.distance;
     evFired.shotIndex = shotIndex;
     evFired.spreadDeg = this.spreadDeg;
     evFired.tracer = tracer;
-    evFired.hitTarget = this.trace.hitTarget;
-    evFired.ammoInMag = this.weapon.mag;
+    evFired.hitTarget = anyHit;
+    evFired.ammoInMag = this.inventory.active.mag;
+    evFired.pellets = pellets;
+    evFired.pelletsHit = report.hits;
+    evFired.minimapPing = def.minimapPing;
     this.bus.emit(EV.WeaponFired, evFired);
   }
 
@@ -295,7 +428,7 @@ export class WeaponSystem {
    */
   private muzzleWorld(cmd: InputCommand, sim: PlayerSim): { x: number; y: number; z: number } {
     const cfg = this.viewmodelConfig;
-    const ads = clamp01(this.weapon.adsFraction);
+    const ads = clamp01(this.inventory.active.adsFraction);
     const yaw = cmd.yaw;
     const pitch = cmd.pitch;
     const cp = Math.cos(pitch);
@@ -324,13 +457,17 @@ export class WeaponSystem {
   }
 
   private writeSnapshot(out: WeaponSnapshot): void {
-    out.raise = this.weapon.raise;
-    out.adsFraction = this.weapon.adsFraction;
+    const weapon = this.inventory.active;
+    out.raise = weapon.raise;
+    out.adsFraction = weapon.adsFraction;
     out.visualPunch = this.recoil.visualPunch;
     out.visualLateral = this.recoil.visualLateral;
-    out.aimPitch = this.recoil.aimPitch;
-    out.aimYaw = this.recoil.aimYaw;
-    out.reloadFraction = this.weapon.reloadFraction;
+    // Scope sway rides in the same channel as recoil so the camera, the shot and the debug
+    // read-out cannot disagree about where the player is aiming.
+    out.aimPitch = this.recoil.aimPitch + this.scope.swayPitch;
+    out.aimYaw = this.recoil.aimYaw + this.scope.swayYaw;
+    out.reloadFraction = weapon.reloadFraction;
+    out.swapFraction = this.inventory.swapping ? 0 : 1;
   }
 }
 
@@ -344,4 +481,5 @@ function copySnapshot(src: WeaponSnapshot, dst: WeaponSnapshot): void {
   dst.aimPitch = src.aimPitch;
   dst.aimYaw = src.aimYaw;
   dst.reloadFraction = src.reloadFraction;
+  dst.swapFraction = src.swapFraction;
 }

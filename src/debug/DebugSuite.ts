@@ -15,9 +15,13 @@ import type { PlayerController } from '../player/PlayerController';
 import type { ViewmodelConfig } from '../weapons/ViewmodelConfig';
 import type { WeaponDef } from '../weapons/WeaponDefs';
 import type { LoadedMap } from '../world/MapLoader';
+import type { EquipmentConfig } from '../equipment/EquipmentConfig';
 import { AiDebug } from './AiDebug';
 import { AiPanel } from './AiPanel';
+import { ArsenalHarness } from './ArsenalHarness';
+import { ArsenalPanel } from './ArsenalPanel';
 import { CollisionDebug } from './CollisionDebug';
+import { EquipmentPanel } from './EquipmentPanel';
 import { DebugOverlay } from './DebugOverlay';
 import type { FrameStats } from './FrameStats';
 import { HitboxDebug } from './HitboxDebug';
@@ -59,6 +63,7 @@ export interface DebugSuiteContext {
   readonly weaponDef: WeaponDef;
   readonly viewmodelConfig: ViewmodelConfig;
   readonly healthConfig: HealthConfig;
+  readonly equipmentConfig: EquipmentConfig;
   readonly tiers: TierTable;
   readonly perceptionConfig: PerceptionConfig;
   readonly schedulerConfig: SchedulerConfig;
@@ -78,6 +83,10 @@ export class DebugSuite {
   readonly modePanel: ModePanel;
   readonly weaponDebug: WeaponDebug;
   readonly weaponHarness: WeaponHarness;
+  /** M5: the arsenal picker, the attachment resolver's read-out and the balance table. */
+  readonly arsenalPanel: ArsenalPanel;
+  readonly arsenalHarness: ArsenalHarness;
+  readonly equipmentPanel: EquipmentPanel;
 
   private readonly scene: THREE.Scene;
 
@@ -145,6 +154,18 @@ export class DebugSuite {
       ctx.bus,
       ctx.onWeaponConfigChanged,
     );
+
+    this.arsenalHarness = new ArsenalHarness(ctx.movementConfig, ctx.healthConfig, ctx.viewmodelConfig);
+    this.arsenalPanel = new ArsenalPanel(
+      this.overlay,
+      ctx.match,
+      this.arsenalHarness,
+      ctx.weaponDef,
+      ctx.onWeaponConfigChanged,
+    );
+
+    this.equipmentPanel = new EquipmentPanel(this.overlay, ctx.match, ctx.equipmentConfig);
+    ctx.scene.add(this.equipmentPanel.group);
   }
 
   /** Per-tick: the collision visualisation follows the player. */
@@ -157,6 +178,7 @@ export class DebugSuite {
     this.hitboxDebug.update();
     this.aiDebug.update(dt);
     this.aiPanel.updateLabels(camera, alpha);
+    this.equipmentPanel.update();
   }
 
   /** Called once per rendered frame, last, so the overlay measures a finished frame. */
@@ -169,6 +191,10 @@ export class DebugSuite {
    * a step in `usedJSHeapSize` at the next match boundary.
    */
   dispose(): void {
+    this.scene.remove(this.equipmentPanel.group);
+    this.equipmentPanel.dispose();
+    this.arsenalPanel.dispose();
+    this.arsenalHarness.dispose();
     this.weaponDebug.dispose();
     this.modePanel.dispose();
     this.aiPanel.dispose();

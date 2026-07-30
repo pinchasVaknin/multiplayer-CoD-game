@@ -407,6 +407,9 @@ export class WeaponHarness {
     player.spawn(0, 0.2, -60, FACE_EAST);
     const weapons = new WeaponSystem(
       cloneWeaponDef(this.def),
+      // No secondary: every measurement here is about one weapon, and a holstered pistol
+      // would be a second magazine the harness has to keep out of its own numbers.
+      null,
       this.world,
       this.damage,
       this.bus,
