@@ -1,3 +1,6 @@
+Please read the bottom of PLAN.md very carefully. You have a critical refactor and some hotfixes to do BEFORE starting the M7 spec.
+
+
 # OPERATOR — PLAN
 
 Browser arena FPS, eight milestones. This file is the running record of what exists,
@@ -1975,6 +1978,23 @@ getters, and moving it is a ~30-call-site refactor of the hot path that deserves
 rather than the end of a milestone. **That is the M7 job, and it should be done first.**
 `Match.ts` is 796. Twenty-five files are over S3's ~400-line guidance.
 `public/verify/*.js` still ship in a production build — now seven files.
+
+### Critical Hotfixes (Action Required IMMEDIATELY after the Game.ts Refactor)
+**Global Loadout Bug:** Selecting a weapon in Create-a-Class currently equips it on all bots in the match. 
+Bots must retain their own independent, randomized (or tier-based) weapon loadouts. 
+Fix the combatant instantiation so loadouts are strictly isolated per-actor.
+**ADS Visibility & Opaque Sights:** The SMG sight/optic is rendering opaque, blocking the target entirely. 
+The pistol viewmodel is still sitting too high and obscuring the target. 
+Fix the optic material transparency/clipping and adjust the pistol's `adsY`/`adsZ` again for clear line-of-sight.
+
+### M6 Playtest Feedback (To be implemented DURING M7)
+**Shooting Range Overhaul:** 
+  1. Force all weapons and attachments to be temporarily UNLOCKED when in the Shooting Range mode.
+  2. Add a new "Infinite Health" dummy specifically for continuous DPS testing without it dying.
+  3. Add a dedicated spread-testing wall/target that clearly retains bullet decals for accuracy testing.
+  4. Expand the greybox room into a proper firing range layout (lanes, moving/falling targets, infinite DPS dummy area).
+**Weapon-Aware Bot AI:** Bots currently do not adjust their playstyle to their weapon. 
+Update `CombatBehaviour` so bots actively try to close the distance if holding a Shotgun/SMG, or maintain distance if holding a Sniper/AR.
 
 ## What is playable right now
 
