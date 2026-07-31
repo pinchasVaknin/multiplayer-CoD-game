@@ -174,6 +174,10 @@ export class MatchFlow {
    */
   simulate(tickIndex: number): void {
     this.tick = tickIndex;
+    // The score's assist window is measured in ticks, and this is the one place in the
+    // project that knows the tick and already owns the score (S4.1: gameplay timers never
+    // touch the wall clock).
+    this.deps.score.setTick(tickIndex);
     this.phaseTicks++;
 
     switch (this.phase) {

@@ -44,6 +44,16 @@ export function healthConfigToSource(cfg: HealthConfig): string {
 
 export class Health {
   current: number;
+  /**
+   * Absorbed before `current` and never regenerated (M6, the ARMOUR PLATE field upgrade).
+   *
+   * A separate pool rather than a raised `max`: regeneration must not refill a plate, and
+   * the low-health vignette and heartbeat are driven off `fraction`, which should describe
+   * *your* health rather than the armour in front of it. Zero for everybody who never
+   * calls `grantOverhealth`, which is every bot and every target dummy — so every M2-M5
+   * measurement still describes the same class.
+   */
+  overhealth = 0;
   /** Seconds since the last damage. Starts high so a fresh entity is not "recovering". */
   sinceDamage = 999;
   alive = true;
@@ -76,9 +86,28 @@ export class Health {
 
   reset(): void {
     this.current = this.cfg.max;
+    this.overhealth = 0;
     this.sinceDamage = 999;
     this.alive = true;
     this.changedThisTick = false;
+    this.lastDelta = 0;
+  }
+
+  /** Restore to full without clearing the damage timer's meaning. */
+  healFull(): void {
+    if (!this.alive) return;
+    const before = this.current;
+    this.current = this.cfg.max;
+    if (this.current === before) return;
+    this.changedThisTick = true;
+    this.lastDelta = this.current - before;
+  }
+
+  /** Add to the absorbing pool. Not capped by `max`; it is not health. */
+  grantOverhealth(amount: number): void {
+    if (!this.alive || amount <= 0) return;
+    this.overhealth += amount;
+    this.changedThisTick = true;
     this.lastDelta = 0;
   }
 
@@ -88,8 +117,20 @@ export class Health {
    */
   applyDamage(amount: number): boolean {
     if (!this.alive || amount <= 0) return false;
+    let incoming = amount;
+    if (this.overhealth > 0) {
+      const absorbed = Math.min(this.overhealth, incoming);
+      this.overhealth -= absorbed;
+      incoming -= absorbed;
+      this.sinceDamage = 0;
+      this.changedThisTick = true;
+      if (incoming <= 0) {
+        this.lastDelta = 0;
+        return false;
+      }
+    }
     const before = this.current;
-    this.current = Math.max(0, this.current - amount);
+    this.current = Math.max(0, this.current - incoming);
     this.sinceDamage = 0;
     this.changedThisTick = true;
     this.lastDelta = this.current - before;

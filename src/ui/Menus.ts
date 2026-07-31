@@ -1,6 +1,7 @@
 import type { GameModeId } from '../modes/GameMode';
 import { MAPS, MODES } from '../modes/ModeRegistry';
 
+
 /**
  * The front end (brief S6.7): main -> play -> match.
  *
@@ -22,8 +23,14 @@ export interface MenuDeps {
   readonly host: HTMLElement;
   readonly selection: MenuSelection;
   readonly onLaunch: () => void;
+  /** M6: enter the `LOADOUT` state. */
+  readonly onLoadout: () => void;
+  /** M6: wipe the profile. The confirmation is this file's, the wipe is `Profile`'s. */
+  readonly onResetProgress: () => void;
   /** Shown under the title: build stats, or whatever the caller wants to say. */
   readonly statusLine: () => string;
+  /** M6: level, class and record. Redrawn every time the menu is shown. */
+  readonly profileLine: () => string;
 }
 
 type Page = 'MAIN' | 'PLAY';
@@ -38,9 +45,11 @@ const KEY_HELP: readonly Readonly<[string, string]>[] = [
   ['Left mouse', 'Fire'],
   ['Right mouse', 'Aim down sights'],
   ['R', 'Reload'],
+  ['Q / 1 / 2', 'Swap weapon'],
+  ['G / F', 'Lethal / tactical'],
+  ['X', 'Field upgrade'],
   ['Tab', 'Scoreboard'],
-  ['Esc', 'Release cursor'],
-  ['F1 / F2 / F4', 'Debug / collision / AI'],
+  ['Esc', 'Pause'],
 ];
 
 /**
@@ -54,6 +63,8 @@ export class Menus {
   private readonly deps: MenuDeps;
   private readonly screen: HTMLElement;
   private page: Page = 'MAIN';
+  /** Whether the reset button is one click from doing it. Cleared on every `show`. */
+  private resetArmed = false;
 
   constructor(deps: MenuDeps) {
     this.deps = deps;
@@ -72,6 +83,7 @@ export class Menus {
   /** Open the front end at its main page. */
   show(): void {
     this.page = 'MAIN';
+    this.resetArmed = false;
     this.screen.hidden = false;
     this.paint();
   }
@@ -102,6 +114,8 @@ export class Menus {
     });
     play.classList.add('op-btn--primary');
 
+    const loadout = this.button('Create a class', () => this.deps.onLoadout());
+
     const keys = document.createElement('dl');
     keys.className = 'op-keys';
     for (const [combo, action] of KEY_HELP) {
@@ -112,14 +126,56 @@ export class Menus {
       keys.append(dt, dd);
     }
 
+    const profile = document.createElement('p');
+    profile.className = 'op-screen__sub op-accent';
+    profile.textContent = this.deps.profileLine();
+
     this.screen.replaceChildren(
       title('OPERATOR'),
       subtitle(this.deps.statusLine()),
+      profile,
       play,
+      loadout,
       keys,
       subtitle(FULLSCREEN_HINT),
+      this.resetControl(),
     );
     play.focus();
+  }
+
+  /**
+   * "Reset progress", behind a confirmation (S6.6).
+   *
+   * A two-step button rather than a `window.confirm`: the page owns pointer lock and a
+   * native modal steals focus in a way the input layer then has to recover from. The
+   * second press has to be a deliberate second click, and clicking anything else — or
+   * re-entering the menu — puts it back.
+   */
+  private resetControl(): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'op-danger';
+    const button = this.button(
+      this.resetArmed ? 'Confirm — erase all progress' : 'Reset progress',
+      () => {
+        if (!this.resetArmed) {
+          this.resetArmed = true;
+          this.paint();
+          return;
+        }
+        this.resetArmed = false;
+        this.deps.onResetProgress();
+        this.paint();
+      },
+    );
+    button.classList.add(this.resetArmed ? 'op-btn--danger' : 'op-btn--quiet');
+    wrap.appendChild(button);
+    if (this.resetArmed) {
+      const warn = document.createElement('span');
+      warn.className = 'op-label';
+      warn.textContent = 'LEVEL, UNLOCKS, CAMOS AND CLASSES. SETTINGS ARE KEPT.';
+      wrap.appendChild(warn);
+    }
+    return wrap;
   }
 
   private paintPlay(): void {
@@ -133,14 +189,20 @@ export class Menus {
       },
     );
 
+    // A mode may pin its map — the Shooting Range only exists where the dummies are. The
+    // picker still shows the map so the player knows where they are going; it simply
+    // cannot be changed, which is more informative than hiding the column.
+    const forced = MODES.find((m) => m.id === this.deps.selection.modeId)?.forcedMapId ?? null;
     const mapList = this.picker(
       'Map',
       MAPS.map((m) => ({ id: m.id, name: m.name, blurb: m.blurb })),
-      this.deps.selection.mapId,
+      forced ?? this.deps.selection.mapId,
       (id) => {
+        if (forced !== null) return;
         this.deps.selection.mapId = id;
         this.paint();
       },
+      forced !== null,
     );
 
     const launch = this.button('Start match', () => this.deps.onLaunch());
@@ -170,13 +232,15 @@ export class Menus {
     entries: readonly Readonly<{ id: string; name: string; blurb: string }>[],
     selected: string,
     onPick: (id: string) => void,
+    locked = false,
   ): HTMLElement {
     const wrap = document.createElement('div');
     wrap.className = 'op-picker';
+    wrap.classList.toggle('is-locked', locked);
 
     const heading = document.createElement('span');
     heading.className = 'op-label';
-    heading.textContent = label;
+    heading.textContent = locked ? `${label} — fixed by this mode` : label;
     wrap.appendChild(heading);
 
     for (const entry of entries) {
@@ -184,6 +248,7 @@ export class Menus {
       option.type = 'button';
       option.className = 'op-option';
       option.classList.toggle('op-option--on', entry.id === selected);
+      option.disabled = locked && entry.id !== selected;
       option.setAttribute('aria-pressed', entry.id === selected ? 'true' : 'false');
 
       const name = document.createElement('span');

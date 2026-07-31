@@ -161,9 +161,20 @@ export class DebugOverlay {
 
     const header = document.createElement('div');
     header.className = 'dbg-header';
-    header.innerHTML =
-      '<span class="dbg-header__title">OPERATOR · DEBUG</span>' +
-      '<span class="dbg-header__hint op-label">F1 close · F2 collision · F3 reset stats</span>';
+    const headTitle = document.createElement('span');
+    headTitle.className = 'dbg-header__title';
+    headTitle.textContent = 'OPERATOR · DEBUG';
+    const headHint = document.createElement('span');
+    headHint.className = 'dbg-header__hint op-label';
+    headHint.textContent = 'F2 collision · F3 reset stats · Esc close';
+    // The M5 playtest asked for an explicit way out that is not a function key.
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'dbg-close';
+    close.setAttribute('aria-label', 'Close the debug overlay');
+    close.textContent = '×';
+    close.addEventListener('click', () => this.setVisible(false));
+    header.append(headTitle, headHint, close);
     this.root.appendChild(header);
 
     const columns = document.createElement('div');
@@ -480,11 +491,26 @@ export class DebugOverlay {
     for (const item of items) fn(item);
   }
 
+  /**
+   * F2 and F3 only (M6, from the M5 playtest notes).
+   *
+   * **F1 is deliberately not bound any more.** The overlay is a large interactive panel and
+   * opening it mid-match put focus-stealing controls under the crosshair; the playtest
+   * asked for it to be reachable from the pause menu instead, and it is — along with the
+   * close button in its own header. The two visualisation keys stay because they toggle
+   * *drawing* rather than opening a panel, and neither takes focus.
+   *
+   * `Escape` is handled here too, and only while the overlay is open: it closes the
+   * overlay and stops there, so Esc-with-the-panel-open no longer unpauses the game
+   * underneath it. That was the last item on the M5 list.
+   */
   private readonly onKeyDown = (e: KeyboardEvent): void => {
-    if (e.code === 'F1') {
-      e.preventDefault();
-      this.setVisible(!this.visible);
-    } else if (e.code === 'F2') {
+    if (e.code === 'Escape') {
+      // Handled by `Game.onEscape`, which owns the Esc stack: `Input`'s listener is
+      // registered first and would run before anything this file could stop.
+      return;
+    }
+    if (e.code === 'F2') {
       e.preventDefault();
       const next = !this.ctx.collisionDebug.isEnabled;
       this.ctx.collisionDebug.setEnabled(next);

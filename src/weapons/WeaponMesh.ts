@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Rng } from '../core/Rng';
+import { camoTexture, disposeCamoTextures, type CamoId } from '../meta/Camos';
 import {
   bodyBoxes,
   bodyTubes,
@@ -68,9 +69,13 @@ export interface WeaponModel {
  * is why it is not part of the cache key. Every model in a match is built with the same
  * value in practice.
  */
-export function buildWeaponModel(weaponId: string, anisotropy: number): WeaponModel {
+export function buildWeaponModel(
+  weaponId: string,
+  anisotropy: number,
+  camo: CamoId | null = null,
+): WeaponModel {
   const spec = modelSpecFor(weaponId);
-  const surfaces = sharedSurfaces(anisotropy);
+  const surfaces = sharedSurfaces(anisotropy, camo);
 
   const root = new THREE.Group();
   root.name = `viewmodel:${weaponId}`;
@@ -166,16 +171,77 @@ function addMerged(
 // -- surfaces ---------------------------------------------------------------
 
 /**
- * The three materials, built once for the process.
+ * The materials, built once per process and per camo.
  *
  * M2 built them per model, which was correct when there was one model. Twelve weapons and a
  * per-match rebuild would be thirty-six 128px canvases generated for three distinct images,
  * and every one of them a GPU upload on the frame the match starts.
+ *
+ * M6 keys the cache by camo instead of holding a single set. A camo replaces the two
+ * *structural* surfaces — the receiver and the furniture — and deliberately leaves the
+ * glove alone: painting the player's hands in tiger stripe is not what a weapon camo is,
+ * and the hands are the one part of the viewmodel that should stay constant so the eye can
+ * read the gun against them.
  */
-let cachedSurfaces: Map<SurfaceKey, THREE.MeshStandardMaterial> | null = null;
+const cachedSurfaces = new Map<string, Map<SurfaceKey, THREE.MeshStandardMaterial>>();
 
-function sharedSurfaces(anisotropy: number): Map<SurfaceKey, THREE.MeshStandardMaterial> {
-  if (cachedSurfaces !== null) return cachedSurfaces;
+function sharedSurfaces(
+  anisotropy: number,
+  camo: CamoId | null,
+): Map<SurfaceKey, THREE.MeshStandardMaterial> {
+  const key = camo ?? '';
+  const existing = cachedSurfaces.get(key);
+  if (existing !== undefined) return existing;
+  const out = camo === null ? buildDefaultSurfaces(anisotropy) : buildCamoSurfaces(anisotropy, camo);
+  cachedSurfaces.set(key, out);
+  return out;
+}
+
+/**
+ * A camo set: the same BRDF as the default, with the pattern in place of the base map.
+ *
+ * Roughness is lifted slightly on the painted surfaces because paint over machining is
+ * duller than the metal underneath, and GOLD goes the other way — it is the one camo that
+ * is a *material* rather than a coating, so it takes the metalness the others do not.
+ */
+function buildCamoSurfaces(
+  anisotropy: number,
+  camo: CamoId,
+): Map<SurfaceKey, THREE.MeshStandardMaterial> {
+  const out = new Map<SurfaceKey, THREE.MeshStandardMaterial>();
+  const texture = camoTexture(camo, anisotropy);
+  const metallic = camo === 'gold' || camo === 'obsidian';
+  out.set(
+    'gunmetal',
+    new THREE.MeshStandardMaterial({
+      map: texture,
+      color: 0xffffff,
+      roughness: metallic ? 0.3 : 0.55,
+      metalness: metallic ? 0.55 : 0.18,
+    }),
+  );
+  out.set(
+    'polymer',
+    new THREE.MeshStandardMaterial({
+      map: texture,
+      color: 0xffffff,
+      roughness: metallic ? 0.38 : 0.8,
+      metalness: metallic ? 0.45 : 0.04,
+    }),
+  );
+  out.set(
+    'glove',
+    new THREE.MeshStandardMaterial({
+      map: baseTexture('glove', anisotropy),
+      color: 0xffffff,
+      roughness: 0.95,
+      metalness: 0,
+    }),
+  );
+  return out;
+}
+
+function buildDefaultSurfaces(anisotropy: number): Map<SurfaceKey, THREE.MeshStandardMaterial> {
   const out = new Map<SurfaceKey, THREE.MeshStandardMaterial>();
 
   // A viewmodel is the one place in this project worth a real BRDF: it is a handful of
@@ -189,7 +255,7 @@ function sharedSurfaces(anisotropy: number): Map<SurfaceKey, THREE.MeshStandardM
   out.set(
     'gunmetal',
     new THREE.MeshStandardMaterial({
-      map: gunmetalTexture(anisotropy),
+      map: baseTexture('gunmetal', anisotropy),
       color: 0xffffff,
       roughness: 0.44,
       metalness: 0.3,
@@ -198,7 +264,7 @@ function sharedSurfaces(anisotropy: number): Map<SurfaceKey, THREE.MeshStandardM
   out.set(
     'polymer',
     new THREE.MeshStandardMaterial({
-      map: polymerTexture(anisotropy),
+      map: baseTexture('polymer', anisotropy),
       color: 0xffffff,
       roughness: 0.85,
       metalness: 0.02,
@@ -207,24 +273,47 @@ function sharedSurfaces(anisotropy: number): Map<SurfaceKey, THREE.MeshStandardM
   out.set(
     'glove',
     new THREE.MeshStandardMaterial({
-      map: gloveTexture(anisotropy),
+      map: baseTexture('glove', anisotropy),
       color: 0xffffff,
       roughness: 0.95,
       metalness: 0,
     }),
   );
-  cachedSurfaces = out;
   return out;
 }
 
 /** Release the process-wide materials. Only the page teardown has any business calling it. */
 export function disposeWeaponSurfaces(): void {
-  if (cachedSurfaces === null) return;
-  for (const material of cachedSurfaces.values()) {
-    material.map?.dispose();
-    material.dispose();
+  for (const set of cachedSurfaces.values()) {
+    for (const material of set.values()) material.dispose();
   }
-  cachedSurfaces = null;
+  cachedSurfaces.clear();
+  for (const texture of baseTextures.values()) texture.dispose();
+  baseTextures.clear();
+  // Camo textures are shared by every material that references them, so they are released
+  // by their own owner rather than by whichever material happened to hold one.
+  disposeCamoTextures();
+}
+
+/**
+ * The three hand-drawn base textures, built once for the process.
+ *
+ * Cached separately from the materials because a camo set reuses the glove: without this,
+ * six camos would generate six identical 128 px hand textures.
+ */
+const baseTextures = new Map<SurfaceKey, THREE.Texture>();
+
+function baseTexture(key: SurfaceKey, anisotropy: number): THREE.Texture {
+  const existing = baseTextures.get(key);
+  if (existing !== undefined) return existing;
+  const made =
+    key === 'gunmetal'
+      ? gunmetalTexture(anisotropy)
+      : key === 'polymer'
+        ? polymerTexture(anisotropy)
+        : gloveTexture(anisotropy);
+  baseTextures.set(key, made);
+  return made;
 }
 
 const TEX = 128;

@@ -1,0 +1,489 @@
+/*
+ * M6: the loadout editor and the end-of-match XP breakdown.
+ *
+ * Every value resolves to a token in tokens.css — S4.6's rule, unchanged since M4. Two
+ * screens' worth of layout, and they share the same vocabulary as the menu they are
+ * reached from: uppercase labels, tabular numerals, one accent on near-black, and a strict
+ * 4px grid.
+ */
+
+/* ---- loadout editor ------------------------------------------------------ */
+
+.lo {
+  justify-content: flex-start;
+  gap: var(--s-4);
+  padding: var(--s-6) var(--s-4);
+  overflow-y: auto;
+}
+
+.lo-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  width: min(1240px, 96vw);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  flex-wrap: wrap;
+}
+
+.lo-head__level {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 72px;
+}
+
+.lo-head__level-num {
+  font-size: var(--t-display);
+  font-weight: var(--w-heavy);
+  line-height: 1;
+  color: var(--c-accent);
+}
+
+.lo-head__bars {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.lo-head__bar {
+  height: 8px;
+  border: 1px solid var(--c-line-hi);
+  border-radius: var(--radius);
+  background: var(--c-void);
+  overflow: hidden;
+}
+
+.lo-head__bar > i {
+  display: block;
+  height: 100%;
+  background: var(--c-accent);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform var(--dur-med) var(--ease);
+}
+
+.lo-head__note {
+  width: 100%;
+  color: var(--c-accent);
+}
+
+.lo-columns {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(320px, 1fr) minmax(280px, 380px);
+  gap: var(--s-4);
+  width: min(1240px, 96vw);
+  align-items: start;
+}
+
+@media (max-width: 1080px) {
+  .lo-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.lo-slots {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.lo-slot.is-equipped .op-option__name::after {
+  content: " ●";
+  color: var(--c-accent);
+}
+
+.lo-rename {
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--c-text);
+  background: var(--c-void);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  padding: var(--s-2);
+}
+
+.lo-rename:focus-visible {
+  outline: 1px solid var(--c-accent);
+  outline-offset: 1px;
+}
+
+/* ---- rows ---------------------------------------------------------------- */
+
+.lo-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.lo-row {
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+}
+
+.lo-row.is-open {
+  border-color: var(--c-accent-dim);
+}
+
+.lo-row__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--c-text);
+  font-family: var(--font-ui);
+}
+
+.lo-row__head:hover,
+.lo-row__head:focus-visible {
+  background: var(--c-surface-hi);
+  outline: none;
+}
+
+.lo-row__value {
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  color: var(--c-accent);
+  text-align: right;
+}
+
+.lo-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2);
+  border-top: 1px solid var(--c-line);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.lo-option {
+  padding: var(--s-2) var(--s-3);
+}
+
+/*
+ * Locked content is struck through and dimmed rather than hidden — the same choice M5's
+ * arsenal panel made for attachments that do not fit. "You cannot have this yet, and here
+ * is what it costs" is the whole job of a progression screen.
+ */
+.lo-option.is-locked {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.lo-option.is-locked .op-option__name {
+  text-decoration: line-through;
+}
+
+.lo-option.is-locked .op-option__blurb {
+  color: var(--c-warn);
+}
+
+.lo-empty {
+  padding: var(--s-3);
+}
+
+/* ---- resolved stat panel ------------------------------------------------- */
+
+.lo-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-3);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  position: sticky;
+  top: var(--s-2);
+}
+
+.lo-stats__title {
+  font-size: var(--t-lead);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.lo-stats__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--s-2);
+}
+
+.lo-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: 2px var(--s-1);
+  font-size: var(--t-small);
+}
+
+.lo-stat.is-changed {
+  background: var(--c-accent-glow);
+  border-radius: var(--radius);
+}
+
+.lo-stat__label {
+  color: var(--c-text-dim);
+}
+
+.lo-stat__value {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-1);
+  white-space: nowrap;
+}
+
+.lo-stat__from {
+  color: var(--c-text-faint);
+  text-decoration: line-through;
+}
+
+.lo-stat__arrow {
+  color: var(--c-text-faint);
+}
+
+.lo-stat__to.is-better {
+  color: var(--c-good);
+}
+
+.lo-stat__to.is-worse {
+  color: var(--c-bad);
+}
+
+.lo-stats__footer {
+  margin-top: var(--s-2);
+  padding-top: var(--s-2);
+  border-top: 1px solid var(--c-line);
+}
+
+/* ---- menu additions ------------------------------------------------------ */
+
+.op-danger {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  margin-top: var(--s-4);
+}
+
+.op-btn--danger {
+  border-color: var(--c-bad);
+  color: var(--c-bad);
+}
+
+.op-picker.is-locked .op-option[disabled] {
+  opacity: 0.3;
+}
+
+/* ---- XP breakdown -------------------------------------------------------- */
+
+.xp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+}
+
+.xp__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.xp__level {
+  font-size: var(--t-title);
+  font-weight: var(--w-heavy);
+  color: var(--c-accent);
+  letter-spacing: var(--track-display);
+}
+
+.xp__total {
+  font-size: var(--t-lead);
+  font-weight: var(--w-heavy);
+}
+
+.xp__bar {
+  height: 10px;
+  border: 1px solid var(--c-line-hi);
+  border-radius: var(--radius);
+  background: var(--c-void);
+  overflow: hidden;
+}
+
+.xp__bar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--c-accent-dim), var(--c-accent));
+  transform-origin: left center;
+  transform: scaleX(0);
+}
+
+.xp__bar-label {
+  text-align: right;
+}
+
+.xp__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/*
+ * Rows arrive one at a time. The transition is on `transform` and `opacity` only, so a
+ * twelve-row breakdown is twelve composited layers rather than twelve reflows.
+ */
+.xp__row {
+  display: grid;
+  grid-template-columns: 1fr auto 84px;
+  gap: var(--s-3);
+  align-items: baseline;
+  padding: 2px var(--s-1);
+  font-size: var(--t-small);
+  opacity: 0;
+  transform: translateX(-8px);
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.xp__row.is-in {
+  opacity: 1;
+  transform: none;
+}
+
+.xp__row-label {
+  color: var(--c-text-dim);
+}
+
+.xp__row-count {
+  color: var(--c-text-faint);
+}
+
+.xp__row-xp {
+  text-align: right;
+  color: var(--c-accent);
+  font-weight: var(--w-heavy);
+}
+
+/*
+ * The level-up flourish. It is the only thing in the project allowed to be loud, and it
+ * earns it by happening a few times an hour.
+ */
+.xp__flourish {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-3);
+  border: 1px solid var(--c-accent);
+  border-radius: var(--radius);
+  background: var(--c-accent-glow);
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity var(--dur-med) var(--ease),
+    transform var(--dur-med) var(--ease);
+}
+
+.xp__flourish.is-on {
+  opacity: 1;
+  transform: none;
+}
+
+.xp__flourish-title {
+  font-size: var(--t-title);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-display);
+  color: var(--c-accent);
+}
+
+.xp__flourish-sub {
+  color: var(--c-text);
+  text-align: center;
+}
+
+.xp__tail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  opacity: 0;
+  transition: opacity var(--dur-med) var(--ease);
+}
+
+.xp__tail.is-in {
+  opacity: 1;
+}
+
+.xp__tag {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-2);
+  border: 1px solid var(--c-line-hi);
+  border-radius: var(--radius);
+  font-size: var(--t-small);
+}
+
+/* ---- HUD: the field upgrade charge -------------------------------------- */
+
+.hud-tac__slot--upgrade {
+  position: relative;
+  overflow: hidden;
+}
+
+.hud-tac__charge {
+  position: absolute;
+  inset: 0;
+  background: var(--c-accent);
+  opacity: 0.18;
+  transform-origin: left center;
+  transform: scaleX(0);
+  pointer-events: none;
+}
+
+.hud-tac__slot--upgrade.is-ready .hud-tac__charge {
+  opacity: 0.34;
+}
+
+.hud-tac__slot--upgrade.is-ready .hud-tac__slot-label {
+  color: var(--c-accent);
+}
+
+/* ---- debug overlay close button ----------------------------------------- */
+
+.dbg-close {
+  margin-left: var(--s-3);
+  min-width: 22px;
+  height: 22px;
+  line-height: 1;
+  font-size: var(--t-lead);
+  color: var(--c-text-dim);
+  background: var(--c-surface-hi);
+  border: 1px solid var(--c-line-hi);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.dbg-close:hover,
+.dbg-close:focus-visible {
+  color: var(--c-text);
+  border-color: var(--c-accent);
+  outline: none;
+}

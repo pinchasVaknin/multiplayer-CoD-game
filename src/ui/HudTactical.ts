@@ -40,6 +40,11 @@ export interface TacticalState {
   breath: number;
   breathHeld: boolean;
   hasScope: boolean;
+
+  // -- M6 --------------------------------------------------------------------
+  /** The equipped field upgrade's short name, and 0..1 of its charge. */
+  fieldUpgradeName: string;
+  fieldUpgradeCharge: number;
 }
 
 export function makeTacticalState(): TacticalState {
@@ -62,6 +67,8 @@ export function makeTacticalState(): TacticalState {
     breath: 1,
     breathHeld: false,
     hasScope: false,
+    fieldUpgradeName: '',
+    fieldUpgradeCharge: 0,
   };
 }
 
@@ -90,7 +97,12 @@ export class HudTactical {
   private readonly cookFill: HTMLElement;
   private readonly breathBar: HTMLElement;
   private readonly breathFill: HTMLElement;
+  private readonly upgradeSlot: HTMLElement;
+  private readonly upgradeLabel: HTMLElement;
+  private readonly upgradeFill: HTMLElement;
 
+  private lastUpgrade = '';
+  private lastCharge = -1;
   private lastWeapon = '';
   private lastOther = '';
   private lastLethal = '';
@@ -131,7 +143,19 @@ export class HudTactical {
     this.tacticalCount = document.createElement('span');
     this.tacticalCount.className = 'hud-tac__slot-count op-num';
     tactical.append(this.tacticalLabel, this.tacticalCount);
-    gear.append(lethal, tactical);
+
+    // The field upgrade is a slot like the other two, with its charge drawn as a fill
+    // behind the label rather than as a separate bar — it is the same kind of thing as a
+    // grenade count and belongs in the same row (M6, S6.3).
+    this.upgradeSlot = document.createElement('div');
+    this.upgradeSlot.className = 'hud-tac__slot hud-tac__slot--upgrade';
+    this.upgradeFill = document.createElement('i');
+    this.upgradeFill.className = 'hud-tac__charge';
+    this.upgradeLabel = document.createElement('span');
+    this.upgradeLabel.className = 'hud-tac__slot-label op-label';
+    this.upgradeSlot.append(this.upgradeFill, this.upgradeLabel);
+
+    gear.append(lethal, tactical, this.upgradeSlot);
 
     this.element.append(weapons, gear);
 
@@ -197,6 +221,19 @@ export class HudTactical {
       this.tacticalLabel.textContent = label(state.tacticalId);
       this.tacticalCount.textContent = state.tacticalCount.toString();
       this.tacticalCount.classList.toggle('is-empty', state.tacticalCount <= 0);
+    }
+
+    if (state.fieldUpgradeName !== this.lastUpgrade) {
+      this.lastUpgrade = state.fieldUpgradeName;
+      this.upgradeLabel.textContent = state.fieldUpgradeName;
+    }
+    // Quantised to a hundredth: the charge changes every tick and a `style` write per
+    // frame for a bar that moves 1% a second is a DOM write nobody can see.
+    const charge = Math.round(clamp01(state.fieldUpgradeCharge) * 100) / 100;
+    if (charge !== this.lastCharge) {
+      this.lastCharge = charge;
+      this.upgradeFill.style.transform = `scaleX(${charge.toFixed(2)})`;
+      this.upgradeSlot.classList.toggle('is-ready', charge >= 1);
     }
 
     this.updateCook(state);

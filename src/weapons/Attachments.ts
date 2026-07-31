@@ -146,7 +146,8 @@ export function fitsWeapon(def: WeaponDef, id: AttachmentId): boolean {
 }
 
 /**
- * The resolved definition: base plus attachments, as a brand new object (S6.2).
+ * The resolved definition: base plus attachments plus any extra modifiers, as a brand new
+ * object (S6.2).
  *
  * Pure. `base` is not read after the clone and is never written to. Attachments that do
  * not fit the weapon are ignored rather than throwing, because a loadout may outlive the
@@ -156,10 +157,21 @@ export function fitsWeapon(def: WeaponDef, id: AttachmentId): boolean {
  * `readonly` records and is never written by anything. Copying thirty objects per resolve
  * to protect data nothing mutates would be a cost with no benefit; the scales that *do*
  * change are plain numbers on the resolved object.
+ *
+ * **`extra` is M6's perks** (S6.4: "perks apply through the same resolved-def / modifier
+ * pipeline as attachments"). They arrive as plain `AttachmentEffects` and go through the
+ * identical multiplication chain, *after* the attachments — so a Quickdraw ADS time is
+ * computed by this function and no other, and the loadout editor showing "0.196 s" is
+ * showing the number the weapon will actually use. Passing the effects rather than the
+ * perk ids keeps `weapons/` from importing `perks/`; the modifier type is the seam.
  */
-export function resolveWeaponDef(base: WeaponDef, attachments: readonly AttachmentId[]): WeaponDef {
+export function resolveWeaponDef(
+  base: WeaponDef,
+  attachments: readonly AttachmentId[],
+  extra: readonly AttachmentEffects[] = [],
+): WeaponDef {
   const out = cloneWeaponDef(base);
-  if (attachments.length === 0) return out;
+  if (attachments.length === 0 && extra.length === 0) return out;
 
   for (const id of APPLY_ORDER) {
     if (!attachments.includes(id)) continue;
@@ -167,10 +179,21 @@ export function resolveWeaponDef(base: WeaponDef, attachments: readonly Attachme
     if (!base.attachmentSlots.includes(attachment.slot)) continue;
     applyEffects(out, attachment.effects);
   }
+  // Attachments first, then perks. Multiplication is commutative in exact arithmetic and
+  // not quite in floating point, so the order is fixed rather than incidental — two
+  // loadouts with the same set must produce byte-identical defs.
+  for (const fx of extra) applyEffects(out, fx);
   return out;
 }
 
-function applyEffects(def: WeaponDef, fx: AttachmentEffects): void {
+/**
+ * Apply one modifier record in place.
+ *
+ * Exported so `PerkState` and the debug panel can describe a single modifier's effect on
+ * a def without re-deriving the rules; the *only* writer of a `WeaponDef` field in this
+ * project is this function.
+ */
+export function applyEffects(def: WeaponDef, fx: AttachmentEffects): void {
   if (fx.adsTimeMult !== undefined) def.adsTime *= fx.adsTimeMult;
   if (fx.reloadMult !== undefined) {
     def.reloadTime *= fx.reloadMult;

@@ -22,6 +22,11 @@ import type { EquipmentConfig } from './equipment/EquipmentConfig';
 import { EquipmentSystem } from './equipment/EquipmentSystem';
 import { MatchEquipment } from './MatchEquipment';
 import { MatchFeedback } from './MatchFeedback';
+import { MatchMeta } from './MatchMeta';
+import type { CamoId } from './meta/Camos';
+import type { ResolvedLoadout } from './meta/Loadouts';
+import type { Profile } from './meta/Profile';
+import type { XpReport } from './meta/XpRules';
 import type { GameMode } from './modes/GameMode';
 import { MatchFlow } from './modes/MatchFlow';
 import type { MapEntry, ModeEntry } from './modes/ModeRegistry';
@@ -73,9 +78,24 @@ export interface MatchDeps {
   readonly world: CollisionWorld;
   readonly player: PlayerController;
   readonly movementConfig: MovementConfig;
+  /**
+   * The player's live primary — resolved from the loadout, so it already carries the
+   * attachments and the perks. The tuning panel writes into this object.
+   */
   readonly weaponDef: WeaponDef;
   /** M5: the player's sidearm. Bots do not carry one — see `WeaponSystem`. */
   readonly secondaryDef: WeaponDef;
+  /**
+   * What the bots carry: the *base* of the player's primary, with no attachments and no
+   * perks (M6).
+   *
+   * M5 handed the bots `weaponDef` directly, which was harmless when that object was the
+   * base. It stopped being harmless the moment a loadout could fold Quickdraw into it —
+   * the enemy team would have been issued the player's perks. The two objects are cloned
+   * from the same registry entry, so TTK is still symmetric for an unmodified loadout and
+   * every difference is one the player deliberately chose.
+   */
+  readonly botWeaponDef: WeaponDef;
   readonly viewmodelConfig: ViewmodelConfig;
   readonly healthConfig: HealthConfig;
   readonly equipmentConfig: EquipmentConfig;
@@ -88,6 +108,11 @@ export interface MatchDeps {
   readonly perceptionConfig: PerceptionConfig;
   readonly schedulerConfig: SchedulerConfig;
   readonly seed: number;
+  /** M6: the equipped class, already resolved and sanitised by `Profile`. */
+  readonly loadout: ResolvedLoadout;
+  readonly profile: Profile;
+  /** False in the Shooting Range: a testbed does not write to the save. */
+  readonly banksProgress: boolean;
 }
 
 /** The player's side. Bots added to 'A' fight alongside them, 'B' against. */
@@ -111,6 +136,8 @@ export class Match {
   readonly weaponAudio: WeaponAudio;
   /** One per inventory slot; only the active one is visible. */
   readonly models: WeaponModel[];
+  /** The camo each slot is wearing, so a rebuild does not lose it. */
+  private readonly slotCamos: Array<CamoId | null> = [];
   /** The visible one. Reassigned on a swap. */
   model: WeaponModel;
   readonly anim: ViewmodelAnim;
@@ -128,6 +155,8 @@ export class Match {
   readonly feedback: MatchFeedback;
   /** M5: grenades, smoke, flashes and the bots that throw them. */
   readonly equipment: MatchEquipment;
+  /** M6: XP, challenges, perks and the field upgrade. */
+  readonly meta: MatchMeta;
 
   /** Interpolated weapon state for this frame. Read by Game for the camera. */
   readonly visual: WeaponSnapshot = {
@@ -176,6 +205,8 @@ export class Match {
     this.selfDamage.targetId = PLAYER_ENTITY_ID;
     this.selfDamage.sourceId = PLAYER_ENTITY_ID;
 
+    // The player holds the *resolved* loadout — base plus attachments plus perks — which
+    // `Game` has already copied into `weaponDef` so the tuning panel keeps its reference.
     this.weapons = new WeaponSystem(
       deps.weaponDef,
       deps.secondaryDef,
@@ -197,7 +228,7 @@ export class Match {
       damage: this.damage,
       movement: deps.movementConfig,
       healthConfig: deps.healthConfig,
-      weaponDef: deps.weaponDef,
+      weaponDef: deps.botWeaponDef,
       viewmodelConfig: deps.viewmodelConfig,
       tiers: deps.tiers,
       perceptionConfig: deps.perceptionConfig,
@@ -231,9 +262,11 @@ export class Match {
     // One mesh per inventory slot, both built up front and toggled by visibility. Building
     // on demand would put a geometry merge and a GPU upload on the frame the player presses
     // the swap key, which is the one frame that must not stutter.
+    this.slotCamos[0] = deps.loadout.primaryCamo;
+    this.slotCamos[1] = deps.loadout.secondaryCamo;
     this.models = [
-      buildWeaponModel(deps.weaponDef.id, deps.anisotropy),
-      buildWeaponModel(deps.secondaryDef.id, deps.anisotropy),
+      buildWeaponModel(deps.weaponDef.id, deps.anisotropy, deps.loadout.primaryCamo),
+      buildWeaponModel(deps.secondaryDef.id, deps.anisotropy, deps.loadout.secondaryCamo),
     ];
     for (const model of this.models) {
       deps.viewmodel.add(model.root);
@@ -301,6 +334,30 @@ export class Match {
       seed: deps.seed,
     });
 
+    // The loadout's grenades, not the M5 defaults. Set before the first refill so a
+    // spawning player is handed what their class actually carries.
+    this.equipment.inventory.lethal = deps.loadout.lethal;
+    this.equipment.inventory.tactical = deps.loadout.tactical;
+    EquipmentSystem.refill(this.equipment.inventory);
+
+    // M6, last: it hooks into the bots, the flash field and the player controller, all of
+    // which have to exist first.
+    this.meta = new MatchMeta({
+      bus: deps.bus,
+      scene: deps.scene,
+      profile: deps.profile,
+      loadout: deps.loadout,
+      score: this.score,
+      player: deps.player,
+      playerHealth: this.playerHealth,
+      weapons: this.weapons,
+      bots: this.bots,
+      equipment: this.equipment.system,
+      equipmentInventory: this.equipment.inventory,
+      localTeam: PLAYER_TEAM,
+      banksProgress: deps.banksProgress,
+    });
+
     // Occlusion low-pass through the same spatial-hash raycaster the sim uses (S6.7).
     deps.audio.setOccluder((x, y, z) =>
       !deps.world.segmentClear(
@@ -328,7 +385,9 @@ export class Match {
     this.anim.reset(this.deps.input.yaw, this.deps.input.pitch);
     // Deferred to the first time a match actually starts rather than done at construction:
     // the harness wants a different roster and gets to set it before anyone spawns.
-    if (this.bots.botCount === 0) this.populateDefault();
+    // The range populates nothing: S9's testbed has no enemies by design, and the
+    // registry says so rather than this file guessing from the map.
+    if (this.bots.botCount === 0 && this.deps.mode.populatesRoster) this.populateDefault();
     this.registerRoster();
     if (this.flow.currentPhase === 'WARMUP' && this.flow.round === 1 && this.score.rows.length > 0) {
       this.flow.start();
@@ -377,25 +436,64 @@ export class Match {
   }
 
   /**
+   * The unmodified base of the player's primary — what the bots carry.
+   *
+   * Exposed for the M6 modifier panel, which compares base against resolved and must read
+   * the *same* base the match was built from rather than looking one up in the registry.
+   */
+  get botWeaponDef(): WeaponDef {
+    return this.deps.botWeaponDef;
+  }
+
+  /** The class this match was built with. */
+  get loadout(): ResolvedLoadout {
+    return this.deps.loadout;
+  }
+
+  /**
    * Put a different weapon in a slot (M5).
    *
    * Rebuilds that slot's mesh, because a weapon is its silhouette as much as its numbers.
    * Used by the debug weapon picker; M6's loadout editor is the real caller.
    */
-  equip(slotIndex: number, def: WeaponDef): void {
+  equip(slotIndex: number, def: WeaponDef, camo?: CamoId | null): void {
     const old = this.models[slotIndex];
     if (old === undefined) return;
     const wasVisible = old.root.visible;
     this.deps.viewmodel.remove(old.root);
     old.dispose();
 
-    const model = buildWeaponModel(def.id, this.deps.anisotropy);
+    // `undefined` keeps whatever finish the slot already had; `null` strips it. The
+    // distinction matters because M5's debug weapon picker calls this with two arguments
+    // and has no idea camos exist — without it, opening the arsenal panel would silently
+    // return a gold rifle to grey.
+    const nextCamo = camo === undefined ? (this.slotCamos[slotIndex] ?? null) : camo;
+    this.slotCamos[slotIndex] = nextCamo;
+    const model = buildWeaponModel(def.id, this.deps.anisotropy, nextCamo);
     this.models[slotIndex] = model;
     this.deps.viewmodel.add(model.root);
     model.root.visible = wasVisible;
 
     this.weapons.equip(slotIndex, def);
     if (wasVisible) this.showSlot(slotIndex);
+  }
+
+  /**
+   * Swap the whole class over on a live match (M6).
+   *
+   * Called when the player edits their loadout from the pause screen, which is S6.3's
+   * "reachable… between spawns". Both weapons are rebuilt (a class change is a different
+   * silhouette as much as different numbers), the grenades are replaced and refilled, and
+   * the perks are re-derived. Ammunition resets with the weapons, which is the honest
+   * behaviour: you did not keep the magazine, you picked up a different gun.
+   */
+  applyLoadout(loadout: ResolvedLoadout): void {
+    this.equip(0, loadout.primary, loadout.primaryCamo);
+    this.equip(1, loadout.secondary, loadout.secondaryCamo);
+    this.equipment.inventory.lethal = loadout.lethal;
+    this.equipment.inventory.tactical = loadout.tactical;
+    EquipmentSystem.refill(this.equipment.inventory);
+    this.meta.setLoadout(loadout);
   }
 
   private showSlot(slotIndex: number): void {
@@ -455,6 +553,7 @@ export class Match {
 
     this.range?.step();
     this.equipment.simulate(cmd, this.deps.player.sim, !this.playerDead);
+    this.meta.simulate(cmd, this.deps.player.sim, !this.playerDead);
     this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
     this.stepPlayerRespawn();
     this.stepLowHealthAudio();
@@ -563,6 +662,7 @@ export class Match {
     this.bots.updateVisuals(alpha, dt);
     this.fx.update(dt);
     this.equipment.render(alpha, dt, camera);
+    this.meta.render(dt);
 
     // A dead player is not holding a rifle.
     this.model.root.visible = !this.playerDead;
@@ -614,6 +714,9 @@ export class Match {
     tac.scopeFraction = tac.hasScope ? this.visual.adsFraction : 0;
     tac.breath = this.weapons.scope.breath;
     tac.breathHeld = this.weapons.scope.holding;
+
+    tac.fieldUpgradeName = this.meta.fieldUpgrade.name;
+    tac.fieldUpgradeCharge = this.meta.fieldUpgrade.charge;
   }
 
   /**
@@ -624,7 +727,19 @@ export class Match {
    * harness are really testing. Anything added to `Match` that is not released here shows up
    * as a step in `usedJSHeapSize` at the next match boundary.
    */
+  /**
+   * Close progression out and hand back the summary's XP report.
+   *
+   * Called by `Game` on the way into SUMMARY rather than from the mode, because banking a
+   * match is a *state machine* event: the mode declares a winner, and the profile is
+   * written once the match is genuinely over and nothing else is going to change.
+   */
+  bankProgression(won: boolean): XpReport {
+    return this.meta.finish(won);
+  }
+
   dispose(): void {
+    this.meta.dispose();
     this.equipment.dispose();
     this.feedback.dispose();
     this.flow.dispose();

@@ -7,6 +7,7 @@ import type { Loop } from '../core/Loop';
 import type { ProceduralAudio } from '../engine/ProceduralAudio';
 import type { Renderer } from '../engine/Renderer';
 import type { Match } from '../Match';
+import type { Profile } from '../meta/Profile';
 import type { MapEntry } from '../modes/ModeRegistry';
 import type { CameraConfig } from '../player/CameraConfig';
 import type { HealthConfig } from '../player/Health';
@@ -26,6 +27,7 @@ import { DebugOverlay } from './DebugOverlay';
 import type { FrameStats } from './FrameStats';
 import { HitboxDebug } from './HitboxDebug';
 import type { MatchHarness } from './MatchHarness';
+import { MetaPanel } from './MetaPanel';
 import { ModePanel } from './ModePanel';
 import type { Speedometer } from './Speedometer';
 import { WeaponDebug } from './WeaponDebug';
@@ -70,6 +72,8 @@ export interface DebugSuiteContext {
   readonly stats: FrameStats;
   readonly speedo: Speedometer;
   readonly matchHarness: MatchHarness;
+  /** M6. Process-wide, unlike everything else here — it outlives every match. */
+  readonly profile: Profile;
   readonly onConfigChanged: () => void;
   readonly onWeaponConfigChanged: () => void;
 }
@@ -87,6 +91,8 @@ export class DebugSuite {
   readonly arsenalPanel: ArsenalPanel;
   readonly arsenalHarness: ArsenalHarness;
   readonly equipmentPanel: EquipmentPanel;
+  /** M6: progression, perks, challenges, the event tap, the simulator and the inspector. */
+  readonly metaPanel: MetaPanel;
 
   private readonly scene: THREE.Scene;
 
@@ -166,6 +172,8 @@ export class DebugSuite {
 
     this.equipmentPanel = new EquipmentPanel(this.overlay, ctx.match, ctx.equipmentConfig);
     ctx.scene.add(this.equipmentPanel.group);
+
+    this.metaPanel = new MetaPanel(this.overlay, ctx.match, ctx.profile, ctx.bus);
   }
 
   /** Per-tick: the collision visualisation follows the player. */
@@ -191,6 +199,7 @@ export class DebugSuite {
    * a step in `usedJSHeapSize` at the next match boundary.
    */
   dispose(): void {
+    this.metaPanel.dispose();
     this.scene.remove(this.equipmentPanel.group);
     this.equipmentPanel.dispose();
     this.arsenalPanel.dispose();

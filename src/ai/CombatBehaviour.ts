@@ -131,8 +131,18 @@ export class CombatBehaviour {
     const solutionPitch = Math.atan2(dy, Math.max(flat, 1e-5));
 
     // Wander target, redrawn a few times a second. Wide while the first-burst hold is
-    // running, tight afterwards, and always widened by how fast the target is moving.
-    const settled = tier.aimConeDeg + tier.trackingErrorDeg * Math.min(speed, MAX_TARGET_SPEED);
+    // running, tight afterwards, and always widened by how fast the target is moving —
+    // and, from M6, by how far away it is.
+    //
+    // The range term is the M5 playtest note ("bots feel too accurate at long distances").
+    // It is additive in degrees past a tier-specific start range, so nothing inside a room
+    // changes and everything across a yard opens up: at Veteran it adds 0.55° per 10 m
+    // past 20 m, which roughly doubles the settled cone by 45 m.
+    const range = Math.hypot(dx, dy, dz);
+    const rangeError =
+      Math.max(0, range - tier.rangeErrorStart) * (tier.rangeErrorPerTenM / 10);
+    const settled =
+      tier.aimConeDeg + tier.trackingErrorDeg * Math.min(speed, MAX_TARGET_SPEED) + rangeError;
     const wide = this.holdTimer > 0;
     if (this.holdTimer > 0) this.holdTimer -= DT;
     this.wanderTimer -= DT;

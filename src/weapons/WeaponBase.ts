@@ -160,6 +160,22 @@ export class Weapon {
     this.emitAmmo();
   }
 
+  /**
+   * Put rounds back in the pouch (M6: Scavenger, and the MUNITIONS field upgrade).
+   *
+   * Capped at the weapon's own `reserveAmmo` rather than allowed to grow without bound —
+   * a perk that lets you carry more than the weapon carries is a different perk. Returns
+   * how many rounds were actually taken, which is what the pickup reports.
+   */
+  addReserve(rounds: number): number {
+    const room = Math.max(0, this.def.reserveAmmo - this.reserve);
+    const taken = Math.min(Math.max(0, Math.round(rounds)), room);
+    if (taken === 0) return 0;
+    this.reserve += taken;
+    this.emitAmmo();
+    return taken;
+  }
+
   /** One simulation tick. */
   step(input: WeaponInput): void {
     this.pendingShots = 0;

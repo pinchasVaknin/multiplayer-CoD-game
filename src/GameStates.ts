@@ -31,9 +31,9 @@ export const GAME_STATES: readonly GameStateId[] = [
 const LEGAL_TRANSITIONS: Readonly<Record<GameStateId, readonly GameStateId[]>> = {
   BOOT: ['MENU'],
   MENU: ['LOADOUT', 'MATCH'],
-  LOADOUT: ['MENU', 'MATCH'],
+  LOADOUT: ['MENU', 'MATCH', 'PAUSED'],
   MATCH: ['SUMMARY', 'MENU', 'PAUSED'],
-  PAUSED: ['MATCH', 'MENU'],
+  PAUSED: ['MATCH', 'MENU', 'LOADOUT'],
   SUMMARY: ['MENU', 'LOADOUT'],
 };
 

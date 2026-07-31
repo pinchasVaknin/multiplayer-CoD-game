@@ -26,6 +26,14 @@ export interface PlayerScore {
   readonly isLocal: boolean;
   kills: number;
   deaths: number;
+  /**
+   * Damage contributed to somebody else's kill (M6).
+   *
+   * S6.1's XP table pays 50 an assist and nothing in M1-M5 knew what one was. It lives
+   * here rather than in `meta/` for the same reason kills do: there is one answer to
+   * "what has this player done", and a second tally kept next door is a second answer.
+   */
+  assists: number;
   /** Mode-defined points. TDM: 100 a kill, 50 more for a headshot. */
   score: number;
   /** Consecutive kills without dying. Reset on death; M7's killstreaks read this. */
@@ -49,6 +57,25 @@ function makeTotals(): TeamTotals {
   return { score: 0, kills: 0, deaths: 0, rounds: 0 };
 }
 
+/**
+ * Recent damage, for assist attribution.
+ *
+ * A fixed ring rather than a map of maps: a firefight produces a few hundred damage
+ * events a minute and an assist only looks back `ASSIST_WINDOW_TICKS`, so anything older
+ * than the ring is older than the window by a wide margin. Allocation free after
+ * construction, which matters because this is written from inside the sim.
+ */
+const DAMAGE_LEDGER_SIZE = 128;
+
+/** 8 seconds at 60 Hz. Mirrors `meta/XpRules.ASSIST_WINDOW_SECONDS`. */
+const ASSIST_WINDOW_TICKS = 480;
+
+interface DamageRecord {
+  sourceId: number;
+  targetId: number;
+  tick: number;
+}
+
 export class ScoreSystem {
   private readonly rowsById = new Map<number, PlayerScore>();
   /** Flat array as well as a map: the scoreboard sorts this every time it opens. */
@@ -56,7 +83,18 @@ export class ScoreSystem {
   private readonly totals: Record<ScoreTeam, TeamTotals> = { A: makeTotals(), B: makeTotals() };
   private readonly unsubscribe: Array<() => void> = [];
 
+  private readonly ledger: DamageRecord[] = [];
+  private ledgerHead = 0;
+  /** Set from `MatchFlow.simulate`, so the assist window is measured in sim ticks (S4.1). */
+  private tick = 0;
+  /** Scratch for `recordKill`; reused so the assist scan allocates nothing. */
+  private readonly assistScratch: number[] = [];
+
   constructor(bus: GameBus) {
+    for (let i = 0; i < DAMAGE_LEDGER_SIZE; i++) {
+      this.ledger.push({ sourceId: -1, targetId: -1, tick: -1 });
+    }
+
     this.unsubscribe.push(
       bus.on(EV.WeaponFired, (p) => {
         const row = this.rowsById.get(p.sourceId);
@@ -69,8 +107,20 @@ export class ScoreSystem {
         if (row === undefined) return;
         row.shotsHit++;
         row.damageDealt += p.amount;
+        const slot = this.ledger[this.ledgerHead];
+        if (slot !== undefined) {
+          slot.sourceId = p.sourceId;
+          slot.targetId = p.targetId;
+          slot.tick = this.tick;
+          this.ledgerHead = (this.ledgerHead + 1) % DAMAGE_LEDGER_SIZE;
+        }
       }),
     );
+  }
+
+  /** The current sim tick. Called once per tick by `MatchFlow`. */
+  setTick(tick: number): void {
+    this.tick = tick;
   }
 
   /** Add a combatant. Called once per roster entry when a match is composed. */
@@ -84,6 +134,7 @@ export class ScoreSystem {
       isLocal: entityId === PLAYER_ENTITY_ID,
       kills: 0,
       deaths: 0,
+      assists: 0,
       score: 0,
       streak: 0,
       bestStreak: 0,
@@ -112,6 +163,10 @@ export class ScoreSystem {
   /**
    * Record a kill. `points` is the mode's, because what a kill is worth is a mode decision
    * and this class has no opinion about it.
+   *
+   * Assists are credited here rather than by the mode: everyone who damaged the victim
+   * inside the window and did not land the killing blow gets one, which is a fact about
+   * the damage ledger and not a scoring policy.
    */
   recordKill(killerId: number, victimId: number, headshot: boolean, points: number): void {
     const victim = this.rowsById.get(victimId);
@@ -119,6 +174,7 @@ export class ScoreSystem {
       victim.deaths++;
       victim.streak = 0;
       this.totals[victim.team].deaths++;
+      this.creditAssists(victimId, killerId, victim.team);
     }
 
     const killer = this.rowsById.get(killerId);
@@ -132,6 +188,29 @@ export class ScoreSystem {
     if (killer.streak > killer.bestStreak) killer.bestStreak = killer.streak;
     if (headshot) killer.headshots++;
     this.totals[killer.team].kills++;
+  }
+
+  /**
+   * One assist each to everyone who softened the victim up, excluding the killer and the
+   * victim's own team. Deduplicated through a reused scratch array so a burst of six
+   * rounds is one assist rather than six.
+   */
+  private creditAssists(victimId: number, killerId: number, victimTeam: ScoreTeam): void {
+    const scratch = this.assistScratch;
+    scratch.length = 0;
+    const oldest = this.tick - ASSIST_WINDOW_TICKS;
+    for (const record of this.ledger) {
+      if (record.targetId !== victimId) continue;
+      if (record.tick < oldest) continue;
+      if (record.sourceId === killerId || record.sourceId === victimId) continue;
+      if (scratch.includes(record.sourceId)) continue;
+      scratch.push(record.sourceId);
+    }
+    for (const id of scratch) {
+      const row = this.rowsById.get(id);
+      if (row === undefined || row.team === victimTeam) continue;
+      row.assists++;
+    }
   }
 
   addTeamScore(team: ScoreTeam, amount: number): void {
@@ -159,6 +238,7 @@ export class ScoreSystem {
     for (const row of this.all) {
       row.kills = 0;
       row.deaths = 0;
+      row.assists = 0;
       row.score = 0;
       row.streak = 0;
       row.bestStreak = 0;

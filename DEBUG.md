@@ -555,3 +555,136 @@ rather than passed on, so it cannot also fire the weapon. Armed in MATCH, disarm
 If `locked` is false while `armed` is true and clicking does nothing, the platform is
 refusing pointer lock outright — the embedded Browser pane does, because the canvas lives in
 a nested document (`WrongDocumentError`). The warning is throttled to once per arming.
+
+---
+
+## The M6 progression panels
+
+### Keys
+
+`X` activates the loadout's field upgrade once its charge is full.
+
+**`F1` no longer opens the overlay.** From the M5 playtest notes: the overlay is a large
+interactive panel and opening it under the crosshair put focus-stealing controls in the
+middle of a firefight. It is now reached from **the pause menu's DEBUG OVERLAY button**, it
+has an **× in its own header**, and **Esc closes it** rather than falling through to
+"resume" — pressing Esc with the panel open used to throw you back into the fight.
+
+`F2` (collision) and `F3` (reset stats) are unchanged: they toggle *drawing* rather than
+opening a panel, and neither takes DOM focus. `F1` is still `preventDefault`ed so Chrome's
+own help does not open over the game.
+
+### `Progression` (left column)
+
+Level and XP into it, what the current match has accrued and is worth so far, the save
+write count and whether the store is persistent, the held weapon's per-weapon stats, the
+active perks, the field upgrade's charge, the Scavenger and Tracker counters, and
+`Meta ms` — wall time inside `MatchMeta.simulate`, which is the number acceptance
+criterion 9 is really about.
+
+### `Perk & attachment modifiers` (left column)
+
+S7's "base value → resolved value per stat". The base is re-resolved through
+`resolveWeaponDef` with an *empty* modifier list rather than read out of the registry, so
+both sides of every comparison have been through the same clone and the same code path —
+**a difference in this table can only have come from a modifier.** Rows that did not move
+are not drawn.
+
+The perks a weapon field cannot express get their own rows underneath, compared against the
+neutrals in `NO_PERKS`: movement multiplier, footstep audibility, flash resistance, and the
+three that S9 leaves inert (Ghost, Cold-Blooded, Hardline), each labelled as such.
+
+### `Challenges` (left column)
+
+The ten challenges closest to completion, sorted by fraction, then the completed count and
+the camos owned. Thirty rows nobody can scan is the same as no rows.
+
+### `EventBus tap` (left column)
+
+Every event type that fired this match, by count, busiest first. It exists because
+"challenge progress is driven off the EventBus, not by polling" is a claim about plumbing,
+and the way to check plumbing is to watch what actually came down it.
+
+### `XP simulator` (right column)
+
+S7's pacing instrument. Three preset run lengths plus **TO LEVEL 55 FROM HERE**, which
+starts from the live profile's XP. It prints the per-source breakdown of one average match,
+then one line per level with the match number, the hours at ten minutes a match, and what
+that level unlocked.
+
+It is deliberately **not** a Monte Carlo: a simulated match is a fixed set of counts pushed
+through the same `XP_SOURCES` table `MatchProgression` uses, so the answer is exact for the
+performance you describe. Variance would hide the thing the panel exists to show, which is
+whether the *curve* is right.
+
+### `Save inspector` (right column)
+
+S7's four asks, as four groups of buttons.
+
+- **REFRESH / APPLY / COPY** — the raw save as editable JSON. APPLY runs the text through
+  the same `normaliseSave` a real load uses, so hand-editing it exercises the repair path
+  rather than going around it.
+- **FORCE MIGRATION (V0)** — pushes `makeSyntheticV0Save()` through the real `migrateSave`
+  and prints what survived, without touching the live profile. Acceptance criterion 7 as a
+  button, run against the *current* migration every time it is pressed.
+- **WRITE V0 AND RELOAD** — writes the V0 payload over the real key so the next page load
+  migrates it at boot. Different from the button above: this exercises the path
+  `SaveStore`'s constructor takes, version check included.
+- **RESET PROGRESS**, **+10,000 / +100,000 XP**, **PRESTIGE** — the levers for reaching a
+  state without playing to it.
+
+---
+
+## The M6 console API
+
+```js
+__operator.profile                     // the Profile. Process-wide, unlike the match handles
+__operator.save()                      // the live SaveV1 document
+__operator.unlocks()                   // the UnlockState snapshot
+__operator.loadouts()                  // all five slots
+__operator.resolveLoadout(unrestricted?)  // the same call Game.buildWorld makes
+__operator.perks / .challenges / .camos / .fieldUpgrades / .levelTable
+__operator.perkState()                 // the live match's resolved PerkState
+__operator.perkResolve(def, ids)       // a def with perks applied, through the real resolver
+__operator.perkStateOf(ids)            // a PerkState without equipping anything
+__operator.challengeProgress()         // every challenge with its definition and counter
+__operator.progression()               // the live MatchProgression
+__operator.simulateXp(n, startXp?)     // fast-forward n matches, printed
+__operator.testMigration()             // V0 -> V1 without touching the save
+__operator.syntheticV0()               // the hand-written V0 payload
+__operator.inspectSave(raw)            // { save, losses } — repair without importing
+__operator.sanitise(slot, level, out)  // force a loadout legal at a level
+__operator.saveWrites()                // { writes, lastWriteMs, persistent }
+__operator.bus                         // the EventBus, for driving a real event
+```
+
+**`saveWrites().writes` is what acceptance criterion 8 is read from.** It counts writes at
+the point they happen rather than the calls that might have caused one, so a coalesced
+burst is one write. A full match is **one** write; the page load is another.
+
+---
+
+## `verify/progression.js`
+
+```js
+fetch('/verify/progression.js').then(r => r.text()).then(eval)
+await __verifyProgression.all()      // every criterion, in order
+__verifyProgression.resolution()     // 3 — editor and gameplay share one resolver
+__verifyProgression.perks()          // 4 — all twelve, measured
+await __verifyProgression.deadSilence()  // 4 — against the real noise field
+__verifyProgression.unlockGate()     // 5 — a hand-edited save cannot equip a locked weapon
+__verifyProgression.migration()      // 7 — V0 -> V1, then a corrupted field
+__verifyProgression.writes()         // 8 — write frequency
+__verifyProgression.live()           // 1, 6 — what a live match has accrued
+__verifyProgression.pacing()         // S7 — the curve
+__verifyProgression.results          // everything measured so far, stashed
+```
+
+**Run the perk and challenge sections a few seconds into a match.** Several of them need a
+live world and report "needs a live match" rather than passing by silence.
+
+**`unlockGate` needs a *locked* weapon to exist**, so it refuses to run on a high-level
+profile and says so. Reset progress first, or run it on a fresh save.
+
+`resolution()` leaves the profile as it found it: it grants the foregrip, fits it, measures,
+and removes it again.

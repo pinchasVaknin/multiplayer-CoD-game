@@ -386,6 +386,67 @@ export class ProceduralAudio extends AudioGraph {
     this.oscHit(spec);
   }
 
+  /**
+   * One XP row landing on the summary screen (M6, S6.1).
+   *
+   * A short bright blip that climbs a fifth over the first eight rows and then holds. The
+   * climb is what makes a long breakdown feel like it is *building* rather than repeating,
+   * and it is capped because a twelve-row match should not end on a whistle.
+   */
+  playXpTick(index: number): void {
+    const step = Math.min(index, 7);
+    const freq = 880 * Math.pow(2, step / 24);
+    this.playUiSweep(freq, freq * 1.35, 0.085, 0.09);
+  }
+
+  /**
+   * The level-up flourish (M6, S6.1: "give it weight, timing and audio").
+   *
+   * Three layers, and the low one is the whole point: a rising sine gives the *shape*, a
+   * band of filtered noise gives it air, and a low body an octave under gives it the
+   * weight that separates a level-up from a menu confirmation. Everything is on the `ui`
+   * bus and non-positional, because it happens to you rather than somewhere in the room.
+   */
+  playLevelUp(): void {
+    if (!this.hasContext) return;
+
+    this.playUiSweep(392, 1046, 0.3, 0.62);
+
+    const body = this.oscScratch;
+    body.x = 0;
+    body.y = 0;
+    body.z = 0;
+    body.positional = false;
+    body.bus = 'ui';
+    body.type = 'triangle';
+    body.freq = 98;
+    body.freqEnd = 196;
+    body.level = 0.34;
+    body.attack = 0.012;
+    body.decay = 0.75;
+    body.wet = 0.18;
+    body.filterFreq = 2600;
+    body.filterQ = 0.9;
+    this.oscHit(body);
+
+    const air = this.noiseScratch;
+    air.x = 0;
+    air.y = 0;
+    air.z = 0;
+    air.positional = false;
+    air.bus = 'ui';
+    air.filter = 'bandpass';
+    air.freq = 3200;
+    air.freqEnd = 6400;
+    air.q = 1.4;
+    air.level = 0.16;
+    air.attack = 0.006;
+    air.decay = 0.34;
+    air.wet = 0.3;
+    air.rate = 1;
+    this.noiseBurst(air);
+  }
+
   /** True once `start()` has built the graph. Guards the composed sounds. */
   private get hasContext(): boolean {
     return this.poolSize > 0;

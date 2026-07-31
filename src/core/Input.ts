@@ -39,11 +39,18 @@ const BUTTON_BINDINGS: readonly KeyBinding[] = [
   { code: 'KeyF', bit: Btn.Tactical },
   { code: 'Digit1', bit: Btn.Slot1 },
   { code: 'Digit2', bit: Btn.Slot2 },
+  { code: 'KeyX', bit: Btn.FieldUpgrade },
 ];
 
 const MOVEMENT_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD'] as const;
 
-/** Always suppressed, even while a debug control has focus. */
+/**
+ * Always suppressed, even while a debug control has focus.
+ *
+ * F1 is still here even though M6 unbound it from the overlay: Chrome opens its own help
+ * on F1, and a stray press mid-match sending the player to a support page would be worse
+ * than the panel it used to open.
+ */
 const ALWAYS_PREVENT = new Set(['F1', 'F2', 'F3', 'Tab']);
 
 /**

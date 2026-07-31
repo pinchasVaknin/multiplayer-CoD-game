@@ -20,6 +20,17 @@ export interface Versioned {
 export type Migrator<T extends Versioned> = (raw: unknown, fromVersion: number) => T | null;
 
 export class SaveStore<T extends Versioned> {
+  /**
+   * How many times this store has actually written to storage.
+   *
+   * M6's acceptance criterion 8 asks for the write frequency across a full match, and the
+   * only honest way to answer is to count the writes at the point they happen rather than
+   * to count the calls that might have caused one. Coalesced bursts are one write.
+   */
+  writes = 0;
+  /** `performance.now()` of the last write, for the same read-out. */
+  lastWriteMs = 0;
+
   private data: T;
   private storage: Storage | null;
   private dirty = false;
@@ -58,6 +69,20 @@ export class SaveStore<T extends Versioned> {
     if (changed) this.scheduleFlush();
   }
 
+  /**
+   * Mark the document changed after mutating it in place.
+   *
+   * `patch` compares by identity, which is right for the flat settings record M1 shipped
+   * and useless for M6's save, whose interesting state lives inside nested objects and
+   * arrays that are edited rather than replaced. `touch` is the explicit "I changed
+   * something, coalesce a write" that a nested edit needs, and it is the *only* way M6
+   * writes — so "never every frame" is a property of the call sites, all of which are
+   * events.
+   */
+  touch(): void {
+    this.scheduleFlush();
+  }
+
   /** Force a write now, e.g. on pagehide. */
   flush(): void {
     if (this.flushHandle !== 0) {
@@ -70,9 +95,29 @@ export class SaveStore<T extends Versioned> {
     if (store === null) return;
     try {
       store.setItem(this.key, JSON.stringify(this.data));
+      this.writes++;
+      this.lastWriteMs = performance.now();
     } catch (err) {
       console.warn(`[SaveStore:${this.key}] write failed; continuing in memory.`, err);
       this.storage = null;
+    }
+  }
+
+  /** Replace the whole document, e.g. an imported JSON blob from the save inspector. */
+  replace(next: T): void {
+    this.data = next;
+    this.data.version = this.version;
+    this.scheduleFlush();
+  }
+
+  /** The raw string currently in storage, for the inspector. Null when not persisted. */
+  readRaw(): string | null {
+    const store = this.storage;
+    if (store === null) return null;
+    try {
+      return store.getItem(this.key);
+    } catch {
+      return null;
     }
   }
 

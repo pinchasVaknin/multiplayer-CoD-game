@@ -12,7 +12,6 @@ import { Input } from './core/Input';
 import type { InputCommand } from './core/InputCommand';
 import { Loop, MAX_STEPS_PER_FRAME, type FrameSample } from './core/Loop';
 import { DEG2RAD } from './core/MathUtil';
-import { SaveStore, type Versioned } from './core/SaveStore';
 import { LocalBotTransport, type INetworkTransport } from './core/Transport';
 import { CameraRig, type CameraDrive } from './engine/CameraRig';
 import { ProceduralAudio } from './engine/ProceduralAudio';
@@ -28,8 +27,13 @@ import { Speedometer } from './debug/Speedometer';
 import { isLegalGameTransition, type GameStateId } from './GameStates';
 import { Match } from './Match';
 import { PLAYER_TEAM } from './Match';
-import type { GameModeId } from './modes/GameMode';
+import { applyEquippedLoadout, asModeId, profileLine } from './GameLoadout';
+import type { ResolvedLoadout } from './meta/Loadouts';
+import { Profile } from './meta/Profile';
+import { defaultSettings } from './meta/SaveData';
 import { DEFAULT_MAP_ID, DEFAULT_MODE_ID, findMap, findMode } from './modes/ModeRegistry';
+import { LoadoutEditor } from './ui/LoadoutEditor';
+import { XpSummary } from './ui/XpSummary';
 import { DEFAULT_CAMERA_CONFIG, FOV_MAX, FOV_MIN, type CameraConfig } from './player/CameraConfig';
 import { DEFAULT_HEALTH_CONFIG, type HealthConfig } from './player/Health';
 import { DEFAULT_MOVEMENT_CONFIG, cloneMovementConfig, type MovementConfig } from './player/MovementConfig';
@@ -69,29 +73,6 @@ import { applyAmbient, loadMap, type LoadedMap } from './world/MapLoader';
  * repeatedly and logs the heap at each boundary, which is the test that this is true.
  */
 
-interface Settings extends Versioned {
-  version: 2;
-  fov: number;
-  sensitivity: number;
-  invertY: boolean;
-  masterVolume: number;
-  renderScale: number;
-  /** M4: remembered menu selection. */
-  modeId: GameModeId;
-  mapId: string;
-}
-
-const DEFAULT_SETTINGS: Settings = {
-  version: 2,
-  fov: DEFAULT_CAMERA_CONFIG.fov,
-  sensitivity: 1,
-  invertY: false,
-  masterVolume: 0.8,
-  renderScale: 1,
-  modeId: DEFAULT_MODE_ID,
-  mapId: DEFAULT_MAP_ID,
-};
-
 interface StateHandlers {
   enter?: (from: GameStateId) => void;
   exit?: (to: GameStateId) => void;
@@ -119,6 +100,15 @@ export class Game {
    */
   readonly weaponDef: WeaponDef = cloneWeaponDef(AR_DEFAULT);
   readonly secondaryDef: WeaponDef = cloneWeaponDef(PISTOL_DEFAULT);
+  /**
+   * What the bots carry: the base of the player's primary, with no attachments and no
+   * perks (M6).
+   *
+   * A third object rather than reusing `weaponDef`, because from M6 that one holds a
+   * *resolved* loadout — and handing it to the bot director would issue the enemy team the
+   * player's Quickdraw. See `MatchDeps.botWeaponDef`.
+   */
+  readonly botWeaponDef: WeaponDef = cloneWeaponDef(AR_DEFAULT);
   readonly viewmodelConfig: ViewmodelConfig = cloneViewmodelConfig(DEFAULT_VIEWMODEL_CONFIG);
   readonly healthConfig: HealthConfig = { ...DEFAULT_HEALTH_CONFIG };
   readonly equipmentConfig: EquipmentConfig = cloneEquipmentConfig(DEFAULT_EQUIPMENT_CONFIG);
@@ -144,7 +134,10 @@ export class Game {
   private readonly summary: EndOfMatch;
   private readonly uiHost: HTMLElement;
   private readonly debugHost: HTMLElement;
-  private readonly settings: SaveStore<Settings>;
+  /** M6: the one save object. Owns settings, progression, loadouts and challenges. */
+  readonly profile: Profile;
+  private readonly loadoutEditor: LoadoutEditor;
+  private readonly xpSummary: XpSummary;
   private readonly transport: INetworkTransport = new LocalBotTransport(64);
   private readonly input: Input;
   private readonly loop: Loop;
@@ -182,18 +175,20 @@ export class Game {
   private overlayWasOpenBeforePause = false;
 
   constructor(canvas: HTMLCanvasElement, uiHost: HTMLElement, debugHost: HTMLElement) {
-    this.settings = new SaveStore<Settings>('operator.settings', 2, DEFAULT_SETTINGS, (raw, from) => {
-      console.info(`[Game] settings v${from} predates the mode/map selection; using defaults.`, raw);
-      return null;
+    // M6: one save object for everything (S6.6). Settings used to live in their own store;
+    // `Profile` carries the old blob across on first load so nobody's FOV resets.
+    this.profile = new Profile({
+      fallbackSettings: defaultSettings(DEFAULT_MODE_ID, DEFAULT_MAP_ID, DEFAULT_CAMERA_CONFIG.fov),
     });
-    this.cameraConfig.fov = clampFov(this.settings.value.fov);
+    const settings = this.profile.settings;
+    this.cameraConfig.fov = clampFov(settings.fov);
     this.selection = {
-      modeId: this.settings.value.modeId,
-      mapId: this.settings.value.mapId,
+      modeId: asModeId(settings.modeId),
+      mapId: settings.mapId,
     };
 
     this.renderer = new Renderer(canvas);
-    this.renderer.setSize(window.innerWidth, window.innerHeight, this.settings.value.renderScale);
+    this.renderer.setSize(window.innerWidth, window.innerHeight, settings.renderScale);
     this.textures = new ProceduralTextures(this.renderer.three);
     this.uiHost = uiHost;
     this.debugHost = debugHost;
@@ -205,8 +200,19 @@ export class Game {
       host: uiHost,
       selection: this.selection,
       onLaunch: () => this.transitionTo('MATCH'),
+      onLoadout: () => this.transitionTo('LOADOUT'),
+      onResetProgress: () => this.profile.resetProgress(),
       statusLine: () => this.statusLine(),
+      profileLine: () => profileLine(this.profile),
     });
+    this.loadoutEditor = new LoadoutEditor({
+      host: uiHost,
+      profile: this.profile,
+      onBack: () => this.transitionTo('MENU'),
+      onLaunch: () => this.transitionTo('MATCH'),
+      unrestricted: () => findMode(this.selection.modeId).unrestricted,
+    });
+    this.xpSummary = new XpSummary({ audio: this.audio });
     this.pauseMenu = new PauseMenu({
       host: uiHost,
       onResume: () => this.resumeFromPause(),
@@ -224,19 +230,29 @@ export class Game {
     this.summary = new EndOfMatch({
       // Sized to the largest roster any map asks for, so the board never has to grow.
       rowsPerTeam: 8,
-      onContinue: () => this.transitionTo('MENU'),
+      // Continue skips the XP animation rather than being blocked by it: a player who has
+      // seen the number does not need to watch the bar arrive at it.
+      onContinue: () => {
+        if (this.xpSummary.isPlaying) {
+          this.xpSummary.finish();
+          return;
+        }
+        this.transitionTo('MENU');
+      },
     });
+    // The M4 insertion point, filled (S6.1). `EndOfMatch` needed no other change.
+    this.summary.xpSlot.appendChild(this.xpSummary.element);
     uiHost.appendChild(this.summary.element);
 
     this.input = new Input({
       canvas,
-      sensitivity: this.settings.value.sensitivity,
-      invertY: this.settings.value.invertY,
+      sensitivity: settings.sensitivity,
+      invertY: settings.invertY,
     });
     this.input.onLockChange((locked) => this.onPointerLockChange(locked));
     this.input.onEscape(() => this.onEscape());
 
-    this.audio.setMasterVolume(this.settings.value.masterVolume);
+    this.audio.setMasterVolume(settings.masterVolume);
 
     this.loop = new Loop({
       sim: (tick) => this.simulate(tick),
@@ -356,6 +372,28 @@ export class Game {
       exit: () => this.menus.hide(),
     });
 
+    /**
+     * LOADOUT (M6). Declared in `GameStates.ts` since M1 with no handler; this is it.
+     *
+     * No world is built and no simulation runs — Create-a-Class is a front-end screen that
+     * reads and writes the profile, and every edit persists through `Profile` as it is
+     * made rather than on the way out. It is reachable from the menu and from the pause
+     * screen, which is S6.3's "between spawns".
+     */
+    this.states.set('LOADOUT', {
+      enter: () => {
+        this.input.clearHeld();
+        this.loadoutEditor.show();
+      },
+      exit: (to) => {
+        this.loadoutEditor.hide();
+        if (to === 'MENU') this.teardownWorld();
+        // Back into a match that is still standing: hand the new class over live. A world
+        // that was never torn down is the paused case, and `buildWorld` would no-op.
+        else if (this.match !== null) this.match.applyLoadout(this.applyLoadout());
+      },
+    });
+
     this.states.set('MATCH', {
       enter: () => {
         this.audio.start();
@@ -419,6 +457,10 @@ export class Game {
       },
     });
 
+    // A pause-screen loadout edit comes back through PAUSED, so the world it left is the
+    // world it returns to and the class change lands on a live match.
+    this.pauseMenu.setOnLoadout(() => this.transitionTo('LOADOUT'));
+
     this.states.set('SUMMARY', {
       enter: () => {
         const match = this.match;
@@ -437,8 +479,20 @@ export class Game {
           result.scoreB,
           match.score,
         );
+
+        // Bank the match here rather than in `MatchEnded`: by this point nothing else is
+        // going to change, and the profile is written exactly once (S6.6). `bankProgression`
+        // is idempotent, so a harness that re-enters SUMMARY cannot double-count.
+        const report = match.bankProgression(result.winner === PLAYER_TEAM);
+        const banks = findMode(this.selection.modeId).banksProgress;
+        this.summary.xpSlot.hidden = !banks;
+        if (banks) {
+          this.xpSummary.prestige = this.profile.prestige;
+          this.xpSummary.play(report);
+        }
       },
       exit: () => {
+        this.xpSummary.stop();
         this.summary.hide();
         this.teardownWorld();
       },
@@ -453,7 +507,19 @@ export class Game {
   // -- world ---------------------------------------------------------------
 
   private mapEntry(): ReturnType<typeof findMap> {
-    return findMap(this.selection.mapId);
+    // A mode may pin its map — the Shooting Range only exists on the grey-box testbed,
+    // because that is where the target dummies are built.
+    const forced = findMode(this.selection.modeId).forcedMapId;
+    return findMap(forced ?? this.selection.mapId);
+  }
+
+  /** Resolve the equipped class into the three long-lived weapon objects. */
+  private applyLoadout(): ResolvedLoadout {
+    return applyEquippedLoadout(this.profile, this.selection.modeId, {
+      primary: this.weaponDef,
+      secondary: this.secondaryDef,
+      botPrimary: this.botWeaponDef,
+    });
   }
 
   /**
@@ -466,6 +532,7 @@ export class Game {
     if (this.map !== null) return;
     const mapEntry = this.mapEntry();
     const modeEntry = findMode(this.selection.modeId);
+    const loadout = this.applyLoadout();
 
     const map = loadMap(mapEntry.def, this.textures);
     this.map = map;
@@ -494,6 +561,7 @@ export class Game {
       movementConfig: this.movementConfig,
       weaponDef: this.weaponDef,
       secondaryDef: this.secondaryDef,
+      botWeaponDef: this.botWeaponDef,
       viewmodelConfig: this.viewmodelConfig,
       healthConfig: this.healthConfig,
       equipmentConfig: this.equipmentConfig,
@@ -505,6 +573,9 @@ export class Game {
       perceptionConfig: this.perceptionConfig,
       schedulerConfig: this.schedulerConfig,
       seed: AI_SEED,
+      loadout,
+      profile: this.profile,
+      banksProgress: modeEntry.banksProgress,
     });
     this.match = match;
 
@@ -540,6 +611,7 @@ export class Game {
       stats: this.stats,
       speedo: this.speedo,
       matchHarness: this.matchHarness,
+      profile: this.profile,
       onConfigChanged: () => this.onConfigChanged(),
       onWeaponConfigChanged: () => this.onWeaponConfigChanged(),
     });
@@ -603,7 +675,7 @@ export class Game {
     this.player?.setConfig(this.movementConfig);
     this.map?.collision.configure(this.movementConfig.maxSlopeDeg, this.movementConfig.collisionSkin);
     this.cameraConfig.fov = clampFov(this.cameraConfig.fov);
-    this.settings.patch({ fov: this.cameraConfig.fov });
+    this.profile.patchSettings({ fov: this.cameraConfig.fov });
   }
 
   private onWeaponConfigChanged(): void {
@@ -613,9 +685,11 @@ export class Game {
       dummy.health.setConfig(this.healthConfig);
       dummy.markLabelDirty();
     }
-    // Bots carry the same weapon and the same health, so a retune has to reach them or
-    // the two sides stop sharing the damage maths that makes TTK symmetric.
-    this.match?.bots.applyWeaponDef(this.weaponDef);
+    // Bots carry the same *base* weapon and the same health, so a retune has to reach them
+    // or the two sides stop sharing the damage maths that makes TTK symmetric. From M6 the
+    // player's own def additionally carries their attachments and perks, which is exactly
+    // the difference the loadout is supposed to make and must not be issued to the enemy.
+    this.match?.bots.applyWeaponDef(this.botWeaponDef);
     this.match?.bots.applyHealthConfig(this.healthConfig);
   }
 
@@ -740,6 +814,7 @@ export class Game {
     return `${map.name} · ${map.def.brushes.length} brushes · ${map.def.props.length} props`;
   }
 
+
   /**
    * The cursor was released — almost always Esc (M5, from the M4 playtest notes).
    *
@@ -760,6 +835,19 @@ export class Game {
    * `onPointerLockChange` instead, so exactly one of the two fires.
    */
   private onEscape(): void {
+    // The Esc stack, from the M5 playtest notes: with the overlay open, Esc closes the
+    // overlay and stops. It used to fall straight through to "resume", which meant a
+    // player closing a panel was thrown back into a firefight.
+    const overlay = this.debug?.overlay;
+    if (overlay !== undefined && overlay.isVisible) {
+      overlay.setVisible(false);
+      this.overlayWasOpenBeforePause = false;
+      return;
+    }
+    if (this.state === 'LOADOUT') {
+      this.transitionTo(this.match === null ? 'MENU' : 'PAUSED');
+      return;
+    }
     if (this.state === 'PAUSED') {
       this.resumeFromPause();
       return;
@@ -800,14 +888,14 @@ export class Game {
   }
 
   private readonly onResize = (): void => {
-    this.renderer.setSize(window.innerWidth, window.innerHeight, this.settings.value.renderScale);
+    this.renderer.setSize(window.innerWidth, window.innerHeight, this.profile.settings.renderScale);
     this.cameraRig.resize(this.renderer.aspect);
     this.viewmodel.resize(this.renderer.aspect);
   };
 
   private readonly onPageHide = (): void => {
-    this.settings.patch({ modeId: this.selection.modeId, mapId: this.selection.mapId });
-    this.settings.flush();
+    this.profile.patchSettings({ modeId: this.selection.modeId, mapId: this.selection.mapId });
+    this.profile.flush();
     this.audio.suspend();
   };
 }

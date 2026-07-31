@@ -56,6 +56,19 @@ export class FlashField implements BlindSource {
   /** Every application since the last reset, newest last. Read by the debug panel. */
   readonly samples: FlashSample[] = [];
 
+  /**
+   * Per-entity multiplier on incoming intensity (M6: the Battle Hardened perk).
+   *
+   * Applied at the *source*, before the state is stored and before the event is emitted,
+   * so the number the player's white-out uses, the number a bot's perception threshold
+   * compares against and the number the debug report prints are all the same one. Scaling
+   * only the player's visuals would have made the perk a lie in exactly the direction
+   * players notice: still blind to the AI, less blind on screen.
+   *
+   * Null means "nobody resists", which is what every M5 flash measurement described.
+   */
+  resistance: ((entityId: number) => number) | null = null;
+
   constructor(
     private readonly bus: GameBus,
     private readonly cfg: EquipmentConfig,
@@ -121,7 +134,8 @@ export class FlashField implements BlindSource {
     const cos = flat < 1e-4 ? 1 : (dx * fx + dz * fz) / flat;
     const angleDeg = Math.acos(Math.max(-1, Math.min(1, cos))) * RAD2DEG;
 
-    const intensity = this.intensityFor(angleDeg, distance, radius, hadLos);
+    const resist = this.resistance?.(target.entityId) ?? 1;
+    const intensity = this.intensityFor(angleDeg, distance, radius, hadLos) * resist;
     if (intensity <= 0.02) return 0;
 
     const seconds = fullSeconds * intensity;

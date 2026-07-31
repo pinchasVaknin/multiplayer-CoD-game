@@ -51,6 +51,21 @@ export class PlayerController {
   /** Effective horizontal speed cap this tick. Surfaced by the debug overlay. */
   currentSpeedCap = 0;
 
+  /**
+   * Multiplier on every ground speed cap (M6: the Lightweight perk).
+   *
+   * A field on the controller rather than a change to `MovementConfig`, because the config
+   * is a single shared object that the tuning panel writes into and that every bot's
+   * controller reads — scaling it for a perk would give the enemy team the perk too. One
+   * multiplier per controller, defaulting to 1, leaves every M1 measurement describing the
+   * same movement code.
+   *
+   * Airborne speed is deliberately not scaled: `airSpeedCap` latches whatever the player
+   * left the ground with, so a faster run already carries into a faster jump, and scaling
+   * the cap again on top would compound.
+   */
+  speedScale = 1;
+
   private strafeInput = 0;
   private crouchHeldThisTick = false;
 
@@ -312,16 +327,17 @@ export class PlayerController {
     const sim = this.sim;
     const cfg = this.cfg;
     if (!sim.grounded) return Math.max(sim.airSpeedCap, cfg.sprintSpeed);
-    if (sim.stance === 'CROUCH') return cfg.crouchSpeed;
-    if (adsHeld) return cfg.adsSpeed;
+    const scale = this.speedScale;
+    if (sim.stance === 'CROUCH') return cfg.crouchSpeed * scale;
+    if (adsHeld) return cfg.adsSpeed * scale;
     if (sim.tacSprintActive) {
       const held = cfg.tacSprintDuration;
-      if (sim.tacSprintElapsed <= held) return cfg.tacSprintSpeed;
+      if (sim.tacSprintElapsed <= held) return cfg.tacSprintSpeed * scale;
       const t = clamp01((sim.tacSprintElapsed - held) / Math.max(cfg.tacSprintDecay, 1e-3));
-      return lerp(cfg.tacSprintSpeed, cfg.sprintSpeed, t);
+      return lerp(cfg.tacSprintSpeed, cfg.sprintSpeed, t) * scale;
     }
-    if (sim.sprintActive) return cfg.sprintSpeed;
-    return cfg.walkSpeed;
+    if (sim.sprintActive) return cfg.sprintSpeed * scale;
+    return cfg.walkSpeed * scale;
   }
 
   private performJump(): void {

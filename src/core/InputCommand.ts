@@ -50,6 +50,10 @@ export const Btn = {
    */
   Slot1: 1 << 10,
   Slot2: 1 << 11,
+
+  // -- M6 ------------------------------------------------------------------
+  /** X. Activates the loadout's field upgrade once its charge is full (S6.3). */
+  FieldUpgrade: 1 << 12,
 } as const;
 
 /**

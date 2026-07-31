@@ -64,6 +64,17 @@ export const EV = {
   KillfeedEntry: 'killfeed.entry',
   AnnouncerCue: 'announcer.cue',
 
+  // M6: progression. Only what M6 actually emits — a declared-but-never-emitted event is
+  // a lie about what the game does, which is the rule this map has followed since M1.
+  MetaXpAwarded: 'meta.xpAwarded',
+  MetaLevelUp: 'meta.levelUp',
+  MetaChallengeCompleted: 'meta.challengeCompleted',
+  MetaCamoUnlocked: 'meta.camoUnlocked',
+  MetaLoadoutChanged: 'meta.loadoutChanged',
+  PerkScavenged: 'perk.scavenged',
+  FieldUpgradeReady: 'fieldUpgrade.ready',
+  FieldUpgradeUsed: 'fieldUpgrade.used',
+
   GameStateChanged: 'game.stateChanged',
   SettingsChanged: 'settings.changed',
 } as const;
@@ -330,6 +341,24 @@ export type GameEvents = {
     involvesLocal: boolean;
   };
   [EV.AnnouncerCue]: { cue: AnnouncerCue };
+
+  /**
+   * M6 progression.
+   *
+   * All of these are *presentation* events: the profile is already updated by the time
+   * they fire, and nothing gameplay-facing subscribes to them. That is deliberate — XP
+   * must not be able to change what a match does, or acceptance criterion 9 ("progression
+   * costs nothing in the hot path") stops being a measurement and becomes a hope.
+   */
+  [EV.MetaXpAwarded]: { total: number; xpBefore: number; xpAfter: number };
+  [EV.MetaLevelUp]: { level: number; prestige: number; unlockCount: number };
+  [EV.MetaChallengeCompleted]: { id: string; name: string; xp: number; camo: string | null };
+  [EV.MetaCamoUnlocked]: { camoId: string; name: string };
+  [EV.MetaLoadoutChanged]: { slotIndex: number; name: string };
+  /** Scavenger picked a magazine off a body. Carries where, so the audio is positional. */
+  [EV.PerkScavenged]: { entityId: number; x: number; y: number; z: number; rounds: number };
+  [EV.FieldUpgradeReady]: { upgradeId: string; entityId: number };
+  [EV.FieldUpgradeUsed]: { upgradeId: string; entityId: number; x: number; y: number; z: number };
 
   [EV.GameStateChanged]: { from: GameStateId; to: GameStateId };
   [EV.SettingsChanged]: { key: string };

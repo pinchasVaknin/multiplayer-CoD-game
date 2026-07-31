@@ -125,6 +125,16 @@ export class BotDirector {
    */
   respawnPolicy: RespawnPolicy | null = null;
 
+  /**
+   * Whose footsteps never reach the noise field (M6: the Dead Silence perk).
+   *
+   * Null means "everybody is audible", which is what every M3-M5 measurement was taken
+   * against. It is a predicate rather than a set because the answer is a property of a
+   * loadout the AI package has no business knowing about — `ai/` asks "can I hear this
+   * entity", and `Match` answers.
+   */
+  silentFootsteps: ((entityId: number) => boolean) | null = null;
+
   readonly group = new THREE.Group();
   readonly nav: NavGrid;
   readonly perception: Perception;
@@ -385,6 +395,9 @@ export class BotDirector {
         // Crouch-walking is silent by design: S6.3 gives footsteps a 12 m radius and
         // qualifies it with "non-crouch", which is the whole reason to ever crouch-walk.
         if (p.quiet) return;
+        // Dead Silence (M6, S6.4). The step still sounds for the *player* — it is the
+        // enemy's hearing that is cut, so the perk is felt by them and not by you.
+        if (this.silentFootsteps?.(p.entityId) === true) return;
         this.perception.noise.emit(
           NoiseKind.Footstep,
           p.entityId,

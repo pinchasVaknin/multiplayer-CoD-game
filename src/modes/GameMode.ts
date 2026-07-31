@@ -26,7 +26,7 @@ import type { GameBus } from '../core/Events';
  */
 export type Entity = Combatant;
 
-export type GameModeId = 'TDM' | 'DOM' | 'FFA' | 'SND' | 'KC';
+export type GameModeId = 'TDM' | 'RANGE' | 'DOM' | 'FFA' | 'SND' | 'KC';
 
 /** One kill, resolved. Built by `MatchFlow` from `entity.killed` plus the roster. */
 export interface KillEvent {

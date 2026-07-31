@@ -28,6 +28,11 @@ export class PauseMenu {
   private readonly status: HTMLElement;
   private readonly deps: PauseMenuDeps;
   private readonly resumeButton: HTMLButtonElement;
+  /**
+   * M6. Bound after construction because `Game` registers its states — and therefore
+   * learns how to reach LOADOUT — after the menus exist.
+   */
+  private onLoadout: (() => void) | null = null;
 
   constructor(deps: PauseMenuDeps) {
     this.deps = deps;
@@ -45,20 +50,27 @@ export class PauseMenu {
 
     this.resumeButton = button('Resume', () => deps.onResume());
     this.resumeButton.classList.add('op-btn--primary');
+    // S6.3's "between spawns": the class change lands on the live match on the way back.
+    const loadout = button('Create a class', () => this.onLoadout?.());
     const debug = button('Debug overlay', () => deps.onToggleDebug());
     const quit = button('Quit to menu', () => deps.onQuit());
     quit.classList.add('op-btn--quiet');
 
     const actions = document.createElement('div');
     actions.className = 'op-actions op-actions--stack';
-    actions.append(this.resumeButton, debug, quit);
+    actions.append(this.resumeButton, loadout, debug, quit);
 
     const hint = document.createElement('p');
     hint.className = 'op-screen__sub';
-    hint.textContent = 'Esc to resume · F1 for the overlay · Tab for the scoreboard';
+    // F1 is no longer bound during play (M5 playtest note); the overlay is a button here.
+    hint.textContent = 'Esc to resume · overlay above · Tab for the scoreboard';
 
     this.screen.append(heading, this.status, actions, hint);
     deps.host.appendChild(this.screen);
+  }
+
+  setOnLoadout(fn: () => void): void {
+    this.onLoadout = fn;
   }
 
   show(): void {

@@ -68,6 +68,11 @@ export class Inventory {
     return this.weapons[index];
   }
 
+  /** Every slot. The MUNITIONS field upgrade resupplies all of them, not just the one held. */
+  get all(): readonly Weapon[] {
+    return this.weapons;
+  }
+
   /**
    * Replace what is in a slot. Used by the loadout picker and by the live retune path;
    * ammo is reset because it is a different gun, not the same gun with different numbers.

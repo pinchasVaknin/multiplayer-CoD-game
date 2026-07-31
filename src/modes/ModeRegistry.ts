@@ -3,6 +3,7 @@ import type { MapDef } from '../world/maps/types';
 import { FOUNDRY_MAP } from '../world/maps/foundry';
 import { GREYBOX_MAP } from '../world/maps/greybox';
 import type { GameMode, GameModeId, ModeDeps } from './GameMode';
+import { Range } from './Range';
 import { Tdm } from './Tdm';
 
 /**
@@ -23,6 +24,25 @@ export interface ModeEntry {
   /** One line, shown under the mode's name in the menu. */
   readonly blurb: string;
   readonly create: (deps: ModeDeps) => GameMode;
+  /**
+   * M6. Whether this mode fills the map with bots. The range does not.
+   *
+   * A mode-level flag rather than a map-level one: the grey-box map is also a legitimate
+   * TDM arena and had a bot roster in M4 and M5.
+   */
+  readonly populatesRoster: boolean;
+  /**
+   * M6. Whether unlock gates are lifted for this mode.
+   *
+   * True only on the range, where the entire point is testing weapons the account has not
+   * earned yet. `banksProgress` moves with it: a mode that hands you everything must not
+   * be able to hand you XP for using it.
+   */
+  readonly unrestricted: boolean;
+  /** Whether a finished match writes to the profile. */
+  readonly banksProgress: boolean;
+  /** Which map this mode forces, or null to let the player choose. */
+  readonly forcedMapId: string | null;
 }
 
 export const MODES: readonly ModeEntry[] = [
@@ -31,6 +51,21 @@ export const MODES: readonly ModeEntry[] = [
     name: 'TEAM DEATHMATCH',
     blurb: 'First to 75 kills, or ten minutes',
     create: (deps) => new Tdm(deps),
+    populatesRoster: true,
+    unrestricted: false,
+    banksProgress: true,
+    forcedMapId: null,
+  },
+  {
+    id: 'RANGE',
+    name: 'SHOOTING RANGE',
+    blurb: 'Every weapon unlocked · dummies · nobody shooting back',
+    create: (deps) => new Range(deps),
+    populatesRoster: false,
+    unrestricted: true,
+    banksProgress: false,
+    // The dummies are built into the grey-box map, so the range is only that map.
+    forcedMapId: GREYBOX_MAP.id,
   },
 ];
 

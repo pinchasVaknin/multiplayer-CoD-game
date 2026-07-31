@@ -362,3 +362,45 @@ body.op-locked .dbg-root {
   border: 1px solid var(--c-line);
   border-radius: var(--radius);
 }
+
+/* ---- M6: the progression panels ---------------------------------------- */
+
+/*
+ * `dbg-buttons` and `dbg-table` are the two shapes M6's panels needed and M1-M5 did not
+ * have: a wrapping row of small actions, and a label/value list that is rebuilt wholesale
+ * rather than field by field. Both reuse the existing `dbg-btn` and `dbg-row` vocabulary
+ * so the new sections read as part of the same overlay.
+ */
+.dbg-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+  margin: var(--s-1) 0;
+}
+
+.dbg-table {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* The raw save. Monospaced, scrollable, and editable in place. */
+.dbg-json {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  line-height: 1.45;
+  color: var(--c-text);
+  background: var(--c-void);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  padding: var(--s-2);
+  resize: vertical;
+  white-space: pre;
+  overflow: auto;
+}
+
+.dbg-json:focus-visible {
+  outline: 1px solid var(--c-accent);
+  outline-offset: -1px;
+}
