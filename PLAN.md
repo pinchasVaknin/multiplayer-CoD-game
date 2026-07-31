@@ -1618,6 +1618,18 @@ into `Match` + `MatchEquipment`, and `Hud` into `Hud` + `HudTactical` — but `G
 over, and `Game.ts` remains the one to split next along the world-lifecycle seam.
 `public/verify/*.js` still ship in a production build — now six files.
 
+### M5 Playtest Feedback (To be implemented DURING M6)
+**Firing Range / Testing Map:** The user wants to test the 12 new weapons. 
+Please re-enable the M2 grey-box firing range as a dedicated, 
+selectable "Shooting Range" game mode in the main menu (with zero enemy bots and active DPS/damage dummies) 
+so all weapons can be tested freely once the Loadout system is built.
+**Bot Accuracy Scaling:** Although bot aim logic exists, they feel too accurate at long distances. 
+Please verify that weapon-specific spread and distance-based accuracy falloff are effectively penalizing bot aim vectors at longer ranges.
+**Debug Overlay (F1) UX Overhaul:** Remove the `F1` hotkey binding during active gameplay to prevent pointer lock and UI conflicts. 
+The Tuning/Debug overlay should now *only* be accessible via a dedicated button inside the PAUSE menu. 
+Add a clear "X" (Close) button to the overlay itself. 
+Finally, fix the `ESC` stack: pressing `ESC` while the overlay is open should close the overlay and return to the PAUSE menu, not unpause the game entirely.
+
 ## What is playable right now
 
 Drop into Foundry and there are twelve guns to pick from — press F1 and the *Arsenal* panel is
