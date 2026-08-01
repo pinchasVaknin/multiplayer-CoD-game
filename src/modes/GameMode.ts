@@ -2,6 +2,7 @@ import type { Combatant } from '../ai/Combatant';
 import type { HitZone } from '../combat/HitboxRig';
 import type { PlayerScore, ScoreSystem, ScoreTeam } from '../combat/ScoreSystem';
 import type { GameBus } from '../core/Events';
+import type { MapDef } from '../world/maps/types';
 
 /**
  * What a game mode is (brief S6.2).
@@ -76,6 +77,15 @@ export interface ModeDeps {
   readonly score: ScoreSystem;
   /** Bots *and* the player. Modes must add to this array, never around it (see PLAN.md). */
   readonly roster: readonly Combatant[];
+  /**
+   * The map, for its authored objectives (M7).
+   *
+   * M4 wrote Domination's three flags and Search & Destroy's two bomb sites into `MapDef`
+   * ahead of the modes that consume them, precisely so this milestone would not have to move
+   * them after the lanes were balanced. A mode reads them here and never positions anything
+   * itself — objective placement is map data, like everything else about a map.
+   */
+  readonly mapDef: MapDef;
 }
 
 export abstract class GameMode {

@@ -238,6 +238,7 @@ function buildCamoSurfaces(
       metalness: 0,
     }),
   );
+  addOpticSurfaces(out);
   return out;
 }
 
@@ -279,7 +280,46 @@ function buildDefaultSurfaces(anisotropy: number): Map<SurfaceKey, THREE.MeshSta
       metalness: 0,
     }),
   );
+  addOpticSurfaces(out);
   return out;
+}
+
+/**
+ * The red dot's glass and its dot (M7).
+ *
+ * Shared by the default and camo sets and deliberately *not* camouflaged: a painted lens is
+ * not a lens, and the dot is the one thing on the weapon that has to stay legible against
+ * every background the map can put behind it.
+ *
+ * `depthWrite: false` on the glass is the load-bearing flag. With it on, the window writes
+ * depth and everything seen through it — the enemy you are aiming at — is rejected by the
+ * depth test, which is the opaque-optic bug wearing a transparent material.
+ */
+function addOpticSurfaces(out: Map<SurfaceKey, THREE.MeshStandardMaterial>): void {
+  out.set(
+    'lens',
+    new THREE.MeshStandardMaterial({
+      color: 0x18242e,
+      roughness: 0.07,
+      metalness: 0,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false,
+    }),
+  );
+  out.set(
+    'reticle',
+    new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      emissive: 0xff2a1e,
+      emissiveIntensity: 3.5,
+      roughness: 1,
+      metalness: 0,
+      // The dot is a light source, not a lit surface: tone mapping would drag it toward the
+      // scene's exposure and a red dot that dims in a bright lane is not a red dot.
+      toneMapped: false,
+    }),
+  );
 }
 
 /** Release the process-wide materials. Only the page teardown has any business calling it. */

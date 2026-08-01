@@ -12,7 +12,15 @@ import type { WeaponModelSpec } from './WeaponModelSpecs';
  * centre of the receiver.
  */
 
-export type SurfaceKey = 'gunmetal' | 'polymer' | 'glove';
+/**
+ * `lens` and `reticle` are M7's.
+ *
+ * A red dot's window used to be a `gunmetal` box sitting exactly on the sight line, which is
+ * why the M6 playtest reported the SMG optic as "rendering opaque, blocking the target
+ * entirely" — it was not a material bug, it was a solid plate across the aperture. The window
+ * is glass now and the dot is its own emissive speck, which is the part you actually aim with.
+ */
+export type SurfaceKey = 'gunmetal' | 'polymer' | 'glove' | 'lens' | 'reticle';
 
 export interface BoxPart {
   readonly surface: SurfaceKey;
@@ -198,97 +206,69 @@ export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
   }
 
   // -- optic ---------------------------------------------------------------
+  //
+  // Everything here is placed relative to `sightHeight` rather than to the rail (M7).
+  //
+  // The rail-relative version was authored against the AR's 0.082 m receiver with absolute
+  // box sizes, and those sizes do not shrink with the weapon. On the pistol — receiver 0.062,
+  // sight line 0.042 — the front and rear sight *bases* both ended up straddling the sight
+  // line, so aiming meant looking into a solid block of gunmetal. That is the M6 playtest's
+  // "pistol viewmodel obscuring the target"; the pose was a symptom, the geometry was the bug.
+  //
+  // Derived from the sight line, the aperture is clear on all twelve weapons by construction:
+  // bases stop below it, posts straddle it and frame it, and only the front blade crosses it,
+  // which is the one piece of metal you are supposed to be looking at.
   const railY = spec.receiverHeight * 0.73;
+  const lineY = spec.sightHeight;
   switch (spec.optic) {
-    case 'irons':
-      // Front post on the barrel end, rear notch over the receiver.
-      out.push({
-        surface: 'gunmetal',
-        x: 0,
-        y: railY + 0.006,
-        z: hgEnd - 0.01,
-        w: spec.receiverWidth * 0.5,
-        h: 0.026,
-        d: 0.03,
-      });
-      out.push({
-        surface: 'gunmetal',
-        x: 0,
-        y: spec.sightHeight - 0.006,
-        z: hgEnd - 0.01,
-        w: 0.007,
-        h: 0.03,
-        d: 0.007,
-      });
-      out.push({
-        surface: 'gunmetal',
-        x: 0,
-        y: railY,
-        z: back * 0.45,
-        w: spec.receiverWidth * 0.56,
-        h: 0.02,
-        d: 0.028,
-      });
-      out.push({
-        surface: 'gunmetal',
-        x: -0.0135,
-        y: spec.sightHeight - 0.004,
-        z: back * 0.45,
-        w: 0.008,
-        h: 0.026,
-        d: 0.024,
-      });
-      out.push({
-        surface: 'gunmetal',
-        x: 0.0135,
-        y: spec.sightHeight - 0.004,
-        z: back * 0.45,
-        w: 0.008,
-        h: 0.026,
-        d: 0.024,
-      });
+    case 'irons': {
+      const baseTop = lineY - 0.008;
+      const baseH = 0.014;
+      const baseY = baseTop - baseH * 0.5;
+      // Posts rise from the base and stop just past the line, so the notch reads as a notch.
+      const postH = 0.012;
+      const postY = baseTop + postH * 0.5;
+      // The blade is the aiming reference and is allowed to reach the line.
+      const bladeH = 0.011;
+      const bladeY = baseTop + bladeH * 0.5;
+
+      // Front sight: base and blade, on the barrel end.
+      out.push({ surface: 'gunmetal', x: 0, y: baseY, z: hgEnd - 0.01, w: spec.receiverWidth * 0.5, h: baseH, d: 0.03 });
+      out.push({ surface: 'gunmetal', x: 0, y: bladeY, z: hgEnd - 0.01, w: 0.007, h: bladeH, d: 0.007 });
+
+      // Rear sight: base and the two notch posts, over the receiver.
+      out.push({ surface: 'gunmetal', x: 0, y: baseY, z: back * 0.45, w: spec.receiverWidth * 0.56, h: baseH, d: 0.028 });
+      for (const side of [-1, 1]) {
+        const postX = Math.min(0.0135, spec.receiverWidth * 0.42);
+        out.push({ surface: 'gunmetal', x: side * postX, y: postY, z: back * 0.45, w: 0.008, h: postH, d: 0.024 });
+      }
       break;
-    case 'reddot':
-      out.push({
-        surface: 'gunmetal',
-        x: 0,
-        y: railY + 0.012,
-        z: back * 0.2,
-        w: 0.03,
-        h: 0.026,
-        d: 0.052,
-      });
-      out.push({
-        surface: 'gunmetal',
-        x: 0,
-        y: spec.sightHeight,
-        z: back * 0.2,
-        w: 0.038,
-        h: 0.036,
-        d: 0.006,
-      });
+    }
+    case 'reddot': {
+      const z = back * 0.2;
+      // A U-shaped housing — floor, two walls, a hood — rather than one block. The block
+      // *was* the window, and a solid window is the bug this rebuild exists to close.
+      out.push({ surface: 'gunmetal', x: 0, y: lineY - 0.021, z, w: 0.036, h: 0.015, d: 0.052 });
+      for (const side of [-1, 1]) {
+        out.push({ surface: 'gunmetal', x: side * 0.019, y: lineY - 0.002, z, w: 0.006, h: 0.034, d: 0.05 });
+      }
+      out.push({ surface: 'gunmetal', x: 0, y: lineY + 0.017, z, w: 0.044, h: 0.005, d: 0.05 });
+      // The glass, and the dot floating behind it on the sight line.
+      out.push({ surface: 'lens', x: 0, y: lineY - 0.002, z: z - 0.021, w: 0.031, h: 0.032, d: 0.002 });
+      out.push({ surface: 'reticle', x: 0, y: lineY, z: z - 0.024, w: 0.0032, h: 0.0032, d: 0.0012 });
       break;
-    case 'scope':
-      // Two rings and a tube; the objective bell is the give-away at a glance.
-      out.push({
-        surface: 'gunmetal',
-        x: 0,
-        y: railY + 0.01,
-        z: back * 0.25,
-        w: 0.026,
-        h: 0.022,
-        d: 0.016,
-      });
-      out.push({
-        surface: 'gunmetal',
-        x: 0,
-        y: railY + 0.01,
-        z: back * 0.25 - spec.opticLength * 0.62,
-        w: 0.026,
-        h: 0.022,
-        d: 0.016,
-      });
+    }
+    case 'scope': {
+      // Two rings and a tube; the objective bell is the give-away at a glance. The rings
+      // now bridge the rail to the tube's underside rather than floating below it.
+      const tubeBottom = lineY - 0.016;
+      const ringH = Math.max(0.008, tubeBottom - railY);
+      const ringY = railY + ringH * 0.5;
+      for (const dz of [0, -spec.opticLength * 0.62]) {
+        out.push({ surface: 'gunmetal', x: 0, y: ringY, z: back * 0.25 + dz, w: 0.026, h: ringH, d: 0.016 });
+      }
       break;
+    }
   }
 
   // -- bipod ---------------------------------------------------------------

@@ -24,8 +24,8 @@ export interface LoadoutTargets {
   /** The player's primary, resolved: base + attachments + perks. */
   readonly primary: WeaponDef;
   readonly secondary: WeaponDef;
-  /** What the bots carry: the *base* of the player's primary, unmodified. */
-  readonly botPrimary: WeaponDef;
+  /** The *base* of the player's primary, unmodified. Not what bots carry — see `BotArsenal`. */
+  readonly playerBase: WeaponDef;
 }
 
 /**
@@ -43,7 +43,7 @@ export function applyEquippedLoadout(
   const loadout = profile.resolveEquipped(findMode(modeId).unrestricted);
   copyWeaponDefInto(loadout.primary, targets.primary);
   copyWeaponDefInto(loadout.secondary, targets.secondary);
-  copyWeaponDefInto(loadout.primaryBase, targets.botPrimary);
+  copyWeaponDefInto(loadout.primaryBase, targets.playerBase);
   return loadout;
 }
 

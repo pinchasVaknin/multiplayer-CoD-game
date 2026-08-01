@@ -1,6 +1,3 @@
-Please read the bottom of PLAN.md very carefully. You have a critical refactor and some hotfixes to do BEFORE starting the M7 spec.
-
-
 # OPERATOR — PLAN
 
 Browser arena FPS, eight milestones. This file is the running record of what exists,
@@ -18,7 +15,7 @@ what was decided, and what the next milestone needs to know.
 | 4 | Map and Team Deathmatch | **Complete** — see below |
 | 5 | Arsenal | **Complete** — see below |
 | 6 | Progression and loadouts | **Complete** — see below |
-| 7 | Killstreaks and perks | Not started |
+| 7 | Killstreaks and Modes | **In progress** — modes + pre-M7 refactor done; streaks not started |
 | 8 | UI, settings, polish | Not started |
 
 ---
@@ -2022,3 +2019,136 @@ shooting range now too, where every weapon is unlocked, nothing counts, and nobo
 back. And under the pause menu the overlay will show you every perk as a before and after,
 every challenge as a fraction, every event the match has fired, and a button that plays four
 hundred matches in a millisecond and tells you it takes thirty-six hours to reach fifty-five.
+
+---
+
+# Milestone 7 — Killstreaks and Modes — **IN PROGRESS**
+
+**Status: the pre-M7 mandate and the four game modes are built and verified. The `streaks/`
+package is not yet started.** This section is the honest running record; it will be rewritten
+into the usual "what was built / deviations / verification" shape when the milestone closes.
+
+## Done and measured
+
+### The refactor PLAN.md asked for first
+
+`Game.ts` 905 -> 770 lines. The world lifecycle moved to **`MatchWorld.ts`** (280) and the
+front end to **`GameScreens.ts`** (144). The point was not to move code but to move the
+*nullability*: six fields that were only ever all-present or all-absent became one
+`MatchWorld | null`, so `Game.simulate` asks once at the top instead of four optional chains,
+and `MatchWorld` itself contains no `?.` at all. Build and teardown are adjacent in one file,
+which is what makes the mirror rule checkable.
+
+`game.map` and `game.player` are now public getters. Six shipped `public/verify/*.js` reach for
+those names — TypeScript's `private` is compile-time only — so the move would otherwise have
+silently broken them.
+
+### Critical hotfix 1: bot loadouts are isolated
+
+`ai/BotArsenal.ts` deals each bot its own weapon from a per-tier pool, drawn from the director's
+seeded `Rng`. M6 had fixed the wrong half of this bug: it isolated *attachments and perks* but
+still handed bots `loadout.primaryBase`, so equipping a sniper armed all nine. The misnamed
+`botWeaponDef` is now `playerBaseDef` — bots never read it, and its one remaining job is the M6
+modifier panel.
+
+**Measured:** player holding `sniper_vantage`, **0 of 9 bots** carrying it, five distinct bot
+weapons on the map, tier-appropriate (Recruits carbine/SMG, Veterans sniper).
+
+### Critical hotfix 2: optics and the pistol sight line
+
+The red dot's window was a solid `gunmetal` box sitting exactly on the sight line — not a
+material bug, a plate across the aperture. It is glass now (`lens`, `depthWrite: false`) with an
+emissive `reticle` dot. Iron sights are rebuilt relative to `sightHeight` instead of the rail,
+because the rail-relative version used absolute box sizes authored for the AR's 0.082 m receiver
+and put the pistol's own sight line *inside* its front and rear sight bases. The pistol's
+`sightHeight` went 0.042 -> 0.062, which also fixes the "sitting too high" pose: ADS holds a
+weapon `sightHeight - 0.0915` lower, so a sight line 50 mm under the reference lifted the whole
+gun up the screen.
+
+**Measured** by ray-testing the real built viewmodel triangles at full ADS, in viewmodel-camera
+space, across all twelve weapons. Iron-sight weapons: centre ray hits the front blade (carbine
+0.68 m, pistol 0.50 m), **rays at +/-5 mm and +/-6 mm are clear**, +/-10 mm hits the rear notch
+posts — a correct sight picture. Red-dot weapons: **no opaque hit at any offset**, glass and dot
+only. Scoped weapons additionally hand off to the scope overlay at `SCOPE_VIEWMODEL_HIDDEN`,
+because a scope tube is a solid cylinder 0.17 m from the eye and was filling the clear centre.
+
+### Weapon-aware bot AI
+
+`ai/WeaponProfile.ts` bends the tier's own numbers by weapon class — the tier still decides how
+*good* a bot is, the weapon decides where it wants to be standing. Plus `tryFallBack`, the mirror
+of `tryPush`, so a sniper caught in a doorway gives ground.
+
+**Measured**, controlled single-class rosters, engagement range:
+
+| Roster | median | p90 | max |
+|---|---|---|---|
+| Shotgun | 9.0 m | 12.5 m | 13.5 m |
+| Sniper | 23.3 m | 39.5 m | 51.5 m |
+
+Organic mixed roster: SMG median 12.7 m (max 24.7), AR median 20.4 m (max 42.4).
+
+### Two latent M3 bugs the arsenal exposed
+
+1. **`LOW_MAGAZINE` was an absolute 8.** Invisible while every bot carried the 30-round carbine;
+   a hard lock the moment shotguns appeared. A full 6-round magazine is already "low", so the bot
+   asked for RELOAD on every decision — and `IDLE -> RELOAD` was not a legal edge, so it never
+   left IDLE. Nine bots stood still for a whole match. Now `LOW_MAGAZINE_FRACTION = 0.28`, which
+   reproduces the carbine's 8 exactly so no M3 measurement moves. `IDLE -> RELOAD` is now legal.
+2. **`OBJECTIVE` was not a firing state.** Bots walked through firefights with the trigger
+   disabled. Found the first time S&D ran: defenders strolled past the attackers who had just
+   planted and defused unopposed, five rounds out of five.
+
+### The four modes
+
+`Domination`, `KillConfirmed`, `FreeForAll`, `SearchAndDestroy`, plus `ObjectiveZone` (capture
+maths shared by flags and bomb sites) and `ai/ObjectiveIntent.ts` — the seam that lets bots play
+objectives without `ai/` importing a mode. `ScoreSystem` grew `captures`/`defends`/`plants`/
+`defuses`/`tags` and `recordObjective`. `ModeDeps` grew `mapDef`; `modesForMap` hides a mode on a
+map that authors no objectives for it.
+
+**Measured:**
+
+| Mode | Result |
+|---|---|
+| Domination | **13 flag captures by bots**; roster split **4 capturing / 5 defending** — the brief's "do not all leave home" |
+| Kill Confirmed | **51 tags dropped, 48 collected — 34 confirmed and 14 denied**; score 7-27 |
+| Free-for-All | 8-player roster (7 bots + player), builds and runs clean |
+| Search & Destroy | Full **best-of-nine to completion**, plants and defuses both non-zero, **zero respawns during a live round** |
+
+Per-mode scoreboard columns confirmed: DOM `cap,def`; KC `tags`; S&D `plants,defuses`.
+
+**Side swap, verified directly** (M4 made `flow.swapSides()` public for exactly this): spawn
+zones genuinely flip — team A's mean spawn Z **+9.9 -> -8.3**, team B's **-7.5 -> +9.3** — the
+round tally swaps (A2/B1 -> A1/B2), and spawn safety holds afterwards: **120 selections, minimum
+enemy distance 41.77 m, zero cone violations, zero visibility violations**.
+
+### Mode harness (S7)
+
+`?harness=botmatch&mode=SND&bots=10&speed=30` runs any mode with nobody at the keyboard.
+`MAX_SPEED` raised 16 -> 32 so a best-of-nine finishes in under a wall minute.
+
+Taking the human out matters more in M7 than M3: with one life per round an idle player on team A
+is not a neutral observer, it makes every S&D round a 4-v-5 and the attacking side wins all nine.
+That was the cause of the first several sweeps, and it was the harness, not the mode.
+
+## Problems found in the brief so far
+
+1. **"Best of 9 rounds, sides swap at 5" cannot always show the swap.** First to five ends a 5-0
+   sweep *at* round five, so the swap after round five never runs. The rule is self-consistent;
+   it just means the swap is not reachable in a sweep. Verified directly instead.
+2. **S&D rounds are deterministic.** Fixed `AI_SEED` plus an identical round reset means rounds
+   2-5 replay round 1 almost exactly, so a bot-only best-of-nine is a sweep rather than a mixed
+   match. Real variety needs per-round spawn variation; noted for the close-out pass.
+3. **FFA's eight sides do not exist underneath.** `ScoreTeam` is `'A' | 'B'` and spawn safety,
+   perception and the killfeed are all written against it. FFA keeps the two-team substrate and
+   makes it irrelevant — the win condition scans individual rows and the banner shows the best
+   individual per side. Rewriting the M4 foundation for one mode was the wrong trade.
+
+## Not yet built
+
+- **`streaks/` — the whole package.** `KillstreakBase` and all six streaks.
+- Perk activation (Ghost / Hardline / Cold-Blooded — the M6 hooks are still inert).
+- HUD additions (capture rings, flag ownership, tag markers, bomb timer, UAV sweep, mortar overlay).
+- Shooting Range overhaul and the M6 playtest range items.
+- Debug panels for streak state, sentry targeting, care-package contest; frame-stats streak fields.
+- Acceptance criteria 1, 2, 7, 8, 9 and the FFA half of 6.

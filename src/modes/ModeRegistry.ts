@@ -3,7 +3,11 @@ import type { MapDef } from '../world/maps/types';
 import { FOUNDRY_MAP } from '../world/maps/foundry';
 import { GREYBOX_MAP } from '../world/maps/greybox';
 import type { GameMode, GameModeId, ModeDeps } from './GameMode';
+import { Domination } from './Domination';
+import { FreeForAll } from './FreeForAll';
+import { KillConfirmed } from './KillConfirmed';
 import { Range } from './Range';
+import { SearchAndDestroy, SND_CONFIG } from './SearchAndDestroy';
 import { Tdm } from './Tdm';
 
 /**
@@ -43,6 +47,32 @@ export interface ModeEntry {
   readonly banksProgress: boolean;
   /** Which map this mode forces, or null to let the player choose. */
   readonly forcedMapId: string | null;
+  /**
+   * M7. Total combatants including the player, or null to use the map's own team size.
+   *
+   * Only Free-for-All sets it: S6.2 fixes FFA at eight players regardless of which map it is
+   * played on, where every other mode takes the roster the map was balanced for.
+   */
+  readonly rosterSize?: number;
+  /**
+   * M7. Whether every other combatant is hostile regardless of side.
+   *
+   * True in FFA only. The two-team substrate stays — see `FreeForAll` — and this flag is what
+   * makes spawn safety and the bot brain treat all seven opponents as threats.
+   */
+  readonly freeForAll?: boolean;
+  /**
+   * M7. Which map objectives this mode requires. A mode listed here is hidden on a map that
+   * does not author them, rather than throwing when the match is built.
+   */
+  readonly requiresObjective?: 'flag' | 'bombsite';
+  /**
+   * M7. Multiplier on every tier's push aggression while this mode is running.
+   *
+   * Only Search & Destroy sets it. One life per round means a trade is a loss, so bots hold
+   * angles instead of closing — the brief's "push aggression should drop sharply".
+   */
+  readonly pushAggressionScale?: number;
 }
 
 export const MODES: readonly ModeEntry[] = [
@@ -55,6 +85,51 @@ export const MODES: readonly ModeEntry[] = [
     unrestricted: false,
     banksProgress: true,
     forcedMapId: null,
+  },
+  {
+    id: 'DOM',
+    name: 'DOMINATION',
+    blurb: 'Three flags · 200 points · one a flag every five seconds',
+    create: (deps) => new Domination(deps),
+    populatesRoster: true,
+    unrestricted: false,
+    banksProgress: true,
+    forcedMapId: null,
+    requiresObjective: 'flag',
+  },
+  {
+    id: 'KC',
+    name: 'KILL CONFIRMED',
+    blurb: 'Kills drop tags · collect to score, deny to refuse · 65 tags',
+    create: (deps) => new KillConfirmed(deps),
+    populatesRoster: true,
+    unrestricted: false,
+    banksProgress: true,
+    forcedMapId: null,
+  },
+  {
+    id: 'FFA',
+    name: 'FREE-FOR-ALL',
+    blurb: 'Eight operators · no teams · first to 30',
+    create: (deps) => new FreeForAll(deps),
+    populatesRoster: true,
+    unrestricted: false,
+    banksProgress: true,
+    forcedMapId: null,
+    rosterSize: 8,
+    freeForAll: true,
+  },
+  {
+    id: 'SND',
+    name: 'SEARCH & DESTROY',
+    blurb: 'One life · plant or defuse · best of nine, sides swap at five',
+    create: (deps) => new SearchAndDestroy(deps),
+    populatesRoster: true,
+    pushAggressionScale: SND_CONFIG.cautionScale,
+    unrestricted: false,
+    banksProgress: true,
+    forcedMapId: null,
+    requiresObjective: 'bombsite',
   },
   {
     id: 'RANGE',
@@ -111,6 +186,22 @@ export function findMode(id: GameModeId): ModeEntry {
   const found = MODES.find((m) => m.id === id);
   if (found === undefined) throw new Error(`Unknown game mode "${id}"`);
   return found;
+}
+
+/**
+ * Modes that can actually be played on this map (M7).
+ *
+ * Domination needs flags and Search & Destroy needs bomb sites; the grey-box testbed authors
+ * neither. Filtering here means the menu never offers a match that would throw on construction,
+ * and adding a second map with objectives makes both modes appear on it with no further work.
+ */
+export function modesForMap(mapId: string): ModeEntry[] {
+  const map = MAPS.find((m) => m.id === mapId);
+  const kinds = new Set((map?.def.objectives ?? []).map((o) => o.kind));
+  return MODES.filter((mode) => {
+    if (mode.forcedMapId !== null && mode.forcedMapId !== mapId) return false;
+    return mode.requiresObjective === undefined || kinds.has(mode.requiresObjective);
+  });
 }
 
 export function findMap(id: string): MapEntry {

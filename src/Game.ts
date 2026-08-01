@@ -17,31 +17,30 @@ import { CameraRig, type CameraDrive } from './engine/CameraRig';
 import { ProceduralAudio } from './engine/ProceduralAudio';
 import { ProceduralTextures } from './engine/ProceduralTextures';
 import { Renderer } from './engine/Renderer';
-import { BotHarness, parseHarnessOptions } from './debug/BotHarness';
-import { DebugSuite } from './debug/DebugSuite';
+import { parseHarnessOptions } from './debug/BotHarness';
+import type { BotHarness } from './debug/BotHarness';
+import type { DebugSuite } from './debug/DebugSuite';
 import { FrameStats } from './debug/FrameStats';
 import { installConsoleApi } from './debug/ConsoleApi';
 import { Harness } from './debug/Harness';
 import { MatchHarness } from './debug/MatchHarness';
 import { Speedometer } from './debug/Speedometer';
 import { isLegalGameTransition, type GameStateId } from './GameStates';
-import { Match } from './Match';
+import type { Match } from './Match';
 import { PLAYER_TEAM } from './Match';
-import { applyEquippedLoadout, asModeId, profileLine } from './GameLoadout';
+import { MatchWorld } from './MatchWorld';
+import { GameScreens } from './GameScreens';
+import { applyEquippedLoadout, asModeId } from './GameLoadout';
 import type { ResolvedLoadout } from './meta/Loadouts';
 import { Profile } from './meta/Profile';
 import { defaultSettings } from './meta/SaveData';
 import { DEFAULT_MAP_ID, DEFAULT_MODE_ID, findMap, findMode } from './modes/ModeRegistry';
-import { LoadoutEditor } from './ui/LoadoutEditor';
-import { XpSummary } from './ui/XpSummary';
 import { DEFAULT_CAMERA_CONFIG, FOV_MAX, FOV_MIN, type CameraConfig } from './player/CameraConfig';
 import { DEFAULT_HEALTH_CONFIG, type HealthConfig } from './player/Health';
 import { DEFAULT_MOVEMENT_CONFIG, cloneMovementConfig, type MovementConfig } from './player/MovementConfig';
-import { PlayerController } from './player/PlayerController';
+import type { PlayerController } from './player/PlayerController';
 import { ViewmodelLayer } from './player/Viewmodel';
-import { EndOfMatch } from './ui/EndOfMatch';
-import { Menus, type MenuSelection } from './ui/Menus';
-import { PauseMenu } from './ui/PauseMenu';
+import type { MenuSelection } from './ui/Menus';
 import {
   cloneEquipmentConfig,
   DEFAULT_EQUIPMENT_CONFIG,
@@ -49,28 +48,29 @@ import {
 } from './equipment/EquipmentConfig';
 import { AR_DEFAULT, cloneWeaponDef, PISTOL_DEFAULT, type WeaponDef } from './weapons/WeaponDefs';
 import { cloneViewmodelConfig, DEFAULT_VIEWMODEL_CONFIG, type ViewmodelConfig } from './weapons/ViewmodelConfig';
-import { applyAmbient, loadMap, type LoadedMap } from './world/MapLoader';
+import type { LoadedMap } from './world/MapLoader';
 
 /**
  * Application root and the top-level state machine (S6.3): BOOT -> MENU -> MATCH -> SUMMARY.
  *
- * `LOADOUT` is declared in `GameStates.ts` because the shape is fixed but has no handler
- * until M6; `transitionTo` refuses to enter a state that nothing implements rather than
- * silently doing nothing.
- *
- * ## The world is per-match, and that is the whole point
+ * ## The world is per-match, and it lives next door
  *
  * M1-M3 built the map, the player and the match once at boot and kept them for the life of
  * the page, because there was only ever one of each. M4 has a map *choice* and a summary
  * screen you come back from, so the world is built on entering MATCH and **fully disposed on
  * leaving SUMMARY** — S6.3's "loading a map twice must not double anything".
  *
- * That is a real constraint on this file, and it is why `buildWorld` and `teardownWorld` are
- * exact mirrors: every field one sets, the other clears; every group one adds to the scene,
- * the other removes. What survives a match is only what is genuinely process-wide — the
- * renderer, the textures, the audio graph, the input listener, the frame-stats buffer and the
- * config objects the tuning panel holds references to. `MatchHarness` runs the cycle
- * repeatedly and logs the heap at each boundary, which is the test that this is true.
+ * M4 put that in this file as `buildWorld` / `teardownWorld` plus six nullable fields, and by
+ * M6 those fields were threaded through `simulate`, `draw`, five state handlers and eight
+ * getters. M7 moved the whole lifecycle to `MatchWorld`, so what is left here is the state
+ * machine, the loop and the front end — and the six fields that were always null together
+ * became one field that is sometimes null. Every method below asks once, at the top.
+ *
+ * What survives a match is what is genuinely process-wide: the renderer, the textures, the
+ * audio graph, the input listener, the frame-stats buffer, the profile and the config objects
+ * the tuning panel holds references to. All of them are fields here and are handed to
+ * `MatchWorld` rather than owned by it. `MatchHarness` runs the build/teardown cycle
+ * repeatedly and logs the heap at each boundary, which is the test that the split is honest.
  */
 
 interface StateHandlers {
@@ -79,12 +79,6 @@ interface StateHandlers {
 }
 
 const stateChangePayload = { from: 'BOOT' as GameStateId, to: 'BOOT' as GameStateId };
-
-/**
- * Seed for everything in `ai/`. Fixed, so two runs of the harness with the same roster
- * produce the same firefight and a regression in bot behaviour is reproducible.
- */
-const AI_SEED = 0x0fe7_a105;
 
 export class Game {
   readonly bus: GameBus = createGameBus();
@@ -101,14 +95,10 @@ export class Game {
   readonly weaponDef: WeaponDef = cloneWeaponDef(AR_DEFAULT);
   readonly secondaryDef: WeaponDef = cloneWeaponDef(PISTOL_DEFAULT);
   /**
-   * What the bots carry: the base of the player's primary, with no attachments and no
-   * perks (M6).
-   *
-   * A third object rather than reusing `weaponDef`, because from M6 that one holds a
-   * *resolved* loadout — and handing it to the bot director would issue the enemy team the
-   * player's Quickdraw. See `MatchDeps.botWeaponDef`.
+   * The base of the player's primary: the resolved loadout with attachments and perks
+   * stripped back off. Read by the M6 modifier panel; see `MatchDeps.playerBaseDef`.
    */
-  readonly botWeaponDef: WeaponDef = cloneWeaponDef(AR_DEFAULT);
+  readonly playerBaseDef: WeaponDef = cloneWeaponDef(AR_DEFAULT);
   readonly viewmodelConfig: ViewmodelConfig = cloneViewmodelConfig(DEFAULT_VIEWMODEL_CONFIG);
   readonly healthConfig: HealthConfig = { ...DEFAULT_HEALTH_CONFIG };
   readonly equipmentConfig: EquipmentConfig = cloneEquipmentConfig(DEFAULT_EQUIPMENT_CONFIG);
@@ -129,28 +119,23 @@ export class Game {
   private readonly viewmodel: ViewmodelLayer;
   private readonly cameraRig: CameraRig;
   private readonly audio = new ProceduralAudio();
-  private readonly menus: Menus;
-  private readonly pauseMenu: PauseMenu;
-  private readonly summary: EndOfMatch;
+  private readonly screens: GameScreens;
   private readonly uiHost: HTMLElement;
   private readonly debugHost: HTMLElement;
   /** M6: the one save object. Owns settings, progression, loadouts and challenges. */
   readonly profile: Profile;
-  private readonly loadoutEditor: LoadoutEditor;
-  private readonly xpSummary: XpSummary;
   private readonly transport: INetworkTransport = new LocalBotTransport(64);
   private readonly input: Input;
   private readonly loop: Loop;
   private readonly selection: MenuSelection;
 
-  // ---- per-match. Every one of these is nulled by `teardownWorld` ---------
-  private map: LoadedMap | null = null;
-  private player: PlayerController | null = null;
-  private match: Match | null = null;
-  /** The F1 overlay and every visualiser and panel that hangs off it. */
-  private debug: DebugSuite | null = null;
-  private botHarness: BotHarness | null = null;
-  private matchEndedSubscription: (() => void) | null = null;
+  /**
+   * The per-match world: the map, the player, the match and its debug tooling.
+   *
+   * One nullable field rather than six, because they were only ever all present or all
+   * absent. Null outside a match; `MatchWorld` itself has no optional members.
+   */
+  private world: MatchWorld | null = null;
 
   // ---- process-wide -------------------------------------------------------
   private readonly harness: Harness;
@@ -196,53 +181,22 @@ export class Game {
     this.viewmodel.resize(this.renderer.aspect);
     this.cameraRig = new CameraRig(this.cameraConfig, this.renderer.aspect);
 
-    this.menus = new Menus({
+    this.screens = new GameScreens({
       host: uiHost,
+      profile: this.profile,
+      audio: this.audio,
       selection: this.selection,
       onLaunch: () => this.transitionTo('MATCH'),
       onLoadout: () => this.transitionTo('LOADOUT'),
-      onResetProgress: () => this.profile.resetProgress(),
+      onLoadoutBack: () => this.transitionTo('MENU'),
+      onQuitToMenu: () => this.transitionTo('MENU'),
+      onResume: () => this.resumeFromPause(),
+      onToggleOverlay: () => this.toggleOverlayFromPause(),
+      onLeaveSummary: () => this.transitionTo('MENU'),
       statusLine: () => this.statusLine(),
-      profileLine: () => profileLine(this.profile),
-    });
-    this.loadoutEditor = new LoadoutEditor({
-      host: uiHost,
-      profile: this.profile,
-      onBack: () => this.transitionTo('MENU'),
-      onLaunch: () => this.transitionTo('MATCH'),
+      pauseStatusLine: () => this.pauseStatusLine(),
       unrestricted: () => findMode(this.selection.modeId).unrestricted,
     });
-    this.xpSummary = new XpSummary({ audio: this.audio });
-    this.pauseMenu = new PauseMenu({
-      host: uiHost,
-      onResume: () => this.resumeFromPause(),
-      onToggleDebug: () => {
-        const overlay = this.debug?.overlay;
-        if (overlay === undefined) return;
-        overlay.setVisible(!overlay.isVisible);
-        // Once it has been opened on purpose it stays open through the resume, rather than
-        // being closed again by the pause handler's book-keeping.
-        this.overlayWasOpenBeforePause = overlay.isVisible;
-      },
-      onQuit: () => this.transitionTo('MENU'),
-      statusLine: () => this.pauseStatusLine(),
-    });
-    this.summary = new EndOfMatch({
-      // Sized to the largest roster any map asks for, so the board never has to grow.
-      rowsPerTeam: 8,
-      // Continue skips the XP animation rather than being blocked by it: a player who has
-      // seen the number does not need to watch the bar arrive at it.
-      onContinue: () => {
-        if (this.xpSummary.isPlaying) {
-          this.xpSummary.finish();
-          return;
-        }
-        this.transitionTo('MENU');
-      },
-    });
-    // The M4 insertion point, filled (S6.1). `EndOfMatch` needed no other change.
-    this.summary.xpSlot.appendChild(this.xpSummary.element);
-    uiHost.appendChild(this.summary.element);
 
     this.input = new Input({
       canvas,
@@ -277,20 +231,33 @@ export class Game {
   }
 
   get activeMatch(): Match | null {
-    return this.match;
+    return this.world?.match ?? null;
   }
 
   get menuSelection(): MenuSelection {
     return this.selection;
   }
 
-  get loadedMap(): LoadedMap | null {
-    return this.map;
+  /**
+   * The loaded map, or null outside a match.
+   *
+   * Public because `public/verify/*.js` reach for `game.map` and `game.player` to drive the
+   * real collision world and the real controller. Until M7 those were private fields the
+   * scripts read anyway — TypeScript's `private` is compile-time only — so the refactor that
+   * moved them into `MatchWorld` would have silently broken six shipped acceptance suites.
+   * They are getters now, which is what they always were in practice.
+   */
+  get map(): LoadedMap | null {
+    return this.world?.map ?? null;
+  }
+
+  get player(): PlayerController | null {
+    return this.world?.player ?? null;
   }
 
   /** The per-match debug tooling, or null outside a match. */
   get debugSuite(): DebugSuite | null {
-    return this.debug;
+    return this.world?.debug ?? null;
   }
 
   /**
@@ -305,12 +272,12 @@ export class Game {
   }
 
   get activeBotHarness(): BotHarness | null {
-    return this.botHarness;
+    return this.world?.botHarness ?? null;
   }
 
   /** The live player simulation state, or undefined outside a match. */
   get playerSim(): PlayerController['sim'] | undefined {
-    return this.player?.sim;
+    return this.world?.player.sim;
   }
 
   /** Debug lever: burn this many milliseconds inside every frame (S7). */
@@ -349,7 +316,7 @@ export class Game {
   private registerStates(): void {
     this.states.set('BOOT', {
       enter: () => {
-        this.menus.showBoot('Loading…');
+        this.screens.menus.showBoot('Loading…');
         // The loop runs from boot so the menu is composited and the frame source is live
         // before any map exists. Deliberately a timeout rather than requestAnimationFrame:
         // rAF never fires in a background tab, and booting into a tab the user has not
@@ -366,10 +333,10 @@ export class Game {
 
     this.states.set('MENU', {
       enter: () => {
-        this.menus.show();
+        this.screens.menus.show();
         this.input.clearHeld();
       },
-      exit: () => this.menus.hide(),
+      exit: () => this.screens.menus.hide(),
     });
 
     /**
@@ -383,14 +350,14 @@ export class Game {
     this.states.set('LOADOUT', {
       enter: () => {
         this.input.clearHeld();
-        this.loadoutEditor.show();
+        this.screens.loadoutEditor.show();
       },
       exit: (to) => {
-        this.loadoutEditor.hide();
+        this.screens.loadoutEditor.hide();
         if (to === 'MENU') this.teardownWorld();
         // Back into a match that is still standing: hand the new class over live. A world
         // that was never torn down is the paused case, and `buildWorld` would no-op.
-        else if (this.match !== null) this.match.applyLoadout(this.applyLoadout());
+        else if (this.world !== null) this.world.match.applyLoadout(this.applyLoadout());
       },
     });
 
@@ -398,13 +365,13 @@ export class Game {
       enter: () => {
         this.audio.start();
         this.buildWorld();
-        this.match?.setActive(true);
+        this.world?.match.setActive(true);
         // The click that started the match must not also pull the trigger.
         this.input.clearHeld();
         // The AFK harness has nobody to capture the cursor for, and asking for it without
         // a user gesture logs a rejection — which would put noise in the console the soak
         // run is there to prove is quiet.
-        if (this.botHarness === null && !this.matchHarness.isRunning) {
+        if (this.world?.botHarness == null && !this.matchHarness.isRunning) {
           // Armed rather than merely requested: resuming from the pause screen with Escape
           // has no user gesture, and resuming with the button can land inside Chrome's
           // post-Escape cooldown. Armed, the next click gets the cursor back either way.
@@ -421,7 +388,7 @@ export class Game {
         // not advancing. Only leaving for good deactivates it.
         if (to === 'PAUSED') return;
         this.input.exitPointerLock();
-        this.match?.setActive(false);
+        this.world?.match.setActive(false);
         // Going back to the menu without a result tears down here; going to SUMMARY keeps
         // the world alive so the scene is still behind the summary screen.
         if (to === 'MENU') this.teardownWorld();
@@ -446,54 +413,41 @@ export class Game {
         // modal screen, which is exactly the clash the pause menu was reported for; the
         // pause menu has a button to bring it back deliberately.
         this.hideOverlayForPause();
-        this.pauseMenu.show();
+        this.screens.pauseMenu.show();
       },
       exit: (to) => {
-        this.pauseMenu.hide();
+        this.screens.pauseMenu.hide();
         if (to === 'MENU') {
-          this.match?.setActive(false);
+          this.world?.match.setActive(false);
           this.teardownWorld();
         }
       },
     });
 
-    // A pause-screen loadout edit comes back through PAUSED, so the world it left is the
-    // world it returns to and the class change lands on a live match.
-    this.pauseMenu.setOnLoadout(() => this.transitionTo('LOADOUT'));
-
     this.states.set('SUMMARY', {
       enter: () => {
-        const match = this.match;
-        const result = match?.flow.result;
-        if (match === null || match === undefined || result === undefined || result === null) {
+        const match = this.world?.match ?? null;
+        const result = match?.flow.result ?? null;
+        if (match === null || result === null) {
           // Nothing to summarise: this can only happen if SUMMARY is entered by hand.
           this.transitionTo('MENU');
           return;
         }
-        this.summary.setColumns(match.mode.getScoreboardColumns(), match.mode.name, this.mapEntry().name);
-        this.summary.show(
-          result.winner,
-          PLAYER_TEAM,
-          result.reason,
-          result.scoreA,
-          result.scoreB,
-          match.score,
-        );
-
         // Bank the match here rather than in `MatchEnded`: by this point nothing else is
         // going to change, and the profile is written exactly once (S6.6). `bankProgression`
         // is idempotent, so a harness that re-enters SUMMARY cannot double-count.
-        const report = match.bankProgression(result.winner === PLAYER_TEAM);
         const banks = findMode(this.selection.modeId).banksProgress;
-        this.summary.xpSlot.hidden = !banks;
-        if (banks) {
-          this.xpSummary.prestige = this.profile.prestige;
-          this.xpSummary.play(report);
-        }
+        const report = match.bankProgression(result.winner === PLAYER_TEAM);
+        this.screens.showSummary(
+          match,
+          result,
+          this.mapEntry().name,
+          banks ? report : null,
+          this.profile.prestige,
+        );
       },
       exit: () => {
-        this.xpSummary.stop();
-        this.summary.hide();
+        this.screens.hideSummary();
         this.teardownWorld();
       },
     });
@@ -518,135 +472,61 @@ export class Game {
     return applyEquippedLoadout(this.profile, this.selection.modeId, {
       primary: this.weaponDef,
       secondary: this.secondaryDef,
-      botPrimary: this.botWeaponDef,
+      playerBase: this.playerBaseDef,
     });
   }
 
   /**
-   * Build everything a match needs. The exact mirror of `teardownWorld`.
-   *
-   * Called on entering MATCH, so the map the player picked is the map that loads and a second
-   * match starts from nothing rather than from whatever the first one left behind.
+   * Build the world this match is played in. Called on entering MATCH, so the map the player
+   * picked is the map that loads and a second match starts from nothing rather than from
+   * whatever the first one left behind.
    */
   private buildWorld(): void {
-    if (this.map !== null) return;
-    const mapEntry = this.mapEntry();
+    if (this.world !== null) return;
     const modeEntry = findMode(this.selection.modeId);
-    const loadout = this.applyLoadout();
-
-    const map = loadMap(mapEntry.def, this.textures);
-    this.map = map;
-    this.scene.add(map.root);
-    applyAmbient(this.scene, map.def);
-    map.collision.configure(this.movementConfig.maxSlopeDeg, this.movementConfig.collisionSkin);
-
-    const player = new PlayerController(this.movementConfig, map.collision, this.bus);
-    this.player = player;
-
-    const spawn = map.spawns[0];
-    if (spawn === undefined) throw new Error('Map has no spawn zones');
-    player.spawn(spawn.position.x, spawn.position.y, spawn.position.z, spawn.facingYaw);
-    this.input.setView(spawn.facingYaw, 0);
-
-    const match = new Match({
+    this.world = new MatchWorld({
       bus: this.bus,
       scene: this.scene,
+      renderer: this.renderer,
+      textures: this.textures,
       viewmodel: this.viewmodel,
       cameraRig: this.cameraRig,
-      cameraConfig: this.cameraConfig,
       audio: this.audio,
       input: this.input,
-      world: map.collision,
-      player,
-      movementConfig: this.movementConfig,
-      weaponDef: this.weaponDef,
-      secondaryDef: this.secondaryDef,
-      botWeaponDef: this.botWeaponDef,
-      viewmodelConfig: this.viewmodelConfig,
-      healthConfig: this.healthConfig,
-      equipmentConfig: this.equipmentConfig,
-      uiHost: this.uiHost,
-      anisotropy: this.textures.anisotropy,
-      map: mapEntry,
-      mode: modeEntry,
-      tiers: this.tiers,
-      perceptionConfig: this.perceptionConfig,
-      schedulerConfig: this.schedulerConfig,
-      seed: AI_SEED,
-      loadout,
-      profile: this.profile,
-      banksProgress: modeEntry.banksProgress,
-    });
-    this.match = match;
-
-    // The match declaring itself over is what moves the state machine on. Deferred to the
-    // render pass rather than transitioned from inside a sim tick: tearing the HUD down
-    // half-way through the tick that produced the winning kill is how you get a null
-    // dereference in the middle of an event dispatch.
-    this.matchEndedSubscription = this.bus.on(EV.MatchEnded, () => {
-      this.pendingSummary = true;
-    });
-
-    this.debug = new DebugSuite({
-      host: this.debugHost,
-      bus: this.bus,
       loop: this.loop,
-      renderer: this.renderer,
-      scene: this.scene,
-      audio: this.audio,
-      player,
-      cameraRig: this.cameraRig,
-      map,
-      mapEntry,
-      match,
-      movementConfig: this.movementConfig,
-      cameraConfig: this.cameraConfig,
-      weaponDef: this.weaponDef,
-      viewmodelConfig: this.viewmodelConfig,
-      healthConfig: this.healthConfig,
-      equipmentConfig: this.equipmentConfig,
-      tiers: this.tiers,
-      perceptionConfig: this.perceptionConfig,
-      schedulerConfig: this.schedulerConfig,
+      uiHost: this.uiHost,
+      debugHost: this.debugHost,
       stats: this.stats,
       speedo: this.speedo,
       matchHarness: this.matchHarness,
       profile: this.profile,
+      movementConfig: this.movementConfig,
+      cameraConfig: this.cameraConfig,
+      viewmodelConfig: this.viewmodelConfig,
+      healthConfig: this.healthConfig,
+      equipmentConfig: this.equipmentConfig,
+      weaponDef: this.weaponDef,
+      secondaryDef: this.secondaryDef,
+      playerBaseDef: this.playerBaseDef,
+      tiers: this.tiers,
+      perceptionConfig: this.perceptionConfig,
+      schedulerConfig: this.schedulerConfig,
+      mapEntry: this.mapEntry(),
+      modeEntry,
+      loadout: this.applyLoadout(),
+      onMatchEnded: () => {
+        this.pendingSummary = true;
+      },
       onConfigChanged: () => this.onConfigChanged(),
       onWeaponConfigChanged: () => this.onWeaponConfigChanged(),
     });
   }
 
-  /**
-   * Take the world apart. The exact mirror of `buildWorld`.
-   *
-   * Order matters only in that the debug tooling holds references to the match and the map,
-   * so it goes first. Everything that was added to the scene is removed and everything with
-   * a `dispose` gets it — including the map's geometries and materials, which are the largest
-   * thing a match allocates.
-   */
+  /** Drop the world. `MatchWorld.dispose` is the mirror of its own constructor. */
   private teardownWorld(): void {
     this.pendingSummary = false;
-
-    this.matchEndedSubscription?.();
-    this.matchEndedSubscription = null;
-
-    this.debug?.dispose();
-    this.debug = null;
-    this.botHarness?.stop();
-    this.botHarness = null;
-
-    this.match?.dispose();
-    this.match = null;
-    this.player = null;
-
-    if (this.map !== null) {
-      this.scene.remove(this.map.root);
-      this.map.dispose();
-      this.map = null;
-    }
-    this.scene.fog = null;
-    this.scene.background = null;
+    this.world?.dispose();
+    this.world = null;
     this.speedo.reset();
   }
 
@@ -661,43 +541,29 @@ export class Game {
     const options = parseHarnessOptions(window.location.search);
     if (options === null) return;
     if (options.map !== null) this.selection.mapId = options.map;
+    // M7: the harness can run any mode. Applied before the transition, so the world is built
+    // from the same registry entry a player's choice would have produced.
+    if (options.mode !== null) this.selection.modeId = options.mode;
 
     this.transitionTo('MATCH');
-    const match = this.match;
-    if (match === null) return;
-
-    const harness = new BotHarness(options, match, this.loop, this.stats);
-    this.botHarness = harness;
-    harness.start();
+    this.world?.startBotHarness(options);
   }
 
   private onConfigChanged(): void {
-    this.player?.setConfig(this.movementConfig);
-    this.map?.collision.configure(this.movementConfig.maxSlopeDeg, this.movementConfig.collisionSkin);
+    this.world?.applyMovementConfig();
     this.cameraConfig.fov = clampFov(this.cameraConfig.fov);
     this.profile.patchSettings({ fov: this.cameraConfig.fov });
   }
 
   private onWeaponConfigChanged(): void {
-    this.match?.weapons.setDefinition(this.weaponDef);
-    this.match?.playerHealth.setConfig(this.healthConfig);
-    for (const dummy of this.match?.range?.dummies ?? []) {
-      dummy.health.setConfig(this.healthConfig);
-      dummy.markLabelDirty();
-    }
-    // Bots carry the same *base* weapon and the same health, so a retune has to reach them
-    // or the two sides stop sharing the damage maths that makes TTK symmetric. From M6 the
-    // player's own def additionally carries their attachments and perks, which is exactly
-    // the difference the loadout is supposed to make and must not be issued to the enemy.
-    this.match?.bots.applyWeaponDef(this.botWeaponDef);
-    this.match?.bots.applyHealthConfig(this.healthConfig);
+    this.world?.applyWeaponConfig();
   }
 
   // -- loop ----------------------------------------------------------------
 
   private simulate(tick: number): void {
-    const player = this.player;
-    if (player === null) return;
+    const world = this.world;
+    if (world === null) return;
     // A paused match does not advance. The render pass still runs, so the pause screen is
     // composited over a live scene and the frame histogram keeps sampling.
     if (this.state === 'PAUSED') return;
@@ -711,7 +577,7 @@ export class Game {
     // exception, so the scoreboard is reachable from the death screen (M5).
     const now = performance.now();
     const inMatch = this.state === 'MATCH';
-    const dead = this.match?.isPlayerDead === true;
+    const dead = world.match.isPlayerDead;
     const cmd = !inMatch
       ? this.input.sampleNeutral(tick, now)
       : dead
@@ -722,12 +588,12 @@ export class Game {
     for (let i = 0; i < count; i++) {
       const drained = this.drainBuffer[i];
       if (drained === undefined) continue;
-      player.step(drained);
+      world.player.step(drained);
       // The weapon consumes the same command the player did, one tick at a time, so
       // fire rate and reload timing are as frame-rate independent as movement is (S4.1).
-      this.match?.simulate(drained);
+      world.match.simulate(drained);
     }
-    this.debug?.simulate(player, this.movementConfig);
+    world.debug.simulate(world.player, this.movementConfig);
   }
 
   private draw(alpha: number): void {
@@ -735,30 +601,29 @@ export class Game {
     const dt = Math.max(0, (now - this.lastRenderMs) / 1000);
     this.lastRenderMs = now;
 
-    const player = this.player;
-    if (player === null) {
+    const world = this.world;
+    if (world === null) {
       // No world: the menu is DOM over an empty canvas, and the canvas still has to be
       // cleared or it holds the last frame of the previous match behind the front end.
       this.renderer.clear();
       return;
     }
 
+    const player = world.player;
     const sim = player.sim;
-    const match = this.match;
+    const match = world.match;
     const def = this.weaponDef;
 
     // Sampled before the camera is composed: the interpolated aim-recoil offset is part
     // of where the camera points, so it cannot be produced after the fact (S6.2).
-    match?.sampleVisual(alpha);
-    const aimYaw = match === null ? 0 : match.visual.aimYaw * DEG2RAD;
-    const aimPitch = match === null ? 0 : match.visual.aimPitch * DEG2RAD;
-    const yaw = this.input.yaw + aimYaw;
-    const pitch = this.input.pitch + aimPitch;
+    match.sampleVisual(alpha);
+    const yaw = this.input.yaw + match.visual.aimYaw * DEG2RAD;
+    const pitch = this.input.pitch + match.visual.aimPitch * DEG2RAD;
 
     this.drive.sprint = sim.sprintActive;
     this.drive.tacSprint = sim.tacSprintActive;
     this.drive.slide = sim.slideActive;
-    this.drive.adsFraction = match === null ? 0 : match.visual.adsFraction;
+    this.drive.adsFraction = match.visual.adsFraction;
     this.drive.adsFovScale = def.adsFovScale;
     this.drive.adsViewmodelFovScale = def.adsViewmodelFovScale;
 
@@ -787,11 +652,11 @@ export class Game {
     // voices used to accumulate: nothing was freeing them, and something still had to.
     this.audio.update();
 
-    match?.render(alpha, cam, dt, yaw, pitch);
-    this.debug?.render(cam, alpha, dt);
+    match.render(alpha, cam, dt, yaw, pitch);
+    world.debug.render(cam, alpha, dt);
 
     this.renderer.render(this.scene, cam, this.viewmodel);
-    this.debug?.update(dt);
+    world.debug.update(dt);
 
     // The match ended during a sim tick this frame. Transition now, between frames, with
     // nothing part-way through a dispatch. A paused match cannot end, so PAUSED is not a
@@ -803,8 +668,9 @@ export class Game {
   }
 
   private onFrame(sample: FrameSample): void {
+    const match = this.world?.match;
     this.stats.push(sample.frameMs, sample.simMs, sample.renderMs, sample.steps, sample.starved);
-    this.stats.pushBreakdown(this.match?.lastModeMs ?? 0, this.match?.ui.lastUpdateMs ?? 0);
+    this.stats.pushBreakdown(match?.lastModeMs ?? 0, match?.ui.lastUpdateMs ?? 0);
   }
 
   // -- events --------------------------------------------------------------
@@ -838,14 +704,14 @@ export class Game {
     // The Esc stack, from the M5 playtest notes: with the overlay open, Esc closes the
     // overlay and stops. It used to fall straight through to "resume", which meant a
     // player closing a panel was thrown back into a firefight.
-    const overlay = this.debug?.overlay;
+    const overlay = this.world?.debug.overlay;
     if (overlay !== undefined && overlay.isVisible) {
       overlay.setVisible(false);
       this.overlayWasOpenBeforePause = false;
       return;
     }
     if (this.state === 'LOADOUT') {
-      this.transitionTo(this.match === null ? 'MENU' : 'PAUSED');
+      this.transitionTo(this.world === null ? 'MENU' : 'PAUSED');
       return;
     }
     if (this.state === 'PAUSED') {
@@ -853,6 +719,17 @@ export class Game {
       return;
     }
     if (this.state === 'MATCH' && !this.input.isLocked) this.transitionTo('PAUSED');
+  }
+
+  /**
+   * The pause screen's debug button. Once the overlay has been opened on purpose it stays
+   * open through the resume, rather than being closed again by the pause book-keeping.
+   */
+  private toggleOverlayFromPause(): void {
+    const overlay = this.world?.debug.overlay;
+    if (overlay === undefined) return;
+    overlay.setVisible(!overlay.isVisible);
+    this.overlayWasOpenBeforePause = overlay.isVisible;
   }
 
   private resumeFromPause(): void {
@@ -869,7 +746,7 @@ export class Game {
    * it was open is remembered so resuming puts the player back where they were.
    */
   private hideOverlayForPause(): void {
-    const overlay = this.debug?.overlay;
+    const overlay = this.world?.debug.overlay;
     if (overlay === undefined) return;
     this.overlayWasOpenBeforePause = overlay.isVisible;
     overlay.setVisible(false);
@@ -877,12 +754,12 @@ export class Game {
 
   private restoreOverlayAfterPause(): void {
     if (!this.overlayWasOpenBeforePause) return;
-    this.debug?.overlay.setVisible(true);
+    this.world?.debug.overlay.setVisible(true);
   }
 
   private pauseStatusLine(): string {
-    const match = this.match;
-    if (match === null) return this.mapEntry().name;
+    const match = this.world?.match;
+    if (match === undefined) return this.mapEntry().name;
     const mode = match.mode;
     return `${mode.name} · ${this.mapEntry().name} · ${mode.teamScore('A')} – ${mode.teamScore('B')}`;
   }

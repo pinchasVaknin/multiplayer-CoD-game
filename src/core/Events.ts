@@ -75,6 +75,25 @@ export const EV = {
   FieldUpgradeReady: 'fieldUpgrade.ready',
   FieldUpgradeUsed: 'fieldUpgrade.used',
 
+  // M7: objectives and killstreaks. Same rule as every milestone before it — only what
+  // this milestone actually emits appears here.
+  ObjectiveCaptured: 'objective.captured',
+  ObjectiveProgress: 'objective.progress',
+  ObjectiveNeutralised: 'objective.neutralised',
+  BombPlanted: 'objective.bombPlanted',
+  BombDefused: 'objective.bombDefused',
+  BombExploded: 'objective.bombExploded',
+  TagDropped: 'objective.tagDropped',
+  TagCollected: 'objective.tagCollected',
+
+  StreakProgress: 'streak.progress',
+  StreakEarned: 'streak.earned',
+  StreakActivated: 'streak.activated',
+  StreakExpired: 'streak.expired',
+  StreakDestroyed: 'streak.destroyed',
+  CarePackageDropped: 'streak.carePackageDropped',
+  CarePackageClaimed: 'streak.carePackageClaimed',
+
   GameStateChanged: 'game.stateChanged',
   SettingsChanged: 'settings.changed',
 } as const;
@@ -359,6 +378,78 @@ export type GameEvents = {
   [EV.PerkScavenged]: { entityId: number; x: number; y: number; z: number; rounds: number };
   [EV.FieldUpgradeReady]: { upgradeId: string; entityId: number };
   [EV.FieldUpgradeUsed]: { upgradeId: string; entityId: number; x: number; y: number; z: number };
+
+  /**
+   * M7 objectives.
+   *
+   * `teamOf` is the team that now owns the thing, or 'NONE' where ownership is being taken
+   * away rather than granted. `entityId` is whoever did it, so the score and the XP path can
+   * both attribute it without either one re-deriving who was standing in the zone.
+   */
+  [EV.ObjectiveCaptured]: {
+    objectiveId: string;
+    label: string;
+    team: BotTeam;
+    entityId: number;
+    x: number;
+    y: number;
+    z: number;
+  };
+  /** Emitted while a capture is in progress. `fraction` is 0..1. */
+  [EV.ObjectiveProgress]: {
+    objectiveId: string;
+    label: string;
+    fraction: number;
+    team: BotTeam | 'NONE';
+    contested: boolean;
+  };
+  [EV.ObjectiveNeutralised]: { objectiveId: string; label: string; entityId: number };
+
+  [EV.BombPlanted]: { siteId: string; label: string; entityId: number; x: number; y: number; z: number };
+  [EV.BombDefused]: { siteId: string; label: string; entityId: number };
+  [EV.BombExploded]: { siteId: string; label: string; x: number; y: number; z: number };
+
+  /** A dog tag hit the floor. `team` is the *victim's* side, which is what colours it. */
+  [EV.TagDropped]: { tagId: number; team: BotTeam; victimId: number; x: number; y: number; z: number };
+  /** `denied` is true when a player picked up a tag belonging to their own side. */
+  [EV.TagCollected]: {
+    tagId: number;
+    team: BotTeam;
+    entityId: number;
+    denied: boolean;
+    x: number;
+    y: number;
+    z: number;
+  };
+
+  /**
+   * M7 killstreaks.
+   *
+   * `requirement` is the *effective* one, after Hardline's discount, so the HUD never has to
+   * know a perk exists. `streakId` matches `StreakDefs`.
+   */
+  [EV.StreakProgress]: { entityId: number; streak: number; nextId: string | null; requirement: number };
+  [EV.StreakEarned]: { entityId: number; streakId: string; name: string; requirement: number };
+  [EV.StreakActivated]: { entityId: number; streakId: string; name: string; instanceId: number };
+  [EV.StreakExpired]: { entityId: number; streakId: string; instanceId: number };
+  /** A placed streak entity was shot down. `byId` is the killer. */
+  [EV.StreakDestroyed]: {
+    streakId: string;
+    instanceId: number;
+    ownerId: number;
+    byId: number;
+    x: number;
+    y: number;
+    z: number;
+  };
+  [EV.CarePackageDropped]: { packageId: number; ownerTeam: BotTeam; x: number; y: number; z: number };
+  [EV.CarePackageClaimed]: {
+    packageId: number;
+    entityId: number;
+    team: BotTeam;
+    streakId: string;
+    name: string;
+  };
 
   [EV.GameStateChanged]: { from: GameStateId; to: GameStateId };
   [EV.SettingsChanged]: { key: string };

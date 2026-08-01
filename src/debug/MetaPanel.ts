@@ -194,7 +194,7 @@ export class MetaPanel {
    */
   private refreshModifiers(): void {
     const loadoutDef = this.match.weapons.definition;
-    const base = resolveWeaponDef(this.match.botWeaponDef, []);
+    const base = resolveWeaponDef(this.match.playerBaseDef, []);
     const rows: Array<Readonly<[string, string]>> = [];
 
     const compare = (label: string, read: (d: WeaponDef) => number, digits: number, unit: string): void => {

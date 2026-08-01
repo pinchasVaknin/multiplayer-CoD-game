@@ -10,6 +10,26 @@ import { clamp01, RAD2DEG } from '../core/MathUtil';
  * are `transform` and `opacity` only, and text is written only when the string changed.
  */
 
+/**
+ * ADS fraction at which the scope tube starts closing in around the picture.
+ *
+ * The transition is deliberately non-linear: the weapon is visibly up before the vignette
+ * arrives, so scoping reads as raising a rifle rather than as a screen effect.
+ */
+export const SCOPE_OVERLAY_START = 0.55;
+
+/**
+ * ADS fraction past which the *weapon* stops being drawn (M7).
+ *
+ * A scoped weapon's tube is a solid cylinder standing exactly on the sight line, 0.17 m from
+ * the eye — measured, not assumed. Below this fraction the player is looking *at* a rifle and
+ * should see it; above it they are looking *through* an optic, and the honest picture is the
+ * one the overlay draws. Without the hand-off the scope's clear centre is filled by the
+ * weapon's own objective bell, which is the same defect the M6 playtest reported on the SMG's
+ * red dot. Set above `SCOPE_OVERLAY_START` so the tube is already closing before the gun goes.
+ */
+export const SCOPE_VIEWMODEL_HIDDEN = 0.8;
+
 export interface TacticalState {
   /** Active weapon name and which slot it came from, for the weapon plate. */
   weaponName: string;
@@ -317,7 +337,7 @@ export class HudTactical {
     this.lastScope = value;
     // Deliberately non-linear: the tube arrives late in the transition so the weapon is
     // visibly coming up before the picture closes in around it.
-    const opacity = value < 0.55 ? 0 : (value - 0.55) / 0.45;
+    const opacity = value < SCOPE_OVERLAY_START ? 0 : (value - SCOPE_OVERLAY_START) / (1 - SCOPE_OVERLAY_START);
     this.scopeElement.style.opacity = opacity.toFixed(3);
   }
 }

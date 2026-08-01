@@ -3,6 +3,7 @@ import { angleDelta, clamp, damp, DEG2RAD, RAD2DEG, TAU } from '../core/MathUtil
 import type { Rng } from '../core/Rng';
 import type { BotBlackboard } from './BotBlackboard';
 import type { TierConfig } from './DifficultyTiers';
+import type { WeaponCombatProfile } from './WeaponProfile';
 
 /**
  * How a bot aims and when it pulls the trigger (brief S6.4).
@@ -197,6 +198,7 @@ export class CombatBehaviour {
    */
   updateTrigger(
     tier: TierConfig,
+    profile: WeaponCombatProfile,
     bb: BotBlackboard,
     rng: Rng,
     magNow: number,
@@ -205,7 +207,10 @@ export class CombatBehaviour {
     hasLine: boolean,
   ): void {
     this.wantsFire = false;
-    this.wantsAds = hasLine && distance >= tier.adsRange;
+    // Both gates are the tier's number scaled by the weapon's (M7). A shotgun holds fire
+    // until the target is close enough for pellets to matter and never bothers with sights;
+    // a sniper opens earlier and is aiming almost from the moment it has a line.
+    this.wantsAds = hasLine && distance >= tier.adsRange * profile.adsScale;
 
     if (this.lastMag >= 0 && magNow < this.lastMag) this.burstRemaining -= this.lastMag - magNow;
     this.lastMag = magNow;
@@ -218,7 +223,7 @@ export class CombatBehaviour {
     // The reaction delay S6.3 specifies: no trigger until it has been paid in full.
     if (!bb.reactionPaid) return;
     if (!hasLine) return;
-    if (distance > tier.engageRange) return;
+    if (distance > tier.engageRange * profile.engageScale) return;
     if (!canFire) return;
     if (this.aimOffSolutionDeg > FIRE_GATE_DEG) return;
 

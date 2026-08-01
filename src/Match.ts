@@ -28,6 +28,7 @@ import type { ResolvedLoadout } from './meta/Loadouts';
 import type { Profile } from './meta/Profile';
 import type { XpReport } from './meta/XpRules';
 import type { GameMode } from './modes/GameMode';
+import type { ObjectiveProvider } from './ai/ObjectiveIntent';
 import { MatchFlow } from './modes/MatchFlow';
 import type { MapEntry, ModeEntry } from './modes/ModeRegistry';
 import { Health, type HealthConfig } from './player/Health';
@@ -35,6 +36,7 @@ import type { MovementConfig } from './player/MovementConfig';
 import type { PlayerController } from './player/PlayerController';
 import type { ViewmodelLayer } from './player/Viewmodel';
 import { LOW_HEALTH_THRESHOLD } from './ui/Hud';
+import { SCOPE_VIEWMODEL_HIDDEN } from './ui/HudTactical';
 import { MatchHud } from './ui/MatchHud';
 import type { CollisionWorld } from './world/CollisionWorld';
 import { makeRayHit, type RayHit } from './world/Geometry';
@@ -86,16 +88,15 @@ export interface MatchDeps {
   /** M5: the player's sidearm. Bots do not carry one — see `WeaponSystem`. */
   readonly secondaryDef: WeaponDef;
   /**
-   * What the bots carry: the *base* of the player's primary, with no attachments and no
-   * perks (M6).
+   * The *base* of the player's primary: no attachments, no perks.
    *
-   * M5 handed the bots `weaponDef` directly, which was harmless when that object was the
-   * base. It stopped being harmless the moment a loadout could fold Quickdraw into it —
-   * the enemy team would have been issued the player's perks. The two objects are cloned
-   * from the same registry entry, so TTK is still symmetric for an unmodified loadout and
-   * every difference is one the player deliberately chose.
+   * M6 introduced this as `botWeaponDef` to stop the enemy team being issued the player's
+   * Quickdraw, and M7 renamed it because the name was describing a bug. Bots never read it —
+   * they draw their own weapons in `BotArsenal` — and its one remaining job is the M6
+   * modifier panel, which shows perks and attachments as a before-and-after and must read
+   * the *same* base the match was built from rather than looking one up in the registry.
    */
-  readonly botWeaponDef: WeaponDef;
+  readonly playerBaseDef: WeaponDef;
   readonly viewmodelConfig: ViewmodelConfig;
   readonly healthConfig: HealthConfig;
   readonly equipmentConfig: EquipmentConfig;
@@ -221,6 +222,7 @@ export class Match {
     if (this.range !== null) deps.scene.add(this.range.group);
 
     // The director bakes the navmesh, so it is built once here rather than per match.
+    // No weapon is handed over: each bot draws its own (M7, `ai/BotArsenal.ts`).
     this.bots = new BotDirector({
       world: deps.world,
       mapDef: deps.map.def,
@@ -228,7 +230,6 @@ export class Match {
       damage: this.damage,
       movement: deps.movementConfig,
       healthConfig: deps.healthConfig,
-      weaponDef: deps.botWeaponDef,
       viewmodelConfig: deps.viewmodelConfig,
       tiers: deps.tiers,
       perceptionConfig: deps.perceptionConfig,
@@ -240,7 +241,12 @@ export class Match {
 
     // ---- the mode ---------------------------------------------------------
     this.score = new ScoreSystem(deps.bus);
-    this.mode = deps.mode.create({ bus: deps.bus, score: this.score, roster: this.bots.roster });
+    this.mode = deps.mode.create({
+      bus: deps.bus,
+      score: this.score,
+      roster: this.bots.roster,
+      mapDef: deps.map.def,
+    });
     this.flow = new MatchFlow({
       bus: deps.bus,
       score: this.score,
@@ -255,6 +261,11 @@ export class Match {
       allowed: (id) => this.flow.respawnAllowed(id),
       noted: (id) => this.flow.noteRespawn(id),
     };
+    // M7: if the mode has objectives, hand the director the provider. `ai/` asks and the
+    // mode answers; nothing in `ai/` knows a flag from a bomb site (see `ObjectiveIntent`).
+    this.bots.objectives = isObjectiveProvider(this.mode) ? this.mode : null;
+    this.bots.freeForAll = deps.mode.freeForAll === true;
+    this.bots.pushAggressionScale = deps.mode.pushAggressionScale ?? 1;
 
     this.fx = new Fx(deps.anisotropy);
     deps.scene.add(this.fx.group);
@@ -394,8 +405,21 @@ export class Match {
     }
   }
 
-  /** The default firefight: the map's team size, the player counting as one of their side. */
+  /**
+   * The default firefight: the map's team size, the player counting as one of their side.
+   *
+   * A mode may override the roster size (M7): Free-for-All is eight operators on any map, and
+   * they are split evenly across the two substrate sides so perception, spawn safety and the
+   * aim model keep working — see `modes/FreeForAll.ts` for why the two-team substrate stays.
+   */
   populateDefault(): void {
+    const override = this.deps.mode.rosterSize;
+    if (override !== undefined) {
+      const bots = Math.max(0, override - 1);
+      const teamB = Math.ceil(bots / 2);
+      this.bots.populate(bots - teamB, teamB, this.deps.map.tierMix);
+      return;
+    }
     const size = this.deps.map.teamSize;
     this.bots.populate(Math.max(0, size - 1), size, this.deps.map.tierMix);
   }
@@ -435,14 +459,9 @@ export class Match {
     return this.deps.world;
   }
 
-  /**
-   * The unmodified base of the player's primary — what the bots carry.
-   *
-   * Exposed for the M6 modifier panel, which compares base against resolved and must read
-   * the *same* base the match was built from rather than looking one up in the registry.
-   */
-  get botWeaponDef(): WeaponDef {
-    return this.deps.botWeaponDef;
+  /** The unmodified base of the player's primary. See `MatchDeps.playerBaseDef`. */
+  get playerBaseDef(): WeaponDef {
+    return this.deps.playerBaseDef;
   }
 
   /** The class this match was built with. */
@@ -664,8 +683,12 @@ export class Match {
     this.equipment.render(alpha, dt, camera);
     this.meta.render(dt);
 
-    // A dead player is not holding a rifle.
-    this.model.root.visible = !this.playerDead;
+    // A dead player is not holding a rifle — and a scoped one is looking through an optic
+    // rather than at a weapon, so the viewmodel hands off to the scope overlay (M7). See
+    // `SCOPE_VIEWMODEL_HIDDEN`: the tube is a solid cylinder on the sight line and would
+    // otherwise fill the middle of the scope picture.
+    const scoped = def.scope !== undefined && this.visual.adsFraction >= SCOPE_VIEWMODEL_HIDDEN;
+    this.model.root.visible = !this.playerDead && !scoped;
 
     const state = this.ui.state;
     state.mag = weapon.mag;
@@ -793,4 +816,15 @@ export class Match {
   get lowHealthThreshold(): number {
     return LOW_HEALTH_THRESHOLD;
   }
+}
+
+/**
+ * Whether a mode also plays the objective-provider role.
+ *
+ * A structural test rather than an `instanceof` chain: `Match` composes modes it is handed by
+ * the registry and has no business importing four concrete classes to ask them what they are.
+ */
+function isObjectiveProvider(mode: GameMode): mode is GameMode & ObjectiveProvider {
+  const candidate = mode as Partial<ObjectiveProvider>;
+  return typeof candidate.assign === 'function' && typeof candidate.onArrived === 'function';
 }

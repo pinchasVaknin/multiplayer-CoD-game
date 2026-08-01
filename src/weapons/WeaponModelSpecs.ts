@@ -315,7 +315,17 @@ export const WEAPON_MODEL_SPECS: Readonly<Record<string, WeaponModelSpec>> = {
     magazine: 'grip',
     magazineLength: 0.1,
     optic: 'irons',
-    sightHeight: 0.042,
+    /**
+     * Raised from 0.042 in M7.
+     *
+     * A pistol's sights sit on top of its slide, and 0.042 put the sight line *below* the
+     * top of its own rear sight — the sight-line-relative rebuild in `WeaponMeshParts` makes
+     * that impossible now, but the number was still wrong. It also drove the pose: ADS holds
+     * a weapon `sightHeight - 0.0915` lower than the carbine, so a sight line 0.050 m below
+     * the reference lifted the whole pistol 50 mm up the screen, which is the M6 playtest's
+     * "sitting too high". At 0.062 the correction is 30 mm and the slide clears the hands.
+     */
+    sightHeight: 0.062,
     scale: 1,
   },
 };

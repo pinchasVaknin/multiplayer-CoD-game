@@ -5,6 +5,11 @@ import type { NavGrid } from '../world/Navmesh';
 import type { Bot } from './Bot';
 import { isFiringState, isLegalBotTransition, isTravellingState, type BotState } from './BotStates';
 import type { CoverIndex } from './Cover';
+import {
+  OBJECTIVE_IGNORE_BELOW,
+  type ObjectiveProvider,
+  type ObjectiveTarget,
+} from './ObjectiveIntent';
 import type { Perception } from './Perception';
 import type { Pathfinder } from './Pathing';
 
@@ -35,16 +40,35 @@ export interface BrainDeps {
   readonly perception: Perception;
   /** Sampled walkable cells used as patrol destinations. */
   readonly patrolCells: Int32Array;
+  /**
+   * What the mode wants this bot doing, or null in a mode with no objectives (M7).
+   *
+   * A getter rather than the provider itself: the director owns the reference and a mode is
+   * built after the brain deps are, so reading it late is what keeps the two lifetimes apart.
+   */
+  readonly objectives: () => ObjectiveProvider | null;
+  /** Match-wide multiplier on `pushAggression` (M7). One life makes bots cautious. */
+  readonly pushScale: () => number;
 }
 
-type GoalKind = 'NONE' | 'PATROL' | 'INVESTIGATE' | 'COVER' | 'FLANK' | 'PUSH';
+type GoalKind = 'NONE' | 'PATROL' | 'INVESTIGATE' | 'COVER' | 'FLANK' | 'PUSH' | 'OBJECTIVE';
 
 /** Distance at which a waypoint counts as reached, metres. */
 const WAYPOINT_RADIUS = 0.55;
 const GOAL_RADIUS = 1.0;
 
-/** Magazine at or below which a bot goes looking for a quiet moment to reload. */
-const LOW_MAGAZINE = 8;
+/**
+ * Reload when the magazine is down to this fraction of its size, with reserve to spare.
+ *
+ * A *fraction*, not a count (M7). It was 8 rounds flat, which was invisible while every bot
+ * carried the 30-round carbine and became a hard lock the moment `BotArsenal` started dealing
+ * shotguns: a full 6-round magazine is already under 8, so the bot believed it was low from
+ * the instant it spawned, asked for RELOAD on every decision, and — because `IDLE -> RELOAD`
+ * was not a legal edge — never left IDLE at all. Nine bots stood still for a whole match.
+ *
+ * At 0.28 the carbine reloads at 8 rounds exactly as it did in M3, so no measurement moves.
+ */
+const LOW_MAGAZINE_FRACTION = 0.28;
 
 /** Stuck detector: less than this much progress over this long means replan. */
 const STUCK_DISTANCE = 0.22;
@@ -90,6 +114,10 @@ export class BotBrain {
   /** Seconds in the current state. */
   stateTime = 0;
   goal: GoalKind = 'NONE';
+  /** What the mode last told this bot to do, for the objective-intent debug panel (M7). */
+  objectiveId = '';
+  objectiveLabel = '';
+  objectiveAction = '';
   goalX = 0;
   goalY = 0;
   goalZ = 0;
@@ -156,7 +184,8 @@ export class BotBrain {
     const seeing = bb.hasLos;
     const hurt = bot.healthFraction < tier.coverHealthFraction;
     const dry = bot.magazine <= 0;
-    const low = bot.magazine <= LOW_MAGAZINE && bot.reserve > 0;
+    const lowThreshold = Math.max(1, Math.floor(bot.weapons.definition.magSize * LOW_MAGAZINE_FRACTION));
+    const low = bot.magazine <= lowThreshold && bot.reserve > 0;
 
     // A reload in progress owns the bot until it finishes.
     if (bot.reloading) {
@@ -183,15 +212,32 @@ export class BotBrain {
       return;
     }
 
+    /**
+     * The mode's job (M7), asked **before** the target block rather than after it.
+     *
+     * After it was wrong and the symptom was precise: `hasTarget && !seeing` falls into
+     * SUPPRESS and returns, so a defender that had merely *heard* somebody never reached the
+     * objective check and never went for the bomb — five S&D rounds in a row ended in a
+     * detonation with zero defuses attempted. Contact is passed in, and the priority gate
+     * inside decides: a defuse at 0.95 outranks the firefight, a "go stand on the flag we
+     * already hold" at 0.35 does not.
+     */
+    if (this.tryObjective(bot, hasTarget)) return;
+
     if (hasTarget) {
       if (hurt && this.trySeekCover(bot)) return;
 
       if (seeing) {
         const range = bb.lastKnownRange;
-        // Too far to shoot usefully: close the distance rather than plink.
-        if (range > tier.engageRange * 0.85 && bot.rng.chance(tier.pushAggression)) {
+        const profile = bot.weaponProfile;
+        // Where the bot wants to be standing is a property of the weapon, not of the tier
+        // (M7). A shotgun or an SMG closes hard; a sniper or an LMG holds the distance it
+        // already has and gives ground when a target gets inside its comfortable range.
+        const push = tier.pushAggression * profile.pushScale * this.deps.pushScale();
+        if (range > profile.preferredRange && bot.rng.chance(push)) {
           if (this.tryPush(bot)) return;
         }
+        if (range < profile.minComfortRange && this.tryFallBack(bot, profile.preferredRange)) return;
         if (bot.rng.chance(tier.flankChance) && this.tryFlank(bot)) return;
         this.setGoalNone();
         this.transition(bot, 'ENGAGE');
@@ -403,6 +449,7 @@ export class BotBrain {
     const shooting = isFiringState(this.state) || (this.state === 'SEEK_COVER' && this.peeking);
     combat.updateTrigger(
       tier,
+      bot.weaponProfile,
       bb,
       bot.rng,
       bot.magazine,
@@ -468,6 +515,90 @@ export class BotBrain {
    * Sampled rather than solved: four bearings around the target at flanking range, first
    * one the navmesh accepts wins. A flank that takes 2 ms to compute is not a flank.
    */
+  /**
+   * Give ground: path to a cell roughly opposite the target, out at the weapon's preferred
+   * range (M7).
+   *
+   * The mirror of `tryPush`, and the reason a sniper caught in a doorway does something
+   * other than lose. Bearings are swept the way the flank does, so a bot backed against a
+   * wall with nowhere to retreat falls through and fights where it stands rather than
+   * freezing against a failed path request.
+   */
+  /**
+   * Take the job the mode is offering, if it is worth taking (M7).
+   *
+   * The whole of "bots play the objective" is this method plus the priorities the mode
+   * assigns. Three rules:
+   *
+   *  - A bot **in contact** only breaks off for a priority at or above
+   *    `OBJECTIVE_IGNORE_BELOW`. That is what stops a defender abandoning a gunfight to stand
+   *    on a flag it is already next to, and what lets a ticking bomb pull people off one.
+   *  - A bot **already inside** the target's radius reports arrival every decision, which is
+   *    how a plant or a defuse advances, and holds position rather than re-pathing on the spot.
+   *  - Otherwise it paths there and the existing travel machinery does the rest. `OBJECTIVE`
+   *    is a real state so the debug panel can say which flag each bot is walking to.
+   */
+  private tryObjective(bot: Bot, inContact: boolean): boolean {
+    const provider = this.deps.objectives();
+    if (provider === null) {
+      this.objectiveId = '';
+      return false;
+    }
+    const target: ObjectiveTarget | null = provider.assign(bot);
+    if (target === null) {
+      this.objectiveId = '';
+      this.objectiveLabel = '';
+      this.objectiveAction = '';
+      return false;
+    }
+
+    this.objectiveId = target.id;
+    this.objectiveLabel = target.label;
+    this.objectiveAction = target.action;
+
+    if (inContact && target.priority < OBJECTIVE_IGNORE_BELOW) return false;
+
+    const dx = target.x - bot.px;
+    const dz = target.z - bot.pz;
+    if (dx * dx + dz * dz <= target.radius * target.radius && Math.abs(target.y - bot.py) < 3) {
+      // Standing on it. Tell the mode, and stop asking the pathfinder for a route to here.
+      provider.onArrived(bot, target);
+      this.setGoalNone();
+      this.transition(bot, 'OBJECTIVE');
+      return true;
+    }
+
+    const nav = this.deps.nav;
+    const cell = nav.nearestCell(target.x, target.y, target.z);
+    if (cell < 0) return false;
+    this.setGoal('OBJECTIVE', nav.centerX(nav.indexOfX(cell)), nav.heightAt(cell), nav.centerZ(nav.indexOfZ(cell)));
+    this.transition(bot, 'OBJECTIVE');
+    return true;
+  }
+
+  private tryFallBack(bot: Bot, preferredRange: number): boolean {
+    const bb = bot.blackboard;
+    if (!bb.hasKnownTarget) return false;
+    const nav = this.deps.nav;
+    const awayX = bot.px - bb.lastKnownX;
+    const awayZ = bot.pz - bb.lastKnownZ;
+    const base = Math.atan2(awayZ, awayX);
+    // Enough ground to be worth the walk, but not so much that the bot leaves the fight.
+    const radius = clamp(preferredRange - bb.lastKnownRange, 4, 14);
+
+    for (const sweep of [0, 30, -30, 60, -60]) {
+      const angle = base + sweep * DEG2RAD;
+      const x = bot.px + Math.cos(angle) * radius;
+      const z = bot.pz + Math.sin(angle) * radius;
+      const cell = nav.cellAtY(x, bot.py, z);
+      if (cell < 0) continue;
+      this.setGoal('PUSH', nav.centerX(nav.indexOfX(cell)), nav.heightAt(cell), nav.centerZ(nav.indexOfZ(cell)));
+      this.transition(bot, 'PUSH');
+      return true;
+    }
+    return false;
+  }
+
   private tryFlank(bot: Bot): boolean {
     const bb = bot.blackboard;
     if (!bb.hasKnownTarget) return false;

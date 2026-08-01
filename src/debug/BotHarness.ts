@@ -1,4 +1,6 @@
 import { BOT_TIERS, type BotTier } from '../ai/DifficultyTiers';
+import type { GameModeId } from '../modes/GameMode';
+import { MODES } from '../modes/ModeRegistry';
 import type { Loop } from '../core/Loop';
 import { DT } from '../core/Loop';
 import type { Match } from '../Match';
@@ -23,7 +25,18 @@ import type { FrameStats } from './FrameStats';
  * the whole mechanism: perception skips it, spawn scoring ignores it, and no bot goes
  * looking for it — so the numbers describe bots fighting bots and nothing else.
  *
- * Enabled by URL flag: `?harness=botmatch&bots=10&speed=4&tier=VETERAN`.
+ * M7 extends it to **any mode** (S7): `?harness=botmatch&mode=SND&speed=20` runs a full
+ * best-of-nine Search & Destroy with nobody at the keyboard, which is the only practical way
+ * to watch a nine-round match play out or to leave one running. The mode is applied to the
+ * menu selection before the world is built, so the harness match is composed exactly the way
+ * a player's would be — same registry entry, same objectives, same roster rules.
+ *
+ * Taking the human out matters more in M7 than it did in M3. With one life per round, an idle
+ * player on team A is not a neutral observer: it makes every Search & Destroy round a 4-v-5,
+ * and the attacking side wins all nine. `playerCombatant.active = false` is what makes the
+ * measurement about the mode rather than about the spectator.
+ *
+ * Enabled by URL flag: `?harness=botmatch&bots=10&speed=4&tier=VETERAN&mode=DOM`.
  */
 
 export interface BotHarnessOptions {
@@ -35,15 +48,25 @@ export interface BotHarnessOptions {
   readonly tier: BotTier | 'MIX';
   /** Map id to load, or null to use whatever the menu had selected. */
   readonly map: string | null;
+  /** Mode id to run, or null to use whatever the menu had selected (M7). */
+  readonly mode: GameModeId | null;
 }
 
-const DEFAULT_OPTIONS: BotHarnessOptions = { bots: 10, speed: 1, tier: 'MIX', map: null };
+const DEFAULT_OPTIONS: BotHarnessOptions = { bots: 10, speed: 1, tier: 'MIX', map: null, mode: null };
 
 const MIX: readonly BotTier[] = ['RECRUIT', 'REGULAR', 'HARDENED', 'VETERAN'];
 
 /** Sanity ceiling. Past this the linear target scan in `Ballistics` is the wrong shape. */
 const MAX_BOTS = 32;
-const MAX_SPEED = 16;
+/**
+ * Raised from 16 in M7.
+ *
+ * A best-of-nine Search & Destroy is up to nine 150-second rounds plus warm-ups — around
+ * twenty-five minutes of simulation. At 16x that is a wall minute and a half of watching
+ * nothing; at 32x it is under a minute, and the multiplier still only adds whole 1/60 s ticks
+ * so the match is bit-for-bit the one a player would have played (S4.1).
+ */
+const MAX_SPEED = 32;
 
 /**
  * Read the harness flags off a query string. Returns null when this is a normal run,
@@ -59,8 +82,10 @@ export function parseHarnessOptions(search: string): BotHarnessOptions | null {
   const raw = (params.get('tier') ?? '').toUpperCase();
   const tier: BotTier | 'MIX' = isTier(raw) ? raw : 'MIX';
   const map = params.get('map');
+  const rawMode = (params.get('mode') ?? '').toUpperCase();
+  const mode = MODES.some((m) => m.id === rawMode) ? (rawMode as GameModeId) : null;
 
-  return { bots, speed, tier, map };
+  return { bots, speed, tier, map, mode };
 }
 
 export interface BotHarnessReport {

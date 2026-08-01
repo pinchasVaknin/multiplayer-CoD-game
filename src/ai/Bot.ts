@@ -19,6 +19,7 @@ import type { BotTeam, Combatant } from './Combatant';
 import { CombatBehaviour } from './CombatBehaviour';
 import type { BotTier, PerceptionConfig, TierConfig, TierTable } from './DifficultyTiers';
 import { Path, type PathClient } from './Pathing';
+import { weaponProfileFor, type WeaponCombatProfile } from './WeaponProfile';
 
 /**
  * One bot (brief S6.1).
@@ -207,6 +208,16 @@ export class Bot implements Combatant, PathClient {
 
   get tier(): TierConfig {
     return this.deps.tiers[this.tierName];
+  }
+
+  /**
+   * How this bot should fight with what it is carrying (M7).
+   *
+   * Derived rather than stored: `applyWeaponDef` can change the weapon under a live bot for
+   * a controlled measurement, and a cached profile would then describe the previous gun.
+   */
+  get weaponProfile(): WeaponCombatProfile {
+    return weaponProfileFor(this.weapons.definition.class);
   }
 
   get state(): BotState {

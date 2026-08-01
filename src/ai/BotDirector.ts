@@ -12,10 +12,12 @@ import { bakeNavmesh, samplePatrolCells, type NavGrid } from '../world/Navmesh';
 import type { MapDef } from '../world/maps/types';
 import { AiScheduler, type SchedulerConfig } from './AiScheduler';
 import { Bot } from './Bot';
+import { drawBotWeapon } from './BotArsenal';
 import type { BrainDeps } from './BotBrain';
 import { buildBotMaterials, type BotMaterials } from './BotMesh';
 import type { BotTeam, Combatant } from './Combatant';
 import { CoverIndex } from './Cover';
+import type { ObjectiveProvider } from './ObjectiveIntent';
 import { BOT_TIERS, type BotTier, type PerceptionConfig, type TierTable } from './DifficultyTiers';
 import { NoiseKind, Perception } from './Perception';
 import { Pathfinder } from './Pathing';
@@ -94,7 +96,6 @@ export interface BotDirectorDeps {
   readonly damage: DamageSystem;
   readonly movement: MovementConfig;
   readonly healthConfig: HealthConfig;
-  readonly weaponDef: WeaponDef;
   readonly viewmodelConfig: ViewmodelConfig;
   readonly tiers: TierTable;
   readonly perceptionConfig: PerceptionConfig;
@@ -134,6 +135,31 @@ export class BotDirector {
    * entity", and `Match` answers.
    */
   silentFootsteps: ((entityId: number) => boolean) | null = null;
+
+  /**
+   * What the mode wants bots doing (M7). Null in a mode with no objectives.
+   *
+   * Set by `Match` once the mode exists. Same inversion as `silentFootsteps`: `ai/` asks a
+   * question and something outside it answers, so nothing in this package imports a mode.
+   */
+  objectives: ObjectiveProvider | null = null;
+
+  /**
+   * True when every other combatant is an enemy regardless of side (M7, Free-for-All).
+   *
+   * FFA keeps the two-team substrate — see `modes/FreeForAll.ts` — and flips this so spawn
+   * safety scores against all seven opponents rather than the four on the other side.
+   */
+  freeForAll = false;
+
+  /**
+   * Multiplier on every tier's `pushAggression` for this match (M7).
+   *
+   * Search & Destroy sets it to 0.35: with one life, running at somebody is a losing move,
+   * and the brief asks for the FSM's push aggression to "drop sharply". A scale rather than a
+   * second tier table, so a Veteran in S&D is the same Veteran playing more carefully.
+   */
+  pushAggressionScale = 1;
 
   readonly group = new THREE.Group();
   readonly nav: NavGrid;
@@ -191,6 +217,8 @@ export class BotDirector {
       cover: this.cover,
       perception: this.perception,
       patrolCells,
+      objectives: () => this.objectives,
+      pushScale: () => this.pushAggressionScale,
     };
 
     this.roster.push(deps.player);
@@ -224,6 +252,11 @@ export class BotDirector {
    *
    * Tiers are dealt round-robin from `tierMix` so a default match is a spread rather than
    * ten identical opponents; the harness overrides it to measure one tier at a time.
+   *
+   * **Each bot draws its own weapon** (M7 hotfix). Until M7 they all shared one def cloned
+   * from the player's primary, so picking a sniper in Create-a-Class armed the entire map
+   * with snipers. `drawBotWeapon` draws per tier from the director's seeded `Rng`, so the
+   * roster is varied, reproducible, and completely independent of the player's class.
    */
   populate(teamA: number, teamB: number, tierMix: readonly BotTier[]): void {
     this.clear();
@@ -245,7 +278,7 @@ export class BotDirector {
             damage: this.deps.damage,
             movement: this.deps.movement,
             healthConfig: this.deps.healthConfig,
-            weaponDef: this.deps.weaponDef,
+            weaponDef: drawBotWeapon(tier, this.rng),
             viewmodelConfig: this.deps.viewmodelConfig,
             tiers: this.deps.tiers,
             perceptionConfig: this.deps.perceptionConfig,
@@ -289,6 +322,14 @@ export class BotDirector {
     for (const bot of this.bots) bot.health.setConfig(cfg);
   }
 
+  /**
+   * Arm every bot with one weapon, overriding the per-tier draw.
+   *
+   * A measurement lever, not part of normal play. From M7 each bot draws its own weapon
+   * (`BotArsenal`), which is right for a match and wrong for a controlled experiment: M3's
+   * per-tier hit-rate table only means something if the tiers are holding the same gun.
+   * `BotHarness` and the arsenal panel call this to flatten the roster before measuring.
+   */
   applyWeaponDef(def: WeaponDef): void {
     for (const bot of this.bots) bot.weapons.setDefinition(def);
   }

@@ -18,6 +18,16 @@ import { PLAYER_ENTITY_ID } from './DamageSystem';
 
 export type ScoreTeam = 'A' | 'B';
 
+/**
+ * The objective actions a mode can credit (M7).
+ *
+ * One closed union rather than a free-form string, because `getScoreboardColumns` reads
+ * these back by name and a typo would produce a column of zeroes rather than an error.
+ * Every mode uses a subset: Domination captures and defends, Kill Confirmed tags, Search &
+ * Destroy plants and defuses.
+ */
+export type ObjectiveStat = 'captures' | 'defends' | 'plants' | 'defuses' | 'tags';
+
 export interface PlayerScore {
   readonly entityId: number;
   readonly displayName: string;
@@ -43,6 +53,16 @@ export interface PlayerScore {
   shotsHit: number;
   damageDealt: number;
   headshots: number;
+
+  // ---- M7: objective play -------------------------------------------------
+  /** Flags taken (Domination) — the moment ownership actually changes. */
+  captures: number;
+  /** Kills made defending a flag this player's team owns. */
+  defends: number;
+  plants: number;
+  defuses: number;
+  /** Dog tags picked up, of either colour (Kill Confirmed). */
+  tags: number;
 }
 
 export interface TeamTotals {
@@ -142,6 +162,11 @@ export class ScoreSystem {
       shotsHit: 0,
       damageDealt: 0,
       headshots: 0,
+      captures: 0,
+      defends: 0,
+      plants: 0,
+      defuses: 0,
+      tags: 0,
     };
     this.rowsById.set(entityId, row);
     this.all.push(row);
@@ -213,6 +238,22 @@ export class ScoreSystem {
     }
   }
 
+  /**
+   * Credit an objective action, and the personal points that go with it (M7).
+   *
+   * The counterpart to `recordKill`, and deliberately the same shape: the mode decides what
+   * the action is *worth* — S6.4 prices a capture differently from a tag — and this class
+   * only records that it happened. Team score is not touched here, because a capture adds to
+   * the team total in Domination and a tag does not in Kill Confirmed; that is the mode's
+   * decision and it makes it through `addTeamScore`.
+   */
+  recordObjective(entityId: number, stat: ObjectiveStat, points: number): void {
+    const row = this.rowsById.get(entityId);
+    if (row === undefined) return;
+    row[stat]++;
+    row.score += points;
+  }
+
   addTeamScore(team: ScoreTeam, amount: number): void {
     this.totals[team].score += amount;
   }
@@ -246,6 +287,11 @@ export class ScoreSystem {
       row.shotsHit = 0;
       row.damageDealt = 0;
       row.headshots = 0;
+      row.captures = 0;
+      row.defends = 0;
+      row.plants = 0;
+      row.defuses = 0;
+      row.tags = 0;
     }
     this.totals.A = makeTotals();
     this.totals.B = makeTotals();

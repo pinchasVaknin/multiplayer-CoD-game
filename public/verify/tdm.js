@@ -166,7 +166,7 @@
     const wasRunning = game.loop.isRunning;
     game.loop.stop();
 
-    const world = game.loadedMap.collision;
+    const world = game.map.collision;
     const player = game.player;
     const cfg = game.movementConfig;
     const Btn = { Jump: 1, Crouch: 2, Sprint: 4, Ads: 8, Fire: 16, Reload: 32 };
@@ -439,7 +439,7 @@
    * fine.
    */
   function clearanceAudit(minGap = 0.02, maxGap = 0.95) {
-    const colliders = game.loadedMap.collision.colliders;
+    const colliders = game.map.collision.colliders;
     const capsule = game.movementConfig.capsuleRadius * 2;
     const n = colliders.count;
 
