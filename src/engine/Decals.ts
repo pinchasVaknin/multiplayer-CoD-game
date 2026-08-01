@@ -11,7 +11,18 @@ import { buildDecalTexture } from './FxAssets';
  * predictable than a lifetime, and it is what acceptance criterion 6 asks to see hold.
  */
 
-const CAPACITY = 96;
+/**
+ * Raised from 96 in M7, for the accuracy wall (M6 playtest item).
+ *
+ * 96 recycled inside a single LMG magazine, so a group being measured lost its earliest holes
+ * while the burst that made them was still going — which is precisely the case the wall exists
+ * to serve. 192 holds two full magazines of the largest-magazine weapon in the arsenal, so a
+ * group survives a reload and can be compared against the next one.
+ *
+ * Nearly free: the whole field is one `InstancedMesh` and therefore one draw call whatever the
+ * count, so this buys 96 more instance matrices and no additional state changes.
+ */
+const CAPACITY = 192;
 /** Lift off the surface, metres. Backed up by a polygon offset in the material. */
 const SURFACE_LIFT = 0.006;
 

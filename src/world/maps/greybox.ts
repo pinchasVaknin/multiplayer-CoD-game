@@ -42,6 +42,9 @@ const MAIN_RAMP_ANGLE = Math.atan2(MAIN_RAMP_RISE, MAIN_RAMP_RUN);
 const MAIN_RAMP_LEN = Math.hypot(MAIN_RAMP_RISE, MAIN_RAMP_RUN);
 const MAIN_RAMP_THICK = 0.5;
 
+/** Mirrors `combat/TargetRange.FIRING_LINE.x`. The range measures from here. */
+const FIRING_LINE_X = -20;
+
 const PIT_DEPTH = 3;
 const PIT_RAMP_RUN = 6;
 const PIT_RAMP_ANGLE = Math.atan2(PIT_DEPTH, PIT_RAMP_RUN);
@@ -118,6 +121,39 @@ function brushes(): Brush[] {
   // Ledge lip in the accent colour, and a guard rail on the far side.
   add('accent', -9.75, 1.48, 3.02, 7.5, 0.06, 0.06, { solid: false, shadows: false });
   add('metal', -9.75, 1.95, 8.85, 7.5, 0.9, 0.3);
+
+  /**
+   * M7: the accuracy wall (M6 playtest item).
+   *
+   * A flat, clean, light face at a stated range, put there for one job: empty a magazine into
+   * it and *look at the group*. Spread is the one weapon property with no honest read-out —
+   * `spread.hipBase` is a cone half-angle in degrees and nobody can picture that — so the only
+   * way to compare two weapons is to see two patterns side by side.
+   *
+   * Three things make it work. It is **plain**, so the holes are the only marks on it. It is
+   * **big** (7 m x 4 m), so even a shotgun at range keeps its whole pattern on the face. And it
+   * is at a **round 25 m** from the firing line, so a group measured here is a number that can
+   * be written down and compared.
+   *
+   * Sunk 5 cm into the wall behind it rather than sitting flush, which is the same rule every
+   * floor-sitting brush in this map follows: no two coplanar faces, so no z-fighting.
+   */
+  add('metal', FIRING_LINE_X + 25, 2.1, -12.0, 0.35, 4.2, 7.2);
+  // A hairline centre cross, non-solid and 1 cm proud, so it cannot be shot away and cannot
+  // z-fight with the face it marks.
+  add('hazard', FIRING_LINE_X + 24.81, 2.1, -12.0, 0.02, 0.03, 7.0, { solid: false, shadows: false });
+  add('hazard', FIRING_LINE_X + 24.81, 2.1, -12.0, 0.02, 4.0, 0.03, { solid: false, shadows: false });
+
+  /**
+   * Lane markers: a stripe on the floor every five metres out to thirty.
+   *
+   * Non-solid and raised 1 cm, the same treatment M1 gave the firing line. Reading a group at
+   * "about twenty metres" is not a measurement; the stripes are what make the range's numbers
+   * mean something.
+   */
+  for (let range = 5; range <= 30; range += 5) {
+    add('accent', FIRING_LINE_X + range, 0.01, -14, 0.12, 0.02, 9, { solid: false, shadows: false });
+  }
 
   // ---- narrow corridor, 1.1 m clear, with a low overhang ----------------
   add('concreteDark', -21.0, 1.4, 4, 1.0, 3, 12);

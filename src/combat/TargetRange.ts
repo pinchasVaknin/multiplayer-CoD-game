@@ -27,6 +27,11 @@ export const DUMMY_IDS = {
   strafe: 6,
   penThin: 7,
   penThick: 8,
+  // M7, from the M6 playtest notes.
+  infinite: 9,
+  fallerNear: 10,
+  fallerFar: 11,
+  strafeFar: 12,
 } as const;
 
 const FACING_WEST = Math.PI / 2;
@@ -85,6 +90,60 @@ const SPECS: readonly DummySpec[] = [
     yaw: FACING_WEST,
     travel: 2.2,
     speed: 2.6,
+  },
+  /**
+   * The infinite dummy (M7, M6 playtest item).
+   *
+   * Straight ahead at a round ten metres, because a DPS figure is only comparable between
+   * weapons if the range it was measured at is a number you can state. It never dies, so a
+   * whole magazine — reloads and all — goes into it and the read-out is sustained damage
+   * rather than a kill.
+   */
+  {
+    id: DUMMY_IDS.infinite,
+    name: 'DPS — INFINITE',
+    behaviour: 'infinite',
+    x: FIRING_LINE.x + 10,
+    y: 0,
+    z: FIRING_LINE.z,
+    yaw: FACING_WEST,
+  },
+  /**
+   * Two fallers on the near lane.
+   *
+   * A faller answers the one question a static target cannot: *was that burst lethal?* It
+   * drops flat the instant it dies and stands back up a couple of seconds later, so the
+   * answer is visible without reading a number off a board.
+   */
+  {
+    id: DUMMY_IDS.fallerNear,
+    name: 'FALLER 8 m',
+    behaviour: 'faller',
+    x: FIRING_LINE.x + 8,
+    y: 0,
+    z: FIRING_LINE.z + 4.2,
+    yaw: FACING_WEST,
+  },
+  {
+    id: DUMMY_IDS.fallerFar,
+    name: 'FALLER 20 m',
+    behaviour: 'faller',
+    x: FIRING_LINE.x + 20,
+    y: 0,
+    z: FIRING_LINE.z + 4.2,
+    yaw: FACING_WEST,
+  },
+  /** A second mover, further out and quicker, for leading practice. */
+  {
+    id: DUMMY_IDS.strafeFar,
+    name: 'STRAFE 24 m',
+    behaviour: 'strafe',
+    x: FIRING_LINE.x + 24,
+    y: 0,
+    z: FIRING_LINE.z - 5.5,
+    yaw: FACING_WEST,
+    travel: 4.5,
+    speed: 4.2,
   },
   {
     id: DUMMY_IDS.penThin,

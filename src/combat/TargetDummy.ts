@@ -19,7 +19,15 @@ import { HitboxRig, HUMANOID_RIG, type HitZone } from './HitboxRig';
  * console, so it is legible while you are still holding the trigger.
  */
 
-export type DummyBehaviour = 'static' | 'popup' | 'strafe';
+/**
+ * M7 adds two, from the M6 playtest notes.
+ *
+ * `infinite` never dies, so a magazine can be emptied into it and the read-out becomes a DPS
+ * meter rather than a kill counter. `faller` drops flat when killed and stands back up, which
+ * is the target that tells you at a glance whether a burst was lethal — a popup on a timer
+ * cannot, because it was going down anyway.
+ */
+export type DummyBehaviour = 'static' | 'popup' | 'strafe' | 'infinite' | 'faller';
 
 export interface DummySpec {
   readonly id: number;
@@ -35,6 +43,8 @@ export interface DummySpec {
   /** Pop-up cycle, seconds: time up, then time down. */
   readonly upTime?: number;
   readonly downTime?: number;
+  /** Seconds a `faller` stays down before it stands back up. */
+  readonly standTime?: number;
 }
 
 /** Seconds a downed dummy stays down before it resets. */
@@ -42,6 +52,9 @@ const RESPAWN_SECONDS = 2.5;
 /** How far a popup target sinks, metres. Below the rig height, so it fully hides. */
 const POPUP_DEPTH = 2.0;
 const POPUP_TRANSITION = 0.32;
+
+/** Seconds without a hit before the infinite dummy's DPS window restarts. */
+const DPS_IDLE_RESET = 1.5;
 
 const LABEL_W = 256;
 const LABEL_H = 96;
@@ -55,6 +68,17 @@ export class TargetDummy implements Damageable {
 
   /** Total damage taken since the last reset, for the printed read-out. */
   totalDamage = 0;
+  /**
+   * Sustained damage per second, for the infinite dummy (M7).
+   *
+   * Measured from the first round of the current burst rather than from the dummy's whole
+   * life: a DPS figure that includes the ten seconds you spent walking up to it is not a DPS
+   * figure. The window resets after `DPS_IDLE_RESET` of not being shot.
+   */
+  dps = 0;
+  private dpsDamage = 0;
+  private dpsSeconds = 0;
+  private sinceHit = 0;
   lastDamage = 0;
   lastZone: HitZone = 'torso';
   lastDistance = 0;
@@ -99,6 +123,7 @@ export class TargetDummy implements Damageable {
 
   private phase = 0;
   private respawnTimer = 0;
+  private fallAmount = 0;
   private strafeDir = 1;
   private strafeOffset = 0;
   private labelDirty = true;
@@ -168,6 +193,11 @@ export class TargetDummy implements Damageable {
     this.drawLabel();
   }
 
+  /** True for a dummy that must never die. Read by the damage read-out and by `step`. */
+  get isInfinite(): boolean {
+    return this.spec.behaviour === 'infinite';
+  }
+
   get behaviour(): DummyBehaviour {
     return this.spec.behaviour;
   }
@@ -204,6 +234,8 @@ export class TargetDummy implements Damageable {
    * that is already regenerating are a different measurement.
    */
   noteHit(amount: number, zone: HitZone, distance: number): void {
+    this.sinceHit = 0;
+    this.dpsDamage += amount;
     this.lastDamage = amount;
     this.lastZone = zone;
     this.lastDistance = distance;
@@ -242,6 +274,21 @@ export class TargetDummy implements Damageable {
     this.prevY = this.currY;
     this.prevZ = this.currZ;
 
+    // An infinite dummy is topped up before anything else looks at it, so it can never
+    // enter the death path and the read-out stays a damage meter (M7).
+    if (this.isInfinite) {
+      this.health.reset();
+      this.sinceHit += DT;
+      if (this.sinceHit > DPS_IDLE_RESET) {
+        this.dpsDamage = 0;
+        this.dpsSeconds = 0;
+        this.dps = 0;
+      } else if (this.dpsSeconds > 0) {
+        this.dps = this.dpsDamage / this.dpsSeconds;
+      }
+      if (this.dpsDamage > 0) this.dpsSeconds += DT;
+      if (this.sinceHit < DPS_IDLE_RESET) this.labelDirty = true;
+    }
     this.health.step();
 
     // The TTK clock counts sim ticks, so the figure cannot vary with frame rate (S4.1).
@@ -271,7 +318,18 @@ export class TargetDummy implements Damageable {
 
     switch (spec.behaviour) {
       case 'static':
+      // An infinite dummy never moves: it exists to stand still and absorb a magazine.
+      case 'infinite':
         break;
+      case 'faller': {
+        // Flat on its face while dead, upright otherwise. `RESPAWN_SECONDS` already stands
+        // it back up, so this only has to express *falling* rather than own a timer.
+        const down = this.health.alive ? 0 : 1;
+        this.fallAmount += (down - this.fallAmount) * Math.min(1, DT * 7);
+        this.group.rotation.x = -this.fallAmount * (Math.PI / 2);
+        y = this.baseY - this.fallAmount * 0.05;
+        break;
+      }
       case 'popup': {
         const up = spec.upTime ?? 3;
         const down = spec.downTime ?? 2;
@@ -387,7 +445,10 @@ export class TargetDummy implements Damageable {
 
       ctx.fillStyle = '#6fd08c';
       ctx.font = `800 15px ${family}`;
-      ctx.fillText(`HP ${Math.round(this.health.current)}`, 12, 82);
+      // The infinite dummy reports sustained damage instead of a health bar it can never
+      // lose — that is the whole reason it exists (M7).
+      if (this.isInfinite) ctx.fillText(`DPS ${this.dps.toFixed(0)}`, 12, 82);
+      else ctx.fillText(`HP ${Math.round(this.health.current)}`, 12, 82);
       ctx.fillStyle = '#626a77';
       ctx.font = `500 13px ${family}`;
       if (this.lastTtkSeconds >= 0) {
