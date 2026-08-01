@@ -892,7 +892,7 @@ export class Match {
     this.fillStreakHud();
     this.fillMinimapStreaks();
     this.objectives.update(dt);
-    this.mortarOverlay.update(dt, this.deps.equipmentConfig !== undefined ? MORTAR_MARK_RADIUS : MORTAR_MARK_RADIUS);
+    this.mortarOverlay.update(dt, MORTAR_MARK_RADIUS);
     this.ui.update(this.flow, sim.x, sim.z, sim.yaw, dt);
     this.feedback.render(camera);
   }

@@ -713,7 +713,25 @@ export class Game {
    */
   private onPointerLockChange(locked: boolean): void {
     if (locked) return;
+    // Esc with the targeting map up is a *cancel*, not a pause — the overlay says so, and a
+    // player who backed out of marking a mortar should be back in the fight, not on a menu.
+    // The browser has taken the cursor either way; the match stays armed, so the next click
+    // recaptures it. See `Input.armPointerLock`.
+    if (this.cancelMortarOverlay()) return;
     if (this.state === 'MATCH') this.transitionTo('PAUSED');
+  }
+
+  /**
+   * Close the mortar targeting map if it is open. Returns whether it was.
+   *
+   * Cancelling deliberately does **not** spend the streak: `MortarOverlay.cancel` leaves it
+   * pending, so a mis-opened map costs nothing.
+   */
+  private cancelMortarOverlay(): boolean {
+    const overlay = this.world?.match.mortarOverlay;
+    if (overlay === undefined || !overlay.isOpen) return false;
+    overlay.cancel();
+    return true;
   }
 
   /**
@@ -733,6 +751,10 @@ export class Game {
       this.overlayWasOpenBeforePause = false;
       return;
     }
+    // Above the pause branches for the same reason the F1 overlay is: a player closing a
+    // panel must not be thrown back into a firefight, and one cancelling a mortar mark must
+    // not be dropped onto the pause screen.
+    if (this.cancelMortarOverlay()) return;
     if (this.state === 'LOADOUT') {
       this.transitionTo(this.world === null ? 'MENU' : 'PAUSED');
       return;

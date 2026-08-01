@@ -935,6 +935,17 @@
   pointer-events: none;
 }
 
+/*
+ * Required, not defensive — the same trap `.op-screen[hidden]` documents in app.css. The
+ * `hidden` attribute only hides an element because the UA stylesheet says
+ * `[hidden] { display: none }`, and the `display: flex` directly above outranks it. Without
+ * this the targeting map is painted over the game from the moment a match starts, blank,
+ * because `update()` correctly refuses to draw an overlay that is not open.
+ */
+.hud-mortar[hidden] {
+  display: none;
+}
+
 .hud-mortar__frame {
   display: flex;
   flex-direction: column;
