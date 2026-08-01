@@ -131,6 +131,7 @@ export class DebugOverlay {
   private fDraws: Field;
   private fBudget: Field;
   private fBreakdown: Field;
+  private fStreaks: Field;
 
   // Player fields
   private fPos: Field;
@@ -201,6 +202,8 @@ export class DebugOverlay {
     this.fBudget = perf.addField('Over 16.7ms');
     this.fDraws = perf.addField('Draws / tris');
     this.fBreakdown = perf.addField('Mode / HUD ms');
+    // M7 (S7): streak-entity cost and how many are alive.
+    this.fStreaks = perf.addField('Streak ms / count');
 
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'dbg-graph';
@@ -421,6 +424,12 @@ export class DebugOverlay {
       this.fBreakdown,
       `${stats.lastModeMs.toFixed(3)} / ${stats.lastHudMs.toFixed(2)} ` +
         `(peak ${stats.peakModeMs.toFixed(2)} / ${stats.peakHudMs.toFixed(2)})`,
+    );
+
+    set(
+      this.fStreaks,
+      `${stats.lastStreakMs.toFixed(3)} ms / ${stats.lastStreakCount} ` +
+        `(peak ${stats.peakStreakMs.toFixed(2)} ms / ${stats.peakStreakCount})`,
     );
 
     set(this.fPos, `${sim.x.toFixed(2)} ${sim.y.toFixed(2)} ${sim.z.toFixed(2)}`);

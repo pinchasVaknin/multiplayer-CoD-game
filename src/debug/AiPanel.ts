@@ -47,6 +47,8 @@ export class AiPanel {
   private selected = 0;
 
   private readonly fBots = field();
+  /** M7 (S7): which flag, tag or site each bot is currently pursuing. */
+  private readonly fObjective = field();
   private readonly fAiMs = field();
   private readonly fAiPct = field();
   private readonly fWork = field();
@@ -144,6 +146,7 @@ export class AiPanel {
 
     const ai = this.overlay.section('AI · budget', left);
     bind(ai, 'Bots', this.fBots);
+    bind(ai, 'Objective intent', this.fObjective);
     bind(ai, 'AI last / mean', this.fAiMs);
     bind(ai, 'AI p50 / p99 / worst', this.fAiPct);
     bind(ai, 'Runs (per/tac/path)', this.fWork);
@@ -235,6 +238,28 @@ export class AiPanel {
 
   // -- read-out --------------------------------------------------------------
 
+  /**
+   * Which flag, tag or site each bot is currently pursuing (M7, S7).
+   *
+   * Read off `BotBrain.objectiveAction` / `objectiveLabel`, which the brain writes every time
+   * it asks the mode — so this is the answer the bot acted on rather than a re-derivation that
+   * could disagree with it.
+   */
+  private objectiveIntent(): string {
+    const counts = new Map<string, number>();
+    for (const bot of this.director.bots) {
+      if (!bot.health.alive) continue;
+      const action = bot.brain.objectiveAction;
+      if (action.length === 0) continue;
+      const key = `${action}:${bot.brain.objectiveLabel}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    if (counts.size === 0) return 'none';
+    const parts: string[] = [];
+    for (const [key, n] of counts) parts.push(`${key} x${n}`);
+    return parts.join(' · ');
+  }
+
   private refresh(): void {
     const d = this.director;
     // Percentiles are computed from a sorted copy, so this is done here at 15 Hz rather
@@ -250,6 +275,7 @@ export class AiPanel {
     }
 
     set(this.fBots, `${alive} alive / ${d.botCount}`);
+    set(this.fObjective, this.objectiveIntent());
     set(this.fAiMs, `${s.lastMs.toFixed(2)} / ${s.meanMs.toFixed(3)} ms`);
     set(this.fAiPct, `${s.p50Ms.toFixed(2)} / ${s.p99Ms.toFixed(2)} / ${s.worstMs.toFixed(2)} ms`);
     set(this.fWork, `${s.perceptionRuns} / ${s.tacticalRuns} / ${s.pathRuns}`);

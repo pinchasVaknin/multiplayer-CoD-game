@@ -29,6 +29,7 @@ import { HitboxDebug } from './HitboxDebug';
 import type { MatchHarness } from './MatchHarness';
 import { MetaPanel } from './MetaPanel';
 import { ModePanel } from './ModePanel';
+import { StreakPanel } from './StreakPanel';
 import type { Speedometer } from './Speedometer';
 import { WeaponDebug } from './WeaponDebug';
 import { WeaponHarness } from './WeaponHarness';
@@ -93,6 +94,8 @@ export class DebugSuite {
   readonly equipmentPanel: EquipmentPanel;
   /** M6: progression, perks, challenges, the event tap, the simulator and the inspector. */
   readonly metaPanel: MetaPanel;
+  /** M7: streak state, sentry targeting and care-package contest (S7). */
+  readonly streakPanel: StreakPanel;
 
   private readonly scene: THREE.Scene;
 
@@ -174,6 +177,7 @@ export class DebugSuite {
     ctx.scene.add(this.equipmentPanel.group);
 
     this.metaPanel = new MetaPanel(this.overlay, ctx.match, ctx.profile, ctx.bus);
+    this.streakPanel = new StreakPanel(this.overlay, ctx.match, ctx.bus);
   }
 
   /** Per-tick: the collision visualisation follows the player. */
@@ -199,6 +203,7 @@ export class DebugSuite {
    * a step in `usedJSHeapSize` at the next match boundary.
    */
   dispose(): void {
+    this.streakPanel.dispose();
     this.metaPanel.dispose();
     this.scene.remove(this.equipmentPanel.group);
     this.equipmentPanel.dispose();

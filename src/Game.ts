@@ -688,7 +688,12 @@ export class Game {
   private onFrame(sample: FrameSample): void {
     const match = this.world?.match;
     this.stats.push(sample.frameMs, sample.simMs, sample.renderMs, sample.steps, sample.starved);
-    this.stats.pushBreakdown(match?.lastModeMs ?? 0, match?.ui.lastUpdateMs ?? 0);
+    this.stats.pushBreakdown(
+      match?.lastModeMs ?? 0,
+      match?.ui.lastUpdateMs ?? 0,
+      match?.streaks.lastMs ?? 0,
+      match?.streaks.active.length ?? 0,
+    );
   }
 
   // -- events --------------------------------------------------------------

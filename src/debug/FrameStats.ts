@@ -45,6 +45,11 @@ export class FrameStats {
   lastHudMs = 0;
   peakModeMs = 0;
   peakHudMs = 0;
+  /** M7 (S7): time inside `StreakSystem.simulate`, and how many entities it ticked. */
+  lastStreakMs = 0;
+  peakStreakMs = 0;
+  lastStreakCount = 0;
+  peakStreakCount = 0;
 
   push(frameMs: number, simMs: number, renderMs: number, steps: number, starved: boolean): void {
     this.frames[this.head] = frameMs;
@@ -65,11 +70,15 @@ export class FrameStats {
   }
 
   /** The M4 sub-costs for this frame. Peaks are held until `reset`. */
-  pushBreakdown(modeMs: number, hudMs: number): void {
+  pushBreakdown(modeMs: number, hudMs: number, streakMs = 0, streakCount = 0): void {
     this.lastModeMs = modeMs;
     this.lastHudMs = hudMs;
+    this.lastStreakMs = streakMs;
+    this.lastStreakCount = streakCount;
     if (modeMs > this.peakModeMs) this.peakModeMs = modeMs;
     if (hudMs > this.peakHudMs) this.peakHudMs = hudMs;
+    if (streakMs > this.peakStreakMs) this.peakStreakMs = streakMs;
+    if (streakCount > this.peakStreakCount) this.peakStreakCount = streakCount;
   }
 
   /** Recompute percentiles. Sorts a copy; call at a few Hz, not per frame. */
@@ -110,6 +119,8 @@ export class FrameStats {
     this.overBudget = 0;
     this.peakModeMs = 0;
     this.peakHudMs = 0;
+    this.peakStreakMs = 0;
+    this.peakStreakCount = 0;
   }
 
   get sampleCount(): number {
