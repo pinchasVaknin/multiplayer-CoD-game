@@ -28,6 +28,7 @@ import { Speedometer } from './debug/Speedometer';
 import { isLegalGameTransition, type GameStateId } from './GameStates';
 import type { Match } from './Match';
 import { PLAYER_TEAM } from './Match';
+import { PLAYER_ENTITY_ID } from './combat/DamageSystem';
 import { MatchWorld } from './MatchWorld';
 import { GameScreens } from './GameScreens';
 import { applyEquippedLoadout, asModeId } from './GameLoadout';
@@ -655,7 +656,24 @@ export class Game {
     match.render(alpha, cam, dt, yaw, pitch);
     world.debug.render(cam, alpha, dt);
 
-    this.renderer.render(this.scene, cam, this.viewmodel);
+    /**
+     * A live Chopper Gunner owns the view (M7).
+     *
+     * Asked rather than pushed: the streak hands back a camera while it is running and null
+     * once it has been restored, so there is nothing for `Game` to undo and no state here that
+     * could disagree with the streak about whose camera it is. That is what makes acceptance
+     * criterion 2 — "returns control cleanly, including if the player is killed or the match
+     * ends" — a property of one method rather than of four call sites.
+     */
+    const chopper = match.streaks.activeChopperFor(PLAYER_ENTITY_ID);
+    const takeover = chopper?.activeCamera(this.renderer.aspect) ?? null;
+    if (takeover !== null) {
+      // Thermal is a render pass over the world with the bodies drawn hot, not a filter over
+      // the ordinary image (S6.1). No viewmodel: the player is not holding anything.
+      this.renderer.renderThermal(this.scene, takeover, match.bots.group);
+    } else {
+      this.renderer.render(this.scene, cam, this.viewmodel);
+    }
     world.debug.update(dt);
 
     // The match ended during a sim tick this frame. Transition now, between frames, with

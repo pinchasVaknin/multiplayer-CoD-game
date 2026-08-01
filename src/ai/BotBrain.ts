@@ -47,6 +47,8 @@ export interface BrainDeps {
    * built after the brain deps are, so reading it late is what keeps the two lifetimes apart.
    */
   readonly objectives: () => ObjectiveProvider | null;
+  /** Objectives that belong to a streak rather than the mode — care packages (M7). */
+  readonly streakObjectives: () => ObjectiveProvider | null;
   /** Match-wide multiplier on `pushAggression` (M7). One life makes bots cautious. */
   readonly pushScale: () => number;
 }
@@ -539,13 +541,19 @@ export class BotBrain {
    *    is a real state so the debug panel can say which flag each bot is walking to.
    */
   private tryObjective(bot: Bot, inContact: boolean): boolean {
-    const provider = this.deps.objectives();
-    if (provider === null) {
-      this.objectiveId = '';
-      return false;
+    // Two providers: the mode's, and whatever streaks have put on the ground. Highest
+    // priority wins, so a care package can outrank a flag the bot was idly holding.
+    const modeProvider = this.deps.objectives();
+    const streakProvider = this.deps.streakObjectives();
+    const fromMode = modeProvider?.assign(bot) ?? null;
+    const fromStreak = streakProvider?.assign(bot) ?? null;
+    let provider = modeProvider;
+    let target: ObjectiveTarget | null = fromMode;
+    if (fromStreak !== null && (fromMode === null || fromStreak.priority > fromMode.priority)) {
+      provider = streakProvider;
+      target = fromStreak;
     }
-    const target: ObjectiveTarget | null = provider.assign(bot);
-    if (target === null) {
+    if (provider === null || target === null) {
       this.objectiveId = '';
       this.objectiveLabel = '';
       this.objectiveAction = '';

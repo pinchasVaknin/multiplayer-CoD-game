@@ -79,7 +79,7 @@ export const HUMANOID_RIG: RigLayout = buildLayout('humanoid', [
   { name: 'legR', zone: 'leg', ox: 0.11, oy: 0.42, oz: 0, sx: 0.18, sy: 0.84, sz: 0.2 },
 ]);
 
-function buildLayout(id: string, boxes: readonly HitboxDef[]): RigLayout {
+export function buildLayout(id: string, boxes: readonly HitboxDef[]): RigLayout {
   let top = 0;
   for (const b of boxes) top = Math.max(top, b.oy + b.sy * 0.5);
   const boundY = top * 0.5;

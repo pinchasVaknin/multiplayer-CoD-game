@@ -7,10 +7,11 @@ import { PlayerCombatant } from './ai/PlayerCombatant';
 import { makeSpawnChoice, type SpawnChoice } from './ai/SpawnSelector';
 import { DamageSystem, makeDamageRequest, PLAYER_ENTITY_ID, type DamageRequest } from './combat/DamageSystem';
 import { ScoreSystem } from './combat/ScoreSystem';
+import { Rng } from './core/Rng';
 import { TargetRange } from './combat/TargetRange';
 import { EV, type GameBus } from './core/Events';
 import type { Input } from './core/Input';
-import { Btn, isDown, type InputCommand } from './core/InputCommand';
+import { Btn, isDown, justPressed, type InputCommand } from './core/InputCommand';
 import { DT } from './core/Loop';
 import { DEG2RAD } from './core/MathUtil';
 import type { CameraRig } from './engine/CameraRig';
@@ -23,6 +24,9 @@ import { EquipmentSystem } from './equipment/EquipmentSystem';
 import { MatchEquipment } from './MatchEquipment';
 import { MatchFeedback } from './MatchFeedback';
 import { MatchMeta } from './MatchMeta';
+import { StreakAudio } from './streaks/StreakAudio';
+import { StreakSystem } from './streaks/StreakSystem';
+import { DEFAULT_STREAK_CONFIG, type StreakConfig } from './streaks/StreakDefs';
 import type { CamoId } from './meta/Camos';
 import type { ResolvedLoadout } from './meta/Loadouts';
 import type { Profile } from './meta/Profile';
@@ -114,6 +118,8 @@ export interface MatchDeps {
   readonly profile: Profile;
   /** False in the Shooting Range: a testbed does not write to the save. */
   readonly banksProgress: boolean;
+  /** M7: killstreak tuning. Live-editable from the debug panel. */
+  readonly streakConfig?: StreakConfig;
 }
 
 /** The player's side. Bots added to 'A' fight alongside them, 'B' against. */
@@ -158,6 +164,8 @@ export class Match {
   readonly equipment: MatchEquipment;
   /** M6: XP, challenges, perks and the field upgrade. */
   readonly meta: MatchMeta;
+  /** M7: killstreaks. Owns every streak entity in the world. */
+  readonly streaks: StreakSystem;
 
   /** Interpolated weapon state for this frame. Read by Game for the camera. */
   readonly visual: WeaponSnapshot = {
@@ -186,6 +194,16 @@ export class Match {
 
   private active = false;
   private playerDead = false;
+  /** Previous tick's buttons, for edge detection in the sim (S4.2). */
+  private prevButtons = 0;
+  /**
+   * Where a mortar will land if one is called in.
+   *
+   * Defaults to the map centre and is moved by the targeting overlay. Held here rather than in
+   * the overlay so a mortar called from the console — or, later, by a bot — still has a mark.
+   */
+  mortarMarkX = 0;
+  mortarMarkZ = 0;
   private playerRespawnTimer = 0;
   private heartbeatTimer = 0;
   private rosterRegistered = false;
@@ -368,6 +386,44 @@ export class Match {
       localTeam: PLAYER_TEAM,
       banksProgress: deps.banksProgress,
     });
+
+    /**
+     * M7, last of all: it asks `MatchMeta` for perk state and `MatchEquipment` for its blast,
+     * so both have to exist first.
+     *
+     * The three predicates below are the whole of the M6 hook activation. `streaks/` never
+     * learns what a perk is — it asks three questions and this is where they are answered:
+     * Cold-Blooded refuses to be targeted, Ghost refuses to appear on a sweep, and Hardline
+     * discounts every requirement.
+     */
+    this.streaks = new StreakSystem({
+      bus: deps.bus,
+      score: this.score,
+      roster: this.bots.roster,
+      localId: PLAYER_ENTITY_ID,
+      targetable: (id) => (id === PLAYER_ENTITY_ID ? this.meta.state.targetedByStreaks : true),
+      visibleToUav: (id) => (id === PLAYER_ENTITY_ID ? this.meta.state.visibleToUav : true),
+      streakDiscount: (id) => (id === PLAYER_ENTITY_ID ? this.meta.state.streakDiscount : 0),
+      context: {
+        bus: deps.bus,
+        scene: deps.scene,
+        world: deps.world,
+        damage: this.damage,
+        bots: this.bots,
+        audio: new StreakAudio(deps.audio),
+        fx: this.fx,
+        cameraRig: deps.cameraRig,
+        mapDef: deps.map.def,
+        cfg: deps.streakConfig ?? DEFAULT_STREAK_CONFIG,
+        rng: new Rng(deps.seed ^ 0x5bd1_e995),
+        tiers: deps.tiers,
+        blast: (x, y, z, radius, bright) => this.equipment.fx.spawnBlast(x, y, z, radius, bright),
+        roster: this.bots.roster,
+      },
+    });
+    // Care packages are contestable in every mode, so they ride the second provider slot
+    // rather than the mode's (see `BotDirector.streakObjectives`).
+    this.bots.streakObjectives = this.streaks;
 
     // Occlusion low-pass through the same spatial-hash raycaster the sim uses (S6.7).
     deps.audio.setOccluder((x, y, z) =>
@@ -574,6 +630,10 @@ export class Match {
     this.equipment.simulate(cmd, this.deps.player.sim, !this.playerDead);
     this.meta.simulate(cmd, this.deps.player.sim, !this.playerDead);
     this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
+    // Streaks tick after the bots that may have just shot one down, and before the flow that
+    // may declare the match over and end them all.
+    this.streaks.simulate(cmd.tickIndex, cmd);
+    if (!this.playerDead) this.stepStreakInput(cmd);
     this.stepPlayerRespawn();
     this.stepLowHealthAudio();
 
@@ -585,7 +645,47 @@ export class Match {
     // Held Tab, read from the command rather than from the DOM (S4.2).
     this.ui.setScoreboardOpen(isDown(cmd.buttons, Btn.Scoreboard));
 
+    this.prevButtons = cmd.buttons;
     this.latency.expire(performance.now());
+  }
+
+  /**
+   * Spend a killstreak on the player's say-so (M7).
+   *
+   * Three absolute keys rather than a cycle, and edge-detected in the sim from the bitfield
+   * exactly as S4.2 requires — there is no DOM handler anywhere near this.
+   *
+   * Where a streak lands is decided here rather than by the streak, because "in front of the
+   * player" is a fact about the player: a sentry goes a couple of metres ahead so it does not
+   * spawn inside them, a package drops on the spot, and a mortar marks wherever the overlay
+   * left its cursor.
+   */
+  private stepStreakInput(cmd: InputCommand): void {
+    const bits = [Btn.Streak1, Btn.Streak2, Btn.Streak3] as const;
+    for (let i = 0; i < bits.length; i++) {
+      const bit = bits[i];
+      if (bit === undefined) continue;
+      if (!justPressed(cmd.buttons, this.prevButtons, bit)) continue;
+      const held = this.streaks.pendingFor(PLAYER_ENTITY_ID);
+      const id = held[i];
+      if (id === undefined) continue;
+
+      const sim = this.deps.player.sim;
+      // Two metres along the facing, so a sentry is placed rather than worn.
+      const ahead = 2;
+      const px = sim.x - Math.sin(sim.yaw) * ahead;
+      const pz = sim.z - Math.cos(sim.yaw) * ahead;
+      const useAhead = id === 'sentry';
+      this.streaks.activate(
+        PLAYER_ENTITY_ID,
+        id,
+        id === 'mortar' ? this.mortarMarkX : useAhead ? px : sim.x,
+        sim.y,
+        id === 'mortar' ? this.mortarMarkZ : useAhead ? pz : sim.z,
+        sim.yaw,
+      );
+      return;
+    }
   }
 
   /**
@@ -682,6 +782,7 @@ export class Match {
     this.fx.update(dt);
     this.equipment.render(alpha, dt, camera);
     this.meta.render(dt);
+    this.streaks.render(dt, alpha);
 
     // A dead player is not holding a rifle — and a scoped one is looking through an optic
     // rather than at a weapon, so the viewmodel hands off to the scope overlay (M7). See
@@ -762,6 +863,8 @@ export class Match {
   }
 
   dispose(): void {
+    // First: a live Chopper Gunner has the camera, and nothing else may run until it is back.
+    this.streaks.dispose();
     this.meta.dispose();
     this.equipment.dispose();
     this.feedback.dispose();

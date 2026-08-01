@@ -8,6 +8,8 @@ import type { LoadoutSlot } from '../meta/Loadouts';
 import { makeSyntheticV0Save, migrateSave, normaliseSave } from '../meta/SaveData';
 import { sanitiseLoadout, UnlockState } from '../meta/Unlocks';
 import { PERKS, type PerkId } from '../perks/PerkDefs';
+import { STREAK_DEFS, type StreakId } from '../streaks/StreakDefs';
+import { PLAYER_ENTITY_ID } from '../combat/DamageSystem';
 import { perkWeaponEffects, resolvePerkState } from '../perks/PerkState';
 import { ATTACHMENTS, resolveWeaponDef } from '../weapons/Attachments';
 import { ALL_WEAPONS, type WeaponDef } from '../weapons/WeaponDefs';
@@ -81,6 +83,26 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
     tiers: game.tiers,
     perceptionConfig: game.perceptionConfig,
     schedulerConfig: game.schedulerConfig,
+
+    // ---- M7 ---------------------------------------------------------------
+    streaks: () => game.activeMatch?.streaks,
+    streakDefs: STREAK_DEFS,
+    /** Live streak entities, one line each (S7). */
+    streakState: () => game.activeMatch?.streaks.active.map((s) => s.describe()),
+    sentries: () => game.activeMatch?.streaks.sentries(),
+    packages: () => game.activeMatch?.streaks.packages(),
+    /** Grant a streak without earning it, then spend it where the player is standing. */
+    giveStreak: (id: string) => game.activeMatch?.streaks.debugGrant(PLAYER_ENTITY_ID, id as StreakId),
+    useStreak: (id: string) => {
+      const match = game.activeMatch;
+      const sim = game.playerSim;
+      if (match === null || sim === undefined) return undefined;
+      return match.streaks.activate(PLAYER_ENTITY_ID, id as StreakId, sim.x, sim.y, sim.z, sim.yaw);
+    },
+    /** The effective requirement for a streak, after Hardline. */
+    streakRequirement: (id: string) =>
+      game.activeMatch?.streaks.requirementFor(id as StreakId, PLAYER_ENTITY_ID),
+    streakPending: () => game.activeMatch?.streaks.pendingFor(PLAYER_ENTITY_ID),
 
     // ---- M6 ---------------------------------------------------------------
     /**

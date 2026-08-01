@@ -145,6 +145,15 @@ export class BotDirector {
   objectives: ObjectiveProvider | null = null;
 
   /**
+   * A second provider, for objectives that are not the mode's (M7).
+   *
+   * A care package is contestable in *every* mode, including Team Deathmatch, so it cannot be
+   * the mode's business. `BotBrain` asks both and takes whichever offers the higher priority,
+   * which is what lets a crate pull a bot off a flag it was only casually defending.
+   */
+  streakObjectives: ObjectiveProvider | null = null;
+
+  /**
    * True when every other combatant is an enemy regardless of side (M7, Free-for-All).
    *
    * FFA keeps the two-team substrate — see `modes/FreeForAll.ts` — and flips this so spawn
@@ -218,6 +227,7 @@ export class BotDirector {
       perception: this.perception,
       patrolCells,
       objectives: () => this.objectives,
+      streakObjectives: () => this.streakObjectives,
       pushScale: () => this.pushAggressionScale,
     };
 

@@ -54,6 +54,18 @@ export const Btn = {
   // -- M6 ------------------------------------------------------------------
   /** X. Activates the loadout's field upgrade once its charge is full (S6.3). */
   FieldUpgrade: 1 << 12,
+
+  // -- M7 ------------------------------------------------------------------
+  /**
+   * 3, 4 and 5. Spend the first, second or third earned killstreak (S6.1).
+   *
+   * Absolute selections rather than a single "use next" key, for the same reason `Slot1` and
+   * `Slot2` are not a toggle: a player holding a UAV and a Chopper Gunner is making a choice,
+   * and a key that cycles would make it a guess.
+   */
+  Streak1: 1 << 13,
+  Streak2: 1 << 14,
+  Streak3: 1 << 15,
 } as const;
 
 /**
