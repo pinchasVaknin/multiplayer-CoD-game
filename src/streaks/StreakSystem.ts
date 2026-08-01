@@ -167,6 +167,11 @@ export class StreakSystem implements ObjectiveProvider {
 
   // -- queries the HUD and the match ask -------------------------------------
 
+  /** How long a UAV contact stays lit after the beam passes. Read by the minimap. */
+  get contactFadeSeconds(): number {
+    return this.deps.context.cfg.uavContactFadeSeconds;
+  }
+
   /** The live UAV benefiting this team, if any. */
   uavFor(team: BotTeam): Uav | null {
     for (const s of this.active) {

@@ -7,6 +7,7 @@ import type { MatchFlow } from '../modes/MatchFlow';
 import type { MapDef } from '../world/maps/types';
 import { Hud, makeHudState, type HudState } from './Hud';
 import { Scoreboard } from './Scoreboard';
+import { HudStreaks, makeStreakHudState, type StreakHudState } from './HudStreaks';
 
 /**
  * Everything the player looks at during a match, in one owner.
@@ -45,6 +46,10 @@ export interface MatchHudDeps {
 export class MatchHud {
   readonly hud: Hud;
   readonly scoreboard: Scoreboard;
+  /** M7: the streak strip and the objective banner. */
+  readonly streaks: HudStreaks;
+  /** M7: filled by `Match` each frame, before `update`. */
+  readonly streakState: StreakHudState = makeStreakHudState();
   readonly state: HudState = makeHudState();
 
   private readonly deps: MatchHudDeps;
@@ -59,6 +64,7 @@ export class MatchHud {
       // Room for the whole side, the player included.
       maxFriendlies: deps.teamSize + 1,
     });
+    this.streaks = new HudStreaks(deps.uiHost);
     this.scoreboard = new Scoreboard(deps.teamSize + 1);
     this.scoreboard.setColumns(deps.columns, deps.modeName, deps.mapName);
     deps.uiHost.appendChild(this.scoreboard.element);
@@ -113,6 +119,7 @@ export class MatchHud {
     tac.threatZ = threatScratch.z;
 
     this.fillFriendlies();
+    this.streaks.update(this.streakState);
     this.hud.update(state, dt);
     this.scoreboard.update(dt, this.deps.score);
   }
@@ -126,6 +133,7 @@ export class MatchHud {
   dispose(): void {
     for (const off of this.unsubscribe) off();
     this.unsubscribe.length = 0;
+    this.streaks.dispose();
     this.scoreboard.dispose();
     this.hud.dispose();
   }

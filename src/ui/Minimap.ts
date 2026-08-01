@@ -38,6 +38,12 @@ const COLOR_BACKDROP = 'rgba(9, 11, 14, 0.72)';
 const COLOR_FRIENDLY = '#6fd08c';
 const COLOR_LOCAL = '#e8eaee';
 const COLOR_PING = '#e8604c';
+/** M7: a UAV contact and the sweep line that found it. */
+const COLOR_CONTACT = '#e8604c';
+const COLOR_SWEEP = 'rgba(232, 96, 76, 0.55)';
+/** M7: flag ownership. Neutral keeps the objective amber the map already uses. */
+const COLOR_OWNED_FRIENDLY = '#6fd08c';
+const COLOR_OWNED_ENEMY = '#e8604c';
 const COLOR_OBJECTIVE = 'rgba(255, 179, 64, 0.85)';
 
 interface Ping {
@@ -54,6 +60,30 @@ export interface MinimapActor {
   active: boolean;
 }
 
+/**
+ * A UAV contact (M7).
+ *
+ * `age` is seconds since the sweep crossed it, so the dot fades rather than blinking off. A
+ * contact you can still just see is the difference between "somebody was there" and "somebody
+ * is there", which is the whole reason the radar sweeps rather than streams.
+ */
+export interface MinimapContact {
+  x: number;
+  z: number;
+  age: number;
+  active: boolean;
+}
+
+/** Who owns an objective, for the flag pips (M7). */
+export interface MinimapObjectiveState {
+  id: string;
+  /** Resolved by the caller against the local team, so the minimap needs no team logic. */
+  owner: 'FRIENDLY' | 'ENEMY' | 'NONE';
+  /** 0..1 capture progress, drawn as an arc around the pip. */
+  progress: number;
+  contested: boolean;
+}
+
 export class Minimap {
   readonly element: HTMLElement;
 
@@ -65,6 +95,23 @@ export class Minimap {
 
   /** Off by default: Domination flags on a Team Deathmatch minimap are noise (see PLAN.md). */
   showObjectives = false;
+
+  // ---- M7 ----------------------------------------------------------------
+  /**
+   * Enemy contacts from a friendly UAV. Written by the caller each frame, never allocated,
+   * for the same reason `friendlies` is not: a ten-bot match must not allocate to draw dots.
+   */
+  readonly contacts: MinimapContact[] = [];
+  /** Bearing of the sweep line, radians, or null when no UAV is up. */
+  sweepAngle: number | null = null;
+  /** Seconds a contact stays visible after the beam passes. Matches the streak's own fade. */
+  contactFadeSeconds = 1.1;
+  /** True while an enemy Counter-UAV is running: the map goes to noise. */
+  scrambled = false;
+  /** Per-objective ownership, for Domination's flag pips. Empty in a mode without them. */
+  readonly objectiveStates: MinimapObjectiveState[] = [];
+
+  private scrambleSeed = 0;
 
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -101,6 +148,10 @@ export class Minimap {
     this.element.appendChild(ring);
 
     for (let i = 0; i < maxFriendlies; i++) this.friendlies.push({ x: 0, z: 0, yaw: 0, active: false });
+    // Enough for a full roster of contacts; the caller only ever activates what it has.
+    for (let i = 0; i < maxFriendlies * 2 + 2; i++) {
+      this.contacts.push({ x: 0, z: 0, age: 0, active: false });
+    }
     for (let i = 0; i < PING_POOL; i++) this.pings.push({ x: 0, z: 0, life: 0 });
 
     const bounds = def.navBounds;
@@ -176,10 +227,14 @@ export class Minimap {
 
     if (this.showObjectives) this.drawObjectives(ctx, scale);
     this.drawPings(ctx, scale, dt);
+    this.drawContacts(ctx);
     this.drawFriendlies(ctx, scale);
 
     ctx.restore();
+    if (this.sweepAngle !== null) this.drawSweep(ctx, half, yaw);
     this.drawLocal(ctx, half);
+    // Last, over everything: being blinded should hide the map, not sit under it.
+    if (this.scrambled) this.drawScramble(ctx, half, dt);
   }
 
   dispose(): void {
@@ -257,10 +312,19 @@ export class Minimap {
   }
 
   private drawObjectives(ctx: CanvasRenderingContext2D, scale: number): void {
-    ctx.fillStyle = COLOR_OBJECTIVE;
-    ctx.strokeStyle = COLOR_OBJECTIVE;
     ctx.lineWidth = 2 / scale;
     for (const o of this.objectives) {
+      // M7: ownership colours the pip and a capture in progress draws an arc around it.
+      const state = this.objectiveStates.find((entry) => entry.id === o.id);
+      const colour =
+        state === undefined || state.owner === 'NONE'
+          ? COLOR_OBJECTIVE
+          : state.owner === 'FRIENDLY'
+            ? COLOR_OWNED_FRIENDLY
+            : COLOR_OWNED_ENEMY;
+      ctx.fillStyle = colour;
+      ctx.strokeStyle = colour;
+
       ctx.beginPath();
       if (o.kind === 'bombsite') {
         const r = 1.6;
@@ -271,7 +335,27 @@ export class Minimap {
       } else {
         ctx.arc(o.position.x, o.position.z, 1.5, 0, Math.PI * 2);
       }
+      // A held objective is filled; neutral or contested is outline only.
+      if (state !== undefined && state.owner !== 'NONE' && !state.contested) {
+        ctx.globalAlpha = 0.35;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
       ctx.stroke();
+
+      if (state !== undefined && state.progress > 0.001) {
+        ctx.lineWidth = 3 / scale;
+        ctx.beginPath();
+        ctx.arc(
+          o.position.x,
+          o.position.z,
+          2.4,
+          -Math.PI / 2,
+          -Math.PI / 2 + state.progress * Math.PI * 2,
+        );
+        ctx.stroke();
+        ctx.lineWidth = 2 / scale;
+      }
     }
   }
 
@@ -290,6 +374,82 @@ export class Minimap {
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
+  }
+
+  /**
+   * UAV contacts (M7): a dot that fades over `contactFadeSeconds`.
+   *
+   * Ages are advanced by the streak on the sim tick, so a stalled frame cannot make a contact
+   * live longer than the sweep says it did. This only reads them.
+   */
+  private drawContacts(ctx: CanvasRenderingContext2D): void {
+    ctx.fillStyle = COLOR_CONTACT;
+    for (const c of this.contacts) {
+      if (!c.active) continue;
+      const t = 1 - Math.min(1, c.age / Math.max(0.05, this.contactFadeSeconds));
+      if (t <= 0) continue;
+      ctx.globalAlpha = t;
+      ctx.beginPath();
+      ctx.arc(c.x, c.z, 1.15, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * The radar beam.
+   *
+   * Drawn in *screen* space after the world transform is popped, because the sweep belongs to
+   * the radar set rather than to the world — adding the player's yaw is what keeps it rotating
+   * with the map underneath it.
+   */
+  private drawSweep(ctx: CanvasRenderingContext2D, half: number, yaw: number): void {
+    const angle = (this.sweepAngle ?? 0) + yaw;
+    const gradient = ctx.createLinearGradient(
+      half,
+      half,
+      half + Math.cos(angle) * half,
+      half + Math.sin(angle) * half,
+    );
+    gradient.addColorStop(0, COLOR_SWEEP);
+    gradient.addColorStop(1, 'rgba(232, 96, 76, 0)');
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(half, half, half - 1, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.strokeStyle = gradient;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(half, half);
+    ctx.lineTo(half + Math.cos(angle) * half, half + Math.sin(angle) * half);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /**
+   * Counter-UAV: bands of interference across the disc (M7).
+   *
+   * Deliberately legible *as* jamming rather than simply blanking the map — a player whose
+   * minimap went black would think it had broken. The seed advances per frame so the noise
+   * moves, and the hash is deterministic so nothing allocates and no `Math.random` runs in a
+   * draw path.
+   */
+  private drawScramble(ctx: CanvasRenderingContext2D, half: number, dt: number): void {
+    this.scrambleSeed = (this.scrambleSeed + dt * 37) % 1000;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(half, half, half - 1, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = 'rgba(9, 11, 14, 0.55)';
+    ctx.fillRect(0, 0, half * 2, half * 2);
+    ctx.fillStyle = 'rgba(232, 234, 238, 0.13)';
+    const bands = 22;
+    for (let i = 0; i < bands; i++) {
+      const n = Math.abs(Math.sin((i * 12.9898 + this.scrambleSeed) * 43758.5453) % 1);
+      const y = (i / bands) * half * 2;
+      ctx.fillRect(n * half * 0.6, y, half * 2 * (0.35 + n * 0.65), 2 + n * 3);
+    }
+    ctx.restore();
   }
 
   private drawFriendlies(ctx: CanvasRenderingContext2D, scale: number): void {

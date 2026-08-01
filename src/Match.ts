@@ -24,9 +24,13 @@ import { EquipmentSystem } from './equipment/EquipmentSystem';
 import { MatchEquipment } from './MatchEquipment';
 import { MatchFeedback } from './MatchFeedback';
 import { MatchMeta } from './MatchMeta';
+import { MatchObjectives } from './MatchObjectives';
+import { MortarOverlay } from './ui/MortarOverlay';
+import { Domination } from './modes/Domination';
+import { SearchAndDestroy } from './modes/SearchAndDestroy';
 import { StreakAudio } from './streaks/StreakAudio';
 import { StreakSystem } from './streaks/StreakSystem';
-import { DEFAULT_STREAK_CONFIG, type StreakConfig } from './streaks/StreakDefs';
+import { DEFAULT_STREAK_CONFIG, streakDef, type StreakConfig } from './streaks/StreakDefs';
 import type { CamoId } from './meta/Camos';
 import type { ResolvedLoadout } from './meta/Loadouts';
 import type { Profile } from './meta/Profile';
@@ -134,6 +138,17 @@ const PLAYER_RESPAWN_SECONDS = 4.5;
 const HEARTBEAT_BPM_CALM = 74;
 const HEARTBEAT_BPM_PANIC = 152;
 
+/** Radius the mortar overlay draws its strike zone at. Matches the streak's own scatter. */
+const MORTAR_MARK_RADIUS = DEFAULT_STREAK_CONFIG.mortarScatter;
+
+/**
+ * Metres the mortar mark travels per radian of look.
+ *
+ * Tuned so a quarter-turn crosses Foundry's long axis: precise enough to pick a doorway,
+ * quick enough that marking does not feel like dragging.
+ */
+const MORTAR_STEER_M_PER_RAD = 42;
+
 export class Match {
   readonly damage: DamageSystem;
   readonly weapons: WeaponSystem;
@@ -166,6 +181,10 @@ export class Match {
   readonly meta: MatchMeta;
   /** M7: killstreaks. Owns every streak entity in the world. */
   readonly streaks: StreakSystem;
+  /** M7: flags, capture rings, dog tags and the bomb, as things in the world. */
+  readonly objectives: MatchObjectives;
+  /** M7: the mortar targeting map. Built once; only rasterises when first opened. */
+  readonly mortarOverlay: MortarOverlay;
 
   /** Interpolated weapon state for this frame. Read by Game for the camera. */
   readonly visual: WeaponSnapshot = {
@@ -204,6 +223,9 @@ export class Match {
    */
   mortarMarkX = 0;
   mortarMarkZ = 0;
+  /** Look angles when the overlay opened, so the mark is steered by the delta. */
+  private overlayYaw = 0;
+  private overlayPitch = 0;
   private playerRespawnTimer = 0;
   private heartbeatTimer = 0;
   private rosterRegistered = false;
@@ -425,6 +447,27 @@ export class Match {
     // rather than the mode's (see `BotDirector.streakObjectives`).
     this.bots.streakObjectives = this.streaks;
 
+    this.objectives = new MatchObjectives({
+      bus: deps.bus,
+      scene: deps.scene,
+      mode: this.mode,
+      localTeam: PLAYER_TEAM,
+    });
+    this.mortarOverlay = new MortarOverlay({
+      host: deps.uiHost,
+      mapDef: deps.map.def,
+      onConfirm: (x, z) => {
+        this.mortarMarkX = x;
+        this.mortarMarkZ = z;
+        this.streaks.activate(PLAYER_ENTITY_ID, 'mortar', x, 0, z, 0);
+      },
+      onCancel: () => {
+        /* The streak stays pending: cancelling a mark must not spend it. */
+      },
+    });
+    // Flags and bomb sites are worth drawing on the minimap; a TDM map is not (M4's note).
+    this.ui.hud.minimap.showObjectives = deps.map.def.objectives.length > 0 && hasObjectiveMode(this.mode);
+
     // Occlusion low-pass through the same spatial-hash raycaster the sim uses (S6.7).
     deps.audio.setOccluder((x, y, z) =>
       !deps.world.segmentClear(
@@ -610,7 +653,11 @@ export class Match {
     // against it, so a bot's round is tested against where the player was when it fired.
     this.playerCombatant.syncRig();
 
-    if (!this.playerDead) {
+    // The targeting map owns the input while it is up — firing confirms the mark rather
+    // than pulling the trigger.
+    const mortarOpen = this.stepMortarOverlay(cmd);
+
+    if (!this.playerDead && !mortarOpen) {
       const sim = this.deps.player.sim;
       this.weapons.step(cmd, sim);
 
@@ -633,7 +680,7 @@ export class Match {
     // Streaks tick after the bots that may have just shot one down, and before the flow that
     // may declare the match over and end them all.
     this.streaks.simulate(cmd.tickIndex, cmd);
-    if (!this.playerDead) this.stepStreakInput(cmd);
+    if (!this.playerDead && !this.mortarOverlay.isOpen) this.stepStreakInput(cmd);
     this.stepPlayerRespawn();
     this.stepLowHealthAudio();
 
@@ -660,6 +707,34 @@ export class Match {
    * spawn inside them, a package drops on the spot, and a mortar marks wherever the overlay
    * left its cursor.
    */
+  /**
+   * Drive the mortar overlay while it is open. Returns true when it owns the input.
+   *
+   * Steered by the *look delta* rather than a mouse position, because pointer lock means
+   * there is no cursor to read and releasing the lock to open a map would drop the player's
+   * aim. The player moves the mark exactly as they would move their view.
+   */
+  private stepMortarOverlay(cmd: InputCommand): boolean {
+    if (!this.mortarOverlay.isOpen) return false;
+
+    const dYaw = angleDeltaRad(this.overlayYaw, cmd.yaw);
+    const dPitch = cmd.pitch - this.overlayPitch;
+    this.overlayYaw = cmd.yaw;
+    this.overlayPitch = cmd.pitch;
+    // Yaw sweeps the mark east/west, pitch north/south. Scaled so a comfortable flick
+    // crosses the map rather than nudging it a metre.
+    this.mortarOverlay.moveBy(dYaw * MORTAR_STEER_M_PER_RAD, -dPitch * MORTAR_STEER_M_PER_RAD);
+
+    if (justPressed(cmd.buttons, this.prevButtons, Btn.Fire)) this.mortarOverlay.confirm();
+    // The same key that opened it closes it, and the streak stays in hand.
+    else if (justPressed(cmd.buttons, this.prevButtons, Btn.Streak1) ||
+             justPressed(cmd.buttons, this.prevButtons, Btn.Streak2) ||
+             justPressed(cmd.buttons, this.prevButtons, Btn.Streak3)) {
+      this.mortarOverlay.cancel();
+    }
+    return true;
+  }
+
   private stepStreakInput(cmd: InputCommand): void {
     const bits = [Btn.Streak1, Btn.Streak2, Btn.Streak3] as const;
     for (let i = 0; i < bits.length; i++) {
@@ -671,6 +746,14 @@ export class Match {
       if (id === undefined) continue;
 
       const sim = this.deps.player.sim;
+      // A mortar is *marked* before it is spent: the overlay opens, and the streak is only
+      // consumed when the player confirms. Cancelling must not cost them the streak.
+      if (id === 'mortar') {
+        this.mortarOverlay.show(sim.x, sim.z);
+        this.overlayYaw = cmd.yaw;
+        this.overlayPitch = cmd.pitch;
+        return;
+      }
       // Two metres along the facing, so a sentry is placed rather than worn.
       const ahead = 2;
       const px = sim.x - Math.sin(sim.yaw) * ahead;
@@ -679,9 +762,9 @@ export class Match {
       this.streaks.activate(
         PLAYER_ENTITY_ID,
         id,
-        id === 'mortar' ? this.mortarMarkX : useAhead ? px : sim.x,
+        useAhead ? px : sim.x,
         sim.y,
-        id === 'mortar' ? this.mortarMarkZ : useAhead ? pz : sim.z,
+        useAhead ? pz : sim.z,
         sim.yaw,
       );
       return;
@@ -806,8 +889,132 @@ export class Match {
     state.dead = this.playerDead;
     state.respawnSeconds = this.playerRespawnTimer;
     this.fillTacticalState();
+    this.fillStreakHud();
+    this.fillMinimapStreaks();
+    this.objectives.update(dt);
+    this.mortarOverlay.update(dt, this.deps.equipmentConfig !== undefined ? MORTAR_MARK_RADIUS : MORTAR_MARK_RADIUS);
     this.ui.update(this.flow, sim.x, sim.z, sim.yaw, dt);
     this.feedback.render(camera);
+  }
+
+  /**
+   * The streak strip and the objective banner (M7).
+   *
+   * Everything here is read straight off `StreakSystem` and the mode. The requirement shown is
+   * already Hardline-discounted, so the HUD never learns that a perk exists.
+   */
+  private fillStreakHud(): void {
+    const hud = this.ui.streakState;
+    const held = this.streaks.pendingFor(PLAYER_ENTITY_ID);
+    for (let i = 0; i < hud.slots.length; i++) {
+      const slot = hud.slots[i];
+      if (slot === undefined) continue;
+      const id = held[i];
+      slot.name = id === undefined ? '' : streakDef(id).name;
+    }
+    hud.streak = this.score.row(PLAYER_ENTITY_ID)?.streak ?? 0;
+    const next = this.streaks.nextFor(PLAYER_ENTITY_ID);
+    hud.nextName = next?.def.name ?? '';
+    hud.nextRequirement = next?.requirement ?? 0;
+
+    this.fillObjectiveBanner(hud);
+  }
+
+  /**
+   * The bomb timer, the plant/defuse ring and the capture prompt.
+   *
+   * Only one thing is ever shown, and the order is by urgency: a ticking bomb outranks an
+   * interaction, which outranks standing on a flag. A banner that tried to show all three
+   * would show none of them.
+   */
+  private fillObjectiveBanner(hud: import('./ui/HudStreaks').StreakHudState): void {
+    hud.objectiveLabel = '';
+    hud.objectiveSeconds = -1;
+    hud.interactFraction = -1;
+    hud.interactLabel = '';
+    hud.urgent = false;
+
+    const mode = this.mode;
+    if (mode instanceof SearchAndDestroy) {
+      if (mode.bomb === 'PLANTED') {
+        hud.objectiveLabel = `BOMB · SITE ${mode.plantedSite?.label ?? ''}`;
+        hud.objectiveSeconds = mode.bombSecondsLeft;
+        hud.urgent = true;
+      }
+      if (mode.interactEntity === PLAYER_ENTITY_ID && mode.interactFraction > 0) {
+        hud.interactFraction = mode.interactFraction;
+        hud.interactLabel = mode.bomb === 'PLANTED' ? 'DEFUSING' : 'PLANTING';
+        if (hud.objectiveLabel.length === 0) hud.objectiveLabel = 'OBJECTIVE';
+      } else if (mode.bomb === 'CARRIED') {
+        const site = mode.siteContaining(this.playerCombatant);
+        if (site !== null) {
+          hud.objectiveLabel = `SITE ${site.label}`;
+          hud.interactFraction = 0;
+          hud.interactLabel = 'HOLD TO PLANT';
+        }
+      }
+      return;
+    }
+
+    if (mode instanceof Domination) {
+      for (const zone of mode.zones) {
+        if (!zone.contains(this.playerCombatant)) continue;
+        hud.objectiveLabel = `FLAG ${zone.label}`;
+        hud.interactFraction = zone.progress;
+        hud.interactLabel = zone.contested
+          ? 'CONTESTED'
+          : zone.owner === PLAYER_TEAM
+            ? 'HELD'
+            : 'CAPTURING';
+        return;
+      }
+    }
+  }
+
+  /**
+   * Push UAV contacts, the sweep bearing, the scramble flag and flag ownership at the minimap.
+   *
+   * Written into preallocated records rather than rebuilt, so a UAV costs no allocation per
+   * frame — the minimap sizes both arrays at construction for exactly this.
+   */
+  private fillMinimapStreaks(): void {
+    const map = this.ui.hud.minimap;
+    const uav = this.streaks.uavFor(PLAYER_TEAM);
+    map.sweepAngle = uav === null ? null : uav.sweepAngle;
+    map.scrambled = this.streaks.minimapScrambledFor(PLAYER_TEAM);
+
+    for (const slot of map.contacts) slot.active = false;
+    if (uav !== null) {
+      map.contactFadeSeconds = this.streaks.contactFadeSeconds;
+      let i = 0;
+      for (const contact of uav.contacts) {
+        if (!contact.active || i >= map.contacts.length) continue;
+        const slot = map.contacts[i];
+        if (slot === undefined) continue;
+        slot.x = contact.x;
+        slot.z = contact.z;
+        slot.age = contact.age;
+        slot.active = true;
+        i++;
+      }
+    }
+
+    if (!(this.mode instanceof Domination)) return;
+    const states = map.objectiveStates;
+    if (states.length !== this.mode.zones.length) {
+      states.length = 0;
+      for (const zone of this.mode.zones) {
+        states.push({ id: zone.id, owner: 'NONE', progress: 0, contested: false });
+      }
+    }
+    for (let i = 0; i < this.mode.zones.length; i++) {
+      const zone = this.mode.zones[i];
+      const state = states[i];
+      if (zone === undefined || state === undefined) continue;
+      state.owner = zone.owner === 'NONE' ? 'NONE' : zone.owner === PLAYER_TEAM ? 'FRIENDLY' : 'ENEMY';
+      state.progress = zone.progress;
+      state.contested = zone.contested;
+    }
   }
 
   /**
@@ -865,6 +1072,8 @@ export class Match {
   dispose(): void {
     // First: a live Chopper Gunner has the camera, and nothing else may run until it is back.
     this.streaks.dispose();
+    this.objectives.dispose();
+    this.mortarOverlay.dispose();
     this.meta.dispose();
     this.equipment.dispose();
     this.feedback.dispose();
@@ -930,4 +1139,17 @@ export class Match {
 function isObjectiveProvider(mode: GameMode): mode is GameMode & ObjectiveProvider {
   const candidate = mode as Partial<ObjectiveProvider>;
   return typeof candidate.assign === 'function' && typeof candidate.onArrived === 'function';
+}
+
+/** Whether this mode has objectives worth putting on the minimap (M7). */
+function hasObjectiveMode(mode: GameMode): boolean {
+  return mode instanceof Domination || mode instanceof SearchAndDestroy;
+}
+
+/** Shortest signed angle from `a` to `b`, radians. */
+function angleDeltaRad(a: number, b: number): number {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
 }

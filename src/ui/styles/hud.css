@@ -762,3 +762,203 @@
     linear-gradient(to right, transparent calc(50% - 0.5px), rgba(232, 234, 238, 0.5) calc(50% - 0.5px), rgba(232, 234, 238, 0.5) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
     linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(232, 234, 238, 0.5) calc(50% - 0.5px), rgba(232, 234, 238, 0.5) calc(50% + 0.5px), transparent calc(50% + 0.5px));
 }
+
+/* ---- M7: killstreaks, the objective banner and the mortar overlay ------- */
+
+/*
+ * The streak strip. Bottom-left, above the health block, so the three widgets that tell you
+ * what you can *do* right now (equipment, field upgrade, streaks) share a corner.
+ */
+.hud-streaks {
+  position: absolute;
+  left: var(--s-4);
+  bottom: 132px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  pointer-events: none;
+}
+
+.hud-streaks__slots {
+  display: flex;
+  gap: var(--s-1);
+}
+
+.hud-streaks__slot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-height: 20px;
+  padding: 2px var(--s-2) 2px var(--s-1);
+  border: 1px solid var(--c-line);
+  background: rgba(12, 14, 17, 0.55);
+  opacity: 0.35;
+  transition: opacity 120ms linear, border-color 120ms linear;
+}
+
+/* An earned streak lights up. Nothing else in this widget moves. */
+.hud-streaks__slot.is-ready {
+  opacity: 1;
+  border-color: var(--c-accent-dim);
+}
+
+.hud-streaks__key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--c-line-hi);
+  color: var(--c-text-dim);
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-streaks__slot.is-ready .hud-streaks__key {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+.hud-streaks__name {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-text);
+}
+
+.hud-streaks__progress {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-faint);
+  opacity: 0;
+  transition: opacity 160ms linear;
+}
+
+/*
+ * The objective banner. Centred and high, well clear of the crosshair — a bomb timer over the
+ * reticle is a bomb timer you shoot through.
+ */
+.hud-objective {
+  position: absolute;
+  top: 84px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  pointer-events: none;
+  transition: opacity 160ms linear;
+}
+
+.hud-objective__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-3);
+  border: 1px solid var(--c-line-hi);
+  background: rgba(12, 14, 17, 0.72);
+}
+
+.hud-objective__label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--c-text);
+}
+
+.hud-objective__timer {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-accent);
+}
+
+/* Post-plant. The whole banner goes hostile rather than just the number. */
+.hud-objective.is-urgent .hud-objective__head {
+  border-color: var(--c-bad);
+}
+
+.hud-objective.is-urgent .hud-objective__timer {
+  color: var(--c-bad);
+}
+
+.hud-objective__ring {
+  position: relative;
+  width: 168px;
+  height: 4px;
+  border: 1px solid var(--c-line-hi);
+  background: rgba(12, 14, 17, 0.72);
+  transition: opacity 120ms linear;
+}
+
+/*
+ * `transform: scaleX` rather than `width`, and the origin pinned left, so a plant timer
+ * running at 60 Hz composites instead of reflowing.
+ */
+.hud-objective__ring-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(0);
+  background: var(--c-accent);
+}
+
+.hud-objective__ring-label {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--c-text-dim);
+}
+
+/* ---- the mortar targeting overlay -------------------------------------- */
+
+.hud-mortar {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 8, 10, 0.82);
+  pointer-events: none;
+}
+
+.hud-mortar__frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--c-accent-dim);
+  background: rgba(12, 14, 17, 0.9);
+}
+
+.hud-mortar__canvas {
+  display: block;
+  /* Fits any viewport without the raster having to know the window size. */
+  max-width: min(72vw, 900px);
+  max-height: 64vh;
+  width: auto;
+  height: auto;
+}
+
+.hud-mortar__hint {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--c-text-faint);
+}
