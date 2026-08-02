@@ -2237,6 +2237,18 @@ same shape `Game.ts` had before this milestone, and the obvious next split is th
 HUD filling. Thirty files are over S3's ~400-line guidance. `public/verify/*.js` still ship in
 a production build.
 
+### M7 Backlog & Polish (To be addressed alongside or before M8)
+**Free For All (FFA):** Bot colors and minimap IFF need fixing. 
+All bots must render as orange (enemies), and no friendly dots should appear on the radar.
+**Search & Destroy (S&D):** Requires a stricter round loop. 
+Change bomb interaction key to 'T'. 
+Bomb must be manually picked up at spawn and manually planted. 
+Rounds must end immediately upon defuse/explosion, followed by a hard reset where all players respawn at their bases.
+**Chopper Gunner:** Fix the thermal shader to grayscale so the map is visible. 
+Fix IFF so teammates appear dark and only enemies glow orange. Ensure the Chopper uses its own infinite ammo pool, not the player's weapon ammo.
+**Shooting Range:** Spread the accuracy targets horizontally so they don't block each other. 
+Ensure bullet decals render properly on these targets. Fix dummy placement clipping (e.g., Infinite DPS dummy spawning inside the ramp geometry).
+
 ## What is playable right now
 
 Pick a mode and the game is a different game. Domination puts three flags on Foundry with a
