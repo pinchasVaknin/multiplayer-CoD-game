@@ -44,6 +44,12 @@ export interface StreakHudState {
   interactLabel: string;
   /** True while the bomb is ticking: the banner goes red and the timer counts down. */
   urgent: boolean;
+
+  // ---- alive counts (M7 playtest) ----------------------------------------
+  /** Whether to show the per-side alive strip at all. One-life modes only. */
+  showAlive: boolean;
+  aliveFriendly: number;
+  aliveEnemy: number;
 }
 
 export function makeStreakHudState(): StreakHudState {
@@ -61,12 +67,16 @@ export function makeStreakHudState(): StreakHudState {
     interactFraction: -1,
     interactLabel: '',
     urgent: false,
+    showAlive: false,
+    aliveFriendly: 0,
+    aliveEnemy: 0,
   };
 }
 
 export class HudStreaks {
   readonly element: HTMLElement;
   readonly bannerElement: HTMLElement;
+  readonly aliveElement: HTMLElement;
 
   private readonly slotEls: HTMLElement[] = [];
   private readonly slotNameEls: HTMLElement[] = [];
@@ -86,6 +96,8 @@ export class HudStreaks {
   private lastRingShown = false;
   private lastBannerShown = false;
   private lastUrgent = false;
+  private lastAlive = '';
+  private lastAliveShown = false;
 
   constructor(host: HTMLElement) {
     this.element = document.createElement('div');
@@ -138,9 +150,48 @@ export class HudStreaks {
     this.bannerElement.appendChild(this.ringWrap);
 
     host.appendChild(this.bannerElement);
+
+    /**
+     * The alive strip: how many are still standing on each side.
+     *
+     * The single most important number in a one-life mode — a 3-v-1 and a 1-v-3 are completely
+     * different rounds and nothing else on screen tells you which one you are in. Sits directly
+     * under the score banner, centred, and is hidden entirely in modes where everybody
+     * respawns and the count would be meaningless.
+     */
+    this.aliveElement = document.createElement('div');
+    this.aliveElement.className = 'hud-alive';
+    this.aliveElement.style.opacity = '0';
+    const friendly = document.createElement('b');
+    friendly.className = 'hud-alive__count hud-alive__count--friendly';
+    const sep = document.createElement('span');
+    sep.className = 'hud-alive__sep';
+    sep.textContent = 'ALIVE';
+    const enemy = document.createElement('b');
+    enemy.className = 'hud-alive__count hud-alive__count--enemy';
+    this.aliveElement.append(friendly, sep, enemy);
+    this.aliveFriendlyEl = friendly;
+    this.aliveEnemyEl = enemy;
+    host.appendChild(this.aliveElement);
   }
 
+  private readonly aliveFriendlyEl: HTMLElement;
+  private readonly aliveEnemyEl: HTMLElement;
+
   update(state: StreakHudState): void {
+    if (state.showAlive !== this.lastAliveShown) {
+      this.lastAliveShown = state.showAlive;
+      this.aliveElement.style.opacity = state.showAlive ? '1' : '0';
+    }
+    if (state.showAlive) {
+      const key = `${state.aliveFriendly}/${state.aliveEnemy}`;
+      if (key !== this.lastAlive) {
+        this.lastAlive = key;
+        this.aliveFriendlyEl.textContent = String(state.aliveFriendly);
+        this.aliveEnemyEl.textContent = String(state.aliveEnemy);
+      }
+    }
+
     for (let i = 0; i < this.slotEls.length; i++) {
       const name = state.slots[i]?.name ?? '';
       if (name !== this.lastSlotNames[i]) {
@@ -206,5 +257,6 @@ export class HudStreaks {
   dispose(): void {
     this.element.remove();
     this.bannerElement.remove();
+    this.aliveElement.remove();
   }
 }

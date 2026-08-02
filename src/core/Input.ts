@@ -43,6 +43,8 @@ const BUTTON_BINDINGS: readonly KeyBinding[] = [
   { code: 'Digit3', bit: Btn.Streak1 },
   { code: 'Digit4', bit: Btn.Streak2 },
   { code: 'Digit5', bit: Btn.Streak3 },
+  { code: 'KeyP', bit: Btn.Use },
+  { code: 'KeyE', bit: Btn.Use },
 ];
 
 const MOVEMENT_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD'] as const;

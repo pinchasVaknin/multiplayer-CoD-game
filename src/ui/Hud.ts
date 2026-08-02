@@ -67,6 +67,14 @@ export interface HudState {
   healthMax: number;
   dead: boolean;
   respawnSeconds: number;
+  /**
+   * True while the player is dead and will *not* be coming back this round (M7 playtest).
+   *
+   * Search & Destroy gives one life, so counting a respawn timer down to zero and then sitting
+   * at zero is a lie the HUD tells for the rest of the round. This replaces the number with
+   * what is actually happening.
+   */
+  awaitingRound: boolean;
 
   /** M4: where the player is, so the minimap can rotate around them. */
   playerX: number;
@@ -93,6 +101,7 @@ export function makeHudState(): HudState {
     healthMax: 100,
     dead: false,
     respawnSeconds: 0,
+    awaitingRound: false,
     playerX: 0,
     playerZ: 0,
     playerYaw: 0,
@@ -631,7 +640,11 @@ export class Hud {
       if (state.dead) this.clearMarkers();
     }
     if (!state.dead) return;
-    const text = state.respawnSeconds > 0 ? state.respawnSeconds.toFixed(1) : 'RESPAWNING';
+    const text = state.awaitingRound
+      ? 'WAITING FOR NEXT ROUND'
+      : state.respawnSeconds > 0
+        ? state.respawnSeconds.toFixed(1)
+        : 'RESPAWNING';
     if (text === this.lastDeadText) return;
     this.lastDeadText = text;
     this.deadCount.textContent = text;

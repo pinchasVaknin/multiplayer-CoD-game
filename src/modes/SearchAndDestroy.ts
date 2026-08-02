@@ -67,6 +67,8 @@ export interface SearchDestroyConfig {
   readonly defuseSeconds: number;
   /** How close you must be to interact, metres. */
   readonly interactRadius: number;
+  /** How close an attacker must be to pick the bomb up, metres. */
+  readonly pickupRadius: number;
   readonly pointsPerKill: number;
   readonly pointsHeadshotBonus: number;
   readonly pointsPerPlant: number;
@@ -79,13 +81,16 @@ export interface SearchDestroyConfig {
 }
 
 export const SND_CONFIG: SearchDestroyConfig = {
-  roundsToWin: 5,
-  swapAfterRound: 5,
+  // Best of three: first side to two rounds takes the match (M7 playtest). Sides change
+  // after round one, so in a two-round match each side attacks once.
+  roundsToWin: 2,
+  swapAfterRound: 1,
   roundSeconds: 150,
   bombTimerSeconds: 45,
   plantSeconds: 5,
   defuseSeconds: 7.5,
   interactRadius: 2.6,
+  pickupRadius: 1.8,
   pointsPerKill: 100,
   pointsHeadshotBonus: 50,
   pointsPerPlant: 250,
@@ -114,6 +119,20 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
   bomb: BombState = 'CARRIED';
   /** The site the bomb is on, once planted. */
   plantedSite: ObjectiveZone | null = null;
+
+  /**
+   * Who is carrying the bomb, or -1 while it is on the ground (M7 playtest).
+   *
+   * The bomb is a *thing* now rather than an ability every attacker has. It starts on the
+   * ground at the attacking side's spawn, an attacker has to walk over it, and it drops where
+   * they fall if they are killed — so the round has an object in it that both sides care
+   * about, which is the whole point of the mode.
+   */
+  carrierId = -1;
+  /** Where the bomb is lying, when nobody is carrying it. */
+  bombX = 0;
+  bombY = 0;
+  bombZ = 0;
   bombTimer = 0;
   /** 0..1 progress on the interaction currently running, for the HUD ring. */
   interactFraction = 0;
@@ -163,11 +182,24 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
     this.deps.score.recordKill(ev.killerId, ev.victimId, ev.headshot, points);
     // Whoever was planting or defusing has stopped.
     if (ev.victimId === this.interactEntity) this.cancelInteract();
+
+    // The carrier went down: the bomb is on the floor where they fell, for anybody to take.
+    if (ev.victimId === this.carrierId) {
+      const victim = this.combatant(ev.victimId);
+      if (victim !== undefined) {
+        this.bombX = victim.px;
+        this.bombY = victim.py;
+        this.bombZ = victim.pz;
+      }
+      this.carrierId = -1;
+    }
   }
 
   override onTick(_tick: number): void {
     if (this.ticksLeft > 0) this.ticksLeft--;
     if (this.roundOutcome !== null) return;
+
+    if (this.bomb === 'CARRIED') this.stepPickup();
 
     if (this.bomb === 'PLANTED') {
       this.bombTimer -= DT;
@@ -233,9 +265,10 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
     this.roundOutcome = null;
     this.cancelInteract();
     for (const site of this.sites) site.reset('NONE');
-    // Sides are swapped by `MatchFlow` after round 5; the attacking role rides along with
-    // it, so whoever is on the attacking end of the map is attacking.
+    // Sides are swapped by `MatchFlow` after `swapAfterRound`; the attacking role rides along
+    // with it, so whoever is on the attacking end of the map is attacking.
     this.attackers = round > this.config.swapAfterRound ? 'A' : 'B';
+    this.resetBomb();
   }
 
   override onRoundEnd(_result: RoundResult): void {
@@ -269,8 +302,20 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
     }
 
     if (attacking) {
+      // Somebody has to fetch the bomb before anybody can plant it. The nearest attacker goes
+      // for it; the rest push the site they will need once it is in hand.
+      if (this.carrierId < 0) {
+        if (bot.entityId === this.nearestToBombId()) return this.bombTarget();
+        const site = this.nearestSite(bot);
+        return site === null ? null : this.targetOf(site, 'plant', 0.6);
+      }
+      if (bot.entityId !== this.carrierId) {
+        // Escort: head for the site the carrier is heading for, but do not break off a fight.
+        const site = this.nearestSite(bot);
+        return site === null ? null : this.targetOf(site, 'defend', 0.45);
+      }
       const site = this.nearestSite(bot);
-      return site === null ? null : this.targetOf(site, 'plant', 0.85);
+      return site === null ? null : this.targetOf(site, 'plant', 0.9);
     }
 
     // Defending, pre-plant: split across the sites so one is never left open. The bot's own
@@ -300,6 +345,56 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
     }
   }
 
+  /**
+   * Put the bomb back on the ground at the attacking side's spawn.
+   *
+   * Averaged over that side's spawn zones rather than dropped on one of them, so it sits in
+   * the middle of where the attackers appear instead of favouring whoever spawned on top of
+   * it. Falls back to the map origin if a map somehow authors no zones for the side.
+   */
+  private resetBomb(): void {
+    this.carrierId = -1;
+    let sx = 0;
+    let sz = 0;
+    let n = 0;
+    for (const zone of this.deps.mapDef.spawns) {
+      if (zone.team !== this.attackers) continue;
+      sx += zone.position.x;
+      sz += zone.position.z;
+      n++;
+    }
+    this.bombX = n > 0 ? sx / n : 0;
+    this.bombY = 0;
+    this.bombZ = n > 0 ? sz / n : 0;
+  }
+
+  /** An attacker standing on the loose bomb picks it up. */
+  private stepPickup(): void {
+    if (this.carrierId >= 0) return;
+    const r2 = this.config.pickupRadius * this.config.pickupRadius;
+    for (const c of this.deps.roster) {
+      if (c.team !== this.attackers || !c.participating) continue;
+      const dx = c.px - this.bombX;
+      const dz = c.pz - this.bombZ;
+      if (dx * dx + dz * dz > r2) continue;
+      if (Math.abs(c.py - this.bombY) > 2.5) continue;
+      this.carrierId = c.entityId;
+      return;
+    }
+  }
+
+  /** True when this combatant is the one holding the bomb. Read by the HUD and the bots. */
+  isCarrier(entityId: number): boolean {
+    return this.carrierId === entityId;
+  }
+
+  /** How many of a side are still standing. The alive-count HUD reads this (M7 playtest). */
+  aliveCount(team: BotTeam): number {
+    let n = 0;
+    for (const c of this.deps.roster) if (c.team === team && c.participating) n++;
+    return n;
+  }
+
   // -- interactions -----------------------------------------------------------
 
   /**
@@ -310,7 +405,13 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
     const actor = this.interactEntity >= 0 && !this.interactIsDefuse
       ? this.combatant(this.interactEntity)
       : undefined;
-    if (actor === undefined || !actor.participating || actor.team !== this.attackers) {
+    // Only the carrier plants. Anyone else standing on the site is just standing on the site.
+    if (
+      actor === undefined ||
+      !actor.participating ||
+      actor.team !== this.attackers ||
+      actor.entityId !== this.carrierId
+    ) {
       this.cancelInteract();
       return;
     }
@@ -324,6 +425,7 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
 
     this.bomb = 'PLANTED';
     this.plantedSite = site;
+    this.carrierId = -1;
     this.bombTimer = this.config.bombTimerSeconds;
     this.deps.score.recordObjective(actor.entityId, 'plants', this.config.pointsPerPlant);
 
@@ -429,6 +531,35 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
    * current defuser dies, which is the behaviour that makes a post-plant feel like a siege
    * rather than a queue.
    */
+  /** The living attacker closest to the loose bomb — the one who goes and gets it. */
+  private nearestToBombId(): number {
+    let bestId = -1;
+    let bestD = Infinity;
+    for (const c of this.deps.roster) {
+      if (c.team !== this.attackers || !c.participating) continue;
+      const d = Math.hypot(c.px - this.bombX, c.pz - this.bombZ);
+      if (d >= bestD) continue;
+      bestD = d;
+      bestId = c.entityId;
+    }
+    return bestId;
+  }
+
+  /** The loose bomb, as something to walk to. */
+  private bombTarget(): ObjectiveTarget {
+    const t = this.scratch;
+    t.id = 'snd_bomb';
+    t.label = 'BOMB';
+    t.x = this.bombX;
+    t.y = this.bombY;
+    t.z = this.bombZ;
+    t.radius = this.config.pickupRadius;
+    t.action = 'collect';
+    // Worth breaking off for: without the bomb the attacking side cannot win.
+    t.priority = 0.9;
+    return t;
+  }
+
   private nearestDefuserId(site: ObjectiveZone): number {
     const p = site.def.position;
     let bestId = -1;

@@ -698,6 +698,7 @@ export class Match {
     this.streaks.simulate(cmd.tickIndex, cmd);
     this.syncChopperBody();
     if (!this.playerDead && !this.mortarOverlay.isOpen) this.stepStreakInput(cmd);
+    if (!this.playerDead) this.stepBombInteraction(cmd);
     this.stepPlayerRespawn();
     this.stepLowHealthAudio();
 
@@ -734,6 +735,39 @@ export class Match {
     const flying = this.streaks.activeChopperFor(PLAYER_ENTITY_ID) !== null;
     this.playerCombatant.active = !flying;
     this.playerCombatant.invulnerable = flying;
+  }
+
+  /**
+   * Hold to plant, hold to defuse (M7 playtest).
+   *
+   * Held rather than tapped, and re-tested every tick: stepping off the site, releasing the
+   * key or dying all cancel, which is what makes a plant something the other side can
+   * interrupt. The mode owns the timer and the rules; this only reports that the player is
+   * standing in the right place with the key down.
+   */
+  private stepBombInteraction(cmd: InputCommand): void {
+    const mode = this.mode;
+    if (!(mode instanceof SearchAndDestroy)) return;
+
+    const holding = isDown(cmd.buttons, Btn.Use);
+    if (!holding) {
+      // Only cancel what *this* player started; a bot's plant is not the player's to stop.
+      if (mode.interactEntity === PLAYER_ENTITY_ID) mode.cancelInteract();
+      return;
+    }
+
+    const me = this.playerCombatant;
+    if (mode.bomb === 'PLANTED') {
+      if (me.team !== mode.defenders) return;
+      const site = mode.plantedSite;
+      if (site === null || !site.contains(me)) return;
+      mode.beginInteract(me, true);
+      return;
+    }
+    if (mode.bomb !== 'CARRIED') return;
+    if (me.team !== mode.attackers || !mode.isCarrier(PLAYER_ENTITY_ID)) return;
+    if (mode.siteContaining(me) === null) return;
+    mode.beginInteract(me, false);
   }
 
   /**
@@ -933,6 +967,8 @@ export class Match {
     state.healthMax = this.playerHealth.max;
     state.dead = this.playerDead;
     state.respawnSeconds = this.playerRespawnTimer;
+    // One life: there is no timer to show, because nobody is coming back until the round does.
+    state.awaitingRound = this.playerDead && !this.flow.respawnAllowed(PLAYER_ENTITY_ID);
     this.fillTacticalState();
     this.fillStreakHud();
     this.fillMinimapStreaks();
@@ -973,6 +1009,7 @@ export class Match {
    * would show none of them.
    */
   private fillObjectiveBanner(hud: import('./ui/HudStreaks').StreakHudState): void {
+    hud.showAlive = false;
     hud.objectiveLabel = '';
     hud.objectiveSeconds = -1;
     hud.interactFraction = -1;
@@ -981,6 +1018,11 @@ export class Match {
 
     const mode = this.mode;
     if (mode instanceof SearchAndDestroy) {
+      // Alive counts, top of screen, every round (M7 playtest).
+      hud.aliveFriendly = mode.aliveCount(PLAYER_TEAM);
+      hud.aliveEnemy = mode.aliveCount(PLAYER_TEAM === 'A' ? 'B' : 'A');
+      hud.showAlive = true;
+
       if (mode.bomb === 'PLANTED') {
         hud.objectiveLabel = `BOMB · SITE ${mode.plantedSite?.label ?? ''}`;
         hud.objectiveSeconds = mode.bombSecondsLeft;
@@ -990,13 +1032,28 @@ export class Match {
         hud.interactFraction = mode.interactFraction;
         hud.interactLabel = mode.bomb === 'PLANTED' ? 'DEFUSING' : 'PLANTING';
         if (hud.objectiveLabel.length === 0) hud.objectiveLabel = 'OBJECTIVE';
-      } else if (mode.bomb === 'CARRIED') {
-        const site = mode.siteContaining(this.playerCombatant);
-        if (site !== null) {
-          hud.objectiveLabel = `SITE ${site.label}`;
+        return;
+      }
+      if (mode.bomb === 'PLANTED' && this.playerCombatant.team === mode.defenders) {
+        const site = mode.plantedSite;
+        if (site !== null && site.contains(this.playerCombatant)) {
           hud.interactFraction = 0;
-          hud.interactLabel = 'HOLD TO PLANT';
+          hud.interactLabel = 'HOLD P TO DEFUSE';
         }
+        return;
+      }
+      if (mode.bomb !== 'CARRIED') return;
+      if (this.playerCombatant.team !== mode.attackers) return;
+      if (!mode.isCarrier(PLAYER_ENTITY_ID)) {
+        // Tell them where the bomb is, because without it the round cannot be won.
+        hud.objectiveLabel = mode.carrierId < 0 ? 'RECOVER THE BOMB' : 'BOMB CARRIER OUT';
+        return;
+      }
+      const site = mode.siteContaining(this.playerCombatant);
+      hud.objectiveLabel = site === null ? 'CARRYING THE BOMB' : `SITE ${site.label}`;
+      if (site !== null) {
+        hud.interactFraction = 0;
+        hud.interactLabel = 'HOLD P TO PLANT';
       }
       return;
     }

@@ -328,8 +328,24 @@ export class MatchObjectives {
   private updateBomb(mode: SearchAndDestroy): void {
     const site = mode.plantedSite;
     const planted = mode.bomb === 'PLANTED' && site !== null;
-    this.bomb.visible = planted;
-    if (!planted || site === null) return;
+
+    // Before the plant the same mesh is the *loose* bomb, lying wherever it was dropped
+    // (M7 playtest): the attacking side has to walk to it and pick it up, so it has to be
+    // findable. Hidden while somebody is carrying it — it is in their hands, not on the floor.
+    if (!planted) {
+      const loose = mode.bomb === 'CARRIED' && mode.carrierId < 0;
+      this.bomb.visible = loose;
+      if (loose) {
+        this.bomb.position.set(mode.bombX, mode.bombY, mode.bombZ);
+        // Slowly turning, so it reads as a pickup rather than as scenery.
+        this.bomb.rotation.y = this.spin * 0.7;
+        this.bombLight.visible = Math.sin(this.spin * 5) > -0.3;
+      }
+      return;
+    }
+    this.bomb.visible = true;
+    this.bomb.rotation.y = 0;
+    if (site === null) return;
 
     const p = site.def.position;
     this.bomb.position.set(p.x, p.y, p.z);

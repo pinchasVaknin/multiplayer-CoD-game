@@ -66,6 +66,13 @@ export const Btn = {
   Streak1: 1 << 13,
   Streak2: 1 << 14,
   Streak3: 1 << 15,
+
+  /**
+   * P (or E). Held, not tapped: plant and defuse are timed interactions that a step away
+   * must interrupt, so the sim needs to know the key is *still* down every tick rather than
+   * that it was pressed once.
+   */
+  Use: 1 << 16,
 } as const;
 
 /**

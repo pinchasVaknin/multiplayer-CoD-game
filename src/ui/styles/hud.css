@@ -973,3 +973,48 @@
   text-transform: uppercase;
   color: var(--c-text-faint);
 }
+
+/*
+ * The alive strip (M7 playtest). Directly under the score banner, centred.
+ *
+ * Two numbers and a word. In a one-life mode this is the most important thing on screen —
+ * a 3-v-1 and a 1-v-3 are completely different rounds — so it sits where the eye already
+ * goes for the score rather than in a corner.
+ */
+.hud-alive {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: 2px var(--s-3);
+  border: 1px solid var(--c-line);
+  background: rgba(12, 14, 17, 0.72);
+  pointer-events: none;
+  transition: opacity 160ms linear;
+}
+
+.hud-alive__count {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.hud-alive__count--friendly {
+  color: var(--c-good);
+}
+
+.hud-alive__count--enemy {
+  color: var(--c-bad);
+}
+
+.hud-alive__sep {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--c-text-faint);
+}
