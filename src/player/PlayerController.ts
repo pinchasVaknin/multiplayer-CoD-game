@@ -43,6 +43,17 @@ const mantleTarget = makeMantleTarget();
 /** How quickly the eye height chases the stance target, per second. */
 const EYE_DAMP_RATE = 16;
 
+/**
+ * Free-cam flight speeds, m/s (post-M8 QA tool).
+ *
+ * 10 m/s crosses Foundry in about eight seconds — quick enough to get somewhere, slow enough
+ * to read a navmesh on the way. Sprint quadruples it for crossing Dunes; ADS quarters it for
+ * easing up to a collider seam, which is the case the tool exists for.
+ */
+const NOCLIP_SPEED = 10;
+const NOCLIP_BOOST = 4;
+const NOCLIP_PRECISE = 0.25;
+
 export class PlayerController {
   readonly sim = new PlayerSim();
   readonly prev: PlayerSnapshot = makeSnapshot();
@@ -65,6 +76,36 @@ export class PlayerController {
    * the cap again on top would compound.
    */
   speedScale = 1;
+
+  /**
+   * Held down by something other than the crouch key (post-M8).
+   *
+   * Planting and defusing use it: S6.3 asks for a visible indicator that somebody is working
+   * on the bomb, and the honest one is the operator kneeling over it — a posture other
+   * players can read from across the site with no HUD element involved. Folded into
+   * `crouchHeld` rather than written straight onto the stance, so every rule that already
+   * governs crouching still applies: the capsule shrinks, the speed cap drops, the eye
+   * height damps down, and standing back up is still refused under a low ceiling.
+   *
+   * It cannot start a slide, because a slide needs the crouch *press* edge and this never
+   * produces one — which is right: an interaction is not a movement input.
+   */
+  forceCrouch = false;
+
+  /**
+   * Free-cam: fly through the world, ignoring gravity and geometry (post-M8 QA tool).
+   *
+   * Deliberately a mode of *this* class rather than a separate camera. The debug camera it
+   * replaces would have needed its own view integration, its own interpolation snapshots and
+   * its own relationship with the render pass — three things that already exist here and
+   * would have had to be kept in step. Flying is a different way of turning a command into a
+   * position, and turning a command into a position is what this class is.
+   *
+   * The consequence worth stating: everything downstream — the camera rig, the viewmodel, the
+   * audio listener, the minimap — keeps working with no knowledge that it is happening,
+   * because all of them read `sim`, and `sim` is still being written every tick.
+   */
+  noclip = false;
 
   private strafeInput = 0;
   private crouchHeldThisTick = false;
@@ -110,11 +151,17 @@ export class PlayerController {
     sim.pitch = cmd.pitch;
     this.strafeInput = cmd.moveX;
 
+    if (this.noclip) {
+      this.stepNoclip(cmd);
+      return;
+    }
+
     const buttons = cmd.buttons;
     const prevButtons = sim.prevButtons;
     const jumpPressed = justPressed(buttons, prevButtons, Btn.Jump);
     const crouchPressed = justPressed(buttons, prevButtons, Btn.Crouch);
-    const crouchHeld = isDown(buttons, Btn.Crouch);
+    // `forceCrouch` joins the *held* test and deliberately not the pressed one: see the field.
+    const crouchHeld = isDown(buttons, Btn.Crouch) || this.forceCrouch;
     const sprintHeld = isDown(buttons, Btn.Sprint);
     const sprintPressed = justPressed(buttons, prevButtons, Btn.Sprint);
     const adsHeld = isDown(buttons, Btn.Ads);
@@ -258,6 +305,75 @@ export class PlayerController {
   }
 
   // -- helpers -------------------------------------------------------------
+
+  /**
+   * One tick of free-cam flight (post-M8 QA tool).
+   *
+   * WASD flies along the *look* direction, including pitch, so the camera goes where it is
+   * pointing — which is what makes inspecting a navmesh from above or a collider from
+   * underneath a single movement rather than a puzzle. Jump rises and crouch sinks on the
+   * world vertical regardless of pitch, because "straight up" is the one direction you cannot
+   * express by looking.
+   *
+   * Velocity is written as well as position even though nothing integrates it here: the
+   * speedometer, the debug overlay and the audio listener all read `sim.speed`, and a
+   * free-cam that reported 0 m/s while crossing the map would make the overlay lie during
+   * exactly the session it is there to support.
+   *
+   * No collision, no gravity, no stance machine and no footsteps — a spectator makes no
+   * noise, which is half of what "observe natural bot AI behaviour up close" requires.
+   */
+  private stepNoclip(cmd: InputCommand): void {
+    const sim = this.sim;
+    const buttons = cmd.buttons;
+
+    const speed =
+      NOCLIP_SPEED *
+      (isDown(buttons, Btn.Sprint) ? NOCLIP_BOOST : 1) *
+      (isDown(buttons, Btn.Ads) ? NOCLIP_PRECISE : 1);
+
+    const cp = Math.cos(sim.pitch);
+    const fx = -Math.sin(sim.yaw) * cp;
+    const fy = Math.sin(sim.pitch);
+    const fz = -Math.cos(sim.yaw) * cp;
+    const rx = Math.cos(sim.yaw);
+    const rz = -Math.sin(sim.yaw);
+
+    let vx = rx * cmd.moveX + fx * cmd.moveZ;
+    let vy = fy * cmd.moveZ;
+    let vz = rz * cmd.moveX + fz * cmd.moveZ;
+    if (isDown(buttons, Btn.Jump)) vy += 1;
+    if (isDown(buttons, Btn.Crouch)) vy -= 1;
+
+    const len = Math.hypot(vx, vy, vz);
+    if (len > 1e-4) {
+      const scale = speed / len;
+      vx *= scale;
+      vy *= scale;
+      vz *= scale;
+    } else {
+      vx = 0;
+      vy = 0;
+      vz = 0;
+    }
+
+    sim.x += vx * DT;
+    sim.y += vy * DT;
+    sim.z += vz * DT;
+    sim.vx = vx;
+    sim.vy = vy;
+    sim.vz = vz;
+
+    // A flying capsule is not standing on anything, and nothing may believe otherwise:
+    // `grounded` false keeps the footstep, landing and slide paths inert for free.
+    sim.grounded = false;
+    sim.justLanded = false;
+    sim.blockedHorizontally = false;
+    sim.steppedUp = false;
+    sim.eyeHeight = this.cfg.standEye;
+    sim.prevButtons = buttons;
+    sim.writeSnapshot(this.curr, this.strafeInput);
+  }
 
   private tickTimers(jumpPressed: boolean): void {
     const sim = this.sim;

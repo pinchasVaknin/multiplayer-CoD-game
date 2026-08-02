@@ -108,6 +108,17 @@ export abstract class GameMode {
    */
   abstract readonly scoreLimit: number;
 
+  /**
+   * Seconds a decided round is held on screen before the next one starts (post-M8).
+   *
+   * A default rather than an abstract, because only one mode has an opinion. Four seconds is
+   * right for a Domination round that ended on a score limit and wrong for Search & Destroy,
+   * where the round ends on a bang and the players are watching a corpse — S&D overrides it
+   * downward. See `MatchFlow.roundEndSeconds`, which asks the mode rather than using a
+   * constant, so "how long is the hold" has one answer per mode and none in the flow.
+   */
+  readonly roundEndSeconds: number = 4;
+
   protected readonly deps: ModeDeps;
 
   constructor(deps: ModeDeps) {

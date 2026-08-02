@@ -38,6 +38,13 @@ export const EV = {
   WeaponAmmoChanged: 'weapon.ammoChanged',
   /** M5: the active inventory slot changed hands. Fires at the hand-over, not the request. */
   WeaponSwapped: 'weapon.swapped',
+  /**
+   * Post-M8: a knife came round, on the one tick the hitbox test ran.
+   *
+   * Emitted whether or not it connected, because a whiff is worth hearing too — the sound of
+   * a knife missing is most of what tells a player how close they came.
+   */
+  MeleeSwing: 'weapon.meleeSwing',
 
   // M5: thrown equipment and the things it does to people (S6.3).
   EquipmentThrown: 'equipment.thrown',
@@ -182,6 +189,16 @@ export type GameEvents = {
    * `x,y,z` is the muzzle and `dx,dy,dz` is the direction *after* recoil and spread.
    * `shotIndex` is the index into the recoil pattern, which is what the debug plot reads.
    */
+  /** Post-M8. `x,y,z` is where the blade ended up — the target, or the end of the reach. */
+  [EV.MeleeSwing]: {
+    sourceId: number;
+    x: number;
+    y: number;
+    z: number;
+    hit: boolean;
+    lethal: boolean;
+  };
+
   [EV.WeaponFired]: {
     weaponId: string;
     /** Who pulled the trigger. From M3 that is not always the player. */

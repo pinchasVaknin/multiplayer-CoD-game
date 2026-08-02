@@ -137,6 +137,22 @@ export class MatchFeedback {
       }),
     );
 
+    /**
+     * The knife (post-M8). Only the swing itself is handled here.
+     *
+     * A connecting knife goes through `DamageSystem` like anything else, so the hitmarker,
+     * the flesh impact, the damage number and the kill sound are already subscribed above —
+     * there is deliberately no melee-specific branch in any of them. A melee that needed its
+     * own hitmarker path would be a second implementation of feedback, and the two would
+     * eventually disagree about what a kill looks like.
+     */
+    this.unsubscribe.push(
+      bus.on(EV.MeleeSwing, (p) => {
+        weaponAudio.playMeleeSwing(p.x, p.y, p.z, p.hit);
+        if (p.sourceId === PLAYER_ENTITY_ID) cameraRig.shake.add(p.hit ? 0.16 : 0.06);
+      }),
+    );
+
     this.unsubscribe.push(
       bus.on(EV.DamageDealt, (p) => {
         if (p.targetId === PLAYER_ENTITY_ID) {

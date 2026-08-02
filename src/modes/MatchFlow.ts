@@ -40,8 +40,6 @@ export type MatchPhase = 'WARMUP' | 'LIVE' | 'ROUND_END' | 'MATCH_END';
 
 /** Seconds of "get ready" before the first tick of a round counts. */
 const WARMUP_SECONDS = 3;
-/** Seconds a round result is held on screen before the next round or the summary. */
-const ROUND_END_SECONDS = 4;
 
 /** Remaining-time announcer cues, in seconds. Fired once each, highest first. */
 const TIME_CUES: readonly Readonly<{ at: number; cue: AnnouncerCue }>[] = [
@@ -115,9 +113,19 @@ export class MatchFlow {
     return this.ticksRemaining * DT;
   }
 
+  /**
+   * How long a decided round is held before the next one, seconds.
+   *
+   * Asked of the mode (post-M8) rather than being a constant here. Search & Destroy ends on a
+   * detonation or a defuse and wants to move on quickly; a Domination round does not exist.
+   */
+  private get roundEndSeconds(): number {
+    return this.deps.mode.roundEndSeconds;
+  }
+
   /** Seconds left of the warm-up or the round-end hold, whichever is running. */
   get phaseSecondsRemaining(): number {
-    const limit = this.phase === 'WARMUP' ? WARMUP_SECONDS : ROUND_END_SECONDS;
+    const limit = this.phase === 'WARMUP' ? WARMUP_SECONDS : this.roundEndSeconds;
     return Math.max(0, limit - this.phaseTicks * DT);
   }
 
@@ -185,7 +193,7 @@ export class MatchFlow {
         if (this.phaseTicks * DT >= WARMUP_SECONDS) this.goLive();
         return;
       case 'ROUND_END':
-        if (this.phaseTicks * DT >= ROUND_END_SECONDS) this.advanceRound();
+        if (this.phaseTicks * DT >= this.roundEndSeconds) this.advanceRound();
         return;
       case 'MATCH_END':
         return;

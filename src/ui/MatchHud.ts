@@ -41,6 +41,17 @@ export interface MatchHudDeps {
   readonly roster: readonly Combatant[];
   /** Upper bound on players per side, for preallocating rows and markers. */
   readonly teamSize: number;
+  /**
+   * Post-M8. Free-for-All: everybody on the map is hostile, including the half of the roster
+   * that shares the player's substrate side.
+   *
+   * The two-team substrate FFA keeps (see `modes/FreeForAll.ts`) leaked into the two places
+   * the HUD asks "is this one of mine": the minimap's friendly chevrons and the gunfire ping
+   * filter. So four of the seven opponents were drawn as team-mates and never pinged the
+   * radar when they fired. The mode's own file already called the minimap out as "the one
+   * place the seam is visible" — this closes it.
+   */
+  readonly freeForAll: boolean;
 }
 
 export class MatchHud {
@@ -150,7 +161,10 @@ export class MatchHud {
   private fillFriendlies(): void {
     const markers = this.hud.minimap.friendlies;
     let at = 0;
-    for (const c of this.deps.roster) {
+    // No allies in Free-for-All. Every marker is left inactive rather than the loop being
+    // skipped, so the deactivation pass below still runs and a mid-match mode change — which
+    // only the harness can do — cannot leave a stale chevron on the disc.
+    for (const c of this.deps.freeForAll ? [] : this.deps.roster) {
       if (at >= markers.length) break;
       // The local player is drawn at the centre by the minimap itself.
       if (c.entityId === 0) continue;
@@ -215,7 +229,12 @@ export class MatchHud {
       bus.on(EV.WeaponFired, (p) => {
         if (!p.minimapPing) return;
         const shooter = this.findRoster(p.sourceId);
-        if (shooter === undefined || shooter.team === this.deps.localTeam) return;
+        if (shooter === undefined) return;
+        // In FFA the only shot that does not ping is your own; everybody else is an enemy.
+        const mine = this.deps.freeForAll
+          ? shooter.entityId === 0
+          : shooter.team === this.deps.localTeam;
+        if (mine) return;
         this.hud.minimap.addPing(p.x, p.z);
       }),
     );

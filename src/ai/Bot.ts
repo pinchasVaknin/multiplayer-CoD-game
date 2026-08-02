@@ -63,6 +63,8 @@ export interface BotDeps {
   readonly perceptionConfig: PerceptionConfig;
   readonly brain: BrainDeps;
   readonly materials: BotMaterials;
+  /** Post-M8: Free-for-All draws every bot in the enemy colour. See `BotMesh`. */
+  readonly hostileLook?: boolean;
 }
 
 const evBotState = { entityId: 0, from: 'IDLE' as BotState, to: 'IDLE' as BotState, tier: 'REGULAR' as BotTier };
@@ -152,7 +154,7 @@ export class Bot implements Combatant, PathClient {
     // the same target do not share a spread sequence.
     this.weapons.reseed(spec.seed ^ 0x5bf0_3d17);
     this.brain = new BotBrain(deps.brain);
-    this.mesh = new BotMesh(spec.team, deps.materials);
+    this.mesh = new BotMesh(spec.team, deps.materials, deps.hostileLook === true);
   }
 
   // -- Combatant ------------------------------------------------------------
@@ -350,8 +352,19 @@ export class Bot implements Combatant, PathClient {
     this.blackboard.age(this.deps.perceptionConfig.confidenceDecay, this.deps.perceptionConfig.noiseMemory);
   }
 
-  /** Produce this tick's command and advance the simulation with it. */
-  advance(tick: number, nowMs: number, roster: readonly Bot[]): void {
+  /**
+   * Produce this tick's command and advance the simulation with it.
+   *
+   * `frozen` is the pre-match countdown (post-M8). The brain still steers — the command it
+   * writes is the command it wanted — and then the movement axes and every action bit are
+   * stripped before the controller sees it. Doing it here rather than skipping `advance`
+   * outright matters: the controller still runs, so gravity, the ground probe and the render
+   * snapshots all keep ticking, and a bot standing on a ramp during the countdown does not
+   * hang in the air. The look angles survive, so a frozen bot still tracks what it can see —
+   * which is what makes the moment the round goes live read as a starting gun rather than a
+   * room full of statues booting up.
+   */
+  advance(tick: number, nowMs: number, roster: readonly Bot[], frozen = false): void {
     if (!this.alive) return;
 
     const cmd = this.cmd;
@@ -359,6 +372,11 @@ export class Bot implements Combatant, PathClient {
     cmd.tickIndex = tick;
     cmd.sampledAtMs = nowMs;
     this.brain.steer(this, cmd, roster);
+    if (frozen) {
+      cmd.moveX = 0;
+      cmd.moveZ = 0;
+      cmd.buttons = 0;
+    }
 
     this.controller.step(cmd);
     const sim = this.controller.sim;

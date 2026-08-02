@@ -121,6 +121,25 @@ export class Input {
   /** Set true while a DOM control (a tuning slider, a menu button) has focus. */
   private domFocusGuard = false;
 
+  /**
+   * Whether physical inputs currently resolve to game actions (post-M8 playtest).
+   *
+   * The bug that produced it: `swapWeapon` is bound to `WheelUp`, and `onWheel` calls
+   * `preventDefault` for anything that resolves to a bit. On the settings screen that meant
+   * the wheel scrolled the binding list *down* and refused to scroll it back up, which reads
+   * exactly as the reported "scrolling gets stuck and I have to drag the scrollbar".
+   *
+   * The honest fix is not a special case for the wheel. A front-end screen owns the page, and
+   * while one is up the game is not taking input at all — the sim already knows that
+   * (`sampleNeutral`), so this is the same rule applied one layer earlier, at the DOM edge,
+   * where `preventDefault` lives. `Game` sets it from the state machine: true in MATCH,
+   * false everywhere else.
+   *
+   * Escape and the overlay's function keys deliberately still get through: they are how you
+   * leave a screen, not things you do in one.
+   */
+  private bindingsActive = true;
+
   constructor(opts: InputOptions) {
     this.canvas = opts.canvas;
     this.sensitivity = opts.sensitivity;
@@ -280,6 +299,22 @@ export class Input {
     this.adsFraction = Math.max(0, Math.min(1, value));
   }
 
+  /**
+   * Turn the binding table on or off at the DOM edge. See `bindingsActive`.
+   *
+   * Clears held state on the way down, so a key still held when a screen opens cannot be
+   * latched across the gap and arrive as a press when the match resumes.
+   */
+  setBindingsActive(on: boolean): void {
+    if (on === this.bindingsActive) return;
+    this.bindingsActive = on;
+    if (!on) this.clearHeld();
+  }
+
+  get bindingsEnabled(): boolean {
+    return this.bindingsActive;
+  }
+
   /** M8. Swap the binding table live and re-arm the reserved-chord capture. */
   setBindings(bindings: BindingMap): void {
     this.keybinds.set(bindings);
@@ -432,9 +467,10 @@ export class Input {
       for (const fn of this.escapeListeners) fn();
       return;
     }
-    // While a debug slider has focus the page belongs to the DOM, so only the overlay's
-    // own function keys are taken; everything else behaves like an ordinary web page.
-    const guarded = this.domFocusGuard && !ALWAYS_PREVENT.has(e.code);
+    // While a debug slider has focus — or a front-end screen is up — the page belongs to the
+    // DOM, so only the overlay's own function keys are taken; everything else behaves like an
+    // ordinary web page, including Tab moving focus and the arrow keys scrolling a list.
+    const guarded = (this.domFocusGuard || !this.bindingsActive) && !ALWAYS_PREVENT.has(e.code);
     if (!guarded && this.shouldPreventDefault(e.code)) e.preventDefault();
     if (guarded) return;
     if (e.repeat) return;
@@ -493,7 +529,7 @@ export class Input {
    * the click that started the match cannot also pull the trigger.
    */
   private readonly onMouseDown = (e: MouseEvent): void => {
-    if (this.domFocusGuard) return;
+    if (this.domFocusGuard || !this.bindingsActive) return;
     // Armed and unlocked: this click is the gesture that gets the cursor back, and it is
     // spent doing that. Passing it on as well would fire the weapon on the frame the player
     // clicked to resume.
@@ -522,7 +558,10 @@ export class Input {
    * is actually bound to it, so the page still scrolls normally on a menu.
    */
   private readonly onWheel = (e: WheelEvent): void => {
-    if (this.domFocusGuard || e.deltaY === 0) return;
+    // Returning *before* `preventDefault` is the point: on a menu the wheel has to reach the
+    // page, or a scrollable panel can only be scrolled in whichever direction happens not to
+    // be bound to anything.
+    if (this.domFocusGuard || !this.bindingsActive || e.deltaY === 0) return;
     const bits = this.keybinds.bitsFor(e.deltaY < 0 ? 'WheelUp' : 'WheelDown');
     if (bits === 0) return;
     e.preventDefault();

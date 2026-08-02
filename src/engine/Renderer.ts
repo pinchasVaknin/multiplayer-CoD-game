@@ -40,6 +40,8 @@ export class Renderer {
   /** Built on first use: most matches never call in a Chopper Gunner. */
   private thermalWorldMaterial: THREE.ShaderMaterial | null = null;
   private thermalHotMaterial: THREE.ShaderMaterial | null = null;
+  /** Post-M8: the gunner's own side, drawn near-black. See `renderGunship`. */
+  private thermalColdMaterial: THREE.ShaderMaterial | null = null;
   /** M8. The live shadow tier; lights read it when a map is loaded and when it changes. */
   private shadowTier: ShadowQuality = 'medium';
   /** M8. Null unless the player has asked for motion blur. */
@@ -175,76 +177,135 @@ export class Renderer {
   }
 
   /**
-   * The Chopper Gunner's thermal view (M7, brief S6.1).
+   * The Chopper Gunner's view (M7, brief S6.1; reworked post-M8).
    *
    * The brief asks for "a render pass, not a colour filter over the normal view", and the
    * difference is not pedantry — it decides what the picture can *say*. A filter tints an
    * already-lit image, so a body in shadow stays dark and the sky stays bright, which is the
-   * opposite of what thermal optics show. A pass decides heat per object:
+   * opposite of what a gunship optic shows. A pass decides what each object is:
    *
-   *  1. The world is drawn with an override material that ignores lighting entirely and ramps
-   *     cold-to-warm on view depth, so the map reads as flat cool terrain.
-   *  2. Depth is kept, and `hot` — the bot group — is drawn again with an unlit bright
-   *     material, so bodies glow *through* an unlit room while still being occluded by walls.
+   *  1. The world is drawn with an override material that ignores lighting entirely and
+   *     shades on surface facing, so the map reads as legible grey terrain **at night as
+   *     well as by day** — the map's own lights are not consulted at all, which is the whole
+   *     point on Depot.
+   *  2. Depth is kept and the bodies are drawn in two further passes: `cold` — the gunner's
+   *     own side — in near-black, and `hot` — everybody else — in orange. Both are occluded
+   *     by the depth buffer pass one wrote, so a body behind a container is still behind it.
+   *
+   * **The IFF split is the post-M8 change.** M7 drew every body hot, so the gunner could not
+   * tell their own team from the enemy and the streak was as likely to wipe the friendly
+   * half of the map as the hostile one. Two groups rather than a per-object test keeps this
+   * a render pass that knows nothing about teams: it is handed the cold ones and the hot
+   * ones and draws them differently.
    *
    * Nothing is post-processed and no render target is allocated, which is what keeps this
    * inside the frame budget on integrated graphics.
    */
-  renderThermal(scene: THREE.Scene, camera: THREE.Camera, hot: THREE.Object3D | null): void {
+  renderGunship(
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+    hot: THREE.Object3D | null,
+    cold: THREE.Object3D | null,
+  ): void {
     const previousOverride = scene.overrideMaterial;
     const previousBackground = scene.background;
     const previousFog = scene.fog;
 
-    scene.overrideMaterial = this.thermalWorld();
-    // Fog and a sky colour are lighting cues, and thermal has neither.
-    scene.background = THERMAL_BACKGROUND;
+    // Bodies are hidden for the world pass and drawn by the two that follow. Without this
+    // they would be shaded as terrain first and then overdrawn, which costs a pass and — on
+    // a body exactly coplanar with the floor it stands on — flickers between the two.
+    const hotWasVisible = hot?.visible ?? false;
+    const coldWasVisible = cold?.visible ?? false;
+    if (hot !== null) hot.visible = false;
+    if (cold !== null) cold.visible = false;
+
+    scene.overrideMaterial = this.gunshipWorld();
+    // Fog and a sky colour are lighting cues, and the optic has neither.
+    scene.background = GUNSHIP_BACKGROUND;
     scene.fog = null;
 
     this.three.clear(true, true, false);
     this.three.render(scene, camera);
-
     scene.overrideMaterial = previousOverride;
 
-    if (hot !== null) {
-      scene.overrideMaterial = this.thermalHot();
-      const wasVisible = new Map<THREE.Object3D, boolean>();
-      // Only the hot group is drawn in the second pass; everything else is hidden rather
-      // than re-rendered, so the depth buffer from pass one still occludes it.
-      for (const child of scene.children) {
-        wasVisible.set(child, child.visible);
-        child.visible = child === hot;
-      }
-      this.three.render(scene, camera);
-      for (const [child, visible] of wasVisible) child.visible = visible;
-      scene.overrideMaterial = previousOverride;
-    }
+    if (hot !== null) hot.visible = hotWasVisible;
+    if (cold !== null) cold.visible = coldWasVisible;
+
+    this.drawBodies(scene, camera, cold, hot, this.gunshipCold(), previousOverride);
+    this.drawBodies(scene, camera, hot, cold, this.gunshipHot(), previousOverride);
 
     scene.background = previousBackground;
     scene.fog = previousFog;
   }
 
-  private thermalWorld(): THREE.Material {
+  /**
+   * Draw one body group with an override material, with everything else hidden.
+   *
+   * `exclude` is the *other* body group, which has to be hidden explicitly because it is a
+   * sibling under the same top-level node — hiding by scene child alone would draw both.
+   */
+  private drawBodies(
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+    subject: THREE.Object3D | null,
+    exclude: THREE.Object3D | null,
+    material: THREE.Material,
+    restoreOverride: THREE.Material | null,
+  ): void {
+    if (subject === null || !subject.visible) return;
+
+    const wasVisible = new Map<THREE.Object3D, boolean>();
+    for (const child of scene.children) {
+      wasVisible.set(child, child.visible);
+      // The subject may be nested (a team group under the roster node), so the test is
+      // ancestry rather than identity.
+      child.visible = child === subject || isAncestorOf(child, subject);
+    }
+    const excludeWas = exclude?.visible ?? false;
+    if (exclude !== null) exclude.visible = false;
+
+    scene.overrideMaterial = material;
+    this.three.render(scene, camera);
+    scene.overrideMaterial = restoreOverride;
+
+    if (exclude !== null) exclude.visible = excludeWas;
+    for (const [child, visible] of wasVisible) child.visible = visible;
+  }
+
+  private gunshipWorld(): THREE.Material {
     if (this.thermalWorldMaterial === null) {
       this.thermalWorldMaterial = new THREE.ShaderMaterial({
         uniforms: {},
-        vertexShader: THERMAL_VERT,
-        fragmentShader: THERMAL_WORLD_FRAG,
+        vertexShader: GUNSHIP_VERT,
+        fragmentShader: GUNSHIP_WORLD_FRAG,
         fog: false,
       });
     }
     return this.thermalWorldMaterial;
   }
 
-  private thermalHot(): THREE.Material {
+  private gunshipHot(): THREE.Material {
     if (this.thermalHotMaterial === null) {
       this.thermalHotMaterial = new THREE.ShaderMaterial({
         uniforms: {},
-        vertexShader: THERMAL_VERT,
-        fragmentShader: THERMAL_HOT_FRAG,
+        vertexShader: GUNSHIP_VERT,
+        fragmentShader: GUNSHIP_HOT_FRAG,
         fog: false,
       });
     }
     return this.thermalHotMaterial;
+  }
+
+  private gunshipCold(): THREE.Material {
+    if (this.thermalColdMaterial === null) {
+      this.thermalColdMaterial = new THREE.ShaderMaterial({
+        uniforms: {},
+        vertexShader: GUNSHIP_VERT,
+        fragmentShader: GUNSHIP_COLD_FRAG,
+        fog: false,
+      });
+    }
+    return this.thermalColdMaterial;
   }
 
   /**
@@ -269,6 +330,8 @@ export class Renderer {
     this.thermalWorldMaterial = null;
     this.thermalHotMaterial?.dispose();
     this.thermalHotMaterial = null;
+    this.thermalColdMaterial?.dispose();
+    this.thermalColdMaterial = null;
     this.three.dispose();
   }
 }
@@ -286,6 +349,16 @@ export class Renderer {
  */
 const shadowAuthoring = new WeakMap<THREE.LightShadow, { radius: number; castShadow: boolean }>();
 
+/** Whether `descendant` sits anywhere below `node`. Used by the gunship body passes. */
+function isAncestorOf(node: THREE.Object3D, descendant: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = descendant.parent;
+  while (current !== null) {
+    if (current === node) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
 /** Called by `MapLoader` once per light, with the values the map asked for. */
 export function rememberShadowAuthoring(
   shadow: THREE.LightShadow,
@@ -295,15 +368,20 @@ export function rememberShadowAuthoring(
   shadowAuthoring.set(shadow, { radius, castShadow });
 }
 
-/** Thermal has no sky. A flat mid-dark grey, so the horizon is not a black void. */
-const THERMAL_BACKGROUND = new THREE.Color(0x121212);
+/**
+ * The optic has no sky. A flat mid grey, so the horizon is not a black void.
+ *
+ * Lifted post-M8 along with the world shader: at 0x121212 the ground and the background were
+ * close enough that Depot's yard had no discernible edge from 60 m up.
+ */
+const GUNSHIP_BACKGROUND = new THREE.Color(0x1e2226);
 
 /**
  * Shared vertex stage: view-space depth is the only thing either fragment stage needs.
  *
  * `viewDepth` is negated because view space looks down -Z, so this is a positive distance.
  */
-const THERMAL_VERT = `
+const GUNSHIP_VERT = `
 varying float vViewDepth;
 varying vec3 vViewNormal;
 void main() {
@@ -328,16 +406,42 @@ void main() {
  * separates a wall from the floor it meets, and depth only darkens gently on top. The result
  * is a readable grey map that never uses colour, leaving orange exclusively for bodies.
  */
-const THERMAL_WORLD_FRAG = `
+const GUNSHIP_WORLD_FRAG = `
 varying float vViewDepth;
 varying vec3 vViewNormal;
 void main() {
   vec3 n = normalize(vViewNormal);
-  float lambert = clamp(dot(n, normalize(vec3(0.35, 0.78, 0.52))), 0.0, 1.0);
-  // Never reaches black: distant geometry has to stay legible or the gun cannot be aimed.
-  float depthFade = 1.0 - 0.42 * clamp(vViewDepth / 130.0, 0.0, 1.0);
-  float lum = (0.16 + 0.60 * lambert) * depthFade;
-  gl_FragColor = vec4(vec3(lum), 1.0);
+  // Two keys rather than one. A single overhead key left every horizontal surface — which,
+  // from a gunship, is nearly the whole picture — at one flat value, so the yard read as a
+  // sheet of grey with no containers on it. The fill comes in from the side and separates a
+  // wall from the floor it meets.
+  float key = clamp(dot(n, normalize(vec3(0.35, 0.86, 0.38))), 0.0, 1.0);
+  float fill = clamp(dot(n, normalize(vec3(-0.62, 0.24, -0.75))), 0.0, 1.0);
+  // Post-M8: the floor was 0.16 + 0.60 * lambert and the depth term took another 42% off it
+  // at range, which on a night map produced the reported "cannot see the map at all". The
+  // ambient term is more than doubled, the range falloff is halved, and the result is a
+  // legible mid-grey everywhere — this is an optic, and an optic is not lit by the map.
+  float depthFade = 1.0 - 0.20 * clamp(vViewDepth / 150.0, 0.0, 1.0);
+  float lum = (0.34 + 0.46 * key + 0.16 * fill) * depthFade;
+  gl_FragColor = vec4(vec3(clamp(lum, 0.0, 1.0)), 1.0);
+}
+`;
+
+/**
+ * The gunner's own side: near-black, unlit (post-M8).
+ *
+ * The brief for this pass is "teammates appear dark, only enemies glow orange", and dark is
+ * doing real work rather than being a colour choice — a silhouette that is *darker* than the
+ * grey terrain is instantly separable from one that is brighter, so a glance at the picture
+ * sorts the map into three categories without reading any of them. A slight lift with
+ * distance keeps a far team-mate from disappearing into a shadowed corner entirely.
+ */
+const GUNSHIP_COLD_FRAG = `
+varying float vViewDepth;
+varying vec3 vViewNormal;
+void main() {
+  float t = clamp(vViewDepth / 120.0, 0.0, 1.0);
+  gl_FragColor = vec4(vec3(mix(0.03, 0.12, t)), 1.0);
 }
 `;
 
@@ -349,7 +453,7 @@ void main() {
  * what thermal shows. It brightens slightly with distance so a far contact still separates
  * from the grey behind it.
  */
-const THERMAL_HOT_FRAG = `
+const GUNSHIP_HOT_FRAG = `
 varying float vViewDepth;
 varying vec3 vViewNormal;
 void main() {

@@ -347,6 +347,10 @@ export class Game {
     const from = this.state;
     this.states.get(from)?.exit?.(next);
     this.state = next;
+    // Post-M8: physical inputs only resolve to game actions inside a match. A front-end
+    // screen owns the page, and the wheel and the arrow keys have to reach it — see
+    // `Input.bindingsActive` for the scroll bug this closes.
+    this.input.setBindingsActive(next === 'MATCH');
     handlers.enter?.(from);
     stateChangePayload.from = from;
     stateChangePayload.to = next;
@@ -516,6 +520,7 @@ export class Game {
 
   private enterState(id: GameStateId): void {
     this.state = id;
+    this.input.setBindingsActive(id === 'MATCH');
     this.states.get(id)?.enter?.(id);
   }
 
@@ -698,9 +703,23 @@ export class Game {
     const now = performance.now();
     const inMatch = this.state === 'MATCH';
     const dead = world.match.isPlayerDead;
+    /**
+     * The pre-match freeze (post-M8 playtest).
+     *
+     * Applied at the *sampler*, which is the only place it can be: movement is integrated by
+     * `player.step` below, before the match ever sees the command, so a check inside `Match`
+     * would arrive a frame late and after the player had already moved. `sampleSpectating`
+     * is exactly the command a frozen player should send — zeroed axes, zeroed buttons, live
+     * view angles — so the countdown reuses it rather than growing a fourth sampler that
+     * would have to be kept in step with it.
+     *
+     * The camera is untouched by any of this: yaw and pitch are integrated in the mousemove
+     * handler and stamped onto whatever command is produced, so looking around still works.
+     */
+    const frozen = world.match.inputFrozen;
     const cmd = !inMatch
       ? this.input.sampleNeutral(tick, now)
-      : dead
+      : dead || frozen
         ? this.input.sampleSpectating(tick, now)
         : this.input.sample(tick, now);
     this.transport.submit(cmd);
@@ -796,9 +815,22 @@ export class Game {
     const chopper = match.streaks.activeChopperFor(PLAYER_ENTITY_ID);
     const takeover = chopper?.activeCamera(this.renderer.aspect) ?? null;
     if (takeover !== null) {
-      // Thermal is a render pass over the world with the bodies drawn hot, not a filter over
-      // the ordinary image (S6.1). No viewmodel: the player is not holding anything.
-      this.renderer.renderThermal(this.scene, takeover, match.bots.group);
+      /**
+       * A grey render pass over the world with the bodies drawn by side, not a filter over
+       * the ordinary image (S6.1). No viewmodel: the player is not holding anything.
+       *
+       * Post-M8 the two body groups are handed over separately so the pass can tell friend
+       * from foe. Which is which is decided *here*, because the local team is a fact about
+       * the match and `engine/` has no business knowing what a team is — it is given a cold
+       * group and a hot one.
+       */
+      const enemyTeam = PLAYER_TEAM === 'A' ? 'B' : 'A';
+      this.renderer.renderGunship(
+        this.scene,
+        takeover,
+        match.bots.groupFor(enemyTeam),
+        match.bots.groupFor(PLAYER_TEAM),
+      );
     } else {
       this.renderer.render(this.scene, cam, this.viewmodel);
     }

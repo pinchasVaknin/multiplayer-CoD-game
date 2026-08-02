@@ -214,6 +214,21 @@ export class WeaponSystem {
     this.rng.reseed(seed);
   }
 
+  /**
+   * Take the sights down now, without waiting for a tick (post-M8 playtest).
+   *
+   * Called when the player is killed. Both snapshots are rewritten, not just the current one:
+   * the render pass interpolates between them, so leaving `prev` at full ADS would blend the
+   * camera back out of the scope over a frame instead of cutting, and on a sniper that reads
+   * as the zoom sticking rather than as a transition.
+   */
+  clearAim(): void {
+    for (const weapon of this.inventory.all) weapon.clearAds();
+    this.scope.reset();
+    this.writeSnapshot(this.curr);
+    this.writeSnapshot(this.prev);
+  }
+
   reset(): void {
     this.inventory.reset();
     this.recoil.reset();
@@ -256,6 +271,21 @@ export class WeaponSystem {
    */
   fireBlocked = false;
 
+  /**
+   * Set true while the player is not with this weapon at all (post-M8).
+   *
+   * `fireBlocked` says "the hands are busy" — the weapon is still in them, it simply cannot
+   * be fired this instant. This says something stronger: the player is flying a Chopper
+   * Gunner, so the trigger, the sights and the reload key all belong to something else and
+   * none of them should reach the rifle standing on the ground.
+   *
+   * It is a separate flag rather than a wider `fireBlocked` because the two have different
+   * answers for ADS. A grenade cook leaves the sights available; a camera takeover must
+   * not, or the ADS button silently aims a weapon a kilometre away and the scope overlay
+   * takes the crosshair off the gunship's screen.
+   */
+  suspended = false;
+
   step(cmd: InputCommand, sim: PlayerSim): void {
     copySnapshot(this.curr, this.prev);
 
@@ -274,14 +304,17 @@ export class WeaponSystem {
     // the grenade throw. Applied to the *input* rather than to the weapon, so a blocked
     // trigger behaves exactly like a trigger nobody pulled: no dry-fire click, no auto
     // reload, and releasing during the block does not queue a shot for when it lifts.
-    wi.fireHeld = !this.fireBlocked && isDown(buttons, Btn.Fire);
-    wi.firePressed = !this.fireBlocked && justPressed(buttons, prevButtons, Btn.Fire);
-    wi.adsHeld = isDown(buttons, Btn.Ads);
-    wi.reloadPressed = justPressed(buttons, prevButtons, Btn.Reload);
+    const blocked = this.fireBlocked || this.suspended;
+    wi.fireHeld = !blocked && isDown(buttons, Btn.Fire);
+    wi.firePressed = !blocked && justPressed(buttons, prevButtons, Btn.Fire);
+    // `suspended` takes the sights too, which `fireBlocked` deliberately does not. See the
+    // field comment: this is the difference between busy hands and an absent player.
+    wi.adsHeld = !this.suspended && isDown(buttons, Btn.Ads);
+    wi.reloadPressed = !this.suspended && justPressed(buttons, prevButtons, Btn.Reload);
     // Anything that puts the weapon out of the fight lowers it. A slide no longer does:
     // M4 playtesting called firing mid-slide missing, and it is — the cost is now a spread
     // penalty in `SpreadContext` rather than a weapon you cannot use.
-    wi.lowering = sim.sprintActive || sim.tacSprintActive || sim.mantleActive || swapLower;
+    wi.lowering = sim.sprintActive || sim.tacSprintActive || sim.mantleActive || swapLower || this.suspended;
 
     const weapon = this.inventory.active;
     const def = weapon.definition;

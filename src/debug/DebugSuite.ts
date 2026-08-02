@@ -30,6 +30,8 @@ import type { MatchHarness } from './MatchHarness';
 import { MetaPanel } from './MetaPanel';
 import { ModePanel } from './ModePanel';
 import { SnagHarness } from './SnagHarness';
+import { Spectator } from './Spectator';
+import { SpectatorPanel } from './SpectatorPanel';
 import { StreakPanel } from './StreakPanel';
 import type { Speedometer } from './Speedometer';
 import { WeaponDebug } from './WeaponDebug';
@@ -99,6 +101,14 @@ export class DebugSuite {
   readonly streakPanel: StreakPanel;
   /** M8: "sprint every wall", derived from the collision world rather than authored. */
   readonly snagHarness: SnagHarness;
+  /**
+   * Post-M8: god mode, invisibility and free-cam, for watching the game rather than playing it.
+   *
+   * Owned here because it is per-match — it holds the match and the controller — and because
+   * everything it switches is put back by the world teardown anyway. See `debug/Spectator.ts`.
+   */
+  readonly spectator: Spectator;
+  readonly spectatorPanel: SpectatorPanel;
 
   private readonly scene: THREE.Scene;
 
@@ -182,6 +192,9 @@ export class DebugSuite {
     this.metaPanel = new MetaPanel(this.overlay, ctx.match, ctx.profile, ctx.bus);
     this.streakPanel = new StreakPanel(this.overlay, ctx.match, ctx.bus);
 
+    this.spectator = new Spectator(ctx.match, ctx.player);
+    this.spectatorPanel = new SpectatorPanel(this.overlay, this.spectator);
+
     this.snagHarness = new SnagHarness({
       map: ctx.map,
       player: ctx.player,
@@ -213,6 +226,11 @@ export class DebugSuite {
    * a step in `usedJSHeapSize` at the next match boundary.
    */
   dispose(): void {
+    // First: hand the player back their body. The match and the controller are about to be
+    // thrown away, so this is belt-and-braces — but a spectator flag surviving into the next
+    // match through some future object reuse would be an invisible, invulnerable player and
+    // a very confusing bug report.
+    this.spectator.reset();
     this.streakPanel.dispose();
     this.metaPanel.dispose();
     this.scene.remove(this.equipmentPanel.group);

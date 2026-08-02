@@ -203,6 +203,19 @@ export class TargetDummy implements Damageable {
   }
 
   /**
+   * Whether rounds leave holes in this dummy (post-M8). See `Damageable.decals`.
+   *
+   * Only the ones that stand still. A decal is placed in *world* space by `DecalField`, so a
+   * hole punched in a strafing dummy would stay where the dummy was and slide off it — worse
+   * than no decal, because it reads as a miss hanging in mid-air. The targets a group is
+   * actually measured on are the static ones and the infinite DPS dummy, which are exactly
+   * the two that never move.
+   */
+  get decals(): boolean {
+    return this.spec.behaviour === 'static' || this.spec.behaviour === 'infinite';
+  }
+
+  /**
    * Move the target. Snaps: there is no interpolation across a teleport, and pretending
    * otherwise would draw a dummy sliding across the map between balance-table cells.
    */

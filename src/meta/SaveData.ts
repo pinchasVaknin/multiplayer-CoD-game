@@ -117,7 +117,7 @@ export interface ChallengeSaveData {
 }
 
 export interface SaveV2 extends Versioned {
-  version: 2;
+  version: 3;
   profile: ProfileData;
   weapons: Record<string, WeaponSaveData>;
   loadouts: LoadoutSlot[];
@@ -131,15 +131,22 @@ export interface SaveV2 extends Versioned {
 }
 
 /**
- * Bumped to 2 in M8, for the eleven settings fields and the binding table.
+ * Bumped to 2 in M8, for the eleven settings fields and the binding table; to 3 in the
+ * post-M8 pass, for two *broken* bindings that a normalise pass must not touch.
  *
- * The bump is not strictly *required* — `normaliseSave` defaults every new field, so a v1
+ * The M8 bump was not strictly *required* — `normaliseSave` defaults every new field, so a v1
  * payload would have loaded correctly without one. It is here because S6.3 asks that every
  * setting "survives a migration", and a migration you never run is a migration you have
  * never tested. `upgradeV1` is therefore a real function with a real assertion behind it
  * (`verify/settings.js`), not a version number nudged upward.
+ *
+ * The v3 bump is required, and the reason is worth stating because it is the whole argument
+ * for versioning a settings block at all. `normaliseBindings` runs on **every** load, so a
+ * repair placed there would be permanent: nobody could ever bind ADS to middle mouse again,
+ * because every load would move it back. A migration runs **once**, which is exactly the
+ * shape of "this stored value was written by a version that was wrong about what it meant".
  */
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export const SAVE_KEY = 'operator.save';
 
 /** The key M1-M5 wrote settings to. Read once, by the migration, then left alone. */
@@ -562,9 +569,10 @@ function normaliseWeaponLoadout(
 export function migrateSave(raw: unknown, fromVersion: number, fallbackSettings: SettingsV1): SaveV2 | null {
   if (!isRecord(raw)) return null;
 
-  // The edges are walked in order, so a v0 payload passes through both upgrades.
+  // The edges are walked in order, so a v0 payload passes through all three upgrades.
   const afterV0 = fromVersion < 1 ? upgradeV0(raw) : raw;
-  const upgraded = fromVersion < 2 ? upgradeV1(afterV0) : afterV0;
+  const afterV1 = fromVersion < 2 ? upgradeV1(afterV0) : afterV0;
+  const upgraded = fromVersion < 3 ? upgradeV2(afterV1) : afterV1;
   const { save, losses } = normaliseSave(upgraded, fallbackSettings);
   save.version = SAVE_VERSION;
 
@@ -575,6 +583,50 @@ export function migrateSave(raw: unknown, fromVersion: number, fallbackSettings:
   );
   for (const line of losses) console.info(`[Save]   ${line}`);
   return save;
+}
+
+/**
+ * v2 to v3 (post-M8): repair the two bindings M8 shipped wrong.
+ *
+ * Both are *corrections*, not preference changes, which is the bar a migration that rewrites
+ * a player's controls has to clear:
+ *
+ * - **ADS `Mouse1` → `Mouse2`.** `Mouse1` is the middle button in `MouseEvent.button`
+ *   numbering, so the shipped default never fired. Anybody whose save still says `Mouse1`
+ *   either never touched the binding or bound it while the row was mislabelled "Right
+ *   mouse" — in both cases they wanted the right button, and in neither case did they have
+ *   a working ADS. A save that has ADS on any *other* input is left alone.
+ * - **Use `KeyP` → `KeyT`.** The action keeps its other binding, so this only moves the
+ *   half of the pair that was reported as unreachable during a firefight.
+ *
+ * Nothing outside `settings.bindings` is touched. A migration that rewrites blocks it does
+ * not need to is a migration that can lose them.
+ */
+function upgradeV2(raw: Record<string, unknown>): Record<string, unknown> {
+  const settings = isRecord(raw['settings']) ? raw['settings'] : {};
+  const bindings = isRecord(settings['bindings']) ? { ...settings['bindings'] } : null;
+  if (bindings === null) return raw;
+
+  const ads = bindings['ads'];
+  if (Array.isArray(ads)) bindings['ads'] = ads.map((v) => (v === 'Mouse1' ? 'Mouse2' : v));
+
+  const use = bindings['use'];
+  if (Array.isArray(use)) {
+    // Replace rather than append: the action has two slots and both were already spoken for.
+    const moved = use.map((v) => (v === 'KeyP' ? 'KeyT' : v));
+    const unique = moved.filter((v, i) => moved.indexOf(v) === i);
+    // `T` goes to the front so it is the key the objective prompts name. The HUD reads the
+    // *first* binding — see `Match.useKeyLabel` — and a migrated save that kept `E` in slot 0
+    // would work perfectly and still tell the player to press the wrong key.
+    const at = unique.indexOf('KeyT');
+    if (at > 0) {
+      unique.splice(at, 1);
+      unique.unshift('KeyT');
+    }
+    bindings['use'] = unique;
+  }
+
+  return { ...raw, settings: { ...settings, bindings } };
 }
 
 /**

@@ -88,6 +88,8 @@ export class MatchObjectives {
   /** The planted bomb, shown only while one is down. */
   private readonly bomb: THREE.Group = new THREE.Group();
   private readonly bombLight: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  /** Post-M8: the progress ring shown while somebody is working on the bomb. */
+  private interactRing: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null = null;
   private readonly unsubscribe: Array<() => void> = [];
   /**
    * Materials whose hostile colour is baked in at construction (M8).
@@ -340,6 +342,33 @@ export class MatchObjectives {
     this.bomb.add(light);
     this.bomb.visible = false;
     this.group.add(this.bomb);
+
+    /**
+     * The defuse ring (post-M8, S6.3's "visual indicator for the player defusing").
+     *
+     * A ring on the floor around the bomb that fills as the wire is cut, in *friendly* green
+     * for a defuse and neutral amber for a plant — so an attacker rounding the corner reads
+     * "this is being taken away from me" from the colour before they have parsed anything
+     * else. It sits on the bomb rather than on the HUD for the reason the capture rings do:
+     * it tells you *where*, and where is the whole of what you do about it.
+     *
+     * Scaled rather than rebuilt per frame, like the capture arcs.
+     */
+    const ringGeo = new THREE.RingGeometry(0.55, 0.78, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: colorFriendly(),
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.disposables.push(ringGeo, ringMat);
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.02;
+    ring.visible = false;
+    this.bomb.add(ring);
+    this.interactRing = ring;
   }
 
   private buildFallbackLight(): THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> {
@@ -362,6 +391,7 @@ export class MatchObjectives {
   private updateBomb(mode: SearchAndDestroy): void {
     const site = mode.plantedSite;
     const planted = mode.bomb === 'PLANTED' && site !== null;
+    this.updateInteractRing(mode);
 
     // Before the plant the same mesh is the *loose* bomb, lying wherever it was dropped
     // (M7 playtest): the attacking side has to walk to it and pick it up, so it has to be
@@ -386,6 +416,32 @@ export class MatchObjectives {
     const fraction = mode.bombSecondsLeft / Math.max(1, mode.config.bombTimerSeconds);
     const rate = 3 + (1 - fraction) * 18;
     this.bombLight.visible = Math.sin(this.spin * rate) > -0.1;
+  }
+
+  /**
+   * Somebody is working on the bomb: grow a ring around it (post-M8).
+   *
+   * Only drawn once the interaction has actually made progress, so brushing past the site
+   * with the key down does not flash a ring at everybody. The colour says which way it is
+   * going — friendly for a defuse, neutral for a plant — and it is read from the palette, so
+   * colourblind mode moves it with everything else.
+   */
+  private updateInteractRing(mode: SearchAndDestroy): void {
+    const ring = this.interactRing;
+    if (ring === null) return;
+
+    const progress = mode.interactingEntity >= 0 ? mode.interactFraction : 0;
+    ring.visible = progress > 0.02;
+    if (!ring.visible) return;
+
+    ring.material.color.setHex(mode.interactIsDefusing ? colorFriendly() : colorNeutral());
+    // Grows from a tight collar to the full radius, so "nearly done" is legible at a glance.
+    const s = 0.45 + progress * 0.55;
+    ring.scale.set(s, s, 1);
+    // A slow throb on top, so a ring that has stalled at 60% still reads as *active* rather
+    // than as scenery the previous defuser left behind.
+    ring.material.opacity = 0.6 + Math.sin(this.spin * 7) * 0.2;
+    ring.rotation.z = this.spin * 1.4;
   }
 }
 

@@ -645,11 +645,28 @@ export const DEPOT_MAP: MapDef = {
    * softening them is what makes a night map read as fog.
    */
   lights: [
-    { kind: 'hemisphere', skyColor: 0x2c3646, groundColor: 0x14181f, intensity: 0.62 },
+    /**
+     * Post-M8: the hemisphere goes 0.62 -> 0.95 and its ground term is lifted.
+     *
+     * Playtesting found corners of the yard genuinely unplayable — not atmospheric, black.
+     * The masts are point lights with `decay: 2` and a 30 m range, so the falloff between
+     * two of them is real inverse-square darkness, and the only thing filling it was a
+     * hemisphere at 0.62 whose *lower* half (0x14181f) is almost black. Anything below waist
+     * height between the pools therefore received essentially no light at all.
+     *
+     * The fix is deliberately in the fill and not in the masts: raising the mast intensity
+     * would have made the pools blow out while leaving the gaps between them just as dark,
+     * which is the opposite of the note. Lifting the hemisphere raises the *floor* of the
+     * image — the darkest part of the frame comes up, the lit parts barely move, and the
+     * night reads as night rather than as a fault. The ground colour carries most of it
+     * because a cargo yard at night is lit from below by its own asphalt.
+     */
+    { kind: 'hemisphere', skyColor: 0x323d50, groundColor: 0x232a34, intensity: 0.95 },
     {
       kind: 'directional',
       color: 0x9fb4d8,
-      intensity: 0.55,
+      // Nudged with the hemisphere so the stacks keep a readable silhouette against it.
+      intensity: 0.62,
       direction: { x: -0.3, y: -0.88, z: -0.37 },
       castShadow: true,
       shadowExtent: 46,
@@ -670,9 +687,11 @@ export const DEPOT_MAP: MapDef = {
     ),
   ],
   ambient: {
-    skyColor: 0x2c3646,
-    groundColor: 0x14181f,
-    fogColor: 0x0d1016,
+    // Kept in step with the hemisphere light above — these are the same two colours, and a
+    // scene whose fog disagrees with its ambient produces a horizon that darkens the wrong way.
+    skyColor: 0x323d50,
+    groundColor: 0x232a34,
+    fogColor: 0x151a22,
     fogNear: 38,
     fogFar: 120,
   },

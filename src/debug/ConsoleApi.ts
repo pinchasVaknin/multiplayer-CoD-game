@@ -94,6 +94,39 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
     snagSweep: () => game.debugSuite?.snagHarness.run(),
     snagReport: () => game.debugSuite?.snagHarness.lastReport,
 
+    // ---- post-M8: the QA spectator ----------------------------------------
+    /**
+     * God mode, invisibility and free-cam, from the console as well as from F1.
+     *
+     * Reachable without opening the overlay on purpose: the overlay is a large modal panel
+     * and half the reason to spectate is to *watch the screen*. `__operator.spectate.all()`
+     * is the one-liner; the three below are the individual switches, and each returns the
+     * spectator's state line so a console session reads back what it just did.
+     */
+    spectate: {
+      all: (on = true) => {
+        game.debugSuite?.spectator.full(on);
+        return game.debugSuite?.spectator.describe();
+      },
+      god: (on = true) => {
+        game.debugSuite?.spectator.setGodMode(on);
+        return game.debugSuite?.spectator.describe();
+      },
+      invisible: (on = true) => {
+        game.debugSuite?.spectator.setInvisible(on);
+        return game.debugSuite?.spectator.describe();
+      },
+      noclip: (on = true) => {
+        game.debugSuite?.spectator.setFreeCam(on);
+        return game.debugSuite?.spectator.describe();
+      },
+      off: () => {
+        game.debugSuite?.spectator.reset();
+        return game.debugSuite?.spectator.describe();
+      },
+      state: () => game.debugSuite?.spectator.describe(),
+    },
+
     // ---- the hand-over tools (S6.5). Documented in DEBUG.md. ---------------
     handover,
     /** Frame-time p50/p95/p99/worst plus the whole buffer, as JSON. */

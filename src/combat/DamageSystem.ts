@@ -38,6 +38,18 @@ export interface Damageable {
    * rule some future damage source will forget.
    */
   readonly invulnerable?: boolean;
+  /**
+   * True when a round that stops on this rig should leave a bullet hole (post-M8).
+   *
+   * False for people, and that is not an oversight: a hit on a body already produces a puff
+   * of debris facing the shooter, and a bullet *hole* decal on a moving operator would be
+   * pinned in world space and left hanging in the air the moment they walked on.
+   *
+   * True for the range's static boards, where it is the entire point — the Shooting Range
+   * exists so a magazine can be emptied into a target and the *group* looked at, and a
+   * target that swallows rounds without marking cannot serve that.
+   */
+  readonly decals?: boolean;
 }
 
 export interface DamageRequest {

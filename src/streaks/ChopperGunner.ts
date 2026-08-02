@@ -28,14 +28,27 @@ import { chopperWeapon } from './StreakWeapons';
  * of play but not invulnerable to a lucky mortar"). What it stops doing is *acting*: the
  * takeover swallows the movement half of the command, so the body stands still and can be shot.
  *
- * ## Thermal is a render pass
+ * ## The optic is a render pass
  *
- * `Renderer.setThermal(true)` swaps in an override material for the world and draws combatants
- * hot in a second pass. That is a pass, not a colour filter over the normal image — the brief
- * distinguishes them and the difference is visible: a filter tints the muzzle flashes and the
- * sky along with everything else, where a pass decides what is hot on a per-object basis and
- * gets bodies that glow through a dim room.
+ * `Renderer.renderGunship` swaps in an override material for the world and draws the bodies in
+ * two further passes — the gunner's own side dark, everybody else hot. That is a pass, not a
+ * colour filter over the normal image — the brief distinguishes them and the difference is
+ * visible: a filter tints the muzzle flashes and the sky along with everything else, where a
+ * pass decides what each object *is* and gets a legible grey map with orange contacts on it
+ * even at night, which is the post-M8 requirement Depot forced.
  */
+/**
+ * The optic, in degrees of vertical FOV (post-M8).
+ *
+ * 55 is what M7 shipped and is the wide setting. 22 is a little over a 2.5x magnification,
+ * which is enough to pick a single operator out of a container yard from the orbit radius
+ * and not so much that the orbital drift makes the picture unusable.
+ */
+const FOV_WIDE = 55;
+const FOV_ZOOMED = 22;
+/** How fast the zoom travels, per second. Brisk enough to use mid-burst. */
+const ZOOM_RATE = 7;
+
 export class ChopperGunner extends Killstreak {
   /** Where the gun is. Orbits the map centre. */
   x = 0;
@@ -51,6 +64,22 @@ export class ChopperGunner extends Killstreak {
   /** Aim, owned here while the takeover is running. */
   yaw = 0;
   pitch = -0.35;
+
+  /**
+   * 0..1 optical zoom, driven by the ADS button (post-M8 playtest).
+   *
+   * The report was that ADS in the gunship "hides the crosshair completely instead of
+   * zooming". Both halves had the same cause: the takeover left the player's *rifle*
+   * consuming the same command, so the ADS button was aiming a weapon a kilometre below and
+   * the scope overlay dutifully hid the reticle for it. `WeaponSystem.suspended` stops that
+   * (see `Match.simulate`), which fixes the crosshair; this is the other half — the button
+   * now does the thing the player expected it to do.
+   *
+   * Eased over `ZOOM_RATE` rather than snapped, because a gunship optic that cut instantly
+   * between two focal lengths reads as a glitch, and because the player is tracking a moving
+   * target while they press it.
+   */
+  zoom = 0;
 
   private orbitAngle = 0;
   private fireTimer = 0;
@@ -98,6 +127,9 @@ export class ChopperGunner extends Killstreak {
 
     const firing = isDown(cmd.buttons, Btn.Fire);
     const cfg = this.ctx.cfg;
+    // The optic. Held, not toggled, matching every other ADS in the game.
+    const zoomTarget = isDown(cmd.buttons, Btn.Ads) ? 1 : 0;
+    this.zoom = clamp(this.zoom + (zoomTarget - this.zoom) * ZOOM_RATE * DT, 0, 1);
     // Heat-up: the barrels wind toward full rate while held and unwind when released, so the
     // first half-second of a burst is deliberately slower than the rest.
     const rate = 1 / Math.max(0.05, cfg.chopperSpinUpSeconds);
@@ -123,8 +155,13 @@ export class ChopperGunner extends Killstreak {
    */
   activeCamera(aspect: number): THREE.PerspectiveCamera | null {
     if (this.restored) return null;
-    if (this.camera.aspect !== aspect) {
+    // Post-M8: the FOV is part of the projection, so the zoom has to be applied where the
+    // aspect is. Both are compared before `updateProjectionMatrix`, which is not free and
+    // must not run on a frame where nothing about the lens changed.
+    const fov = FOV_WIDE + (FOV_ZOOMED - FOV_WIDE) * this.zoom;
+    if (this.camera.aspect !== aspect || Math.abs(this.camera.fov - fov) > 1e-3) {
       this.camera.aspect = aspect;
+      this.camera.fov = fov;
       this.camera.updateProjectionMatrix();
     }
     this.camera.position.set(this.x, this.y, this.z);
@@ -142,6 +179,7 @@ export class ChopperGunner extends Killstreak {
     if (this.restored) return;
     this.restored = true;
     this.spin = 0;
+    this.zoom = 0;
   }
 
   override describe(): string {

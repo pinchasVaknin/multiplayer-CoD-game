@@ -145,26 +145,59 @@ function brushes(): Brush[] {
   add('hazard', FIRING_LINE_X + 24.81, 2.1, -12.0, 0.02, 4.0, 0.03, { solid: false, shadows: false });
 
   /**
-   * Bullseye plates at 10, 18 and 25 m (M7 playtest).
+   * Bullseye plates at 10, 16 and 22 m (M7 playtest; re-laid out post-M8).
    *
-   * Three concentric rings each, drawn as flat non-solid plates 2 cm proud of a backing
-   * board. Rings rather than a solid disc because a group is read by *where it sits in the
-   * scoring rings*, which is the whole reason a bullseye looks like a bullseye — a plain
-   * square tells you the shots landed but not how well.
+   * Three concentric rings each, drawn as flat plates proud of a backing board. Rings rather
+   * than a solid disc because a group is read by *where it sits in the scoring rings*, which
+   * is the whole reason a bullseye looks like a bullseye — a plain square tells you the shots
+   * landed but not how well.
    *
-   * Standing free rather than on the far wall so each is at a stated distance from the firing
-   * line, which is what makes two weapons comparable.
+   * ## Three things were wrong with the M7 layout and all three are fixed here
+   *
+   * **They were in a line.** All three sat at `z = -16.4`, so from the firing line at
+   * (-20, -14) they were at bearings of 13.5°, 7.6° and 5.5° — the 10 m board stood squarely
+   * in front of the other two and the far ones were unusable. `LATERALS` below fans them,
+   * and the `x` of each is then solved so the straight-line distance from the firing line is
+   * exactly the stated range rather than approximately it. The laterals are chosen so no
+   * board falls inside the *shadow cone* a nearer one casts — a board is 2 m wide, so at
+   * twice the range it hides a 4 m band, which is what caught the M7 layout out.
+   *
+   * **No decals landed on them.** The rings were `solid: false`, so a round passed straight
+   * through every one of them and stopped on the backing board — where the decal was placed
+   * 6 mm proud of a face that is itself 1 cm *behind* the outermost ring. Every hole was
+   * inside the ring plate that was supposed to be showing it. The rings are solid now, so a
+   * round stops on the surface the player is aiming at and the group appears where they are
+   * looking. They cannot be "shot away": a brush is not destructible.
+   *
+   * **Their faces were coplanar.** 2 cm plates spaced 2 cm apart touch exactly, and two
+   * coincident faces are the textbook z-fighting case — which is what the post-M8 report of
+   * models that "severely jitter as you approach" was describing. `RING_GAP` puts a
+   * millimetre-scale air gap between every pair, so no two faces ever share a plane.
    */
-  for (const range of [10, 18, 25]) {
-    const bx = FIRING_LINE_X + range;
-    const bz = -16.4;
+  const BULLSEYE_RANGES = [10, 16, 22] as const;
+  /** Metres off the firing line's own `z`, per range. See the shadow-cone note above. */
+  const BULLSEYE_LATERALS = [-4.6, -3.6, -1.0] as const;
+  /** Plate thickness and the air gap between consecutive plates, metres. */
+  const RING_THICK = 0.02;
+  const RING_GAP = 0.01;
+  for (let i = 0; i < BULLSEYE_RANGES.length; i++) {
+    const range = BULLSEYE_RANGES[i] ?? 10;
+    const lateral = BULLSEYE_LATERALS[i] ?? 0;
+    // Solved so the straight-line distance is the stated range, exactly as `TargetRange`
+    // solves its measured dummies. A board marked 22 m that is really 22.3 m makes the
+    // number on it a lie.
+    const bx = FIRING_LINE_X + Math.sqrt(Math.max(0, range * range - lateral * lateral));
+    const bz = -14 + lateral;
     // Backing board.
     add('concreteDark', bx, 1.7, bz, 0.3, 2.0, 2.0);
-    // Rings, outermost first, each one proud of the last so none are coplanar.
-    add('concrete', bx - 0.16, 1.7, bz, 0.02, 1.62, 1.62, { solid: false, shadows: false });
-    add('hazard', bx - 0.18, 1.7, bz, 0.02, 1.06, 1.06, { solid: false, shadows: false });
-    add('concrete', bx - 0.20, 1.7, bz, 0.02, 0.54, 0.54, { solid: false, shadows: false });
-    add('accent', bx - 0.22, 1.7, bz, 0.02, 0.16, 0.16, { solid: false, shadows: false });
+    // Rings, outermost first. Each sits one thickness plus a gap in front of the last, so
+    // consecutive plates never share a face and a decal on one is never buried in the next.
+    const pitch = RING_THICK + RING_GAP;
+    const face = 0.15 + RING_GAP;
+    add('concrete', bx - face - pitch * 0, 1.7, bz, RING_THICK, 1.62, 1.62, { shadows: false });
+    add('hazard', bx - face - pitch * 1, 1.7, bz, RING_THICK, 1.06, 1.06, { shadows: false });
+    add('concrete', bx - face - pitch * 2, 1.7, bz, RING_THICK, 0.54, 0.54, { shadows: false });
+    add('accent', bx - face - pitch * 3, 1.7, bz, RING_THICK, 0.16, 0.16, { shadows: false });
   }
 
   /**

@@ -75,6 +75,16 @@ export interface ModeEntry {
    * angles instead of closing — the brief's "push aggression should drop sharply".
    */
   readonly pushAggressionScale?: number;
+  /**
+   * Post-M8. Whether the start of a round puts every combatant back on a spawn.
+   *
+   * True only for Search & Destroy, and it is a *mode* property rather than something derived
+   * from `roundsToWin > 1`: a hard reset is right for a mode where a round is a fresh
+   * engagement with one life each, and would be wrong for a hypothetical multi-round
+   * Domination where holding ground across a round break is the point. Modes that never
+   * declare it keep M4's behaviour exactly.
+   */
+  readonly usesRoundReset?: boolean;
 }
 
 export const MODES: readonly ModeEntry[] = [
@@ -132,6 +142,7 @@ export const MODES: readonly ModeEntry[] = [
     banksProgress: true,
     forcedMapId: null,
     requiresObjective: 'bombsite',
+    usesRoundReset: true,
   },
   {
     id: 'RANGE',

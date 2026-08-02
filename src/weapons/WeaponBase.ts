@@ -161,6 +161,28 @@ export class Weapon {
   }
 
   /**
+   * Drop the sights immediately (post-M8 playtest).
+   *
+   * Dying is the case this exists for. A dead player's weapon stops stepping, so whatever
+   * `adsFraction` held on the tick they were killed is what the camera keeps using — and with
+   * a sniper that is a scoped view the player cannot get out of until they respawn. `stepAds`
+   * cannot fix it, because the whole problem is that `stepAds` is no longer running.
+   *
+   * The ADS event is emitted on the way down so nothing downstream is left believing the
+   * weapon is still aimed; `aimingLastTick` goes with it, or the next genuine aim would be
+   * swallowed as "no change".
+   */
+  clearAds(): void {
+    this.adsFraction = 0;
+    if (!this.aimingLastTick) return;
+    this.aimingLastTick = false;
+    evAds.weaponId = this.def.id;
+    evAds.sourceId = this.sourceId;
+    evAds.aiming = false;
+    this.bus.emit(EV.WeaponAdsChanged, evAds);
+  }
+
+  /**
    * Put rounds back in the pouch (M6: Scavenger, and the MUNITIONS field upgrade).
    *
    * Capped at the weapon's own `reserveAmmo` rather than allowed to grow without bound —

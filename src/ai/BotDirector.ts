@@ -199,7 +199,29 @@ export class BotDirector {
    */
   pushAggressionScale = 1;
 
+  /**
+   * Nobody moves or shoots (post-M8 playtest).
+   *
+   * Set by `Match` for the duration of the 3-2-1 and the between-rounds hold. Bots keep
+   * *thinking* — perception, the tactical decision and pathing all still run, so the moment
+   * the round goes live they act on a world they have been watching rather than waking up
+   * blind — but `Bot.advance` neuters the movement axes and the trigger before the command
+   * reaches the controller. Freezing only the human would be worse than not freezing at all.
+   */
+  inputFrozen = false;
+
   readonly group = new THREE.Group();
+  /**
+   * The roster, split by side, as two scene graph nodes (post-M8).
+   *
+   * Built for the Chopper Gunner's IFF: the gunship view draws team-mates dark and enemies
+   * hot, and doing that per *object* would mean the renderer walking the bot list and knowing
+   * what a team is. Two groups means the render pass is handed "these are cold, those are
+   * hot" and stays a render pass. They are children of `group`, so everything that already
+   * adds, removes or disposes the roster as one node is untouched.
+   */
+  readonly groupA = new THREE.Group();
+  readonly groupB = new THREE.Group();
   readonly nav: NavGrid;
   readonly perception: Perception;
   readonly pathfinder: Pathfinder;
@@ -222,6 +244,9 @@ export class BotDirector {
   constructor(deps: BotDirectorDeps) {
     this.deps = deps;
     this.group.name = 'bots';
+    this.groupA.name = 'bots:A';
+    this.groupB.name = 'bots:B';
+    this.group.add(this.groupA, this.groupB);
     this.rng = new Rng(deps.seed);
     this.materials = buildBotMaterials();
 
@@ -334,13 +359,16 @@ export class BotDirector {
             perceptionConfig: this.deps.perceptionConfig,
             brain: this.brainDeps,
             materials: this.materials,
+            // Post-M8: no teams means no team colours. `Match` sets `freeForAll` from the
+            // registry entry before `populate` is ever called, so this is already correct.
+            hostileLook: this.ffa,
           },
         );
         this.bots.push(bot);
         this.roster.push(bot);
         this.byId.set(bot.entityId, bot);
         this.deps.damage.register(bot);
-        this.group.add(bot.mesh.group);
+        this.groupFor(team).add(bot.mesh.group);
         this.spawnBot(bot);
         index++;
       }
@@ -349,10 +377,15 @@ export class BotDirector {
     add('B', teamB);
   }
 
+  /** The scene node holding one side's bodies. See `groupA`. */
+  groupFor(team: BotTeam): THREE.Group {
+    return team === 'A' ? this.groupA : this.groupB;
+  }
+
   clear(): void {
     for (const bot of this.bots) {
       this.deps.damage.unregister(bot.entityId);
-      this.group.remove(bot.mesh.group);
+      this.groupFor(bot.team).remove(bot.mesh.group);
       bot.dispose();
     }
     this.bots.length = 0;
@@ -424,7 +457,7 @@ export class BotDirector {
       }
       if (scheduler.tacticalDue(i)) bot.brain.decide(bot);
       if (scheduler.pathDue(i)) bot.brain.requestPath(bot);
-      bot.advance(tick, nowMs, bots);
+      bot.advance(tick, nowMs, bots, this.inputFrozen);
     }
 
     scheduler.runPathBudget(this.pathfinder);
@@ -439,6 +472,23 @@ export class BotDirector {
   /** Pick a spawn for anybody on `team`, including the player. Never fails. */
   selectSpawn(team: BotTeam, selfId: number, out: SpawnChoice): boolean {
     return this.spawns.select(team, this.roster, selfId, this.tick, out);
+  }
+
+  /**
+   * Put every bot back on a spawn, alive, whatever state they were in (post-M8 playtest).
+   *
+   * The start of a Search & Destroy round, and nothing else. It deliberately bypasses the
+   * respawn gate rather than asking it: with `livesPerRound = 1` the gate's answer is
+   * permanently "no", which is correct for a *death* mid-round and exactly wrong for the
+   * round boundary — a round that could not put its players back would be a round nobody can
+   * play. That is the same reason the very first spawn of a match is not gated either.
+   *
+   * Living bots are respawned too, not just dead ones. "Hard reset to the original spawn
+   * points" is the requirement, and a survivor left standing where the last round ended is
+   * the half of it that would still be broken.
+   */
+  respawnAll(): void {
+    for (const bot of this.bots) this.spawnBot(bot);
   }
 
   dispose(): void {

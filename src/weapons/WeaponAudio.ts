@@ -123,6 +123,37 @@ export class WeaponAudio {
   }
 
   /**
+   * The knife coming round (post-M8).
+   *
+   * A downward noise sweep — air moving, not metal ringing — and it plays whether or not the
+   * swing connected. A miss you cannot hear is a miss you learn nothing from: the whoosh is
+   * how a player finds out they were half a metre short. A connection is *additionally*
+   * reported by the ordinary hitmarker path, because a melee applies damage through the same
+   * door everything else does and gets that feedback for free.
+   */
+  playMeleeSwing(x: number, y: number, z: number, connected: boolean): void {
+    const noise = this.audio.noiseScratch;
+    noise.roll = 'handling';
+    noise.x = x;
+    noise.y = y;
+    noise.z = z;
+    noise.positional = true;
+    noise.bus = 'sfx';
+    noise.filter = 'bandpass';
+    // Sweeping down rather than up: the blade is accelerating away from the ear, and a rising
+    // sweep reads as something being drawn instead of something being swung.
+    noise.freq = connected ? 2200 : 3000;
+    noise.freqEnd = connected ? 520 : 900;
+    noise.q = connected ? 1.6 : 0.9;
+    noise.level = connected ? 0.42 : 0.24;
+    noise.attack = 0.002;
+    noise.decay = connected ? 0.1 : 0.13;
+    noise.wet = 0.12;
+    noise.rate = 1;
+    this.audio.noiseBurst(noise);
+  }
+
+  /**
    * Reload mechanics. Each step is a different piece of metal doing a different thing,
    * and they have to be distinguishable with your eyes on the enemy.
    */

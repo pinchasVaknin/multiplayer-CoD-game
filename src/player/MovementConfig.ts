@@ -152,12 +152,27 @@ export const DEFAULT_MOVEMENT_CONFIG: MovementConfig = {
   crouchEye: 0.95,
   slideEye: 0.55,
 
-  stepHeight: 0.35,
+  /**
+   * 0.5, raised from 0.35 post-M8.
+   *
+   * Playtesting reported being stopped by kerbs, pallet edges and the small rocks on Dunes
+   * and having to jump over things a walking person would not notice. 0.35 m is a tall kerb
+   * and the map props are not built to it — Depot's pallets and Dunes' stone lips sit in the
+   * 0.36-0.48 m band, which was exactly high enough to block and exactly low enough that
+   * being blocked read as a bug rather than as an obstacle.
+   *
+   * It stays clear of `mantleMinHeight`, which moves up with it: the two ranges must not
+   * overlap, or an obstacle would be both silently stepped and vault-detected on the same
+   * tick and which one you got would depend on your approach speed.
+   */
+  stepHeight: 0.5,
   maxSlopeDeg: 46,
   groundSnapDist: 0.4,
   collisionSkin: 0.005,
 
-  mantleMinHeight: 0.4,
+  // Post-M8: raised from 0.4 to stay above `stepHeight`. Anything the capsule can silently
+  // step over must not also be a vault, or the same ledge produces two different animations.
+  mantleMinHeight: 0.55,
   mantleMaxHeight: 1.6,
   mantleDuration: 0.4,
   mantleReach: 0.95,

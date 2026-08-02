@@ -49,6 +49,14 @@ export interface ViewmodelDrive {
    * two keyframed destinations.
    */
   swapping: boolean;
+  /**
+   * 0..1 through a knife swing, or 0 (post-M8).
+   *
+   * A single arc rather than a phase enum, for the same reason `reloadFraction` is a number:
+   * the pose is a continuous function of how far through the animation the sim says it is,
+   * so the picture cannot disagree with the state machine about whether the blade is out.
+   */
+  melee: number;
 
   /** Head-bob phase from the player sim, so the gun and the camera share a footfall. */
   bobPhase: number;
@@ -75,6 +83,7 @@ export function makeViewmodelDrive(): ViewmodelDrive {
     tacSprint: false,
     slide: false,
     swapping: false,
+    melee: 0,
     bobPhase: 0,
     speed: 0,
     speedRef: 6.9,
@@ -101,6 +110,20 @@ const THROW_LOWER_RATE = 14;
 const CHARGE_PULL = 0.68;
 const CHARGE_PEAK = 0.75;
 const CHARGE_HOME = 0.81;
+
+/**
+ * The knife swing, as an offset on the weapon's own pose (post-M8).
+ *
+ * Tuned to read as "the rifle is shoved aside while the other hand comes across": down and
+ * to the right, rolled hard, with a forward lunge on `Z` that peaks at the strike. Metres
+ * and degrees, matching every other pose constant in `ViewmodelConfig`.
+ */
+const MELEE_SWEEP_X = 0.075;
+const MELEE_SWEEP_Y = -0.055;
+const MELEE_SWEEP_Z = 0.11;
+const MELEE_PITCH = -13;
+const MELEE_YAW = 21;
+const MELEE_ROLL = -34;
 
 export class ViewmodelAnim {
   private swayX = 0;
@@ -240,6 +263,32 @@ export class ViewmodelAnim {
       this.model.magazine.position.set(0, 0, 0);
       this.model.magazine.rotation.set(0, 0, 0);
       this.model.chargingHandle.position.set(0, 0, 0);
+    }
+
+    /**
+     * ---- melee (post-M8) ---------------------------------------------------
+     *
+     * The rifle is *not* replaced by a knife mesh. The player's off hand comes across with
+     * the blade and the weapon rolls out of the way to make room for it, which is what a
+     * quick-knife looks like in this genre and — more to the point — is what can be built
+     * out of the transforms that already exist. A second viewmodel to build, camo, dispose
+     * and keep in step with a swap would be a large amount of machinery for a 0.5 s arc.
+     *
+     * `sin(pi * f)` is zero at both ends by construction, so the pose cannot leave the
+     * weapon displaced if a swing is cut short by a death or a respawn — the drive simply
+     * goes back to 0 and the arc is already there.
+     */
+    const swing = clamp01(drive.melee);
+    if (swing > 0) {
+      const arc = Math.sin(Math.PI * swing);
+      // Fast in, slower out: the strike is at `arc`'s peak and the recovery is the long half.
+      const thrust = Math.sin(Math.PI * Math.pow(swing, 0.7));
+      px += MELEE_SWEEP_X * arc;
+      py += MELEE_SWEEP_Y * arc;
+      pz += MELEE_SWEEP_Z * thrust;
+      rx += MELEE_PITCH * arc;
+      ry += MELEE_YAW * arc;
+      rz += MELEE_ROLL * thrust;
     }
 
     // ---- bob ----------------------------------------------------------------

@@ -492,6 +492,10 @@ body.op-locked #viewport {
   /* Tall enough for the binding list, short enough that Back stays on screen. */
   max-height: 56vh;
   overflow-y: auto;
+  /* Scrolling past either end stays here rather than chaining to the document and, on
+   * Chrome, arming the overscroll gesture. The other half of the post-M8 "scrolling gets
+   * stuck" report lives in `core/Input.ts`. */
+  overscroll-behavior: contain;
   padding-right: var(--s-2);
 }
 

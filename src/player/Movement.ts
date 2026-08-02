@@ -24,6 +24,16 @@ const probe = makeGroundProbe();
 const DEBUG_CONTACT_CAP = 16;
 
 /**
+ * How far the capsule must actually rise before a step-up is worth attempting, metres.
+ *
+ * An absolute floor rather than a fraction of `stepHeight`: see `integrateMotion`. Small
+ * enough that a 5 cm kerb under a low ceiling still steps, large enough that a capsule
+ * pinned flush against a wall does not run three extra sweeps every tick to discover it
+ * cannot move.
+ */
+const MIN_STEP_RISE = 0.04;
+
+/**
  * Contact capture for the collision visualiser. Off by default and costing one
  * branch per pass when off; the debug overlay flips `capture` on.
  */
@@ -230,11 +240,21 @@ export function integrateMotion(sim: PlayerSim, cfg: MovementConfig, world: Coll
   const achieved = Math.hypot(hx - startX, hz - startZ);
   sim.blockedHorizontally = desired > 1e-4 && achieved < desired - 1e-3;
 
-  // ---- step-up: silent, no vault animation (S5.1) ------------------------
+  /**
+   * ---- step-up: silent, no vault animation (S5.1) ------------------------
+   *
+   * The `rise` gate was `> stepHeight * 0.5` and is now an absolute minimum (post-M8). The
+   * old test scaled with the config, so raising `stepHeight` to clear taller obstacles also
+   * raised the *ceiling* the capsule had to have free above it before a step was attempted —
+   * which made the setting fight itself, and under a low soffit or a container lip it refused
+   * to step over things it had just been retuned to step over. What actually matters is that
+   * the capsule got far enough up to have a chance of clearing the obstacle, and a few
+   * centimetres is that.
+   */
   if (sim.blockedHorizontally && sim.wasGrounded && cfg.stepHeight > 0) {
     world.moveCapsule(startX, startY, startZ, 0, cfg.stepHeight, 0, r, h, stepRise);
     const rise = stepRise.y - startY;
-    if (rise > cfg.stepHeight * 0.5) {
+    if (rise > MIN_STEP_RISE) {
       world.moveCapsule(stepRise.x, stepRise.y, stepRise.z, dx, 0, dz, r, h, stepForward);
       const steppedDistance = Math.hypot(stepForward.x - startX, stepForward.z - startZ);
       if (steppedDistance > achieved + 0.005) {

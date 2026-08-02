@@ -4,6 +4,7 @@ import { EV, type GameBus } from '../core/Events';
 import type { CollisionWorld } from '../world/CollisionWorld';
 import { makeRayHit, rayBoxExit, type RayHit } from '../world/Geometry';
 import { surfaceAtIndex } from '../world/maps/materials';
+import { materialIndex } from '../world/maps/types';
 import type { WeaponDef } from './WeaponDefs';
 
 /**
@@ -81,6 +82,15 @@ export function makeShotTrace(): ShotTrace {
 }
 
 const evImpact = { x: 0, y: 0, z: 0, nx: 0, ny: 1, nz: 0, material: 0, penetrated: false };
+
+/**
+ * The surface a range dummy is made of, for the decal and the impact click (post-M8).
+ *
+ * Resolved through `materialIndex` rather than written as a literal so it survives anybody
+ * reordering `MATERIAL_KEYS` — the index is a wire value between the map format and the
+ * material table, and hard-coding one here would be the one place that does not move with it.
+ */
+const DUMMY_IMPACT_MATERIAL = materialIndex('metal');
 
 export class Ballistics {
   /** Diagnostics: rig tests performed by the last shot. */
@@ -172,6 +182,26 @@ export class Ballistics {
         out.damage = this.damage.apply(request);
         const target = this.damage.get(targetId);
         out.lethal = target !== undefined && !target.health.alive;
+        /**
+         * A hole in a target board (post-M8). Only for rigs that ask for it — see
+         * `Damageable.decals`, and `TargetDummy.decals` for why people do not.
+         *
+         * Emitted as an ordinary `bullet.impact` rather than through a new channel, so the
+         * decal, the debris and the impact click all come from the code that already handles
+         * every other surface in the game. `metal` is the surface: the range's boards are
+         * steel plate, and it is the material the audio and the spark colour should match.
+         */
+        if (target?.decals === true) {
+          evImpact.x = out.endX;
+          evImpact.y = out.endY;
+          evImpact.z = out.endZ;
+          evImpact.nx = out.nx;
+          evImpact.ny = out.ny;
+          evImpact.nz = out.nz;
+          evImpact.material = DUMMY_IMPACT_MATERIAL;
+          evImpact.penetrated = false;
+          this.bus.emit(EV.BulletImpact, evImpact);
+        }
         return;
       }
 

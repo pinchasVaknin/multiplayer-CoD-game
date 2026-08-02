@@ -68,11 +68,21 @@ export const Btn = {
   Streak3: 1 << 15,
 
   /**
-   * P (or E). Held, not tapped: plant and defuse are timed interactions that a step away
-   * must interrupt, so the sim needs to know the key is *still* down every tick rather than
-   * that it was pressed once.
+   * T (or E). Held, not tapped: pick-up, plant and defuse are timed interactions that a step
+   * away must interrupt, so the sim needs to know the key is *still* down every tick rather
+   * than that it was pressed once.
    */
   Use: 1 << 16,
+
+  // -- post-M8 --------------------------------------------------------------
+  /**
+   * V. One swing of the knife (post-M8 playtest).
+   *
+   * Edge-triggered in the sim like every other tap: a held melee key must not produce a
+   * stream of swings, and the cooldown that stops it lives in `weapons/Melee.ts` rather
+   * than in an input handler.
+   */
+  Melee: 1 << 17,
 } as const;
 
 /**

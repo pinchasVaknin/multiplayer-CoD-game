@@ -81,6 +81,18 @@ export class Settings {
   /** Shown under the binding list after a rebind took a key off something else. */
   private notice = '';
 
+  /**
+   * The scrolling body, and how far down it was (post-M8 playtest).
+   *
+   * `paint()` rebuilds the whole screen, which is what keeps the DOM a pure function of the
+   * settings record and is worth keeping. The cost is that the scroll position lives on an
+   * element that gets thrown away — so arming a binding row three-quarters of the way down
+   * the list snapped the page back to the top, and the row you were trying to rebind was off
+   * screen. The offset is carried across the rebuild rather than the rebuild being avoided.
+   */
+  private body: HTMLElement | null = null;
+  private scrollTop = 0;
+
   constructor(deps: SettingsDeps) {
     this.deps = deps;
     this.screen = document.createElement('div');
@@ -93,6 +105,8 @@ export class Settings {
     this.screen.hidden = false;
     this.capturing = null;
     this.notice = '';
+    // Opening the screen is the one time the list *should* start at the top.
+    this.scrollTop = 0;
     this.paint();
   }
 
@@ -127,6 +141,9 @@ export class Settings {
   // -- painting --------------------------------------------------------------
 
   private paint(): void {
+    // Read before the rebuild, because the element holding it is about to be discarded.
+    this.rememberScroll();
+
     const nav = document.createElement('div');
     nav.className = 'op-tabs';
     for (const tab of TABS) {
@@ -138,6 +155,8 @@ export class Settings {
       b.addEventListener('click', () => {
         this.stopCapture();
         this.tab = tab;
+        // A different tab is a different list; starting it half-way down would be nonsense.
+        this.scrollTop = 0;
         this.paint();
       });
       nav.appendChild(b);
@@ -157,6 +176,16 @@ export class Settings {
     actions.appendChild(back);
 
     this.screen.replaceChildren(title('SETTINGS'), nav, body, actions);
+    this.body = body;
+    // After insertion: `scrollTop` on a detached element is silently ignored, so assigning
+    // it before `replaceChildren` would look right and do nothing.
+    body.scrollTop = this.scrollTop;
+  }
+
+  private rememberScroll(): void {
+    const body = this.body;
+    if (body === null || !body.isConnected) return;
+    this.scrollTop = body.scrollTop;
   }
 
   private paintControls(host: HTMLElement): void {

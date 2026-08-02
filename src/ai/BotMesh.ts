@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { clamp01, lerp } from '../core/MathUtil';
 import { HUMANOID_RIG, type HitZone } from '../combat/HitboxRig';
+import { palette } from '../ui/Palette';
 import type { BotTeam } from './Combatant';
 
 /**
@@ -40,6 +41,16 @@ export interface BotMaterials {
   readonly bodyB: THREE.Material;
   readonly headA: THREE.Material;
   readonly headB: THREE.Material;
+  /**
+   * The everybody-is-an-enemy set (post-M8).
+   *
+   * Free-for-All has no teams, so the two-silhouette scheme below is not merely unhelpful
+   * there — it is a lie: half the lobby was drawn in the colour the player's own side wears,
+   * and playtesting reported exactly that as "bot colours are mixed". In FFA every bot wears
+   * this instead, so "not me" and "shoot it" are the same reading.
+   */
+  readonly bodyHostile: THREE.Material;
+  readonly headHostile: THREE.Material;
   readonly gear: THREE.Material;
   dispose(): void;
 }
@@ -51,21 +62,60 @@ export function buildBotMaterials(): BotMaterials {
   const bodyB = new THREE.MeshLambertMaterial({ color: 0x6e5a44 });
   const headA = new THREE.MeshLambertMaterial({ color: 0x8a6a3c });
   const headB = new THREE.MeshLambertMaterial({ color: 0x8a6a3c });
+  /**
+   * Hostile orange, taken from the live palette rather than written here.
+   *
+   * That is what makes it move with colourblind mode: the minimap dot, the killfeed row and
+   * the body in front of you are then all the same colour by construction, which is the whole
+   * argument in `ui/Palette.ts`. Darkened toward the body's own value rather than used raw —
+   * a fully saturated HUD orange on a Lambert surface under Depot's mast lights reads as a
+   * light source rather than as a person.
+   */
+  const bodyHostile = new THREE.MeshLambertMaterial({ color: hostileBody() });
+  const headHostile = new THREE.MeshLambertMaterial({ color: hostileHead() });
   const gear = new THREE.MeshLambertMaterial({ color: 0x1d2026 });
+
+  const repaint = palette.onChange(() => {
+    bodyHostile.color.setHex(hostileBody());
+    headHostile.color.setHex(hostileHead());
+  });
+
   return {
     bodyA,
     bodyB,
     headA,
     headB,
+    bodyHostile,
+    headHostile,
     gear,
     dispose(): void {
+      repaint();
       bodyA.dispose();
       bodyB.dispose();
       headA.dispose();
       headB.dispose();
+      bodyHostile.dispose();
+      headHostile.dispose();
       gear.dispose();
     },
   };
+}
+
+/** The palette's hostile colour, pulled down so a body is lit rather than glowing. */
+function hostileBody(): number {
+  return mixToward(palette.current.hostile, 0x14171c, 0.42);
+}
+
+/** A shade brighter than the body, so the head still reads as the head. */
+function hostileHead(): number {
+  return mixToward(palette.current.hostile, 0x14171c, 0.24);
+}
+
+function mixToward(colour: number, target: number, amount: number): number {
+  const r = Math.round((((colour >> 16) & 0xff) * (1 - amount)) + (((target >> 16) & 0xff) * amount));
+  const g = Math.round((((colour >> 8) & 0xff) * (1 - amount)) + (((target >> 8) & 0xff) * amount));
+  const b = Math.round(((colour & 0xff) * (1 - amount)) + ((target & 0xff) * amount));
+  return (r << 16) | (g << 8) | b;
 }
 
 export class BotMesh {
@@ -91,12 +141,22 @@ export class BotMesh {
   private flinchX = 0;
   private flinchZ = 0;
 
-  constructor(team: BotTeam, materials: BotMaterials) {
+  /**
+   * `hostile` forces the everybody-is-an-enemy look regardless of substrate side (post-M8).
+   *
+   * Decided at construction rather than per frame because it cannot change during a match:
+   * a mode is Free-for-All or it is not. `BotDirector` passes its own `freeForAll`, which
+   * `Match` has already set from the registry entry by the time the roster is populated.
+   */
+  constructor(team: BotTeam, materials: BotMaterials, hostile = false) {
     this.body = new THREE.Mesh(
       buildZoneGeometry(['torso', 'arm', 'leg']),
-      team === 'A' ? materials.bodyA : materials.bodyB,
+      hostile ? materials.bodyHostile : team === 'A' ? materials.bodyA : materials.bodyB,
     );
-    this.head = new THREE.Mesh(buildZoneGeometry(['head']), team === 'A' ? materials.headA : materials.headB);
+    this.head = new THREE.Mesh(
+      buildZoneGeometry(['head']),
+      hostile ? materials.headHostile : team === 'A' ? materials.headA : materials.headB,
+    );
     this.gear = new THREE.Mesh(buildGearGeometry(), materials.gear);
     this.body.castShadow = true;
     this.head.castShadow = true;

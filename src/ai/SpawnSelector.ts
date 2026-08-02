@@ -40,8 +40,14 @@ export const MIN_ENEMY_DISTANCE = 15;
  * the least-bad tier in front of somebody. Spawn selection runs on death, a handful of
  * times a minute, so a wider candidate pool costs nothing that matters and it is the
  * only lever that reliably finds a point behind cover.
+ *
+ * Raised again to 14 post-M8, for the same reason one step further out: eight-player
+ * Free-for-All asks the selector to seat twice as many people as the 5v5 the number was
+ * tuned against, and the tier a thin pool degrades into is the one that spawns you on
+ * somebody. The whole loop is a few hundred candidate scorings on a death — it does not
+ * run on a frame, and it is nowhere near anything with a budget.
  */
-const SAMPLES_PER_ZONE = 9;
+const SAMPLES_PER_ZONE = 14;
 
 export type SpawnTier = 'safe' | 'hidden' | 'leastBad';
 
@@ -182,6 +188,24 @@ export class SpawnSelector {
     this.swapped = on;
   }
 
+  /**
+   * May this candidate be considered for a spawn on `drawFrom`?
+   *
+   * **Free-for-All opens the whole map** (post-M8 playtest). FFA keeps the two-team substrate
+   * so that perception and spawn safety keep working — see `modes/FreeForAll.ts` — but the
+   * *spawn zones* were an unintended casualty of that: eight independent hostiles were being
+   * confined to whichever half of the map their substrate side owned, so half the arena was
+   * unreachable and the remaining half had to seat four people who all wanted 15 m of space.
+   * On Foundry that is not possible, so every FFA spawn fell to the least-bad tier and landed
+   * next to somebody. There are no sides in FFA, so there is no reason to hold half the
+   * candidates back, and opening them up roughly doubles the pool the scorer gets to choose
+   * from before any of the scoring changes are considered.
+   */
+  private eligible(candidate: Candidate, drawFrom: BotTeam): boolean {
+    if (this.freeForAll) return true;
+    return candidate.team === drawFrom || candidate.team === 'FFA';
+  }
+
   get sidesSwapped(): boolean {
     return this.swapped;
   }
@@ -209,7 +233,7 @@ export class SpawnSelector {
     const c = this.candidateList[index];
     if (c === undefined) return false;
     const drawFrom = this.swapped ? opposingTeam(team) : team;
-    out.eligible = c.team === drawFrom || c.team === 'FFA';
+    out.eligible = this.eligible(c, drawFrom);
     out.x = c.x;
     out.y = c.y;
     out.z = c.z;
@@ -227,7 +251,7 @@ export class SpawnSelector {
     out.distance = measuredDistance;
     out.cone = measuredCone;
     out.visible = measuredVisible;
-    out.score = Math.min(measuredDistance, 40) - recent - Math.abs(measuredFriendly - 9) * 0.25;
+    out.score = scoreOf(measuredDistance, recent, measuredFriendly);
     out.tier =
       measuredDistance < MIN_ENEMY_DISTANCE
         ? 'leastBad'
@@ -278,7 +302,7 @@ export class SpawnSelector {
     for (let i = 0; i < this.candidateList.length; i++) {
       const c = this.candidateList[i];
       if (c === undefined) continue;
-      if (c.team !== drawFrom && c.team !== 'FFA') continue;
+      if (!this.eligible(c, drawFrom)) continue;
 
       this.measure(c, roster, selfId, team);
       const distance = measuredDistance;
@@ -289,10 +313,26 @@ export class SpawnSelector {
       // Distance to the nearest enemy is the whole point, but only up to a point: 40 m
       // away in an empty corner is not better than 22 m near a teammate.
       const recent = tick - c.lastUsedTick < 240 ? 9 : 0;
-      const base = Math.min(distance, 40) - recent - Math.abs(friendly - 9) * 0.25;
+      const base = scoreOf(distance, recent, friendly);
 
-      if (base > bestAny) {
-        bestAny = base - (visible ? 100 : 0) - (cone ? 30 : 0);
+      /**
+       * The least-bad fallback, scored correctly (post-M8 playtest).
+       *
+       * This compared the *unpenalised* `base` against a `bestAny` that had already had the
+       * visibility and cone penalties subtracted from it — two different scales on either
+       * side of one `>`. Because a penalised best is around -100, essentially every later
+       * candidate cleared it, so "best" collapsed into "very nearly the last one examined"
+       * and the fallback returned an effectively arbitrary point. That is the spawn that
+       * puts you on top of somebody, and it is the tier that runs most often in Free-for-All
+       * — where seven hostiles on a 5v5 map mean the 15 m rule frequently cannot be met by
+       * *any* candidate and every spawn comes through here.
+       *
+       * Both sides are the penalised score now, so the fallback genuinely maximises distance
+       * and genuinely prefers not being looked at.
+       */
+      const scored = base - (visible ? 100 : 0) - (cone ? 30 : 0);
+      if (scored > bestAny) {
+        bestAny = scored;
         bestAnyAt = i;
         bestAnyDistance = distance;
         bestAnyCone = cone;
@@ -409,6 +449,25 @@ export class SpawnSelector {
     }
     if (measuredFriendly === Infinity) measuredFriendly = 9;
   }
+}
+
+/**
+ * How good a candidate is, before the cone and visibility penalties.
+ *
+ * One function, called by `select` and by `inspect`, so the debug visualisation is drawing
+ * the selector's own arithmetic rather than a second implementation of it — which is what the
+ * comment on `inspect` has always promised and is now structurally true.
+ *
+ * The `crowding` term is the post-M8 change. Distance was capped at 40 m and otherwise
+ * linear, which meant a 3 m spawn scored 3 and a 12 m one scored 12: a nine-point gap, easily
+ * swamped by the 9-point recency penalty. Being *close enough to be shot immediately* is not
+ * a little worse than being far away, it is categorically worse, so proximity inside the
+ * 15 m rule is penalised at four points a metre. A 3 m candidate now scores -45 against a
+ * 12 m candidate's 0, and nothing else in the score can outvote that.
+ */
+function scoreOf(distance: number, recent: number, friendly: number): number {
+  const crowding = distance < MIN_ENEMY_DISTANCE ? (MIN_ENEMY_DISTANCE - distance) * 4 : 0;
+  return Math.min(distance, 40) - recent - Math.abs(friendly - 9) * 0.25 - crowding;
 }
 
 let measuredDistance = Infinity;

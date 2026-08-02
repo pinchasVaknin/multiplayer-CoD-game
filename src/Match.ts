@@ -11,6 +11,7 @@ import { Rng } from './core/Rng';
 import { TargetRange } from './combat/TargetRange';
 import { EV, type GameBus } from './core/Events';
 import type { Input } from './core/Input';
+import { inputLabel } from './core/Keybinds';
 import { Btn, isDown, justPressed, type InputCommand } from './core/InputCommand';
 import { DT } from './core/Loop';
 import { DEG2RAD } from './core/MathUtil';
@@ -58,6 +59,7 @@ import type { ObjectiveKind } from './world/maps/types';
 import { ViewmodelAnim, makeViewmodelDrive, type ViewmodelDrive } from './weapons/ViewmodelAnim';
 import type { ViewmodelConfig } from './weapons/ViewmodelConfig';
 import { WeaponAudio } from './weapons/WeaponAudio';
+import { Melee } from './weapons/Melee';
 import type { WeaponDef } from './weapons/WeaponDefs';
 import { buildWeaponModel, type WeaponModel } from './weapons/WeaponMesh';
 import { WeaponSystem, type WeaponSnapshot } from './weapons/WeaponSystem';
@@ -162,6 +164,11 @@ const ALL_STREAK_IDS: readonly StreakId[] = STREAK_DEFS.map((d) => d.id);
 export class Match {
   readonly damage: DamageSystem;
   readonly weapons: WeaponSystem;
+  /**
+   * The knife (post-M8). Alongside the weapon rather than inside it — see `weapons/Melee.ts`
+   * for why a melee is not an inventory slot.
+   */
+  readonly melee: Melee;
   /** Only on the grey-box testbed: a firing range does not belong on a TDM map. */
   readonly range: TargetRange | null;
   readonly fx: Fx;
@@ -220,6 +227,7 @@ export class Match {
 
   private readonly spawnChoice: SpawnChoice = makeSpawnChoice();
   private swapSubscription: (() => void) | null = null;
+  private roundResetSubscription: (() => void) | null = null;
 
   private active = false;
   private playerDead = false;
@@ -270,7 +278,18 @@ export class Match {
       deps.movementConfig.walkSpeed,
     );
 
-    this.range = deps.map.targetRange ? new TargetRange(this.damage, deps.bus, deps.healthConfig) : null;
+    this.melee = new Melee({
+      world: deps.world,
+      damage: this.damage,
+      bus: deps.bus,
+      sourceId: PLAYER_ENTITY_ID,
+    });
+
+    // The world is handed over so each dummy is dropped onto the geometry actually beneath
+    // it rather than trusting the authored `y` (post-M8; see `TargetRange`).
+    this.range = deps.map.targetRange
+      ? new TargetRange(this.damage, deps.bus, deps.healthConfig, deps.world)
+      : null;
     if (this.range !== null) deps.scene.add(this.range.group);
 
     // The director bakes the navmesh, so it is built once here rather than per match.
@@ -316,6 +335,9 @@ export class Match {
     // M7: if the mode has objectives, hand the director the provider. `ai/` asks and the
     // mode answers; nothing in `ai/` knows a flag from a bomb site (see `ObjectiveIntent`).
     this.bots.objectives = isObjectiveProvider(this.mode) ? this.mode : null;
+    // Post-M8: the player collects the bomb with the Use key rather than by walking over it.
+    // The mode is told *which* entity drives itself; it never learns that one of them is human.
+    if (this.mode instanceof SearchAndDestroy) this.mode.manualPickupId = PLAYER_ENTITY_ID;
     this.bots.freeForAll = deps.mode.freeForAll === true;
     // There is no such thing as a teammate in FFA, so the friendly-fire gate at the damage
     // door has to come off or half the lobby is unkillable by the other half.
@@ -355,6 +377,7 @@ export class Match {
       localTeam: PLAYER_TEAM,
       roster: this.bots.roster,
       teamSize: deps.map.teamSize,
+      freeForAll: deps.mode.freeForAll === true,
     });
     this.weaponAudio = new WeaponAudio(deps.audio);
 
@@ -381,6 +404,22 @@ export class Match {
     this.swapSubscription = deps.bus.on(EV.WeaponSwapped, (p) => {
       if (p.sourceId !== PLAYER_ENTITY_ID) return;
       this.showSlot(this.weapons.inventory.activeSlotIndex);
+    });
+
+    /**
+     * A new round puts everybody back where they started (post-M8 playtest).
+     *
+     * Only for modes that actually have rounds, which in practice is Search & Destroy: a
+     * single-round mode fires this once, at the start, where it is a no-op against a world
+     * that has just spawned everyone anyway.
+     *
+     * Subscribed rather than called from `MatchFlow`, because respawning is not the flow's
+     * job — it owns *whether* somebody may come back and this owns *putting them there*, and
+     * merging the two would put the roster and the spawn selector inside the round machine.
+     */
+    this.roundResetSubscription = deps.bus.on(EV.RoundStarted, () => {
+      if (this.deps.mode.usesRoundReset !== true) return;
+      this.hardResetRound();
     });
 
     // M5. Built after the HUD because it pushes the flash and the threat indicator into it,
@@ -563,6 +602,36 @@ export class Match {
     return this.playerDead;
   }
 
+  /**
+   * Nobody may move or shoot right now (post-M8 playtest).
+   *
+   * True through the 3-2-1 and through the hold between rounds. The brief asks for movement
+   * and shooting to be locked during the countdown and for the camera to stay free, which is
+   * exactly the split `Input.sampleSpectating` already produces — it zeroes the axes and the
+   * buttons and stamps the live view angles — so `Game` reads this and picks that sampler
+   * rather than a fourth one being written.
+   *
+   * `ROUND_END` is included on purpose. It is the same situation as the warm-up with the
+   * clock running the other way: the round is decided, and letting people keep shooting into
+   * it is how a Search & Destroy round that has already been won produces another death on
+   * the scoreboard.
+   */
+  get inputFrozen(): boolean {
+    const phase = this.flow.currentPhase;
+    return phase === 'WARMUP' || phase === 'ROUND_END';
+  }
+
+  /**
+   * Debug spectator state (post-M8, `debug/Spectator.ts`).
+   *
+   * Held here rather than in the debug suite because two of the three things it does are
+   * facts about the *match* — whether the player can be hurt and whether anybody is looking
+   * for them — and both are already expressed on `PlayerCombatant`. The suite owns the
+   * toggle and the panel; this owns what the toggle means.
+   */
+  godMode = false;
+  hiddenFromBots = false;
+
   get playerRespawnSeconds(): number {
     return this.playerRespawnTimer;
   }
@@ -680,14 +749,53 @@ export class Match {
     // The targeting map owns the input while it is up — firing confirms the mark rather
     // than pulling the trigger.
     const mortarOpen = this.stepMortarOverlay(cmd);
-    // A hand on a grenade is a hand off the rifle. One flag, read by the weapon and by the
-    // viewmodel, so the gun cannot be fired while it is visibly lowered.
+    /**
+     * A live Chopper Gunner takes the player's weapon out of the loop entirely (post-M8).
+     *
+     * Until now the takeover consumed the command *and left the rifle consuming it too*, so
+     * holding the trigger in the gunship emptied the magazine on the ground below — reported
+     * as "the chopper drains my primary ammo". It also meant the ADS button drove the rifle's
+     * `adsFraction` up while the player was a kilometre away from it, which is what hid the
+     * crosshair: the scope overlay saw a scoped sniper and took the reticle away.
+     *
+     * Both are the same bug and this is the one fix. The chopper has always had its own
+     * `Ballistics` and its own `WeaponDef` — an infinite pool by construction, because it
+     * spends no magazine — and now nothing else is spending one on its behalf.
+     */
+    const flyingChopper = this.streaks.activeChopperFor(PLAYER_ENTITY_ID) !== null;
+    // A hand on a grenade — or on the knife — is a hand off the rifle. One flag, read by the
+    // weapon and by the viewmodel, so the gun cannot be fired while it is visibly lowered.
     //
     // The held button is part of the test, not just the thrower state. `equipment.simulate`
     // runs *after* the weapon this tick, so on the very first tick of a cook `busy` is still
     // last tick's answer and exactly one round escaped - measured, not theorised.
+    /**
+     * Reaching for something else cancels a reload (post-M8 playtest).
+     *
+     * The report was that grenades can be thrown mid-reload, and the fix the brief allows is
+     * either blocking the throw or cancelling the reload. Cancelling is the right one: a
+     * blocked throw is an input the player made that the game silently ate, and the magazine
+     * is not lost either way — `Weapon` only banks ammunition on completion, so an interrupted
+     * reload leaves the count exactly as it was. It is the same rule a swap already follows.
+     *
+     * Tested on the *press edge* rather than on `busy`, so it fires once, on the tick the hand
+     * leaves the rifle, and a held cook does not keep re-cancelling nothing.
+     */
+    const meleePressed = justPressed(cmd.buttons, this.prevButtons, Btn.Melee);
+    const reachedThisTick =
+      justPressed(cmd.buttons, this.prevButtons, Btn.Lethal) ||
+      justPressed(cmd.buttons, this.prevButtons, Btn.Tactical) ||
+      meleePressed;
+    if (!this.playerDead && reachedThisTick) this.weapons.weapon.cancelReload();
+
     const reachingForEquipment = isDown(cmd.buttons, Btn.Lethal) || isDown(cmd.buttons, Btn.Tactical);
-    this.weapons.fireBlocked = this.equipment.thrower.busy || reachingForEquipment;
+    // `meleePressed` is part of the test and not just `melee.busy`, for the reason the
+    // equipment note above gives: `melee.step` runs *after* the weapon this tick, so on the
+    // first tick of a swing `busy` is still last tick's answer — which is exactly how the
+    // grenade path let one round escape before it was measured and fixed.
+    this.weapons.fireBlocked =
+      this.equipment.thrower.busy || reachingForEquipment || this.melee.busy || meleePressed;
+    this.weapons.suspended = flyingChopper;
 
     if (!this.playerDead && !mortarOpen) {
       const sim = this.deps.player.sim;
@@ -700,6 +808,16 @@ export class Match {
       }
     }
 
+    /**
+     * The knife (post-M8). Edge-detected here, in the sim, from the bitfield — S4.2, and the
+     * reason there is no DOM handler anywhere near it.
+     *
+     * Blocked while a grenade is in hand or the gunship has the camera, both of which are
+     * "something else owns the hands" cases the weapon already respects.
+     */
+    const swing = meleePressed && !mortarOpen && !flyingChopper && !this.equipment.thrower.busy;
+    this.melee.step(swing, this.deps.player.sim, !this.playerDead);
+
     // The glint an enemy can see is a property of the weapon, and `PlayerCombatant` is
     // built before the weapon exists — so it is stamped here, once a tick, before
     // perception runs against it.
@@ -708,6 +826,10 @@ export class Match {
     this.range?.step();
     this.equipment.simulate(cmd, this.deps.player.sim, !this.playerDead);
     this.meta.simulate(cmd, this.deps.player.sim, !this.playerDead);
+    // Nobody moves or shoots during the 3-2-1 (post-M8). The player's half is handled at the
+    // sampler in `Game.simulate`; this is the other half, and both sides freezing is the
+    // point — a countdown one side can use to take an angle is not a countdown.
+    this.bots.inputFrozen = this.inputFrozen;
     this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
     // Streaks tick after the bots that may have just shot one down, and before the flow that
     // may declare the match over and end them all.
@@ -715,6 +837,7 @@ export class Match {
     this.syncChopperBody();
     if (!this.playerDead && !this.mortarOverlay.isOpen) this.stepStreakInput(cmd);
     if (!this.playerDead) this.stepBombInteraction(cmd);
+    this.stepInteractPose();
     this.stepPlayerRespawn();
     this.stepLowHealthAudio();
 
@@ -749,8 +872,12 @@ export class Match {
    */
   private syncChopperBody(): void {
     const flying = this.streaks.activeChopperFor(PLAYER_ENTITY_ID) !== null;
-    this.playerCombatant.active = !flying;
-    this.playerCombatant.invulnerable = flying;
+    // Post-M8: the QA spectator uses the same two levers, so it is folded in here rather
+    // than written from a second place. Driven from state every tick means there is still
+    // nothing to get stuck — turning god mode off puts the body back on the next tick,
+    // unarguably, which is the property this method was built for.
+    this.playerCombatant.active = !flying && !this.hiddenFromBots;
+    this.playerCombatant.invulnerable = flying || this.godMode;
   }
 
   /**
@@ -781,9 +908,37 @@ export class Match {
       return;
     }
     if (mode.bomb !== 'CARRIED') return;
-    if (me.team !== mode.attackers || !mode.isCarrier(PLAYER_ENTITY_ID)) return;
+    if (me.team !== mode.attackers) return;
+    // Picking the bomb up is now the same key as planting it (post-M8 playtest): walking
+    // over it does nothing. Tested before the plant branch because you cannot plant a bomb
+    // you are not carrying, and one press should be able to do the first of the two.
+    if (!mode.isCarrier(PLAYER_ENTITY_ID)) {
+      mode.tryPickup(me);
+      return;
+    }
     if (mode.siteContaining(me) === null) return;
     mode.beginInteract(me, false);
+  }
+
+  /**
+   * Whoever is planting or defusing kneels over the bomb (post-M8, S6.3's visual indicator).
+   *
+   * Driven from mode state every tick rather than latched on start and cleared on finish,
+   * for the same reason `syncChopperBody` is: an interaction can end four ways — completed,
+   * stepped off, key released, killed — and a latch would have to be cleared correctly on
+   * all four. Asked every tick, there is nothing to get stuck, and a player who dies
+   * mid-defuse does not respawn permanently crouched.
+   *
+   * It applies to bots as well as the player, which is the half that actually matters: the
+   * crouch is how the *other* side can tell at a glance that somebody is on the bomb.
+   */
+  private stepInteractPose(): void {
+    const mode = this.mode;
+    if (!(mode instanceof SearchAndDestroy)) return;
+    const busy = mode.interactingEntity;
+
+    this.deps.player.forceCrouch = busy === PLAYER_ENTITY_ID;
+    for (const bot of this.bots.bots) bot.controller.forceCrouch = bot.entityId === busy;
   }
 
   /**
@@ -878,6 +1033,25 @@ export class Match {
     this.respawnPlayer();
   }
 
+  /**
+   * Everybody back to a spawn, the bomb back at the attackers' base (post-M8 playtest).
+   *
+   * The bomb half is already done by the time this runs — `SearchAndDestroy.onRoundStart`
+   * calls `resetBomb`, and the flow emits `round.started` after it — so this is the *people*
+   * half, which nothing owned. Rounds two and three previously began with whoever survived
+   * round one standing wherever they had finished it, which on a bomb site is a free plant.
+   *
+   * The player is reset through the same `respawnPlayer` a death uses, so a round start and a
+   * respawn cannot disagree about what a fresh life is: full health, full magazines, primary
+   * in hand, sights down, equipment refilled.
+   */
+  private hardResetRound(): void {
+    this.bots.respawnAll();
+    this.playerDead = false;
+    this.playerRespawnTimer = 0;
+    this.respawnPlayer();
+  }
+
   private respawnPlayer(): void {
     const choice = this.spawnChoice;
     if (this.bots.selectSpawn(PLAYER_TEAM, PLAYER_ENTITY_ID, choice)) {
@@ -886,6 +1060,21 @@ export class Match {
     }
     this.playerHealth.reset();
     this.weapons.reset();
+    /**
+     * The mesh follows the reset, explicitly (post-M8 playtest).
+     *
+     * `weapons.reset()` puts the *logic* back on slot 0, and the visible model normally
+     * follows the inventory through the `weapon.swapped` subscription in the constructor —
+     * but a reset is not a swap and emits no such event. So a player who died holding the
+     * pistol came back holding a pistol that fired the rifle's ballistics and reported the
+     * rifle's ammo: the two halves of "which weapon am I holding" had drifted apart.
+     *
+     * Asking the inventory which slot is live rather than hard-coding 0 keeps the two facts
+     * in the same place — if `Inventory.reset` ever comes back on a different slot, the
+     * viewmodel comes back with it.
+     */
+    this.showSlot(this.weapons.inventory.activeSlotIndex);
+    this.melee.reset();
     // Equipment is per life (S6.3). `MatchEquipment` refills on `player.spawned`, which
     // `PlayerController.spawn` above has already emitted.
     this.playerCombatant.syncRig();
@@ -947,6 +1136,7 @@ export class Match {
     drive.slide = sim.slideActive;
     drive.throwing = this.equipment.thrower.busy;
     drive.swapping = this.weapons.inventory.swapping;
+    drive.melee = this.melee.fraction;
     drive.bobPhase = sim.bobPhase;
     drive.speed = sim.speed;
     drive.speedRef = this.deps.movementConfig.sprintSpeed;
@@ -1050,11 +1240,27 @@ export class Match {
         if (hud.objectiveLabel.length === 0) hud.objectiveLabel = 'OBJECTIVE';
         return;
       }
+      /**
+       * Somebody else already has it (post-M8 playtest).
+       *
+       * Telling a second defender to "hold T to defuse" while a team-mate is three seconds
+       * into the defuse is telling them to do something the mode will refuse —
+       * `beginInteract` ignores a newcomer while a live actor owns the interaction. The
+       * prompt is replaced by what is actually happening, which is the thing worth knowing:
+       * somebody is on it, so go and cover them.
+       */
+      const busyWith = mode.interactingEntity;
+      if (busyWith >= 0 && busyWith !== PLAYER_ENTITY_ID) {
+        hud.interactFraction = mode.interactFraction;
+        hud.interactLabel = mode.interactIsDefusing ? 'TEAMMATE DEFUSING' : 'PLANT IN PROGRESS';
+        if (hud.objectiveLabel.length === 0) hud.objectiveLabel = 'OBJECTIVE';
+        return;
+      }
       if (mode.bomb === 'PLANTED' && this.playerCombatant.team === mode.defenders) {
         const site = mode.plantedSite;
         if (site !== null && site.contains(this.playerCombatant)) {
           hud.interactFraction = 0;
-          hud.interactLabel = 'HOLD P TO DEFUSE';
+          hud.interactLabel = `HOLD ${this.useKeyLabel()} TO DEFUSE`;
         }
         return;
       }
@@ -1062,14 +1268,24 @@ export class Match {
       if (this.playerCombatant.team !== mode.attackers) return;
       if (!mode.isCarrier(PLAYER_ENTITY_ID)) {
         // Tell them where the bomb is, because without it the round cannot be won.
-        hud.objectiveLabel = mode.carrierId < 0 ? 'RECOVER THE BOMB' : 'BOMB CARRIER OUT';
+        if (mode.carrierId < 0) {
+          hud.objectiveLabel = 'RECOVER THE BOMB';
+          // Standing on it: the pick-up is a key press now, so it needs a prompt like any
+          // other interaction. Without one, "auto-pickup is off" reads as "the bomb is broken".
+          if (mode.tryPickupPrompt(this.playerCombatant)) {
+            hud.interactFraction = 0;
+            hud.interactLabel = `HOLD ${this.useKeyLabel()} TO TAKE THE BOMB`;
+          }
+        } else {
+          hud.objectiveLabel = 'BOMB CARRIER OUT';
+        }
         return;
       }
       const site = mode.siteContaining(this.playerCombatant);
       hud.objectiveLabel = site === null ? 'CARRYING THE BOMB' : `SITE ${site.label}`;
       if (site !== null) {
         hud.interactFraction = 0;
-        hud.interactLabel = 'HOLD P TO PLANT';
+        hud.interactLabel = `HOLD ${this.useKeyLabel()} TO PLANT`;
       }
       return;
     }
@@ -1087,6 +1303,18 @@ export class Match {
         return;
       }
     }
+  }
+
+  /**
+   * What the Use key is actually bound to, for the objective prompts (post-M8).
+   *
+   * The prompts used to read "HOLD P", hard-coded, which was wrong the moment M8 shipped
+   * rebinding and wrong again when the default moved to T. Asked of the live binding table
+   * so the HUD says the key the player will actually press, whatever they set it to.
+   */
+  private useKeyLabel(): string {
+    const bound = this.deps.input.keybinds.inputsFor('use')[0];
+    return bound === undefined ? 'USE' : inputLabel(bound).toUpperCase();
   }
 
   /**
@@ -1211,6 +1439,8 @@ export class Match {
     this.deps.scene.remove(this.fx.group);
     this.swapSubscription?.();
     this.swapSubscription = null;
+    this.roundResetSubscription?.();
+    this.roundResetSubscription = null;
     for (const model of this.models) {
       this.deps.viewmodel.remove(model.root);
       model.dispose();
@@ -1228,6 +1458,17 @@ export class Match {
     if (this.playerDead) return;
     this.playerDead = true;
     this.playerRespawnTimer = PLAYER_RESPAWN_SECONDS;
+    /**
+     * Out of the sights, on the tick of death (post-M8 playtest).
+     *
+     * A dead player's weapon is not stepped — `simulate` skips it — so `adsFraction` freezes
+     * at whatever it held when the round landed, and `Game` keeps feeding that to the camera
+     * as an FOV scale. With a sniper that is a scoped picture the player is stuck inside for
+     * the whole death screen. Forcing it down here is the only place that works, because
+     * every other candidate is code that has just stopped running.
+     */
+    this.weapons.clearAim();
+    this.melee.reset();
     const sim = this.deps.player.sim;
     this.weaponAudio.playDeath(sim.x, sim.y + 0.4, sim.z);
     this.deps.cameraRig.shake.add(0.45);

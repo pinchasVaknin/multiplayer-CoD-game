@@ -284,14 +284,41 @@ export function loadMap(
   };
 }
 
+/**
+ * Materials the maps use for *decorative overlays* rather than for structure (post-M8).
+ *
+ * Trim lips, floor stripes, lane markers, hazard chevrons and ledge edges are all authored
+ * as thin brushes laid a centimetre or two proud of the surface they mark. Every map does
+ * this and every map states the rule in its own header — "no two coplanar faces" — but a
+ * rule enforced by hand across four maps and several hundred brushes is a rule that will be
+ * broken, and it had been: the range's bullseye plates were spaced exactly their own
+ * thickness apart, so consecutive faces were *precisely* coincident. Coincident faces are
+ * the textbook depth-fight, and a depth-fight at close range is the violent per-frame
+ * flicker reported post-M8 as models that "jitter and shake as you approach them".
+ *
+ * The authoring bug is fixed where it was (see `maps/greybox.ts`). This is the guard that
+ * stops the next one shipping: a decorative surface is pulled toward the viewer in depth by
+ * a fixed offset, so it wins against whatever it is decorating no matter how flush the
+ * author left it. It costs nothing — `polygonOffset` is fixed-function — and it is applied
+ * by *material* rather than per brush because the brush geometry is merged per material
+ * before it ever becomes a mesh.
+ */
+const TRIM_MATERIALS: ReadonlySet<MaterialKey> = new Set<MaterialKey>(['accent', 'hazard']);
+
 function makeMaterial(textures: ProceduralTextures, key: MaterialKey): THREE.Material {
   const profile = textures.get(key);
+  const trim = TRIM_MATERIALS.has(key);
   return new THREE.MeshLambertMaterial({
     map: profile.texture,
     vertexColors: true,
     // Lambert keeps the frame budget honest on integrated graphics; the surface
     // interest comes from the procedural maps and the baked AO, not from a BRDF.
     dithering: true,
+    // Negative offset pulls the fragment toward the camera in depth without moving the
+    // geometry, so nothing about collision, AO or the navmesh changes.
+    polygonOffset: trim,
+    polygonOffsetFactor: trim ? -2 : 0,
+    polygonOffsetUnits: trim ? -2 : 0,
   });
 }
 

@@ -171,6 +171,20 @@ export class Inventory {
     }
   }
 
+  /**
+   * Back to slot 0, full magazines, sights down (S6.9's respawn).
+   *
+   * **This is a hard reset and it has to be one.** Post-M8 playtesting found that dying with
+   * the pistol out respawned you with the pistol on screen but the rifle's ballistics behind
+   * it. The logic half was always correct — `activeIndex` goes to 0 here — and the *mesh* was
+   * the half that lagged, because `Match` only ever changes the visible model on a
+   * `weapon.swapped` event and a reset does not swap, it resets. The fix is on the other side
+   * of the seam (`Match.respawnPlayer` re-shows the slot), and it works because this method
+   * is unambiguous about which slot is live afterwards.
+   *
+   * `clearAds` is here rather than only on death so a life can never start part-way into the
+   * sights, whatever the previous one ended holding.
+   */
   reset(): void {
     this.phase = 'READY';
     this.timer = 0;
@@ -179,6 +193,7 @@ export class Inventory {
     for (const weapon of this.weapons) {
       weapon.handlingSeconds = 0;
       weapon.raise = weapon === this.active ? 1 : 0;
+      weapon.clearAds();
       weapon.resetAmmo();
     }
   }

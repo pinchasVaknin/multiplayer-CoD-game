@@ -902,3 +902,84 @@ acceptance check is made rather than asserted.
   every map that does not set `navClimb`.
 - **`coverage`** — walkable nodes as a fraction of the columns inside `navBounds`. A large
   drop between two builds of the same map means geometry has closed something off.
+
+---
+
+# Post-M8 — the QA spectator
+
+The tool the polish pass added, and the one to reach for when the question is *"what are the
+bots actually doing?"* rather than *"how fast is this frame?"*.
+
+## Three switches, not one mode
+
+F1 → **Spectator (QA)**, or `__operator.spectate.*` from the console. They are independent on
+purpose, because they answer different questions:
+
+| Switch | What it does | The question it answers |
+|---|---|---|
+| **God mode** | `Damageable.invulnerable`, tested inside `DamageSystem.apply` | *How long does a VETERAN take to notice me, and how hard does it hit?* Stand in the open with a stopwatch. |
+| **Invisible** | `PlayerCombatant.active = false` | *What does this firefight look like when I am not in it?* Removes you from perception, bot target selection **and** spawn scoring. |
+| **Free-cam** | `PlayerController.noclip` | *Where exactly is this collider seam / spawn cluster / navmesh hole?* |
+
+**Invisibility turns god mode on with it.** Nothing is aiming at you, but a grenade, a mortar
+or a sentry burst already in the air does not know that, and dying mid-observation drops you
+into a respawn timer in the middle of the thing you were watching.
+
+**God mode is not "regenerate very fast".** The check is at the damage door, before anything
+is subtracted, so you take no damage *events* either — no flinch, no hurt vignette, no
+directional indicator, no low-health muffle. That is the difference between a mode you can
+observe through and one that is strobing at you.
+
+## Free-cam controls
+
+| Input | Effect |
+|---|---|
+| `WASD` | Fly along your look direction, pitch included |
+| `Space` | Straight up, 10 m/s |
+| Crouch | Straight down |
+| Sprint | ×4 — crossing Dunes |
+| ADS | ×¼ — easing up to a seam |
+
+Leaving free-cam drops you where you were floating and hands you back to gravity and
+collision. That is deliberate: teleporting you back to the take-off point would hide the case
+where the geometry you flew out to inspect is geometry you cannot get out of.
+
+## Console
+
+```js
+__operator.spectate.all(true)        // all three; the common case
+__operator.spectate.god(true)        // just invulnerability
+__operator.spectate.invisible(true)  // implies god
+__operator.spectate.noclip(true)     // just the free-cam
+__operator.spectate.off()            // everything back
+__operator.spectate.state()          // "god · unseen · noclip", or "off"
+```
+
+Each returns the state line, so a console session reads back what it just did. Reachable
+without the overlay on purpose — the overlay is a large modal panel, and half the reason to
+spectate is to *watch the screen*.
+
+## What it does not do
+
+- **It is not a free-flying camera detached from the player.** It is the player, flying. The
+  audio listener, the minimap and the viewmodel all follow you, because they read `sim` and
+  `sim` is still being written every tick.
+- **It does not pause anything.** The match runs, the clock runs, the mode can still end.
+- **It leaves no trace.** Every switch writes through to the object that owns the behaviour,
+  and those are re-applied from state every tick (`Match.syncChopperBody` is the one to read).
+  There is no undo path to maintain — turn it off and the match is exactly as it was.
+- **In Search & Destroy, being invisible makes you non-participating**, so the round will
+  count you as eliminated. That is correct — you are spectating — but it means you cannot
+  observe a full S&D round from the attacking side without ending it.
+
+## Melee, for reference
+
+Post-M8 also added the knife (`V`). It has no panel, but the swing is on the bus as
+`weapon.meleeSwing` with `{ sourceId, x, y, z, hit, lethal }`, which is enough to tap:
+
+```js
+__operator.game.bus.on('weapon.meleeSwing', (p) => console.log(p));
+```
+
+A swing that reports `hit: false` at the full 2 m reach found no target; one that reports
+`hit: false` at a shorter range was blocked by world geometry between the eye and the target.

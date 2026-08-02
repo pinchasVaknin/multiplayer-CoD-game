@@ -110,6 +110,17 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
   override readonly roundSeconds: number;
   /** No running score bar: the thing being counted is rounds. */
   override readonly scoreLimit = 0;
+  /**
+   * A decided S&D round is held for a beat and no longer (post-M8 playtest).
+   *
+   * The round ends on the *tick* the bomb goes off or comes apart — `checkWinCondition`
+   * returns the outcome that `explode` and `stepDefuse` set, and `MatchFlow` consults it on
+   * the same tick — so there has never been a delay in the *decision*. What there was is this
+   * hold, and at the shared four seconds it read as one: you defuse, nothing happens, and
+   * then the round ends. A second and a half is enough to register the result and short
+   * enough that the bang and the round ending feel like one event.
+   */
+  override readonly roundEndSeconds = 1.5;
 
   readonly sites: ObjectiveZone[] = [];
   readonly config: SearchDestroyConfig;
@@ -129,6 +140,18 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
    * about, which is the whole point of the mode.
    */
   carrierId = -1;
+  /**
+   * One entity that must ask before it picks the bomb up (post-M8 playtest).
+   *
+   * Set to the local player by `Match`. Bots keep walking onto the bomb and collecting it,
+   * because a bot has no key to press and `onArrived` is the only interaction verb it has;
+   * the player now presses Use, like every other interaction in the mode.
+   *
+   * An *id* rather than a `isPlayer` flag because the mode has no business knowing which
+   * combatant is human — it is told which one drives itself, exactly as `BotDirector` is
+   * told which entities have silent footsteps.
+   */
+  manualPickupId = -1;
   /** Where the bomb is lying, when nobody is carrying it. */
   bombX = 0;
   bombY = 0;
@@ -368,19 +391,72 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
     this.bombZ = n > 0 ? sz / n : 0;
   }
 
-  /** An attacker standing on the loose bomb picks it up. */
+  /**
+   * An attacker standing on the loose bomb picks it up — unless it is the one entity that
+   * has to ask (post-M8 playtest).
+   *
+   * The report was "disable auto-pickup; the player must press the key". Bots are exempt
+   * from that, and not as a concession: a bot's entire interaction vocabulary is *arriving
+   * somewhere* (`onArrived`), and giving it a synthetic key press would be inventing an
+   * input path for the one participant that does not have one.
+   */
   private stepPickup(): void {
     if (this.carrierId >= 0) return;
-    const r2 = this.config.pickupRadius * this.config.pickupRadius;
     for (const c of this.deps.roster) {
-      if (c.team !== this.attackers || !c.participating) continue;
-      const dx = c.px - this.bombX;
-      const dz = c.pz - this.bombZ;
-      if (dx * dx + dz * dz > r2) continue;
-      if (Math.abs(c.py - this.bombY) > 2.5) continue;
-      this.carrierId = c.entityId;
-      return;
+      if (c.entityId === this.manualPickupId) continue;
+      if (this.tryPickup(c)) return;
     }
+  }
+
+  /**
+   * Take the bomb, if this combatant is an attacker standing on it. Returns whether they did.
+   *
+   * Public because the player's route in is a held key rather than proximity: `Match` calls
+   * it from the Use branch. The eligibility test lives here, once, so the manual and the
+   * automatic paths cannot develop different ideas of what "standing on the bomb" means.
+   */
+  tryPickup(c: Combatant): boolean {
+    if (!this.canPickup(c)) return false;
+    this.carrierId = c.entityId;
+    return true;
+  }
+
+  /**
+   * Would `tryPickup` succeed? For the HUD prompt, which has to know without doing it.
+   *
+   * Deliberately the same predicate rather than a re-derivation: a prompt that appears where
+   * the interaction does not work — or fails to appear where it does — is worse than none,
+   * and that is exactly what two copies of a proximity test drift into.
+   */
+  tryPickupPrompt(c: Combatant): boolean {
+    return this.canPickup(c);
+  }
+
+  private canPickup(c: Combatant): boolean {
+    if (this.bomb !== 'CARRIED' || this.carrierId >= 0) return false;
+    if (c.team !== this.attackers || !c.participating) return false;
+    const r2 = this.config.pickupRadius * this.config.pickupRadius;
+    const dx = c.px - this.bombX;
+    const dz = c.pz - this.bombZ;
+    if (dx * dx + dz * dz > r2) return false;
+    return Math.abs(c.py - this.bombY) <= 2.5;
+  }
+
+  /**
+   * Who is planting or defusing right now, or -1 (post-M8).
+   *
+   * Read by the HUD so the "hold to defuse" prompt is suppressed for everybody except the
+   * person actually doing it, and by `MatchObjectives` so the bomb shows somebody working on
+   * it. Both were previously reconstructing it from `interactEntity` plus a fraction test,
+   * which is the same question asked two ways.
+   */
+  get interactingEntity(): number {
+    return this.interactFraction > 0 ? this.interactEntity : -1;
+  }
+
+  /** True while the interaction under way is a defuse rather than a plant. */
+  get interactIsDefusing(): boolean {
+    return this.interactIsDefuse;
   }
 
   /** True when this combatant is the one holding the bomb. Read by the HUD and the bots. */

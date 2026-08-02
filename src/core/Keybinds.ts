@@ -33,6 +33,15 @@ import { Btn } from './InputCommand';
  * `WheelUp` / `WheelDown`. One namespace, so a binding is one string in the save and the
  * rebinding UI has one kind of thing to capture — S6.3 asks for mouse buttons explicitly,
  * and a separate mouse table would have meant two code paths and two migrations.
+ *
+ * **`MouseN` is `MouseEvent.button`, verbatim, and that numbering is not the obvious one.**
+ * The DOM orders them 0 = left, **1 = middle, 2 = right**. M8 shipped ADS on `Mouse1` and
+ * labelled it "Right mouse", which meant the default bind was really *middle* mouse and
+ * right-clicking did nothing — reported as "ADS does not work until I rebind it to the key
+ * it already shows". Both halves of that are fixed here: the default is `Mouse2` and
+ * `inputLabel` names the buttons the way the DOM numbers them. The lookup table is keyed on
+ * whatever `mouseInput(e.button)` produces, so the DOM's numbering is the only one in the
+ * project and there is no second convention for the two to disagree about.
  */
 
 /** Bits above the wire bitfield, consumed by the sampler and never sent. */
@@ -57,6 +66,7 @@ export type ActionId =
   | 'swapWeapon'
   | 'slot1'
   | 'slot2'
+  | 'melee'
   | 'lethal'
   | 'tactical'
   | 'fieldUpgrade'
@@ -81,9 +91,15 @@ export interface ActionDef {
 /**
  * Every bindable action, in the order the settings screen shows them.
  *
- * The defaults are exactly what M1-M7 hard-coded in `Input.ts`, including the doubled ones
- * (`ControlLeft`/`KeyC` for crouch, `KeyP`/`KeyE` for use) — a milestone that adds rebinding
- * must not silently change anybody's controls on the way past.
+ * The defaults are what M1-M7 hard-coded in `Input.ts`, including the doubled ones
+ * (`ControlLeft`/`KeyC` for crouch) — a milestone that adds rebinding must not silently
+ * change anybody's controls on the way past. Two have moved since, and both were bugs
+ * rather than preferences:
+ *
+ *  - **ADS is `Mouse2`**, not `Mouse1`. See the note on DOM button numbering above.
+ *  - **Use is `KeyT` first**, replacing `KeyP` (post-M8 playtest). `P` is nowhere near the
+ *    movement keys, so planting a bomb meant taking a hand off the rifle; `T` is a reach
+ *    from `WASD`. `E` stays as the second binding because it is what everybody presses.
  */
 export const ACTIONS: readonly ActionDef[] = [
   { id: 'moveForward', label: 'Move forward', group: 'Movement', bit: LocalBtn.Forward, defaults: ['KeyW'] },
@@ -95,7 +111,7 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'sprint', label: 'Sprint', group: 'Movement', bit: Btn.Sprint, defaults: ['ShiftLeft'] },
 
   { id: 'fire', label: 'Fire', group: 'Combat', bit: Btn.Fire, defaults: ['Mouse0'] },
-  { id: 'ads', label: 'Aim down sights', group: 'Combat', bit: Btn.Ads, defaults: ['Mouse1'] },
+  { id: 'ads', label: 'Aim down sights', group: 'Combat', bit: Btn.Ads, defaults: ['Mouse2'] },
   { id: 'reload', label: 'Reload', group: 'Combat', bit: Btn.Reload, defaults: ['KeyR'] },
   { id: 'swapWeapon', label: 'Swap weapon', group: 'Combat', bit: Btn.SwapWeapon, defaults: ['KeyQ', 'WheelUp'] },
   { id: 'slot1', label: 'Primary', group: 'Combat', bit: Btn.Slot1, defaults: ['Digit1'] },
@@ -108,7 +124,9 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'streak2', label: 'Killstreak 2', group: 'Equipment', bit: Btn.Streak2, defaults: ['Digit4'] },
   { id: 'streak3', label: 'Killstreak 3', group: 'Equipment', bit: Btn.Streak3, defaults: ['Digit5'] },
 
-  { id: 'use', label: 'Use / plant / defuse', group: 'Interface', bit: Btn.Use, defaults: ['KeyE', 'KeyP'] },
+  { id: 'melee', label: 'Melee', group: 'Combat', bit: Btn.Melee, defaults: ['KeyV'] },
+
+  { id: 'use', label: 'Use / plant / defuse', group: 'Interface', bit: Btn.Use, defaults: ['KeyT', 'KeyE'] },
   { id: 'scoreboard', label: 'Scoreboard', group: 'Interface', bit: Btn.Scoreboard, defaults: ['Tab'] },
 ];
 
@@ -246,10 +264,13 @@ export function inputLabel(input: string): string {
   if (input === 'WheelUp') return 'Wheel up';
   if (input === 'WheelDown') return 'Wheel down';
   if (input.startsWith('Mouse')) {
+    // `MouseEvent.button` numbering, which is what `mouseInput` produces: 0 left, 1 middle,
+    // 2 right. M8 had 1 and 2 the other way round, so the settings screen advertised a
+    // binding the browser never delivers.
     const n = Number(input.slice(5));
     if (n === 0) return 'Left mouse';
-    if (n === 1) return 'Right mouse';
-    if (n === 2) return 'Middle mouse';
+    if (n === 1) return 'Middle mouse';
+    if (n === 2) return 'Right mouse';
     return `Mouse ${n + 1}`;
   }
   if (input.startsWith('Key')) return input.slice(3);
