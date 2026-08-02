@@ -1,3 +1,4 @@
+import { cssHex, cssRgba, palette } from './Palette';
 import { PROP_SHAPES } from '../world/maps/props';
 import type { Brush, MapDef, ObjectiveDef, ObjectiveKind } from '../world/maps/types';
 
@@ -35,16 +36,29 @@ const COLOR_WALL = '#2b313b';
 const COLOR_WALL_EDGE = '#3d4552';
 const COLOR_DECK = '#4a5462';
 const COLOR_BACKDROP = 'rgba(9, 11, 14, 0.72)';
-const COLOR_FRIENDLY = '#6fd08c';
-const COLOR_LOCAL = '#e8eaee';
-const COLOR_PING = '#e8604c';
-/** M7: a UAV contact and the sweep line that found it. */
-const COLOR_CONTACT = '#e8604c';
-const COLOR_SWEEP = 'rgba(232, 96, 76, 0.55)';
-/** M7: flag ownership. Neutral keeps the objective amber the map already uses. */
-const COLOR_OWNED_FRIENDLY = '#6fd08c';
-const COLOR_OWNED_ENEMY = '#e8604c';
-const COLOR_OBJECTIVE = 'rgba(255, 179, 64, 0.85)';
+/**
+ * M8: the four gameplay colours the minimap draws are read from the live palette rather
+ * than written here, so colourblind mode changes the radar and not a filter over it.
+ *
+ * Cached as strings because a canvas fill takes a string and formatting one per dot, per
+ * frame, for a ten-bot roster is exactly the sort of per-frame allocation S4.7 bans. The
+ * cache is refilled by the palette's change notification, which fires immediately on
+ * subscribe — so there is one code path for "set up" and "changed".
+ */
+const ink = {
+  friendly: '',
+  local: '',
+  hostile: '',
+  sweep: '',
+  neutral: '',
+};
+palette.onChange((p) => {
+  ink.friendly = cssHex(p.friendly);
+  ink.local = cssHex(p.local);
+  ink.hostile = cssHex(p.hostile);
+  ink.sweep = cssRgba(p.hostile, 0.55);
+  ink.neutral = cssRgba(p.neutral, 0.85);
+});
 
 interface Ping {
   x: number;
@@ -329,10 +343,10 @@ export class Minimap {
       const state = this.objectiveStates.find((entry) => entry.id === o.id);
       const colour =
         state === undefined || state.owner === 'NONE'
-          ? COLOR_OBJECTIVE
+          ? ink.neutral
           : state.owner === 'FRIENDLY'
-            ? COLOR_OWNED_FRIENDLY
-            : COLOR_OWNED_ENEMY;
+            ? ink.friendly
+            : ink.hostile;
       ctx.fillStyle = colour;
       ctx.strokeStyle = colour;
 
@@ -377,7 +391,7 @@ export class Minimap {
       if (p.life <= 0) continue;
       const t = p.life / PING_SECONDS;
       // A ring that grows as it fades: the eye catches expansion far better than a dot.
-      ctx.strokeStyle = COLOR_PING;
+      ctx.strokeStyle = ink.hostile;
       ctx.globalAlpha = t * t;
       ctx.lineWidth = 2 / scale;
       ctx.beginPath();
@@ -394,7 +408,7 @@ export class Minimap {
    * live longer than the sweep says it did. This only reads them.
    */
   private drawContacts(ctx: CanvasRenderingContext2D): void {
-    ctx.fillStyle = COLOR_CONTACT;
+    ctx.fillStyle = ink.hostile;
     for (const c of this.contacts) {
       if (!c.active) continue;
       const t = 1 - Math.min(1, c.age / Math.max(0.05, this.contactFadeSeconds));
@@ -422,7 +436,7 @@ export class Minimap {
       half + Math.cos(angle) * half,
       half + Math.sin(angle) * half,
     );
-    gradient.addColorStop(0, COLOR_SWEEP);
+    gradient.addColorStop(0, ink.sweep);
     gradient.addColorStop(1, 'rgba(232, 96, 76, 0)');
     ctx.save();
     ctx.beginPath();
@@ -464,8 +478,8 @@ export class Minimap {
   }
 
   private drawFriendlies(ctx: CanvasRenderingContext2D, scale: number): void {
-    ctx.fillStyle = COLOR_FRIENDLY;
-    ctx.strokeStyle = COLOR_FRIENDLY;
+    ctx.fillStyle = ink.friendly;
+    ctx.strokeStyle = ink.friendly;
     ctx.lineWidth = 1.4 / scale;
     for (const a of this.friendlies) {
       if (!a.active) continue;
@@ -486,7 +500,7 @@ export class Minimap {
   /** The player, always at the centre and always pointing up. */
   private drawLocal(ctx: CanvasRenderingContext2D, half: number): void {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = COLOR_LOCAL;
+    ctx.fillStyle = ink.local;
     ctx.beginPath();
     ctx.moveTo(half, half - 9);
     ctx.lineTo(half + 6, half + 7);

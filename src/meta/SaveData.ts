@@ -1,3 +1,4 @@
+import { defaultBindings, normaliseBindings, type BindingMap } from '../core/Keybinds';
 import type { Versioned } from '../core/SaveStore';
 import { ALL_EQUIPMENT, type EquipmentId } from '../equipment/EquipmentDefs';
 import { isPerkId, perkDef, type PerkId } from '../perks/PerkDefs';
@@ -38,7 +39,14 @@ import {
  * lets `verify/progression.js` hand them a hand-written older save and check the result.
  */
 
-/** Settings, folded into the one save object S6.6 asks for. */
+/**
+ * Settings, folded into the one save object S6.6 asks for.
+ *
+ * M8 adds eleven fields and every one of them does something — S6.3 is blunt that "a setting
+ * that does not do anything is worse than a missing setting". The name is still `SettingsV1`
+ * because it is the settings block of save **v2**; the version lives on the save, not on
+ * each block, and renaming the type would have been a rename with no migration behind it.
+ */
 export interface SettingsV1 {
   fov: number;
   sensitivity: number;
@@ -47,7 +55,31 @@ export interface SettingsV1 {
   renderScale: number;
   modeId: string;
   mapId: string;
+
+  // ---- M8 -----------------------------------------------------------------
+  /** Multiplier on look sensitivity at full ADS (S6.3). */
+  adsSensitivity: number;
+  /** The three buses under master, each 0..1. */
+  sfxVolume: number;
+  musicVolume: number;
+  uiVolume: number;
+  /** Shadow map size and softness, as a named tier. */
+  shadowQuality: ShadowQuality;
+  /** Whether the always-on FPS read-out is drawn. */
+  showFps: boolean;
+  /** Per-object motion blur on the camera. */
+  motionBlur: boolean;
+  /** Which colour vocabulary gameplay uses. See `ui/Palette.ts`. */
+  colorblind: ColorblindMode;
+  /** Physical input to action, by action id. See `core/Keybinds.ts`. */
+  bindings: BindingMap;
 }
+
+export const SHADOW_QUALITIES = ['off', 'low', 'medium', 'high'] as const;
+export type ShadowQuality = (typeof SHADOW_QUALITIES)[number];
+
+export const COLORBLIND_MODES = ['off', 'deuteranopia', 'protanopia', 'tritanopia'] as const;
+export type ColorblindMode = (typeof COLORBLIND_MODES)[number];
 
 export interface ProfileData {
   level: number;
@@ -84,8 +116,8 @@ export interface ChallengeSaveData {
   completed: boolean;
 }
 
-export interface SaveV1 extends Versioned {
-  version: 1;
+export interface SaveV2 extends Versioned {
+  version: 2;
   profile: ProfileData;
   weapons: Record<string, WeaponSaveData>;
   loadouts: LoadoutSlot[];
@@ -98,7 +130,16 @@ export interface SaveV1 extends Versioned {
   settings: SettingsV1;
 }
 
-export const SAVE_VERSION = 1;
+/**
+ * Bumped to 2 in M8, for the eleven settings fields and the binding table.
+ *
+ * The bump is not strictly *required* — `normaliseSave` defaults every new field, so a v1
+ * payload would have loaded correctly without one. It is here because S6.3 asks that every
+ * setting "survives a migration", and a migration you never run is a migration you have
+ * never tested. `upgradeV1` is therefore a real function with a real assertion behind it
+ * (`verify/settings.js`), not a version number nudged upward.
+ */
+export const SAVE_VERSION = 2;
 export const SAVE_KEY = 'operator.save';
 
 /** The key M1-M5 wrote settings to. Read once, by the migration, then left alone. */
@@ -113,6 +154,16 @@ export function defaultSettings(modeId: string, mapId: string, fov: number): Set
     renderScale: 1,
     modeId,
     mapId,
+    // M8. The mix defaults are not all 1: see `AudioMix` for why SFX sits under the others.
+    adsSensitivity: 0.8,
+    sfxVolume: 0.9,
+    musicVolume: 0.55,
+    uiVolume: 0.85,
+    shadowQuality: 'medium',
+    showFps: false,
+    motionBlur: false,
+    colorblind: 'off',
+    bindings: defaultBindings(),
   };
 }
 
@@ -169,7 +220,7 @@ export function makeWeaponSave(): WeaponSaveData {
   };
 }
 
-export function defaultSave(settings: SettingsV1): SaveV1 {
+export function defaultSave(settings: SettingsV1): SaveV2 {
   const weapons: Record<string, WeaponSaveData> = {};
   for (const def of ALL_WEAPONS) weapons[def.id] = makeWeaponSave();
 
@@ -203,7 +254,7 @@ export function defaultSave(settings: SettingsV1): SaveV1 {
 
 /** What `normaliseSave` had to change, in human-readable lines. */
 export interface SaveRepair {
-  readonly save: SaveV1;
+  readonly save: SaveV2;
   readonly losses: string[];
 }
 
@@ -222,8 +273,24 @@ function nonNegative(value: unknown, fallback: number): number {
   return Math.max(0, num(value, fallback));
 }
 
+function clampTo(value: number, lo: number, hi: number): number {
+  return value < lo ? lo : value > hi ? hi : value;
+}
+
+/** A 0..1 setting, repaired rather than rejected. */
+function unit(value: unknown, fallback: number): number {
+  return clampTo(num(value, fallback), 0, 1);
+}
+
+/** A string setting from a closed list, or the fallback. */
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : fallback;
+}
+
 /**
- * Take whatever came out of storage and make it a legal `SaveV1`, reporting every repair.
+ * Take whatever came out of storage and make it a legal `SaveV2`, reporting every repair.
  *
  * `unlockedLevel` is passed in rather than read off the payload because the profile's own
  * level is one of the things being repaired: a save that claims level 55 with 0 XP must
@@ -351,15 +418,32 @@ export function normaliseSave(raw: unknown, fallbackSettings: SettingsV1): SaveR
   );
 
   // ---- settings ------------------------------------------------------------
+  //
+  // Every field falls back to the default it does not have, which is what makes a save
+  // written before M8 load with eleven new settings at sensible values rather than at
+  // `undefined` — and it is why the settings block needed no version bump of its own.
   const settings = raw['settings'];
   if (isRecord(settings)) {
-    out.settings.fov = num(settings['fov'], fallbackSettings.fov);
-    out.settings.sensitivity = num(settings['sensitivity'], fallbackSettings.sensitivity);
-    out.settings.invertY = settings['invertY'] === true;
-    out.settings.masterVolume = num(settings['masterVolume'], fallbackSettings.masterVolume);
-    out.settings.renderScale = num(settings['renderScale'], fallbackSettings.renderScale);
-    if (typeof settings['modeId'] === 'string') out.settings.modeId = settings['modeId'];
-    if (typeof settings['mapId'] === 'string') out.settings.mapId = settings['mapId'];
+    const s = out.settings;
+    s.fov = clampTo(num(settings['fov'], fallbackSettings.fov), 60, 120);
+    s.sensitivity = clampTo(num(settings['sensitivity'], fallbackSettings.sensitivity), 0.05, 10);
+    s.invertY = settings['invertY'] === true;
+    s.masterVolume = unit(settings['masterVolume'], fallbackSettings.masterVolume);
+    s.renderScale = clampTo(num(settings['renderScale'], fallbackSettings.renderScale), 0.5, 1);
+    if (typeof settings['modeId'] === 'string') s.modeId = settings['modeId'];
+    if (typeof settings['mapId'] === 'string') s.mapId = settings['mapId'];
+
+    s.adsSensitivity = clampTo(num(settings['adsSensitivity'], fallbackSettings.adsSensitivity), 0.1, 2);
+    s.sfxVolume = unit(settings['sfxVolume'], fallbackSettings.sfxVolume);
+    s.musicVolume = unit(settings['musicVolume'], fallbackSettings.musicVolume);
+    s.uiVolume = unit(settings['uiVolume'], fallbackSettings.uiVolume);
+    s.shadowQuality = oneOf(settings['shadowQuality'], SHADOW_QUALITIES, fallbackSettings.shadowQuality);
+    s.showFps = settings['showFps'] === true;
+    s.motionBlur = settings['motionBlur'] === true;
+    s.colorblind = oneOf(settings['colorblind'], COLORBLIND_MODES, fallbackSettings.colorblind);
+    // `normaliseBindings` restores the defaults for any action the save never heard of, so
+    // a pre-M8 save comes back fully bound rather than with three dead killstreak keys.
+    s.bindings = normaliseBindings(settings['bindings']);
   }
 
   return { save: out, losses };
@@ -475,10 +559,12 @@ function normaliseWeaponLoadout(
  * Returns `null` only for input that is not an object at all, at which point `SaveStore`
  * falls back to defaults and says so. Anything object-shaped is salvaged.
  */
-export function migrateSave(raw: unknown, fromVersion: number, fallbackSettings: SettingsV1): SaveV1 | null {
+export function migrateSave(raw: unknown, fromVersion: number, fallbackSettings: SettingsV1): SaveV2 | null {
   if (!isRecord(raw)) return null;
 
-  const upgraded = fromVersion < 1 ? upgradeV0(raw) : raw;
+  // The edges are walked in order, so a v0 payload passes through both upgrades.
+  const afterV0 = fromVersion < 1 ? upgradeV0(raw) : raw;
+  const upgraded = fromVersion < 2 ? upgradeV1(afterV0) : afterV0;
   const { save, losses } = normaliseSave(upgraded, fallbackSettings);
   save.version = SAVE_VERSION;
 
@@ -489,6 +575,38 @@ export function migrateSave(raw: unknown, fromVersion: number, fallbackSettings:
   );
   for (const line of losses) console.info(`[Save]   ${line}`);
   return save;
+}
+
+/**
+ * v1 to v2 (M8): the settings block gains eleven fields and a binding table.
+ *
+ * Nothing outside `settings` moved, so this touches nothing else — a migration that
+ * rewrites blocks it does not need to is a migration that can lose them. The new fields
+ * are **derived where a v1 save had something to derive them from** rather than simply
+ * defaulted:
+ *
+ * - `sfxVolume` inherits the old `masterVolume`, so a player who had turned the game down
+ *   to 0.3 does not get a 0.9 SFX bus the first time they launch M8.
+ * - `masterVolume` is then lifted to 1, because v1's single slider was doing the job the
+ *   three bus sliders now do and leaving both at 0.3 would multiply to 0.09.
+ *
+ * The rest have no v1 equivalent and take their defaults. `bindings` is deliberately absent
+ * rather than defaulted here: `normaliseBindings` runs downstream on every load and rebuilds
+ * the whole table, so writing it twice would only create somewhere for the two to disagree.
+ */
+function upgradeV1(raw: Record<string, unknown>): Record<string, unknown> {
+  const settings = isRecord(raw['settings']) ? raw['settings'] : {};
+  const master = num(settings['masterVolume'], 0.8);
+  return {
+    ...raw,
+    settings: {
+      ...settings,
+      sfxVolume: num(settings['sfxVolume'], master),
+      musicVolume: num(settings['musicVolume'], master * 0.6),
+      uiVolume: num(settings['uiVolume'], master),
+      masterVolume: 1,
+    },
+  };
 }
 
 /**

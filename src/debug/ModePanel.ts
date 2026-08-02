@@ -3,7 +3,7 @@ import { accuracy, type ScoreTeam } from '../combat/ScoreSystem';
 import { EV, type GameBus } from '../core/Events';
 import { formatClock } from '../ui/HudBanner';
 import type { MapEntry } from '../modes/ModeRegistry';
-import { FOUNDRY_LANES, type LaneDef } from '../world/maps/foundry';
+import type { LaneDef } from '../world/maps/types';
 import { MAX_WAYPOINTS, Path, type PathClient } from '../ai/Pathing';
 import type { AiDebug } from './AiDebug';
 import type { MatchHarness } from './MatchHarness';
@@ -173,18 +173,17 @@ export class ModePanel {
     const sprint = bots.sprintSpeed;
     const timings: LaneTiming[] = [];
 
-    const lanes: readonly LaneDef[] =
-      this.map.id === 'mp_foundry'
-        ? FOUNDRY_LANES
-        : // Any other map has no authored lanes; measure the one thing it does have.
-          [
-            {
-              name: 'MAP',
-              center: { x: 0, y: 0, z: 0 },
-              a: this.map.def.spawns[0]?.position ?? { x: 0, y: 0, z: 0 },
-              b: this.map.def.spawns[1]?.position ?? { x: 0, y: 0, z: 0 },
-            },
-          ];
+    // M8: lanes are a property of the map, not of this file. M4 branched on the Foundry id
+    // here, which meant a second map with lanes would have been silently reported as one
+    // spawn-to-spawn walk. A map that authors none still gets that fallback.
+    const lanes: readonly LaneDef[] = this.map.def.lanes ?? [
+      {
+        name: 'MAP',
+        center: { x: 0, y: 0, z: 0 },
+        a: this.map.def.spawns[0]?.position ?? { x: 0, y: 0, z: 0 },
+        b: this.map.def.spawns[1]?.position ?? { x: 0, y: 0, z: 0 },
+      },
+    ];
 
     for (const lane of lanes) {
       for (const team of ['A', 'B'] as const) {

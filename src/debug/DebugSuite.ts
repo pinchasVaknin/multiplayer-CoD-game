@@ -29,6 +29,7 @@ import { HitboxDebug } from './HitboxDebug';
 import type { MatchHarness } from './MatchHarness';
 import { MetaPanel } from './MetaPanel';
 import { ModePanel } from './ModePanel';
+import { SnagHarness } from './SnagHarness';
 import { StreakPanel } from './StreakPanel';
 import type { Speedometer } from './Speedometer';
 import { WeaponDebug } from './WeaponDebug';
@@ -96,6 +97,8 @@ export class DebugSuite {
   readonly metaPanel: MetaPanel;
   /** M7: streak state, sentry targeting and care-package contest (S7). */
   readonly streakPanel: StreakPanel;
+  /** M8: "sprint every wall", derived from the collision world rather than authored. */
+  readonly snagHarness: SnagHarness;
 
   private readonly scene: THREE.Scene;
 
@@ -178,6 +181,13 @@ export class DebugSuite {
 
     this.metaPanel = new MetaPanel(this.overlay, ctx.match, ctx.profile, ctx.bus);
     this.streakPanel = new StreakPanel(this.overlay, ctx.match, ctx.bus);
+
+    this.snagHarness = new SnagHarness({
+      map: ctx.map,
+      player: ctx.player,
+      movement: ctx.movementConfig,
+      loop: ctx.loop,
+    });
   }
 
   /** Per-tick: the collision visualisation follows the player. */

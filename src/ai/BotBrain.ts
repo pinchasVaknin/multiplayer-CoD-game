@@ -60,6 +60,27 @@ const WAYPOINT_RADIUS = 0.55;
 const GOAL_RADIUS = 1.0;
 
 /**
+ * Depot's climbing rules (M8).
+ *
+ * `CLIMB_ARRIVED_RISE` is how far above the feet a waypoint may still be and count as
+ * reached — a hair over `stepHeight`, so an ordinary kerb does not read as a climb.
+ * `CLIMB_PRESS_RANGE` is how close in plan the bot has to be before it presses jump:
+ * `Mantle.detectMantle` probes forward by `capsuleRadius + mantleReach` (1.3 m), so
+ * pressing from further out is pressing at nothing, and the bot would jump its way across
+ * the map.
+ */
+const CLIMB_ARRIVED_RISE = 0.4;
+const CLIMB_PRESS_RANGE = 1.5;
+/**
+ * Sim ticks between jump presses while a climb is pending.
+ *
+ * A mantle is triggered on a *press* edge, so holding jump climbs once and then does
+ * nothing. Re-pressing on a cadence is what lets a bot that arrived at a bad angle try
+ * again a fifth of a second later instead of standing against the crate forever.
+ */
+const CLIMB_PRESS_PERIOD = 12;
+
+/**
  * Reload when the magazine is down to this fraction of its size, with reserve to spare.
  *
  * A *fraction*, not a count (M7). It was 8 rounds flat, which was invisible while every bot
@@ -130,6 +151,12 @@ export class BotBrain {
   stuckEvents = 0;
   pathFailures = 0;
   replans = 0;
+  /** M8: mantles this bot has completed, for the Depot verticality read-out. */
+  climbsCompleted = 0;
+
+  /** Sim ticks spent at the foot of a climb waypoint. Zero when not climbing (M8). */
+  private climbTicks = 0;
+  private climbStartY = 0;
 
   private readonly deps: BrainDeps;
   private strafeSide = 1;
@@ -163,6 +190,7 @@ export class BotBrain {
     this.stuckTimer = 0;
     this.wantsReloadPress = false;
     this.pressedReload = false;
+    this.climbTicks = 0;
   }
 
   // -- state machine ---------------------------------------------------------
@@ -337,7 +365,33 @@ export class BotBrain {
       wishZ = pathWishZ;
     }
 
-    if (isFiringState(this.state) && bb.hasKnownTarget) {
+    /**
+     * A mantle is pending when the waypoint is above the feet and within arm's reach (M8).
+     *
+     * `NavBake` only ever emits a climb link where the destination provably fits a standing
+     * capsule, so what is left for the brain is the two things the bake cannot know: whether
+     * the bot has actually arrived at the foot of the ledge, and whether it is *facing* it —
+     * `Mantle.detectMantle` probes along `sim.yaw`, so a bot looking sideways at a container
+     * will never find it.
+     */
+    const climbing = hasPath && pathWishUp > CLIMB_ARRIVED_RISE && pathWishDist <= CLIMB_PRESS_RANGE;
+    if (climbing) {
+      if (this.climbTicks === 0) this.climbStartY = bot.py;
+      this.climbTicks++;
+    } else {
+      // Count the climb where it lands, not where it was attempted: `climbsCompleted` is
+      // the number the Depot verticality read-out reports, so it has to mean a bot that
+      // actually got up there rather than one that pressed jump at a wall.
+      if (this.climbTicks > 0 && bot.py - this.climbStartY > CLIMB_ARRIVED_RISE) this.climbsCompleted++;
+      this.climbTicks = 0;
+    }
+
+    if (climbing) {
+      // Square up on the ledge. This takes the aim for the half-second the climb costs,
+      // which is the trade: a bot cannot mantle and hold an angle at the same time, and
+      // neither can a player.
+      combat.lookToward(tier, Math.atan2(-pathWishX, -pathWishZ), 0);
+    } else if (isFiringState(this.state) && bb.hasKnownTarget) {
       combat.updateAim(tier, bb, bot.px, bot.py + bot.eyeHeight, bot.pz, bot.rng);
     } else if (this.state === 'SEEK_COVER' && !hasPath && bb.hasKnownTarget) {
       combat.updateAim(tier, bb, bot.px, bot.py + bot.eyeHeight, bot.pz, bot.rng);
@@ -437,9 +491,25 @@ export class BotBrain {
     let buttons = 0;
     if (crouch) buttons |= Btn.Crouch;
 
+    /**
+     * The mantle press (M8).
+     *
+     * Pressed on a cadence rather than held, because `PlayerController` triggers a mantle on
+     * the jump *press* edge — a held button climbs once and then does nothing at all, which
+     * is precisely how a bot ends up jogging into a container for the rest of the match. The
+     * bot keeps walking into the ledge between presses, so each attempt starts from a
+     * slightly different approach and a bad angle corrects itself.
+     */
+    if (climbing && bot.grounded && this.climbTicks % CLIMB_PRESS_PERIOD === 1) {
+      buttons |= Btn.Jump;
+    }
+
     // Sprint only where a human would: running somewhere, facing that way, not shooting.
+    // Never while climbing: an auto-vault fires on a sprint into a ledge and would take a
+    // 0.8 m step the moment the bot wanted the 1.4 m one above it.
     const sprintWorthy =
       travelling &&
+      !climbing &&
       !isFiringState(this.state) &&
       cmd.moveZ > 0.72 &&
       bot.grounded &&
@@ -698,6 +768,7 @@ export class BotBrain {
   /** Advance the path cursor and write the wish direction. False when the path is done. */
   private followPath(bot: Bot): boolean {
     const path = bot.path;
+    pathWishUp = 0;
     while (path.cursor < path.count) {
       const wx = path.x[path.cursor] ?? bot.px;
       const wz = path.z[path.cursor] ?? bot.pz;
@@ -705,16 +776,25 @@ export class BotBrain {
       const dz = wz - bot.pz;
       const dist = Math.hypot(dx, dz);
       const last = path.cursor === path.count - 1;
-      if (dist <= (last ? GOAL_RADIUS : WAYPOINT_RADIUS)) {
+      // A waypoint above the bot's feet is only *reached* when the bot is actually up
+      // there. Without the height test the plan-distance check retires a mantle waypoint
+      // the moment the bot walks into the wall below it, and the bot then trots off
+      // toward the next one having never climbed anything.
+      const rise = (path.y[path.cursor] ?? bot.py) - bot.py;
+      const arrived = dist <= (last ? GOAL_RADIUS : WAYPOINT_RADIUS) && rise <= CLIMB_ARRIVED_RISE;
+      if (arrived) {
         path.cursor++;
         continue;
       }
       pathWishX = dx / dist;
       pathWishZ = dz / dist;
+      pathWishUp = rise;
+      pathWishDist = dist;
       return true;
     }
     pathWishX = 0;
     pathWishZ = 0;
+    pathWishDist = Infinity;
     return false;
   }
 
@@ -785,3 +865,7 @@ export class BotBrain {
 /** Module-level scratch: the wish direction from the path follower. Zero allocation. */
 let pathWishX = 0;
 let pathWishZ = 0;
+/** How far above the bot's feet the current waypoint sits, metres (M8). */
+let pathWishUp = 0;
+/** Plan distance to the current waypoint, metres (M8). */
+let pathWishDist = Infinity;

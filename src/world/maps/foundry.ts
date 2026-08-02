@@ -7,7 +7,7 @@ import {
   rotateHalfProps,
 } from './build';
 import { deriveCoverPoints, emitCoverPoint } from './cover';
-import type { Brush, CoverPoint, MapDef, ObjectiveDef, PropDef, SpawnZone, Vec3Lit } from './types';
+import type { Brush, CoverPoint, LaneDef, MapDef, ObjectiveDef, PropDef, SpawnZone } from './types';
 
 /**
  * MP_FOUNDRY — the M4 map (brief S6.1).
@@ -57,7 +57,7 @@ import type { Brush, CoverPoint, MapDef, ObjectiveDef, PropDef, SpawnZone, Vec3L
  * one fewer 0.12 m ledge for the navmesh to call walkable. Cover up there comes from the
  * structural girders that pass through the deck.
  *
- * The deck is the reason `NAV_LAYERS` is 2: a column inside the hall holds the floor *and*
+ * The deck is the reason this map bakes two nav layers: a column inside the hall holds the floor *and*
  * the deck above it, and a single-layer grid could only ever describe one of them.
  *
  * Convention: +X east, +Z south, Y up. Floor top is y = 0.
@@ -115,14 +115,12 @@ const DECK_GIRDERS: readonly Readonly<{ x: number; z: number; along: 'x' | 'z' }
   { x: -4.0, z: 1.0, along: 'x' },
 ];
 
-/** Where the two teams meet in each lane, and the home spawn that feeds it. */
-export interface LaneDef {
-  readonly name: string;
-  readonly center: Vec3Lit;
-  readonly a: Vec3Lit;
-  readonly b: Vec3Lit;
-}
-
+/**
+ * Where the two teams meet in each lane, and the home spawn that feeds it.
+ *
+ * `LaneDef` moved to `types.ts` in M8 so Dunes and Depot are timed by the same harness
+ * code rather than by a branch on this map's id.
+ */
 export const FOUNDRY_LANES: readonly LaneDef[] = [
   {
     name: 'WEST',
@@ -448,6 +446,7 @@ export const FOUNDRY_MAP: MapDef = {
   ],
   props: [...ALL_PROPS, ...lightStrips()],
   spawns: spawns(),
+  lanes: FOUNDRY_LANES,
   /**
    * Lighting, brightened in M5 from the M4 playtest note that Foundry was too dark.
    *

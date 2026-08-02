@@ -1,3 +1,4 @@
+import { inputLabel, type ActionId, type BindingMap } from '../core/Keybinds';
 import type { GameModeId } from '../modes/GameMode';
 import { MAPS, MODES, modesForMap } from '../modes/ModeRegistry';
 
@@ -25,31 +26,45 @@ export interface MenuDeps {
   readonly onLaunch: () => void;
   /** M6: enter the `LOADOUT` state. */
   readonly onLoadout: () => void;
+  /** M8: enter the `SETTINGS` state. */
+  readonly onSettings: () => void;
   /** M6: wipe the profile. The confirmation is this file's, the wipe is `Profile`'s. */
   readonly onResetProgress: () => void;
   /** Shown under the title: build stats, or whatever the caller wants to say. */
   readonly statusLine: () => string;
   /** M6: level, class and record. Redrawn every time the menu is shown. */
   readonly profileLine: () => string;
+  /** M8: the live binding table, so the controls card names the player's own keys. */
+  readonly bindings: () => BindingMap;
 }
 
 type Page = 'MAIN' | 'PLAY';
 
-const KEY_HELP: readonly Readonly<[string, string]>[] = [
-  ['W A S D', 'Move'],
-  ['Shift', 'Sprint'],
-  ['Shift Shift', 'Tactical sprint'],
-  ['Ctrl / C', 'Crouch'],
-  ['Sprint + Crouch', 'Slide'],
-  ['Space', 'Jump / mantle'],
-  ['Left mouse', 'Fire'],
-  ['Right mouse', 'Aim down sights'],
-  ['R', 'Reload'],
-  ['Q / 1 / 2', 'Swap weapon'],
-  ['G / F', 'Lethal / tactical'],
-  ['X', 'Field upgrade'],
-  ['Tab', 'Scoreboard'],
-  ['Esc', 'Pause'],
+/**
+ * The controls card, built from the player's actual bindings (M8).
+ *
+ * It used to be a hard-coded list, which was fine until S6.3 made every key reassignable —
+ * at which point a card that still said "W A S D" for a player who had moved to the arrow
+ * keys would be worse than no card at all. Each row names the actions it summarises and the
+ * card resolves them through `Keybinds`, so it is correct by construction.
+ *
+ * The last three rows are chords and modifiers rather than single actions, so they are
+ * composed from the bindings of their parts.
+ */
+const CONTROL_ROWS: readonly Readonly<{ actions: readonly ActionId[]; label: string }>[] = [
+  { actions: ['moveForward', 'moveLeft', 'moveBack', 'moveRight'], label: 'Move' },
+  { actions: ['sprint'], label: 'Sprint (double-tap for tactical)' },
+  { actions: ['crouch'], label: 'Crouch (with sprint, slide)' },
+  { actions: ['jump'], label: 'Jump / mantle' },
+  { actions: ['fire'], label: 'Fire' },
+  { actions: ['ads'], label: 'Aim down sights' },
+  { actions: ['reload'], label: 'Reload' },
+  { actions: ['swapWeapon', 'slot1', 'slot2'], label: 'Swap weapon' },
+  { actions: ['lethal', 'tactical'], label: 'Lethal / tactical' },
+  { actions: ['fieldUpgrade'], label: 'Field upgrade' },
+  { actions: ['streak1', 'streak2', 'streak3'], label: 'Killstreaks' },
+  { actions: ['use'], label: 'Use / plant / defuse' },
+  { actions: ['scoreboard'], label: 'Scoreboard' },
 ];
 
 /**
@@ -115,16 +130,31 @@ export class Menus {
     play.classList.add('op-btn--primary');
 
     const loadout = this.button('Create a class', () => this.deps.onLoadout());
+    const settings = this.button('Settings', () => this.deps.onSettings());
 
+    const bindings = this.deps.bindings();
     const keys = document.createElement('dl');
     keys.className = 'op-keys';
-    for (const [combo, action] of KEY_HELP) {
+    for (const row of CONTROL_ROWS) {
+      // Only the first binding of each action: the card is a reminder, not the settings
+      // screen, and a row reading "L Ctrl / C / L Shift" helps nobody.
+      const combo = row.actions
+        .map((id) => bindings[id]?.[0])
+        .filter((input): input is string => input !== undefined)
+        .map(inputLabel)
+        .join(' ');
+      if (combo === '') continue;
       const dt = document.createElement('dt');
       dt.textContent = combo;
       const dd = document.createElement('dd');
-      dd.textContent = action;
+      dd.textContent = row.label;
       keys.append(dt, dd);
     }
+    const esc = document.createElement('dt');
+    esc.textContent = 'Esc';
+    const escLabel = document.createElement('dd');
+    escLabel.textContent = 'Pause';
+    keys.append(esc, escLabel);
 
     const profile = document.createElement('p');
     profile.className = 'op-screen__sub op-accent';
@@ -136,6 +166,7 @@ export class Menus {
       profile,
       play,
       loadout,
+      settings,
       keys,
       subtitle(FULLSCREEN_HINT),
       this.resetControl(),

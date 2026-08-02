@@ -33,6 +33,8 @@ export class PauseMenu {
    * learns how to reach LOADOUT — after the menus exist.
    */
   private onLoadout: (() => void) | null = null;
+  /** M8. Same late binding as `onLoadout`, and for the same reason. */
+  private onSettings: (() => void) | null = null;
 
   constructor(deps: PauseMenuDeps) {
     this.deps = deps;
@@ -52,13 +54,16 @@ export class PauseMenu {
     this.resumeButton.classList.add('op-btn--primary');
     // S6.3's "between spawns": the class change lands on the live match on the way back.
     const loadout = button('Create a class', () => this.onLoadout?.());
+    // M8: paused is where a player actually notices their sensitivity is wrong, and the
+    // cursor is already free here.
+    const settings = button('Settings', () => this.onSettings?.());
     const debug = button('Debug overlay', () => deps.onToggleDebug());
     const quit = button('Quit to menu', () => deps.onQuit());
     quit.classList.add('op-btn--quiet');
 
     const actions = document.createElement('div');
     actions.className = 'op-actions op-actions--stack';
-    actions.append(this.resumeButton, loadout, debug, quit);
+    actions.append(this.resumeButton, loadout, settings, debug, quit);
 
     const hint = document.createElement('p');
     hint.className = 'op-screen__sub';
@@ -71,6 +76,10 @@ export class PauseMenu {
 
   setOnLoadout(fn: () => void): void {
     this.onLoadout = fn;
+  }
+
+  setOnSettings(fn: () => void): void {
+    this.onSettings = fn;
   }
 
   show(): void {

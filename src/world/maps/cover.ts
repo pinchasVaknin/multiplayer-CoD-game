@@ -56,10 +56,32 @@ export const COVER_PROFILES: Partial<Record<PropShapeId, CoverProfile>> = {
   // fights from there, so it offers its broad sides only.
   container: { halfDepth: 1.25, height: 'high', faces: BROAD_FACES },
   machine: { halfDepth: 0.7, height: 'high', faces: FOUR_SIDES },
-  barrels: { halfDepth: 0.55, height: 'low', faces: FOUR_SIDES },
+  /**
+   * 0.75, not the 0.55 M4 shipped. **This was a real bug, found by the M8 rejection count.**
+   *
+   * The shape is a *pair* of drums at x = +/-0.42, each 0.62 wide, so its half-extent across
+   * that axis is 0.73 m and not 0.31. At 0.55 the derived point sat 1.17 m from the centre,
+   * which leaves 0.44 m of clearance against a 0.35 m capsule radius — and the navmesh, which
+   * asks the collision world rather than the profile table, correctly refused it. Dunes threw
+   * four such points and Foundry had been quietly throwing two since M4.
+   */
+  barrels: { halfDepth: 0.75, height: 'low', faces: FOUR_SIDES },
   girder: { halfDepth: 0.21, height: 'high', faces: FOUR_SIDES },
   ladle: { halfDepth: 1.3, height: 'high', faces: FOUR_SIDES },
   spool: { halfDepth: 0.65, height: 'low', faces: FOUR_SIDES },
+
+  // M8. `palm` is deliberately absent: its trunk is 0.42 m against a 0.7 m capsule, so
+  // "behind a palm" is not a place a body fits, and offering it as cover would have bots
+  // standing in the open believing they were hidden. `lightMast` is absent for the same
+  // reason. Concealment and cover are different things and only one of them is in here.
+  containerBlue: { halfDepth: 1.25, height: 'high', faces: BROAD_FACES },
+  stall: { halfDepth: 0.45, height: 'low', faces: BROAD_FACES },
+  well: { halfDepth: 1.3, height: 'low', faces: FOUR_SIDES },
+  sandbags: { halfDepth: 0.4, height: 'low', faces: BROAD_FACES },
+  // 0.8 is the half-extent of the *long* axis (1.6 m), so all four faces clear the box.
+  // Deriving four faces from one depth means the depth has to be the larger of the two.
+  pallets: { halfDepth: 0.8, height: 'low', faces: FOUR_SIDES },
+  forklift: { halfDepth: 1.2, height: 'high', faces: BROAD_FACES },
 };
 
 /** How far clear of the object's face a bot stands. Capsule radius plus breathing room. */

@@ -8,7 +8,7 @@ import type { MovementConfig } from '../player/MovementConfig';
 import type { ViewmodelConfig } from '../weapons/ViewmodelConfig';
 import type { WeaponDef } from '../weapons/WeaponDefs';
 import type { CollisionWorld } from '../world/CollisionWorld';
-import { bakeNavmesh, samplePatrolCells, type NavGrid } from '../world/Navmesh';
+import { bakeNavmesh, NAV_DEFAULT_LAYERS, samplePatrolCells, type NavGrid } from '../world/Navmesh';
 import type { MapDef } from '../world/maps/types';
 import { AiScheduler, type SchedulerConfig } from './AiScheduler';
 import { Bot } from './Bot';
@@ -50,6 +50,15 @@ const NAV_CELL = 0.5;
 
 /** Spacing of sampled patrol destinations, metres. */
 const PATROL_SPACING = 7;
+
+/**
+ * M8. How far a bot will deliberately step off, on a map that bakes climb links.
+ *
+ * 2.8 m is a container roof to the yard, which is the descent Depot's whole vertical
+ * vocabulary needs. It is deliberately under Foundry's 4 m catwalk: that edge stays
+ * unlinked, so the M4 rule that bots do not walk off the deck survives untouched.
+ */
+const NAV_DROP_HEIGHT = 2.8;
 
 const NAMES = [
   'VULTURE',
@@ -117,6 +126,12 @@ export interface NavStats {
   coverPoints: number;
   coverRejected: number;
   spawnCandidates: number;
+  /** M8. Surfaces per column this map baked. */
+  layers: number;
+  /** M8. Of `links`, how many need a mantle. The Depot verticality number. */
+  climbLinks: number;
+  /** M8. `walkable` as a fraction of the columns inside `navBounds`, 0..1. */
+  coverage: number;
 }
 
 export class BotDirector {
@@ -217,8 +232,14 @@ export class BotDirector {
       stepHeight: deps.movement.stepHeight,
       // Ground snap is what a bot can walk down without it reading as a fall.
       maxDrop: deps.movement.groundSnapDist,
+      // M8. Opt-in per map, and the two halves arrive together: the same ledge window
+      // `Mantle` uses for climbing up, and a bounded step-off for coming back down. A map
+      // that does not ask for them bakes exactly the graph M3 baked.
+      mantleHeight: deps.mapDef.navClimb === true ? deps.movement.mantleMaxHeight : 0,
+      dropHeight: deps.mapDef.navClimb === true ? NAV_DROP_HEIGHT : 0,
       minGroundY: Math.cos(deps.movement.maxSlopeDeg * (Math.PI / 180)),
       seeds: deps.mapDef.spawns.map((s) => s.position),
+      layers: deps.mapDef.navLayers ?? NAV_DEFAULT_LAYERS,
     });
 
     const patrolCells = samplePatrolCells(this.nav, PATROL_SPACING);
@@ -258,6 +279,11 @@ export class BotDirector {
       coverPoints: this.cover.count,
       coverRejected: this.cover.rejected,
       spawnCandidates: this.spawns.candidateCount,
+      layers: this.nav.layers,
+      climbLinks: this.nav.stats.climbLinks,
+      // Against *columns*, not nodes: a map whose upper layers are mostly empty air would
+      // otherwise report a coverage that fell as it gained levels, which is backwards.
+      coverage: this.nav.columnCount > 0 ? this.nav.stats.walkable / this.nav.columnCount : 0,
     };
 
     this.subscribe();

@@ -1,4 +1,5 @@
 import type { Rng } from '../core/Rng';
+import type { DistanceProfileName } from './AudioMix';
 
 /**
  * The parameter records the audio toolkit takes, and the two buffers it is built on.
@@ -36,6 +37,14 @@ export interface NoiseSpec {
   wet: number;
   /** Playback rate of the shared noise buffer; shifts the perceived grain. */
   rate: number;
+  /**
+   * M8. Which distance-falloff curve this sound uses (`engine/AudioMix.ts`).
+   *
+   * A property of the sound rather than of the graph, because a rifle and a footstep are
+   * not the same size of source and one global curve cannot be right for both. See
+   * `AudioMix` for the measurement that forced this.
+   */
+  roll: DistanceProfileName;
 }
 
 export function makeNoiseSpec(): NoiseSpec {
@@ -54,6 +63,7 @@ export function makeNoiseSpec(): NoiseSpec {
     decay: 0.1,
     wet: 0.15,
     rate: 1,
+    roll: 'world',
   };
 }
 
@@ -73,6 +83,8 @@ export interface OscSpec {
   /** Low-pass applied after the oscillator, so a square can be softened. */
   filterFreq: number;
   filterQ: number;
+  /** M8. See `NoiseSpec.roll`. */
+  roll: DistanceProfileName;
 }
 
 export function makeOscSpec(): OscSpec {
@@ -91,6 +103,7 @@ export function makeOscSpec(): OscSpec {
     wet: 0,
     filterFreq: 8000,
     filterQ: 0.7,
+    roll: 'world',
   };
 }
 

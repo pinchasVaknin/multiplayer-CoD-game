@@ -1,5 +1,27 @@
 import * as THREE from 'three';
+import type { ShadowQuality } from '../meta/SaveData';
+import { MotionBlur } from './MotionBlur';
 import type { ViewmodelLayer } from '../player/Viewmodel';
+
+/**
+ * What each shadow tier costs and buys (M8, brief S6.3).
+ *
+ * `size` is the shadow map edge in texels and is the whole cost: 4096 is four times the
+ * fill of 2048 and sixteen times 1024, and on integrated graphics the depth pass is a real
+ * fraction of the frame. `radiusScale` multiplies whatever softness the *map* asked for
+ * (`LightDef.shadowRadius`), so a tier change never overrides a map's art direction — Dunes
+ * stays harder-edged than Foundry at every quality level, it is simply blurrier or sharper
+ * in proportion.
+ *
+ * `off` disables the shadow map outright rather than shrinking it to nothing. A 256-texel
+ * shadow is worse than no shadow: it is a rectangle of noise under everything.
+ */
+export const SHADOW_TIERS: Readonly<Record<ShadowQuality, { size: number; radiusScale: number }>> = {
+  off: { size: 0, radiusScale: 0 },
+  low: { size: 1024, radiusScale: 0.6 },
+  medium: { size: 2048, radiusScale: 1 },
+  high: { size: 4096, radiusScale: 1.6 },
+};
 
 /**
  * Renderer ownership: size, colour management, shadows, and the two-pass draw
@@ -18,6 +40,10 @@ export class Renderer {
   /** Built on first use: most matches never call in a Chopper Gunner. */
   private thermalWorldMaterial: THREE.ShaderMaterial | null = null;
   private thermalHotMaterial: THREE.ShaderMaterial | null = null;
+  /** M8. The live shadow tier; lights read it when a map is loaded and when it changes. */
+  private shadowTier: ShadowQuality = 'medium';
+  /** M8. Null unless the player has asked for motion blur. */
+  private blur: MotionBlur | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.three = new THREE.WebGLRenderer({
@@ -55,18 +81,97 @@ export class Renderer {
     return this.widthPx / this.heightPx;
   }
 
+  get shadowQuality(): ShadowQuality {
+    return this.shadowTier;
+  }
+
+  /**
+   * Set the shadow tier and push it into every shadow-casting light in the scene (M8).
+   *
+   * Applied live rather than at the next map load: a setting that needs a restart to take
+   * effect is a setting a player cannot evaluate, and evaluating it is the entire reason it
+   * exists on a screen whose job is finding a playable configuration.
+   *
+   * Changing `mapSize` on an existing shadow needs its render target disposed, or three.js
+   * keeps drawing into the old one at the old resolution and the setting appears to do
+   * nothing at all.
+   */
+  setShadowQuality(quality: ShadowQuality, scene: THREE.Object3D): void {
+    this.shadowTier = quality;
+    const tier = SHADOW_TIERS[quality];
+    this.three.shadowMap.enabled = tier.size > 0;
+
+    scene.traverse((object) => {
+      const light = object as THREE.Object3D & { isLight?: boolean; shadow?: THREE.LightShadow };
+      const shadow = light.shadow;
+      if (light.isLight !== true || shadow === undefined) return;
+      const authored = shadowAuthoring.get(shadow);
+      if (authored === undefined) return;
+
+      if (tier.size === 0) {
+        light.castShadow = false;
+        return;
+      }
+      light.castShadow = authored.castShadow;
+      shadow.radius = authored.radius * tier.radiusScale;
+      if (shadow.mapSize.width !== tier.size) {
+        shadow.mapSize.set(tier.size, tier.size);
+        // The existing target is the old size; it has to go or nothing changes on screen.
+        shadow.map?.dispose();
+        shadow.map = null;
+      }
+    });
+    this.three.shadowMap.needsUpdate = true;
+  }
+
   get pixelRatio(): number {
     return this.ratio;
   }
 
   render(scene: THREE.Scene, camera: THREE.Camera, viewmodel: ViewmodelLayer | null): void {
-    this.three.clear(true, true, false);
+    const blur = this.blur;
+    if (blur === null) {
+      this.three.clear(true, true, false);
+      this.drawFrame(scene, camera, viewmodel);
+      return;
+    }
+    // The same closure the direct path calls, so there is one description of what a frame
+    // contains and the blurred path cannot forget the viewmodel pass.
+    blur.render(this.three, () => this.drawFrame(scene, camera, viewmodel));
+  }
+
+  private drawFrame(scene: THREE.Scene, camera: THREE.Camera, viewmodel: ViewmodelLayer | null): void {
     this.three.render(scene, camera);
     if (viewmodel !== null && viewmodel.hasContent) {
       // Fresh depth so the viewmodel can never intersect world geometry.
       this.three.clearDepth();
       this.three.render(viewmodel.scene, viewmodel.camera);
     }
+  }
+
+  /**
+   * Turn accumulation motion blur on or off (M8, S6.3).
+   *
+   * Built on the first frame it is wanted and destroyed the moment it is not, so a player
+   * who leaves it off never allocates a render target. See `engine/MotionBlur.ts`.
+   */
+  setMotionBlur(on: boolean): void {
+    if (on === (this.blur !== null)) return;
+    if (on) {
+      this.blur = new MotionBlur();
+      return;
+    }
+    this.blur?.dispose();
+    this.blur = null;
+  }
+
+  get motionBlurEnabled(): boolean {
+    return this.blur !== null;
+  }
+
+  /** Drop the blur history — on a respawn, a map change or a camera takeover. */
+  resetMotionBlur(): void {
+    this.blur?.reset();
   }
 
   /**
@@ -158,12 +263,36 @@ export class Renderer {
   }
 
   dispose(): void {
+    this.blur?.dispose();
+    this.blur = null;
     this.thermalWorldMaterial?.dispose();
     this.thermalWorldMaterial = null;
     this.thermalHotMaterial?.dispose();
     this.thermalHotMaterial = null;
     this.three.dispose();
   }
+}
+
+/**
+ * What each shadow was *authored* at, keyed by the shadow itself.
+ *
+ * The quality tier scales a map's intent rather than replacing it, so the intent has to
+ * survive being scaled — without this, going medium → high → medium would multiply the
+ * radius by 1.6 and then by 1 against the already-scaled value, and the map's art direction
+ * would drift a little further every time the player touched the slider.
+ *
+ * A `WeakMap` because the key is a light that belongs to a map, and a map is disposed
+ * between matches: entries go with it and there is nothing to clean up.
+ */
+const shadowAuthoring = new WeakMap<THREE.LightShadow, { radius: number; castShadow: boolean }>();
+
+/** Called by `MapLoader` once per light, with the values the map asked for. */
+export function rememberShadowAuthoring(
+  shadow: THREE.LightShadow,
+  radius: number,
+  castShadow: boolean,
+): void {
+  shadowAuthoring.set(shadow, { radius, castShadow });
 }
 
 /** Thermal has no sky. A flat mid-dark grey, so the horizon is not a black void. */

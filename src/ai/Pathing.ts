@@ -27,6 +27,16 @@ import { NAV_DIRS, type NavGrid } from '../world/Navmesh';
 /** Waypoints a smoothed path may hold. Well past the diagonal of any M4 map at 0.5 m. */
 export const MAX_WAYPOINTS = 64;
 
+/**
+ * What a mantle costs A*, in metres of equivalent ground (M8).
+ *
+ * The vault itself is 0.4 s and a bot loses a little more lining up, so call it half a
+ * second at ~6.9 m/s sprint. Charging it in metres rather than as an abstract penalty
+ * keeps the heuristic admissible — octile distance never overestimates a path whose edges
+ * all cost at least their length.
+ */
+const CLIMB_COST_METRES = 3.5;
+
 export const enum SearchState {
   Idle = 0,
   Running = 1,
@@ -318,7 +328,12 @@ export class Pathfinder {
         // Climbing costs more than flat ground so a bot prefers the ramp to the step
         // when both reach the same place, which reads as picking the sensible route.
         const rise = Math.abs((grid.height[next] ?? 0) - (grid.height[current] ?? 0));
-        const cost = dir.cost * grid.cellSize + rise * 1.5;
+        // A mantle is roughly half a second of not moving and not shooting (M8). Charged
+        // as the distance a sprint would have covered in that time, so A* trades a climb
+        // against a detour in the same units — which is what makes a bot walk round to the
+        // gantry stair when it is close and haul itself up a container when it is not.
+        const climb = grid.isClimb(current, d) ? CLIMB_COST_METRES : 0;
+        const cost = dir.cost * grid.cellSize + rise * 1.5 + climb;
         const tentative = gHere + cost;
         if (this.nodeState[next] === 1 && tentative >= (this.gScore[next] ?? Infinity)) continue;
 

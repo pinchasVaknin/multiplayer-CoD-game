@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { BotTeam } from './ai/Combatant';
 import type { GameBus } from './core/Events';
 import type { GameMode } from './modes/GameMode';
+import { palette } from './ui/Palette';
 import { Domination } from './modes/Domination';
 import { KillConfirmed } from './modes/KillConfirmed';
 import { SearchAndDestroy } from './modes/SearchAndDestroy';
@@ -33,10 +34,23 @@ import type { ObjectiveZone } from './modes/ObjectiveZone';
  * true each frame, which is one source of truth rather than two.
  */
 
-/** Neutral, friendly and enemy. The same three the minimap uses. */
-const COLOR_NEUTRAL = 0xffb340;
-const COLOR_FRIENDLY = 0x6fd08c;
-const COLOR_ENEMY = 0xe8604c;
+/**
+ * Neutral, friendly and enemy — read from the live palette (M8).
+ *
+ * These are `THREE.Color` inputs rather than CSS, which is the reason S6.3's "not just a CSS
+ * filter" has teeth: a flag ring, a dog tag and a bomb light are *world geometry*, and no
+ * amount of filtering the page would have touched them. Objective materials are rebuilt on
+ * a palette change, which happens once, on a user gesture, outside a match tick.
+ */
+function colorNeutral(): number {
+  return palette.current.neutral;
+}
+function colorFriendly(): number {
+  return palette.current.friendly;
+}
+function colorEnemy(): number {
+  return palette.current.hostile;
+}
 
 /** Height of a flag pole, metres. Tall enough to see over a container. */
 const POLE_HEIGHT = 3.4;
@@ -75,6 +89,14 @@ export class MatchObjectives {
   private readonly bomb: THREE.Group = new THREE.Group();
   private readonly bombLight: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   private readonly unsubscribe: Array<() => void> = [];
+  /**
+   * Materials whose hostile colour is baked in at construction (M8).
+   *
+   * Everything else on this screen re-reads the palette every frame and follows a change for
+   * free. These do not, so they are collected and repainted by the palette subscription —
+   * the alternative is a dog tag that stays red after the player switched to deuteranopia.
+   */
+  private readonly hostileMaterials: THREE.MeshBasicMaterial[] = [];
   private spin = 0;
 
   constructor(deps: MatchObjectivesDeps) {
@@ -92,6 +114,14 @@ export class MatchObjectives {
     if (mode instanceof KillConfirmed) this.buildTagPool();
 
     this.bombLight = this.bomb.children.find(isBasicMesh) ?? this.buildFallbackLight();
+
+    // Repaint the baked-in materials whenever the palette moves. Fires immediately, which
+    // is what sets them correctly for a session that started in a colourblind mode.
+    this.unsubscribe.push(
+      palette.onChange((p) => {
+        for (const mat of this.hostileMaterials) mat.color.setHex(p.hostile);
+      }),
+    );
     deps.scene.add(this.group);
   }
 
@@ -119,6 +149,7 @@ export class MatchObjectives {
     this.group.clear();
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
+    this.hostileMaterials.length = 0;
   }
 
   // -- flags and bomb sites ---------------------------------------------------
@@ -136,13 +167,13 @@ export class MatchObjectives {
     group.position.set(p.x, p.y, p.z);
 
     const bannerMat = new THREE.MeshStandardMaterial({
-      color: COLOR_NEUTRAL,
+      color: colorNeutral(),
       roughness: 0.85,
       metalness: 0,
       side: THREE.DoubleSide,
     });
     const ringMat = new THREE.MeshBasicMaterial({
-      color: COLOR_NEUTRAL,
+      color: colorNeutral(),
       transparent: true,
       opacity: 0.5,
       // Flat on the floor: writing depth would make it z-fight with the slab it sits on.
@@ -150,7 +181,7 @@ export class MatchObjectives {
       side: THREE.DoubleSide,
     });
     const progressMat = new THREE.MeshBasicMaterial({
-      color: COLOR_NEUTRAL,
+      color: colorNeutral(),
       transparent: true,
       opacity: 0.85,
       depthWrite: false,
@@ -220,8 +251,8 @@ export class MatchObjectives {
   }
 
   private colourFor(team: BotTeam | 'NONE'): number {
-    if (team === 'NONE') return COLOR_NEUTRAL;
-    return team === this.deps.localTeam ? COLOR_FRIENDLY : COLOR_ENEMY;
+    if (team === 'NONE') return colorNeutral();
+    return team === this.deps.localTeam ? colorFriendly() : colorEnemy();
   }
 
   // -- dog tags ---------------------------------------------------------------
@@ -237,7 +268,8 @@ export class MatchObjectives {
     const chainGeo = new THREE.TorusGeometry(0.07, 0.008, 4, 10);
     this.disposables.push(geo, chainGeo);
     for (let i = 0; i < 24; i++) {
-      const mat = new THREE.MeshBasicMaterial({ color: COLOR_ENEMY, toneMapped: false });
+      const mat = new THREE.MeshBasicMaterial({ color: colorEnemy(), toneMapped: false });
+      this.hostileMaterials.push(mat);
       this.disposables.push(mat);
       const group = new THREE.Group();
       const mesh = new THREE.Mesh(geo, mat);
@@ -276,7 +308,7 @@ export class MatchObjectives {
       visual.group.rotation.y = this.spin * 1.6 + tag.id;
       // Friendly tags deny, enemy tags score — so they must be told apart instantly.
       visual.mesh.material.color.setHex(
-        tag.team === this.deps.localTeam ? COLOR_FRIENDLY : COLOR_ENEMY,
+        tag.team === this.deps.localTeam ? colorFriendly() : colorEnemy(),
       );
       // The last three seconds blink, which is the only warning it is about to evaporate.
       visual.group.visible = tag.life > 3 || Math.sin(this.spin * 14) > -0.2;
@@ -295,7 +327,8 @@ export class MatchObjectives {
     const bodyGeo = new THREE.BoxGeometry(0.42, 0.26, 0.3);
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0x23282f, roughness: 0.7, metalness: 0.25 });
     const lightGeo = new THREE.SphereGeometry(0.05, 8, 6);
-    const lightMat = new THREE.MeshBasicMaterial({ color: COLOR_ENEMY, toneMapped: false });
+    const lightMat = new THREE.MeshBasicMaterial({ color: colorEnemy(), toneMapped: false });
+    this.hostileMaterials.push(lightMat);
     this.disposables.push(bodyGeo, bodyMat, lightGeo, lightMat);
 
     const body = new THREE.Mesh(bodyGeo, bodyMat);
@@ -311,7 +344,8 @@ export class MatchObjectives {
 
   private buildFallbackLight(): THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> {
     const geo = new THREE.SphereGeometry(0.01, 4, 3);
-    const mat = new THREE.MeshBasicMaterial({ color: COLOR_ENEMY });
+    const mat = new THREE.MeshBasicMaterial({ color: colorEnemy() });
+    this.hostileMaterials.push(mat);
     this.disposables.push(geo, mat);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.visible = false;

@@ -15,8 +15,10 @@ import { ATTACHMENTS, resolveWeaponDef } from '../weapons/Attachments';
 import { ALL_WEAPONS, type WeaponDef } from '../weapons/WeaponDefs';
 import { ttkTableToMarkdown } from './ArsenalHarness';
 import type { Harness } from './Harness';
+import { Handover } from './Handover';
 import type { MatchHarness } from './MatchHarness';
 import { simulateXp, simulationToLines } from './XpSimulator';
+import { cssHex, palette } from '../ui/Palette';
 
 /**
  * `window.__operator`, the console surface the acceptance measurements are read from.
@@ -31,6 +33,14 @@ import { simulateXp, simulationToLines } from './XpSimulator';
  * it alive and turn the heap harness into a liar about its own subject.
  */
 export function installConsoleApi(game: Game, harness: Harness, matchHarness: MatchHarness): void {
+  /**
+   * M8. The four hand-over measurements S6.5 asks for, in one export format.
+   *
+   * Built here rather than per-match because three of the four outlive a match — the frame
+   * buffer, the heap boundaries and the render-scale sweep all span the thing they measure.
+   */
+  const handover = new Handover({ game, loop: game.loopHandle, stats: game.stats, matchHarness });
+
   const api = {
     game,
     harness,
@@ -78,6 +88,30 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
     mode: () => game.activeMatch?.mode,
     score: () => game.activeMatch?.score,
     laneReport: () => game.debugSuite?.modePanel.laneReport(),
+
+    // ---- M8 ---------------------------------------------------------------
+    /** "Sprint every wall" on the current map (S8, criterion 2). One call, one table. */
+    snagSweep: () => game.debugSuite?.snagHarness.run(),
+    snagReport: () => game.debugSuite?.snagHarness.lastReport,
+
+    // ---- the hand-over tools (S6.5). Documented in DEBUG.md. ---------------
+    handover,
+    /** Frame-time p50/p95/p99/worst plus the whole buffer, as JSON. */
+    frameReport: () => handover.frameReport(),
+    /** Input latency, in milliseconds and in frames. Needs a live match. */
+    latencyReport: () => handover.latencyReport(),
+    /** Drive the per-tick sim path and watch the heap, with a control. Needs a live match. */
+    allocationProbe: (ticks?: number) => handover.allocationProbe(ticks),
+    /** Walk every render scale and report the percentiles at each. Needs a live match. */
+    renderSweep: (secondsPerStep?: number) => handover.renderScaleSweep(secondsPerStep),
+    /** Everything but the heap run, for pasting into an issue. */
+    fullReport: () => handover.fullReport(),
+    /** Copy any of the above to the clipboard as JSON. */
+    copyReport: (report: unknown) => handover.copy(report),
+    /** The live settings record, so a script can assert what a change actually did. */
+    settings: () => game.profile.settings,
+    applySettings: (patch: unknown) => game.applySettings(patch as Record<string, never>),
+    palette: () => paletteSnapshot(),
     matchReport: () => matchHarness.report(),
     runMatches: (count: number) => matchHarness.run(count),
     tiers: game.tiers,
@@ -156,4 +190,17 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
     }),
   };
   Object.defineProperty(window, '__operator', { value: api, configurable: true });
+}
+
+/** The live gameplay palette, for the colourblind acceptance check. */
+function paletteSnapshot(): Record<string, string> {
+  const p = palette.current;
+  return {
+    mode: palette.currentMode,
+    friendly: cssHex(p.friendly),
+    hostile: cssHex(p.hostile),
+    neutral: cssHex(p.neutral),
+    hitmarker: cssHex(p.hitmarker),
+    hitmarkerKill: cssHex(p.hitmarkerKill),
+  };
 }

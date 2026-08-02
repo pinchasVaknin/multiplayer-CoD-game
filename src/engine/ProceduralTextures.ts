@@ -96,6 +96,34 @@ export class ProceduralTextures {
         paintGrate(ctx, rng);
         worldScale = 1;
         break;
+
+      // ---- M8 -------------------------------------------------------------
+      case 'sand':
+        paintSand(ctx, rng);
+        // 3 m per repeat: a desert street is a big flat surface and a 1 m tile on it
+        // reads as a chequerboard the moment you sprint down the lane.
+        worldScale = 3;
+        break;
+      case 'plaster':
+        paintPlaster(ctx, rng);
+        worldScale = 2.4;
+        break;
+      case 'clayTile':
+        paintClayTile(ctx, rng);
+        worldScale = 1.4;
+        break;
+      case 'wood':
+        paintWood(ctx, rng);
+        worldScale = 1.6;
+        break;
+      case 'asphalt':
+        paintAsphalt(ctx, rng);
+        worldScale = 3;
+        break;
+      case 'paintedSteel':
+        paintPaintedSteel(ctx, rng);
+        worldScale = 2.4;
+        break;
     }
 
     const texture = new THREE.CanvasTexture(canvas);
@@ -328,6 +356,219 @@ function paintGrate(ctx: CanvasRenderingContext2D, rng: Rng): void {
   strokeRect(ctx, 2, 2, TEX_SIZE - 4, TEX_SIZE - 4);
   grainNoise(ctx, rng, 0.1);
   speckle(ctx, rng, 400, 0.35, 1.8);
+}
+
+// -- M8 painters ------------------------------------------------------------
+
+/**
+ * Wind-rippled sand. Dunes' ground, and most of what the eye sees on that map.
+ *
+ * The ripples are the whole job. A flat noise field at this world scale reads as a
+ * beige fog with no sense of direction or speed; low-amplitude sine bands crossing the
+ * tile give the ground a grain that tells you how fast you are moving over it. Two
+ * bands at different frequencies and a slight angle keep the pattern from resolving
+ * into stripes.
+ */
+function paintSand(ctx: CanvasRenderingContext2D, rng: Rng): void {
+  fill(ctx, 0xbfa274);
+  blotches(ctx, rng, 20, 30, 96, 0.05);
+
+  ctx.save();
+  ctx.translate(TEX_SIZE / 2, TEX_SIZE / 2);
+  ctx.rotate(0.28);
+  ctx.translate(-TEX_SIZE, -TEX_SIZE);
+  for (let i = 0; i < 64; i++) {
+    const y = (i / 64) * TEX_SIZE * 2;
+    const a = 0.035 + Math.abs(Math.sin(i * 0.7)) * 0.035;
+    ctx.fillStyle = `rgba(255,240,210,${a.toFixed(3)})`;
+    ctx.fillRect(0, y, TEX_SIZE * 2, 2.2);
+    ctx.fillStyle = `rgba(96,72,46,${(a * 0.8).toFixed(3)})`;
+    ctx.fillRect(0, y + 3, TEX_SIZE * 2, 1.6);
+  }
+  ctx.restore();
+
+  // Grit and the odd pebble, so the surface has a scale close up as well as far away.
+  grainNoise(ctx, rng, 0.09);
+  speckle(ctx, rng, 1400, 0.24, 1.8);
+  for (let i = 0; i < 26; i++) {
+    ctx.fillStyle = `rgba(${Math.round(rng.range(120, 160))},${Math.round(rng.range(100, 130))},80,0.5)`;
+    disc(ctx, rng.float() * TEX_SIZE, rng.float() * TEX_SIZE, rng.range(1.2, 3.2));
+  }
+}
+
+/**
+ * Sun-bleached mud plaster over block. Dunes' walls.
+ *
+ * Warm, matte and slightly uneven, with the block courses only just visible through the
+ * render — the point is that a village wall reads as *hand-finished*, which is what makes
+ * it a different building material from Foundry's fired brick rather than a recolour.
+ */
+function paintPlaster(ctx: CanvasRenderingContext2D, rng: Rng): void {
+  fill(ctx, 0xc4ab86);
+  blotches(ctx, rng, 24, 26, 84, 0.07);
+
+  // Block courses, ghosted: four courses to the tile, mortar barely darker.
+  const courses = 4;
+  const courseH = TEX_SIZE / courses;
+  ctx.strokeStyle = 'rgba(120,98,70,0.22)';
+  ctx.lineWidth = 2;
+  for (let row = 1; row < courses; row++) line(ctx, 0, row * courseH, TEX_SIZE, row * courseH);
+  ctx.strokeStyle = 'rgba(120,98,70,0.14)';
+  for (let row = 0; row < courses; row++) {
+    const x = ((row % 2) * 0.5 + 0.25) * TEX_SIZE;
+    line(ctx, x, row * courseH, x, (row + 1) * courseH);
+  }
+
+  // Spalled patches where the render has come off and the darker block shows through.
+  for (let i = 0; i < 12; i++) {
+    const x = rng.float() * TEX_SIZE;
+    const y = rng.float() * TEX_SIZE;
+    ctx.fillStyle = `rgba(150,120,88,${rng.range(0.16, 0.34).toFixed(3)})`;
+    disc(ctx, x, y, rng.range(5, 18));
+  }
+  // Dust collecting low, the way it does on every wall in a dry place.
+  const grad = ctx.createLinearGradient(0, 0, 0, TEX_SIZE);
+  grad.addColorStop(0, 'rgba(255,238,206,0.06)');
+  grad.addColorStop(1, 'rgba(126,102,72,0.18)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+  grainNoise(ctx, rng, 0.08);
+  speckle(ctx, rng, 600, 0.22, 1.5);
+}
+
+/** Baked clay roof tile. Dunes' roofs and window lintels: the map's one saturated note. */
+function paintClayTile(ctx: CanvasRenderingContext2D, rng: Rng): void {
+  fill(ctx, 0x8f5236);
+  const rows = 6;
+  const rowH = TEX_SIZE / rows;
+  const tileW = TEX_SIZE / 5;
+  for (let row = 0; row < rows; row++) {
+    const y = row * rowH;
+    const offset = row % 2 === 0 ? 0 : tileW * 0.5;
+    for (let col = -1; col < 6; col++) {
+      const x = col * tileW + offset;
+      const shade = rng.range(0.82, 1.16);
+      ctx.fillStyle = `rgb(${clamp255(154 * shade)},${clamp255(86 * shade)},${clamp255(58 * shade)})`;
+      ctx.fillRect(x + 1.5, y + 1.5, tileW - 3, rowH - 3);
+      // A highlight on the crown of each tile, so the run reads as barrel-shaped.
+      ctx.fillStyle = 'rgba(255,214,168,0.12)';
+      ctx.fillRect(x + 1.5, y + 1.5, tileW - 3, rowH * 0.22);
+    }
+  }
+  ctx.fillStyle = 'rgba(40,24,16,0.18)';
+  for (let row = 1; row < rows; row++) ctx.fillRect(0, row * rowH - 1.5, TEX_SIZE, 3);
+  grainNoise(ctx, rng, 0.1);
+  speckle(ctx, rng, 500, 0.3, 1.6);
+}
+
+/** Weathered plank. Market stalls, doors, carts, and Depot's pallets. */
+function paintWood(ctx: CanvasRenderingContext2D, rng: Rng): void {
+  fill(ctx, 0x6d5334);
+  const planks = 6;
+  const plankW = TEX_SIZE / planks;
+  for (let i = 0; i < planks; i++) {
+    const x = i * plankW;
+    const shade = rng.range(0.8, 1.2);
+    ctx.fillStyle = `rgb(${clamp255(122 * shade)},${clamp255(92 * shade)},${clamp255(58 * shade)})`;
+    ctx.fillRect(x + 1, 0, plankW - 2, TEX_SIZE);
+    // Grain: long streaks along the plank, a couple of knots.
+    for (let s = 0; s < 26; s++) {
+      const sx = x + rng.range(2, plankW - 4);
+      const sy = rng.float() * TEX_SIZE;
+      const h = rng.range(20, 110);
+      ctx.fillStyle = rng.chance(0.5)
+        ? `rgba(60,42,24,${rng.range(0.06, 0.18).toFixed(3)})`
+        : `rgba(220,192,148,${rng.range(0.04, 0.12).toFixed(3)})`;
+      ctx.fillRect(sx, sy, 1.4, h);
+    }
+    if (rng.chance(0.4)) {
+      const kx = x + plankW * 0.5;
+      const ky = rng.float() * TEX_SIZE;
+      ctx.fillStyle = 'rgba(48,32,18,0.55)';
+      disc(ctx, kx, ky, rng.range(2.4, 4.4));
+    }
+  }
+  // Plank gaps, which is where the shape actually comes from.
+  ctx.fillStyle = 'rgba(24,16,10,0.6)';
+  for (let i = 0; i <= planks; i++) ctx.fillRect(i * plankW - 1, 0, 2, TEX_SIZE);
+  grainNoise(ctx, rng, 0.07);
+}
+
+/**
+ * Cracked asphalt with painted bay lines. Depot's yard.
+ *
+ * Deliberately near-black in albedo: Depot is a night map lit by pooled sources, and a
+ * ground that reflects much of anything flattens the pools into a uniform grey. The bay
+ * lines are the only bright thing, which is what gives the yard readable geometry in the
+ * dark without adding a light.
+ */
+function paintAsphalt(ctx: CanvasRenderingContext2D, rng: Rng): void {
+  fill(ctx, 0x24262b);
+  blotches(ctx, rng, 22, 24, 80, 0.07);
+  // Aggregate.
+  for (let i = 0; i < 2400; i++) {
+    const a = rng.range(0.05, 0.22);
+    ctx.fillStyle = rng.chance(0.6) ? `rgba(150,156,166,${a})` : `rgba(10,11,13,${a * 1.6})`;
+    ctx.fillRect(rng.float() * TEX_SIZE, rng.float() * TEX_SIZE, rng.range(0.8, 2.4), rng.range(0.8, 2.4));
+  }
+  // Cracks: a few random walks across the tile.
+  ctx.strokeStyle = 'rgba(8,9,11,0.7)';
+  ctx.lineWidth = 1.6;
+  for (let c = 0; c < 5; c++) {
+    let x = rng.float() * TEX_SIZE;
+    let y = rng.float() * TEX_SIZE;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    for (let s = 0; s < 14; s++) {
+      x += rng.spread() * 18;
+      y += rng.range(6, 20);
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // One painted bay line per tile, worn.
+  ctx.fillStyle = 'rgba(226,214,178,0.30)';
+  ctx.fillRect(TEX_SIZE * 0.5 - 4, 0, 8, TEX_SIZE);
+  ctx.fillStyle = 'rgba(24,26,31,0.35)';
+  for (let i = 0; i < 40; i++) {
+    ctx.fillRect(TEX_SIZE * 0.5 - 4, rng.float() * TEX_SIZE, 8, rng.range(1, 5));
+  }
+  grainNoise(ctx, rng, 0.07);
+}
+
+/**
+ * Painted container plate: corrugated like `rust`, but the paint is still winning.
+ *
+ * Cool blue-green rather than warm oxide, so a Depot stack reads as a different object
+ * from a Foundry one even though both are 6 m of corrugated steel. The ribs are the same
+ * pitch deliberately — that is what a shipping container is.
+ */
+function paintPaintedSteel(ctx: CanvasRenderingContext2D, rng: Rng): void {
+  fill(ctx, 0x2f4a4f);
+  blotches(ctx, rng, 16, 22, 70, 0.08);
+
+  const pitch = TEX_SIZE / 8;
+  for (let i = 0; i < 8; i++) {
+    const x = i * pitch;
+    ctx.fillStyle = 'rgba(190,214,218,0.10)';
+    ctx.fillRect(x, 0, pitch * 0.34, TEX_SIZE);
+    ctx.fillStyle = 'rgba(0,0,0,0.26)';
+    ctx.fillRect(x + pitch * 0.62, 0, pitch * 0.3, TEX_SIZE);
+  }
+  // Rust creeping in at the seams rather than across the panel.
+  for (let i = 0; i < 18; i++) {
+    const x = rng.float() * TEX_SIZE;
+    const y = rng.float() * TEX_SIZE;
+    ctx.fillStyle = `rgba(${Math.round(rng.range(110, 150))},${Math.round(rng.range(62, 84))},40,${rng.range(0.1, 0.26).toFixed(3)})`;
+    disc(ctx, x, y, rng.range(4, 14));
+  }
+  // Stencilled block, knocked back — a container always has something painted on it.
+  ctx.fillStyle = 'rgba(214,226,228,0.16)';
+  ctx.fillRect(TEX_SIZE * 0.18, TEX_SIZE * 0.4, TEX_SIZE * 0.1, TEX_SIZE * 0.16);
+  ctx.fillRect(TEX_SIZE * 0.33, TEX_SIZE * 0.4, TEX_SIZE * 0.1, TEX_SIZE * 0.16);
+  ctx.fillRect(TEX_SIZE * 0.48, TEX_SIZE * 0.4, TEX_SIZE * 0.1, TEX_SIZE * 0.16);
+  grainNoise(ctx, rng, 0.1);
+  speckle(ctx, rng, 700, 0.32, 2);
 }
 
 // -- primitives -------------------------------------------------------------

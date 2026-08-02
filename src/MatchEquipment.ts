@@ -55,6 +55,13 @@ export interface MatchEquipmentDeps {
   readonly seed: number;
 }
 
+/** How long the concussion takes to clear. Short, per S6.4. */
+const CONCUSSION_SECONDS = 1.6;
+/** Below this proximity a blast is heard rather than felt, and does nothing to the mix. */
+const CONCUSSION_MIN_FALLOFF = 0.35;
+/** The ring is a hint at this range, not the wall of tone a flashbang produces. */
+const CONCUSSION_RING_SCALE = 0.45;
+
 export class MatchEquipment {
   readonly system: EquipmentSystem;
   readonly thrower: ThrowController;
@@ -84,6 +91,15 @@ export class MatchEquipment {
 
   private flashRemaining = 0;
   private flashTotal = 1;
+  /**
+   * A nearby blast, decaying (M8, brief S6.4).
+   *
+   * S6.4 asks for "low-pass + tinnitus sine after nearby explosions", and until M8 only a
+   * *flashbang* did either — a frag going off at your feet was loud and then instantly over.
+   * This is the same pair of effects on a much shorter, much shallower curve: a concussion
+   * is a moment of your ears folding, not the ten seconds of nothing a flash buys.
+   */
+  private concussion = 0;
   private beepTimer = 0;
   private elapsed = 0;
   /** Round-robin cursor so one bot is considered per tick rather than all ten. */
@@ -133,6 +149,7 @@ export class MatchEquipment {
     this.system.simulate(sim.x, sim.y + sim.eyeHeight, sim.z, this.deps.localTeam);
     this.stepBotThrows();
     this.stepFlash();
+    this.stepConcussion();
     this.stepThreatBeep();
 
     this.lastMs = performance.now() - t0;
@@ -220,6 +237,19 @@ export class MatchEquipment {
     this.deps.audio.setFlashMuffle(value);
   }
 
+  /**
+   * Decay the concussion.
+   *
+   * Linear over `CONCUSSION_SECONDS` rather than exponential: an exponential tail leaves a
+   * barely-audible muffle hanging around for seconds after the blast, which reads as the
+   * audio being broken rather than as the player recovering.
+   */
+  private stepConcussion(): void {
+    if (this.concussion <= 0) return;
+    this.concussion = Math.max(0, this.concussion - DT / CONCUSSION_SECONDS);
+    this.deps.audio.setConcussionMuffle(this.concussion);
+  }
+
   private stepThreatBeep(): void {
     const threat = this.system.threat;
     if (!threat.active) {
@@ -253,6 +283,22 @@ export class MatchEquipment {
     const distance = Math.hypot(cam.x - x, cam.y - y, cam.z - z);
     const falloff = clamp01(1 - distance / Math.max(radius * 2.5, 1e-3));
     if (falloff > 0) this.deps.cameraRig.shake.add(this.deps.cfg.blastShake * falloff * falloff);
+
+    /**
+     * The concussion (M8, S6.4).
+     *
+     * Only for a real blast — a flashbang has its own, deeper effect and stacking the two
+     * would put the world behind two low-passes at once. Squared falloff, so it is a thing
+     * that happens when a grenade lands *near you* rather than a thing that happens
+     * whenever a grenade goes off; and it takes the maximum with whatever is already
+     * decaying so a second blast cannot make the first one quieter.
+     */
+    if (!flashy && falloff > CONCUSSION_MIN_FALLOFF) {
+      const strength = falloff * falloff;
+      this.concussion = Math.max(this.concussion, strength);
+      this.deps.audio.setConcussionMuffle(this.concussion);
+      this.deps.audio.playRing(strength * CONCUSSION_RING_SCALE);
+    }
   }
 
   private onFlashed(targetId: number, intensity: number): void {

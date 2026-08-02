@@ -5,7 +5,7 @@ import { requireWeapon, WEAPON_DEFS, type WeaponDef } from '../weapons/WeaponDef
 import { CAMO_IDS, type CamoId } from './Camos';
 import { fieldUpgradeDef, FIELD_UPGRADE_IDS, type FieldUpgradeId } from './FieldUpgrades';
 import type { LoadoutSlot } from './Loadouts';
-import type { SaveV1, WeaponSaveData } from './SaveData';
+import type { SaveV2, WeaponSaveData } from './SaveData';
 
 /**
  * What is unlocked, and what it takes (brief S6.2).
@@ -111,7 +111,7 @@ export class UnlockState {
   }
 
   /** Built from a save. The one constructor anything outside this file should use. */
-  static fromSave(save: SaveV1, unrestricted = false): UnlockState {
+  static fromSave(save: SaveV2, unrestricted = false): UnlockState {
     return new UnlockState(
       save.profile.level,
       save.weapons,
@@ -351,6 +351,6 @@ export function attachmentsForWeapon(def: WeaponDef): AttachmentId[] {
 }
 
 /** Camos the profile has earned, in declaration order. */
-export function ownedCamos(save: SaveV1): CamoId[] {
+export function ownedCamos(save: SaveV2): CamoId[] {
   return CAMO_IDS.filter((id) => save.camos[id] === true);
 }

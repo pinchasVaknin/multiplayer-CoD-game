@@ -140,12 +140,21 @@ export class ProceduralAudio extends AudioGraph {
    * Heavy steps sit lower and louder and pick up a body thump, which is what separates
    * a sprint from a walk by ear.
    */
-  playFootstep(x: number, y: number, z: number, speed: number, heavy: boolean, material: number): void {
+  playFootstep(
+    x: number,
+    y: number,
+    z: number,
+    speed: number,
+    heavy: boolean,
+    material: number,
+    gain = 1,
+  ): void {
     if (!this.hasContext) return;
     const surface = surfaceAtIndex(material);
-    const intensity = Math.min(1, 0.35 + speed / 9);
+    const intensity = Math.min(1, 0.35 + speed / 9) * gain;
 
     const spec = this.noiseScratch;
+    spec.roll = 'footstep';
     spec.x = x;
     spec.y = y;
     spec.z = z;
@@ -178,17 +187,26 @@ export class ProceduralAudio extends AudioGraph {
     osc.wet = 0.1;
     osc.filterFreq = 400;
     osc.filterQ = 0.6;
+    osc.roll = 'footstep';
     this.oscHit(osc);
   }
 
   /** Landing: fuller and lower than a footstep, scaled by impact speed. */
-  playLanding(x: number, y: number, z: number, impactSpeed: number, material: number): void {
+  playLanding(
+    x: number,
+    y: number,
+    z: number,
+    impactSpeed: number,
+    material: number,
+    gain = 1,
+  ): void {
     if (!this.hasContext) return;
-    const t = Math.min(1, impactSpeed / 11);
+    const t = Math.min(1, impactSpeed / 11) * gain;
     if (t < 0.08) return;
     const surface = surfaceAtIndex(material);
 
     const spec = this.noiseScratch;
+    spec.roll = 'footstep';
     spec.x = x;
     spec.y = y;
     spec.z = z;

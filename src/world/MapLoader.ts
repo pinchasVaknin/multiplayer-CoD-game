@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import type { ProceduralTextures } from '../engine/ProceduralTextures';
+import { rememberShadowAuthoring, SHADOW_TIERS } from '../engine/Renderer';
+import type { ShadowQuality } from '../meta/SaveData';
 import { ColliderSet, writeBasis } from './ColliderSet';
 import { CollisionWorld } from './CollisionWorld';
 import { buildBoxGeometry, type BoxSpec } from './MapMesher';
@@ -40,7 +42,11 @@ export interface MapStats {
 const BRUSH_FACE_SPACING = 1.6;
 const PROP_FACE_SPACING = 0.6;
 
-export function loadMap(def: MapDef, textures: ProceduralTextures): LoadedMap {
+export function loadMap(
+  def: MapDef,
+  textures: ProceduralTextures,
+  shadowQuality: ShadowQuality = 'medium',
+): LoadedMap {
   const t0 = performance.now();
   const root = new THREE.Group();
   root.name = `map:${def.id}`;
@@ -210,7 +216,13 @@ export function loadMap(def: MapDef, textures: ProceduralTextures): LoadedMap {
         l.castShadow = light.castShadow;
         if (light.castShadow) {
           const e = light.shadowExtent;
-          l.shadow.mapSize.set(2048, 2048);
+          // M8: the tier the player chose, not a constant. `SHADOW_TIERS` scales the map's
+          // own softness rather than replacing it, so Dunes stays harder than Foundry at
+          // every quality level.
+          const tier = SHADOW_TIERS[shadowQuality];
+          const size = tier.size === 0 ? 1024 : tier.size;
+          l.castShadow = tier.size > 0;
+          l.shadow.mapSize.set(size, size);
           l.shadow.camera.left = -e;
           l.shadow.camera.right = e;
           l.shadow.camera.top = e;
@@ -219,11 +231,18 @@ export function loadMap(def: MapDef, textures: ProceduralTextures): LoadedMap {
           l.shadow.camera.far = 160;
           // Constant bias handles the depth quantisation; normalBias handles the
           // grazing-angle acne that a pure constant bias would need to be huge for.
-          l.shadow.bias = -0.0004;
-          l.shadow.normalBias = 0.035;
+          // Both are per-map overridable from M8: Depot's night key is weak enough that
+          // the acne Foundry never shows is the brightest thing in the frame.
+          l.shadow.bias = light.shadowBias ?? -0.0004;
+          l.shadow.normalBias = light.shadowNormalBias ?? 0.035;
           // PCF taps are spread by this radius; it is where shadow softness comes from
-          // now that PCFSoftShadowMap is gone.
-          l.shadow.radius = 2.5;
+          // now that PCFSoftShadowMap is gone. Midday sun wants a much smaller number
+          // than an industrial skylight does.
+          const authoredRadius = light.shadowRadius ?? 2.5;
+          l.shadow.radius = authoredRadius * (tier.radiusScale === 0 ? 1 : tier.radiusScale);
+          // Remember what the map asked for, so a later quality change scales the intent
+          // rather than compounding on the previous scaling.
+          rememberShadowAuthoring(l.shadow, authoredRadius, light.castShadow);
           l.shadow.camera.updateProjectionMatrix();
         }
         root.add(l);

@@ -29,6 +29,11 @@ export interface Box {
  * material, so "distinct material" and "shoots through differently" are the same
  * statement. Append only: `materialIndex` is an index into this list and `ColliderSet`
  * stores it.
+ *
+ * The last five are M8's, and they are what stop Dunes and Depot reading as Foundry with
+ * the lights changed. `sand`, `plaster` and `clayTile` are Dunes' warm vocabulary; `asphalt`
+ * and `paintedSteel` are Depot's cool one. `wood` is shared — a market stall and a cargo
+ * pallet are the same plank.
  */
 export const MATERIAL_KEYS = [
   'concrete',
@@ -41,6 +46,13 @@ export const MATERIAL_KEYS = [
   'brick',
   'rust',
   'grate',
+  // M8
+  'sand',
+  'plaster',
+  'clayTile',
+  'wood',
+  'asphalt',
+  'paintedSteel',
 ] as const;
 
 export type MaterialKey = (typeof MATERIAL_KEYS)[number];
@@ -93,7 +105,17 @@ export type PropShapeId =
   | 'barrels'
   | 'girder'
   | 'ladle'
-  | 'spool';
+  | 'spool'
+  // M8, for Dunes.
+  | 'palm'
+  | 'stall'
+  | 'well'
+  | 'sandbags'
+  // M8, for Depot.
+  | 'containerBlue'
+  | 'pallets'
+  | 'lightMast'
+  | 'forklift';
 
 export interface PropShapeDef {
   id: PropShapeId;
@@ -133,6 +155,22 @@ export type LightDef =
       castShadow: boolean;
       /** Half-size of the shadow ortho frustum, metres. */
       shadowExtent: number;
+      /**
+       * M8. How far the PCF taps are spread, in texels. This is where shadow *softness*
+       * comes from, and it is a property of the light the map is describing rather than a
+       * global: Foundry's 2.5 is a diffuse industrial skylight, Dunes' 1.1 is midday sun,
+       * and Depot's is a floodlight. Defaults to 2.5, which is what M4 shipped.
+       */
+      shadowRadius?: number;
+      /**
+       * M8. Depth bias overrides, for maps where the default produces acne or peter-panning.
+       *
+       * Depot is the reason these exist. A night map's shadows are cast by point lights onto
+       * surfaces at grazing angles from a low key, which is exactly the case a constant bias
+       * tuned on a midday map gets wrong in both directions at once.
+       */
+      shadowBias?: number;
+      shadowNormalBias?: number;
     }
   | {
       kind: 'point';
@@ -171,6 +209,43 @@ export interface ObjectiveDef {
   label: string;
 }
 
+/**
+ * Where a lane runs, so a debug harness can path it and report seconds (M8).
+ *
+ * M4 declared this in `foundry.ts` and `ModePanel` imported it from there, which meant the
+ * lane report was hard-coded to one map id. Lifted here so every map that authors lanes
+ * gets timed by the same code — the brief's "lane timings within ~15%" is a property of a
+ * map, and a number the author claims rather than the harness measures is not a number.
+ */
+export interface LaneDef {
+  readonly name: string;
+  /** Where the two teams meet: the point both are timed to. */
+  readonly center: Vec3Lit;
+  /** Team A's home end of this lane. */
+  readonly a: Vec3Lit;
+  /** Team B's home end. */
+  readonly b: Vec3Lit;
+}
+
+/**
+ * Airborne particulate: dust on Dunes, drifting haze on Depot (M8).
+ *
+ * A cloud of motes in a box that follows the camera and wraps, so a few hundred points
+ * cover a whole map. Absent means no atmosphere pass at all and no cost.
+ */
+export interface ParticulateDef {
+  /** Motes in the cloud. One draw call regardless. */
+  count: number;
+  /** Half-size of the box around the listener the motes live in, metres. */
+  radius: number;
+  color: number;
+  /** Point size in world metres. */
+  size: number;
+  opacity: number;
+  /** Drift velocity, m/s. */
+  drift: Vec3Lit;
+}
+
 export interface MapDef {
   id: string;
   name: string;
@@ -179,6 +254,10 @@ export interface MapDef {
   spawns: SpawnZone[];
   lights: LightDef[];
   ambient: AmbientDef;
+  /** M8. Absent means no atmosphere pass. */
+  particulate?: ParticulateDef;
+  /** M8. Absent means the debug harness has no lanes to time on this map. */
+  lanes?: readonly LaneDef[];
 
   /** Populated from M3 (bots) onward. */
   coverPoints: CoverPoint[];
@@ -190,6 +269,22 @@ export interface MapDef {
   objectives: ObjectiveDef[];
   /** Bounds of playable space; also sizes the collision grid and the navmesh bake. */
   navBounds: Box;
+  /**
+   * M8. Walkable surfaces the navmesh keeps per XZ column. Defaults to 2.
+   *
+   * Three on Depot, where a column can hold the yard, a container roof and the gantry over
+   * both. Every extra layer costs memory and bake time on every column of the map, so it is
+   * per-map rather than global — Foundry gains nothing from a third.
+   */
+  navLayers?: number;
+  /**
+   * M8. Whether the bake emits mantle links. Defaults to true.
+   *
+   * A climb link lets a bot haul itself onto something it cannot walk up. Set false for a
+   * map whose vertical geometry is decorative, where the only thing climb links would buy
+   * is bots standing on the scenery.
+   */
+  navClimb?: boolean;
   /**
    * The reverberant character of this space, for the single convolver's impulse response
    * (S6.6). Absent means the default room.

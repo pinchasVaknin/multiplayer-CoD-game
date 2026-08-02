@@ -1,5 +1,7 @@
 import type { BotTier } from '../ai/DifficultyTiers';
 import type { MapDef } from '../world/maps/types';
+import { DEPOT_MAP } from '../world/maps/depot';
+import { DUNES_MAP } from '../world/maps/dunes';
 import { FOUNDRY_MAP } from '../world/maps/foundry';
 import { GREYBOX_MAP } from '../world/maps/greybox';
 import type { GameMode, GameModeId, ModeDeps } from './GameMode';
@@ -166,6 +168,26 @@ export const MAPS: readonly MapEntry[] = [
     // 5v5 is four bots alongside the player and five against (S6).
     teamSize: 5,
     tierMix: ['REGULAR', 'HARDENED', 'RECRUIT', 'REGULAR', 'VETERAN', 'HARDENED', 'REGULAR', 'RECRUIT'],
+    targetRange: false,
+  },
+  {
+    id: DUNES_MAP.id,
+    name: DUNES_MAP.name,
+    blurb: 'Desert village · long streets · tight alleys',
+    def: DUNES_MAP,
+    // 5v5, same as Foundry. Dunes is bigger in area but the fight concentrates in three
+    // lanes exactly as Foundry's does, so a larger roster would only thin it out.
+    teamSize: 5,
+    tierMix: ['REGULAR', 'HARDENED', 'RECRUIT', 'REGULAR', 'VETERAN', 'HARDENED', 'REGULAR', 'RECRUIT'],
+    targetRange: false,
+  },
+  {
+    id: DEPOT_MAP.id,
+    name: DEPOT_MAP.name,
+    blurb: 'Night cargo yard · stacked containers · climb it',
+    def: DEPOT_MAP,
+    teamSize: 5,
+    tierMix: ['HARDENED', 'REGULAR', 'VETERAN', 'REGULAR', 'HARDENED', 'RECRUIT', 'REGULAR', 'VETERAN'],
     targetRange: false,
   },
   {

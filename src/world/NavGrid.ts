@@ -9,7 +9,7 @@ import type { Vec3Lit } from './maps/types';
  * capsule provably fits in — the navmesh cannot disagree with collision, because it asks
  * collision.
  *
- * **Columns carry up to `NAV_LAYERS` surfaces.** M1-M3 kept one height per XZ cell and
+ * **Columns carry up to `layers` surfaces.** M1-M3 kept one height per XZ cell and
  * said so: the grey-box room has no place where two walkable surfaces genuinely overlap,
  * and PLAN.md recorded that M4's real maps would. Foundry's catwalks run directly over
  * walkable floor, so a column now holds the ground *and* the deck above it, and a node is
@@ -46,13 +46,20 @@ export const DIAGONAL_DEPS: readonly Readonly<[number, number]>[] = [
 ];
 
 /**
- * Walkable surfaces one XZ column may carry.
+ * Walkable surfaces one XZ column may carry, by default.
  *
  * Two, because that is what Foundry needs and what a 3-lane map with a catwalk deck
- * *means*: the floor, and the thing over it. `linkLayer` packs `LAYER_BITS` per direction
- * into a Uint16, so this may not exceed 4 without widening that word.
+ * *means*: the floor, and the thing over it. Depot asks for three — the yard, a container
+ * roof, and the gantry above both — and pays for it in bake time and memory, so it is a
+ * per-map number from M8 rather than a constant every map is taxed by.
  */
-export const NAV_LAYERS = 2;
+export const NAV_DEFAULT_LAYERS = 2;
+
+/**
+ * The ceiling. `linkLayer` packs `LAYER_BITS` per direction into a Uint16, so a layer
+ * index must fit in two bits — four surfaces per column and not one more.
+ */
+export const NAV_MAX_LAYERS = 4;
 
 const LAYER_BITS = 2;
 const LAYER_MASK = (1 << LAYER_BITS) - 1;
@@ -65,10 +72,30 @@ export interface NavBakeOptions {
   readonly stepHeight: number;
   /** Descent a bot may take without it reading as a fall, metres. */
   readonly maxDrop: number;
+  /**
+   * M8. The tallest ledge a mantle can take, metres. Rises above `stepHeight` and at or
+   * below this become **climb links**: real edges in the graph that cost more and that the
+   * bot brain crosses by pressing jump. Zero disables them entirely.
+   */
+  readonly mantleHeight: number;
+  /**
+   * M8. The tallest **deliberate drop** a bot may step off, metres. Zero disables them.
+   *
+   * Climb links without drop links are a trap in the literal sense: a bot that mantles onto
+   * a container has an inbound edge and no outbound one, so it patrols up there once and
+   * stands on it for the rest of the match. The two features are one feature and are
+   * enabled together.
+   *
+   * Kept well below a catwalk's height on purpose. Foundry's deck edge is 4 m over open
+   * floor and is deliberately unlinked so bots do not walk off it — that stays true.
+   */
+  readonly dropHeight: number;
   /** cos of the steepest walkable slope. */
   readonly minGroundY: number;
   /** Reachability seeds. Anything not connected to one of these is discarded. */
   readonly seeds: readonly Vec3Lit[];
+  /** M8. Walkable surfaces per column, 1..`NAV_MAX_LAYERS`. */
+  readonly layers: number;
 }
 
 export interface NavBakeStats {
@@ -81,6 +108,8 @@ export interface NavBakeStats {
   bakeMs: number;
   /** Columns that ended up carrying more than one walkable surface. */
   stacked: number;
+  /** M8. Of `links`, how many are mantles rather than walks. */
+  climbLinks: number;
 }
 
 export class NavGrid {
@@ -99,6 +128,15 @@ export class NavGrid {
   readonly height: Float32Array;
   /** Bit k set when this node links to `NAV_DIRS[k]`. Directional. */
   readonly links: Uint8Array;
+  /**
+   * M8. Bit k set when link k is a **mantle** rather than a walk.
+   *
+   * A separate word rather than a flag folded into `links`, because every existing
+   * consumer of `links` — A*, the string puller, the reachability prune, the debug
+   * visualiser — is asking "can I get there", and the answer is yes either way. Only the
+   * two places that care *how* read this one.
+   */
+  readonly climb: Uint8Array;
   /** `LAYER_BITS` per direction: which layer of the neighbour column the link lands on. */
   readonly linkLayer: Uint16Array;
   /** Surface normal Y, for debug colouring and slope-aware steering. */
@@ -126,6 +164,7 @@ export class NavGrid {
     this.walkable = new Uint8Array(n);
     this.height = new Float32Array(n);
     this.links = new Uint8Array(n);
+    this.climb = new Uint8Array(n);
     this.linkLayer = new Uint16Array(n);
     this.normalY = new Float32Array(n);
     this.stats = stats;
@@ -192,6 +231,11 @@ export class NavGrid {
 
   linked(node: number, dir: number): boolean {
     return ((this.links[node] ?? 0) & (1 << dir)) !== 0;
+  }
+
+  /** M8. Whether crossing this link needs a mantle. */
+  isClimb(node: number, dir: number): boolean {
+    return ((this.climb[node] ?? 0) & (1 << dir)) !== 0;
   }
 
   /** Record which layer of the neighbour column direction `dir` lands on. */
@@ -317,6 +361,64 @@ export class NavGrid {
       const delta = Math.abs(rise);
       if (delta >= bestDelta) continue;
       bestDelta = delta;
+      best = n;
+    }
+    return best;
+  }
+
+  /**
+   * A surface in this column that could be **mantled** onto from height `fromH`, or -1 (M8).
+   *
+   * The window is deliberately `(stepHeight, mantleHeight]` — open at the bottom, because
+   * anything at or below step-up is an ordinary link and this must not shadow it — and the
+   * *lowest* qualifying surface wins rather than the nearest, because a bot faced with a
+   * crate and a container in the same column should climb the crate.
+   *
+   * The destination being `walkable` is what makes this honest: that flag was set by the
+   * same capsule test movement uses, so a climb link only ever points at somewhere a body
+   * provably fits standing up. What it cannot check is whether `Mantle.detectMantle` will
+   * find the ledge face from this exact approach, which is why a bot that fails a climb
+   * still has `updateStuck` behind it.
+   */
+  /**
+   * A surface in this column that could be **dropped down to** from height `fromH`, or -1.
+   *
+   * The window is `[-dropHeight, -maxDrop)` — everything below an ordinary ground-snap
+   * descent and above the height at which stepping off stops being a route. The *highest*
+   * qualifying surface wins, because a bot leaving a container roof should land on the
+   * pallet beside it rather than plunge past it to the yard.
+   */
+  dropFrom(ix: number, iz: number, fromH: number, maxDrop: number, dropHeight: number): number {
+    if (dropHeight <= maxDrop || !this.inBounds(ix, iz)) return -1;
+    const column = this.index(ix, iz);
+    let best = -1;
+    let bestHeight = -Infinity;
+    for (let l = 0; l < this.layers; l++) {
+      const n = l * this.columnCount + column;
+      if (this.walkable[n] !== 1) continue;
+      const top = this.height[n] ?? 0;
+      const fall = fromH - top;
+      if (fall <= maxDrop || fall > dropHeight) continue;
+      if (top <= bestHeight) continue;
+      bestHeight = top;
+      best = n;
+    }
+    return best;
+  }
+
+  climbFrom(ix: number, iz: number, fromH: number, stepHeight: number, mantleHeight: number): number {
+    if (mantleHeight <= stepHeight || !this.inBounds(ix, iz)) return -1;
+    const column = this.index(ix, iz);
+    let best = -1;
+    let bestHeight = Infinity;
+    for (let l = 0; l < this.layers; l++) {
+      const n = l * this.columnCount + column;
+      if (this.walkable[n] !== 1) continue;
+      const top = this.height[n] ?? 0;
+      const rise = top - fromH;
+      if (rise <= stepHeight || rise > mantleHeight) continue;
+      if (top >= bestHeight) continue;
+      bestHeight = top;
       best = n;
     }
     return best;

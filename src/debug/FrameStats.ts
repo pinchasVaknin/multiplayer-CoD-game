@@ -128,6 +128,23 @@ export class FrameStats {
   }
 
   /**
+   * The rolling buffer as a plain array, oldest first (M8).
+   *
+   * For the JSON export S6.5 asks to hand over. Allocates — deliberately and once, on a
+   * human's explicit request — because the alternative is handing out the live ring and
+   * having the caller work out where the head is.
+   */
+  snapshot(): number[] {
+    const n = this.filled;
+    const out = new Array<number>(n);
+    for (let i = 0; i < n; i++) {
+      const idx = (this.head - n + i + HISTORY_LENGTH * 2) % HISTORY_LENGTH;
+      out[i] = this.frames[idx] ?? 0;
+    }
+    return out;
+  }
+
+  /**
    * Draw the rolling buffer. Oldest on the left, newest on the right, with the 16.7 ms
    * budget line and the p99 marker overlaid.
    */

@@ -5,6 +5,7 @@ import type { HitZone } from './combat/HitboxRig';
 import { EV, type GameBus } from './core/Events';
 import type { Input } from './core/Input';
 import { angleDelta } from './core/MathUtil';
+import { MIX } from './engine/AudioMix';
 import type { CameraRig } from './engine/CameraRig';
 import type { Fx } from './engine/Fx';
 import type { ProceduralAudio } from './engine/ProceduralAudio';
@@ -117,7 +118,9 @@ export class MatchFeedback {
         const local = p.sourceId === PLAYER_ENTITY_ID;
         fx.fireMuzzleFlash(p.x, p.y, p.z, def.muzzleFlashScale, local);
         if (p.tracer) fx.spawnTracer(p.x, p.y, p.z, p.endX, p.endY, p.endZ);
-        weaponAudio.playGunshot(p.x, p.y, p.z, def.voice);
+        // M8 mix: your own rifle sits below everyone else's so an enemy at thirty metres
+        // has somewhere to be heard. See `engine/AudioMix.ts` for the arithmetic.
+        weaponAudio.playGunshot(p.x, p.y, p.z, def.voice, local ? MIX.ownWeapon : MIX.otherWeapon);
         // Everything below is about the local player's own hands and must not fire for a bot:
         // a bot shooting across the room shaking your camera is the classic tell.
         if (!local) return;
@@ -203,16 +206,33 @@ export class MatchFeedback {
      */
     this.unsubscribe.push(
       bus.on(EV.PlayerLanded, (p) => {
-        if (p.entityId === PLAYER_ENTITY_ID) {
-          cameraRig.applyLanding(this.deps.cameraConfig, p.impactSpeed);
-        }
-        this.deps.audio.playLanding(p.x, p.y, p.z, p.impactSpeed, p.material);
+        const own = p.entityId === PLAYER_ENTITY_ID;
+        if (own) cameraRig.applyLanding(this.deps.cameraConfig, p.impactSpeed);
+        this.deps.audio.playLanding(
+          p.x,
+          p.y,
+          p.z,
+          p.impactSpeed,
+          p.material,
+          own ? MIX.ownFootstep : MIX.otherFootstep,
+        );
       }),
     );
 
     this.unsubscribe.push(
       bus.on(EV.PlayerFootstep, (p) => {
-        this.deps.audio.playFootstep(p.x, p.y, p.z, p.speed, p.heavy, p.material);
+        // M8 mix: your own steps are constant, carry no information, and are the best mask
+        // in the game for the one sound you most need to hear (`engine/AudioMix.ts`).
+        const own = p.entityId === PLAYER_ENTITY_ID;
+        this.deps.audio.playFootstep(
+          p.x,
+          p.y,
+          p.z,
+          p.speed,
+          p.heavy,
+          p.material,
+          own ? MIX.ownFootstep : MIX.otherFootstep,
+        );
       }),
     );
   }

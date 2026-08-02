@@ -26,6 +26,7 @@ import type { ViewmodelLayer } from './player/Viewmodel';
 import type { ViewmodelConfig } from './weapons/ViewmodelConfig';
 import type { WeaponDef } from './weapons/WeaponDefs';
 import { applyAmbient, loadMap, type LoadedMap } from './world/MapLoader';
+import { Particulate } from './world/Particulate';
 
 /**
  * The world a match is played in, as one object with one lifetime (M7).
@@ -118,6 +119,8 @@ export class MatchWorld {
   readonly match: Match;
   /** The F1 overlay and every visualiser and panel that hangs off it. */
   readonly debug: DebugSuite;
+  /** M8. Airborne dust or haze, or null on a map that authors none. */
+  readonly particulate: Particulate | null;
 
   /** The AFK bot-match driver, when `?harness=botmatch` asked for one. */
   private harness: BotHarness | null = null;
@@ -128,10 +131,16 @@ export class MatchWorld {
   constructor(deps: MatchWorldDeps) {
     this.deps = deps;
 
-    const map = loadMap(deps.mapEntry.def, deps.textures);
+    const map = loadMap(deps.mapEntry.def, deps.textures, deps.profile.settings.shadowQuality);
     this.map = map;
     deps.scene.add(map.root);
     applyAmbient(deps.scene, map.def);
+
+    // Added to the map's own root rather than to the scene, so the one `scene.remove` in
+    // `dispose` takes it with everything else and there is no second thing to forget.
+    const particulateDef = map.def.particulate;
+    this.particulate = particulateDef === undefined ? null : new Particulate(particulateDef);
+    if (this.particulate !== null) map.root.add(this.particulate.points);
     map.collision.configure(deps.movementConfig.maxSlopeDeg, deps.movementConfig.collisionSkin);
 
     const player = new PlayerController(deps.movementConfig, map.collision, deps.bus);
@@ -271,6 +280,7 @@ export class MatchWorld {
     this.match.dispose();
 
     this.deps.scene.remove(this.map.root);
+    this.particulate?.dispose();
     this.map.dispose();
 
     this.deps.scene.fog = null;

@@ -1,5 +1,6 @@
 import { clamp, DEG2RAD, wrapAngle } from './MathUtil';
 import { Btn, CommandRing, type InputCommand } from './InputCommand';
+import { Keybinds, LocalBtn, mouseInput, type BindingMap } from './Keybinds';
 
 /**
  * The only place in the project that touches keyboard, mouse or pointer lock.
@@ -22,33 +23,6 @@ const RAD_PER_COUNT = 0.0022;
 const MAX_DELTA_PER_EVENT = 400;
 const SETTLE_EVENTS_AFTER_LOCK = 1;
 
-interface KeyBinding {
-  readonly code: string;
-  readonly bit: number;
-}
-
-const BUTTON_BINDINGS: readonly KeyBinding[] = [
-  { code: 'Space', bit: Btn.Jump },
-  { code: 'ControlLeft', bit: Btn.Crouch },
-  { code: 'KeyC', bit: Btn.Crouch },
-  { code: 'ShiftLeft', bit: Btn.Sprint },
-  { code: 'KeyR', bit: Btn.Reload },
-  { code: 'Tab', bit: Btn.Scoreboard },
-  { code: 'KeyQ', bit: Btn.SwapWeapon },
-  { code: 'KeyG', bit: Btn.Lethal },
-  { code: 'KeyF', bit: Btn.Tactical },
-  { code: 'Digit1', bit: Btn.Slot1 },
-  { code: 'Digit2', bit: Btn.Slot2 },
-  { code: 'KeyX', bit: Btn.FieldUpgrade },
-  { code: 'Digit3', bit: Btn.Streak1 },
-  { code: 'Digit4', bit: Btn.Streak2 },
-  { code: 'Digit5', bit: Btn.Streak3 },
-  { code: 'KeyP', bit: Btn.Use },
-  { code: 'KeyE', bit: Btn.Use },
-];
-
-const MOVEMENT_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD'] as const;
-
 /**
  * Always suppressed, even while a debug control has focus.
  *
@@ -58,24 +32,18 @@ const MOVEMENT_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD'] as const;
  */
 const ALWAYS_PREVENT = new Set(['F1', 'F2', 'F3', 'Tab']);
 
+/** Suppressed regardless of what is bound, so the page never scrolls under the game. */
+const ALSO_PREVENT = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'] as const;
+
 /**
- * Every code the game binds, suppressed so the browser's own chord does not fire
- * underneath it — Ctrl+S, Ctrl+A, Ctrl+D, Ctrl+F, Ctrl+P and friends all collide with
- * crouch-plus-a-movement-key.
+ * How long the wheel counts as "held", in milliseconds.
  *
- * `Ctrl+W` and `Ctrl+T` are the exception and cannot be fixed this way: Chrome reserves
- * them and ignores `preventDefault`. The only mechanism that captures them is the
- * Keyboard Lock API, which is why `lockKeyboard` exists and why it needs fullscreen.
+ * A wheel notch is an impulse and the bitfield is a level, so something has to give it a
+ * duration. Two sim ticks is long enough that the sampler cannot miss it between frames and
+ * short enough that one notch is one press — which is what makes `WheelUp` bindable to
+ * weapon swap and behave like the tap it looks like.
  */
-const PREVENT_DEFAULT_CODES = new Set<string>([
-  ...ALWAYS_PREVENT,
-  ...MOVEMENT_CODES,
-  ...BUTTON_BINDINGS.map((b) => b.code),
-  'ArrowUp',
-  'ArrowDown',
-  'ArrowLeft',
-  'ArrowRight',
-]);
+const WHEEL_HOLD_MS = 34;
 
 interface KeyboardLockApi {
   lock(keyCodes?: string[]): Promise<void>;
@@ -96,20 +64,37 @@ export interface InputOptions {
   readonly canvas: HTMLCanvasElement;
   readonly sensitivity: number;
   readonly invertY: boolean;
+  /** M8. Absent means the shipped defaults. */
+  readonly bindings?: BindingMap;
 }
 
 export class Input {
   private readonly canvas: HTMLCanvasElement;
   private readonly ring = new CommandRing(128);
 
+  /** M8. The one place a physical input becomes a bit. See `core/Keybinds.ts`. */
+  readonly keybinds: Keybinds;
+
   private readonly held = new Set<string>();
   private buttons = 0;
   private mouseButtons = 0;
+  /** `performance.now()` until which a wheel notch still counts as held. */
+  private wheelUntilMs = 0;
+  private wheelBits = 0;
 
   private yawRad = 0;
   private pitchRad = 0;
 
   private sensitivity: number;
+  /**
+   * M8. Multiplier applied while aiming down sights (S6.3).
+   *
+   * Driven per frame from the weapon's ADS fraction rather than from the button, so the
+   * sensitivity travels *with* the sights instead of snapping when the button goes down —
+   * the same reason `CameraDrive.ads` became a fraction in M2.
+   */
+  private adsSensitivity = 1;
+  private adsFraction = 0;
   private invertY: boolean;
 
   private seq = 0;
@@ -140,6 +125,7 @@ export class Input {
     this.canvas = opts.canvas;
     this.sensitivity = opts.sensitivity;
     this.invertY = opts.invertY;
+    this.keybinds = new Keybinds(opts.bindings);
     this.attach();
   }
 
@@ -152,6 +138,7 @@ export class Input {
     window.addEventListener('mousemove', this.onMouseMove);
     window.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
+    window.addEventListener('wheel', this.onWheel, { passive: false });
     this.canvas.addEventListener('contextmenu', this.onContextMenu);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
     document.addEventListener('pointerlockerror', this.onPointerLockError);
@@ -167,6 +154,7 @@ export class Input {
     window.removeEventListener('mousemove', this.onMouseMove);
     window.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
+    window.removeEventListener('wheel', this.onWheel);
     this.canvas.removeEventListener('contextmenu', this.onContextMenu);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     document.removeEventListener('pointerlockerror', this.onPointerLockError);
@@ -276,6 +264,30 @@ export class Input {
     this.invertY = value;
   }
 
+  /** M8. Multiplier on look sensitivity at full ADS (S6.3). 1 means no change. */
+  setAdsSensitivity(value: number): void {
+    this.adsSensitivity = Math.max(0.1, Math.min(2, value));
+  }
+
+  /**
+   * How far into the sights the weapon is, 0..1. Written every frame from `Match.visual`.
+   *
+   * The scale is interpolated across the transition rather than switched at the button,
+   * because the alternative is the crosshair changing speed a tenth of a second before the
+   * sights arrive — which reads as input lag rather than as a sensitivity setting.
+   */
+  setAdsFraction(value: number): void {
+    this.adsFraction = Math.max(0, Math.min(1, value));
+  }
+
+  /** M8. Swap the binding table live and re-arm the reserved-chord capture. */
+  setBindings(bindings: BindingMap): void {
+    this.keybinds.set(bindings);
+    // Held keys were latched under the old table; their bits would be stale.
+    this.clearHeld();
+    this.tryKeyboardLock();
+  }
+
   // -- view ---------------------------------------------------------------
 
   get yaw(): number {
@@ -323,12 +335,15 @@ export class Input {
    * Zero allocation: the returned object is a reused ring slot.
    */
   sample(tickIndex: number, nowMs: number): InputCommand {
+    // M8: the movement axes come out of the same bitfield everything else does, so a
+    // rebound "forward" travels the identical path a default one does (see `Keybinds`).
+    const bits = this.liveBits(nowMs);
     let x = 0;
     let z = 0;
-    if (this.held.has('KeyA')) x -= 1;
-    if (this.held.has('KeyD')) x += 1;
-    if (this.held.has('KeyW')) z += 1;
-    if (this.held.has('KeyS')) z -= 1;
+    if ((bits & LocalBtn.Left) !== 0) x -= 1;
+    if ((bits & LocalBtn.Right) !== 0) x += 1;
+    if ((bits & LocalBtn.Forward) !== 0) z += 1;
+    if ((bits & LocalBtn.Back) !== 0) z -= 1;
 
     // Normalise diagonals here, once, so no downstream code has to remember to.
     if (x !== 0 && z !== 0) {
@@ -344,9 +359,17 @@ export class Input {
     cmd.moveZ = z;
     cmd.yaw = this.yawRad;
     cmd.pitch = this.pitchRad;
-    cmd.buttons = this.buttons | this.mouseButtons;
+    // The local movement bits are masked off: they are the sampler's business and the sim
+    // has no bit assignments up there.
+    cmd.buttons = bits & WIRE_BITS;
     cmd.sampledAtMs = nowMs;
     return cmd;
+  }
+
+  /** Everything currently down, including a wheel notch that has not expired. */
+  private liveBits(nowMs: number): number {
+    const wheel = nowMs <= this.wheelUntilMs ? this.wheelBits : 0;
+    return this.buttons | this.mouseButtons | wheel;
   }
 
   /**
@@ -394,6 +417,8 @@ export class Input {
     this.held.clear();
     this.buttons = 0;
     this.mouseButtons = 0;
+    this.wheelBits = 0;
+    this.wheelUntilMs = 0;
     this.firePressMs = -1;
   }
 
@@ -410,11 +435,11 @@ export class Input {
     // While a debug slider has focus the page belongs to the DOM, so only the overlay's
     // own function keys are taken; everything else behaves like an ordinary web page.
     const guarded = this.domFocusGuard && !ALWAYS_PREVENT.has(e.code);
-    if (!guarded && PREVENT_DEFAULT_CODES.has(e.code)) e.preventDefault();
+    if (!guarded && this.shouldPreventDefault(e.code)) e.preventDefault();
     if (guarded) return;
     if (e.repeat) return;
     this.held.add(e.code);
-    this.buttons |= bitsFor(e.code);
+    this.buttons |= this.keybinds.bitsFor(e.code);
   };
 
   private readonly onKeyUp = (e: KeyboardEvent): void => {
@@ -422,6 +447,22 @@ export class Input {
     // A bit stays set while any other binding for it is still held (Ctrl vs C).
     this.buttons = this.recomputeKeyButtons();
   };
+
+  /**
+   * Suppress the browser's own chord under anything the game binds.
+   *
+   * Ctrl+S, Ctrl+A, Ctrl+D, Ctrl+F and Ctrl+P all collide with crouch plus a movement key,
+   * and which keys those are is now a player decision — so the set is asked of the binding
+   * table rather than baked in. `Ctrl+W` and `Ctrl+T` remain the exception and cannot be
+   * fixed this way: Chrome reserves them and ignores `preventDefault`. The only mechanism
+   * that captures them is the Keyboard Lock API, which is why `lockKeyboard` exists and why
+   * it needs fullscreen.
+   */
+  private shouldPreventDefault(code: string): boolean {
+    if (ALWAYS_PREVENT.has(code)) return true;
+    for (const arrow of ALSO_PREVENT) if (code === arrow) return true;
+    return this.keybinds.bitsFor(code) !== 0;
+  }
 
   private readonly onBlur = (): void => {
     this.clearHeld();
@@ -435,7 +476,10 @@ export class Input {
     }
     const dx = clamp(e.movementX, -MAX_DELTA_PER_EVENT, MAX_DELTA_PER_EVENT);
     const dy = clamp(e.movementY, -MAX_DELTA_PER_EVENT, MAX_DELTA_PER_EVENT);
-    const scale = RAD_PER_COUNT * this.sensitivity;
+    // M8: the ADS multiplier is blended in by how far the sights are up, so the change
+    // arrives with the picture rather than a tenth of a second before it.
+    const adsScale = 1 + (this.adsSensitivity - 1) * this.adsFraction;
+    const scale = RAD_PER_COUNT * this.sensitivity * adsScale;
     this.yawRad = wrapAngle(this.yawRad - dx * scale);
     const pitchDelta = (this.invertY ? dy : -dy) * scale;
     this.pitchRad = clamp(this.pitchRad + pitchDelta, -PITCH_LIMIT, PITCH_LIMIT);
@@ -458,17 +502,32 @@ export class Input {
       this.requestPointerLock();
       return;
     }
-    if (e.button === 2) this.mouseButtons |= Btn.Ads;
-    if (e.button === 0) {
-      this.mouseButtons |= Btn.Fire;
-      // Stamped here, at the DOM edge, so the latency probe measures the whole path.
-      this.firePressMs = performance.now();
-    }
+    const bits = this.keybinds.bitsFor(mouseInput(e.button));
+    this.mouseButtons |= bits;
+    // Stamped here, at the DOM edge, so the latency probe measures the whole path. Keyed
+    // off the *bit* rather than off button 0, so a player who moved fire onto another
+    // button still gets a latency reading.
+    if ((bits & Btn.Fire) !== 0) this.firePressMs = performance.now();
   };
 
   private readonly onMouseUp = (e: MouseEvent): void => {
-    if (e.button === 2) this.mouseButtons &= ~Btn.Ads;
-    if (e.button === 0) this.mouseButtons &= ~Btn.Fire;
+    this.mouseButtons &= ~this.keybinds.bitsFor(mouseInput(e.button));
+  };
+
+  /**
+   * A wheel notch, latched for `WHEEL_HOLD_MS`.
+   *
+   * The bitfield is a level and a notch is an impulse, so the notch is given just enough
+   * duration for the 60 Hz sampler to see it exactly once. Not prevented unless something
+   * is actually bound to it, so the page still scrolls normally on a menu.
+   */
+  private readonly onWheel = (e: WheelEvent): void => {
+    if (this.domFocusGuard || e.deltaY === 0) return;
+    const bits = this.keybinds.bitsFor(e.deltaY < 0 ? 'WheelUp' : 'WheelDown');
+    if (bits === 0) return;
+    e.preventDefault();
+    this.wheelBits = bits;
+    this.wheelUntilMs = performance.now() + WHEEL_HOLD_MS;
   };
 
   private readonly onContextMenu = (e: Event): void => {
@@ -513,27 +572,32 @@ export class Input {
     if (document.fullscreenElement === null) return;
     const api = keyboardLockApi();
     if (api === null) return;
-    api.lock(['KeyW', 'KeyT', 'KeyN', 'KeyD', 'KeyR']).catch((err: unknown) => {
+    // The reserved chords worth taking are the ones the player has actually bound, plus
+    // the two Chrome will not release any other way.
+    const codes = new Set(this.keybinds.boundKeyCodes());
+    codes.add('KeyW');
+    codes.add('KeyT');
+    codes.add('KeyN');
+    api.lock([...codes]).catch((err: unknown) => {
       console.warn('[Input] keyboard lock refused; Ctrl+W will still reach the browser.', err);
     });
   }
 
   private recomputeKeyButtons(): number {
     let bits = 0;
-    for (const binding of BUTTON_BINDINGS) {
-      if (this.held.has(binding.code)) bits |= binding.bit;
-    }
+    for (const code of this.held) bits |= this.keybinds.bitsFor(code);
     return bits;
   }
 }
 
-function bitsFor(code: string): number {
-  let bits = 0;
-  for (const binding of BUTTON_BINDINGS) {
-    if (binding.code === code) bits |= binding.bit;
-  }
-  return bits;
-}
+/**
+ * Bits that cross the wire.
+ *
+ * The movement axes ride local bits above this mask (`core/Keybinds.ts`) so that binding
+ * lookup is uniform, and they are masked off before the command is built — `InputCommand`
+ * carries `moveX`/`moveZ` and has no bit assignments up there.
+ */
+const WIRE_BITS = 0x00ff_ffff;
 
 function isFormControl(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;

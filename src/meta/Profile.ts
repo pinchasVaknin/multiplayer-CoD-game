@@ -19,7 +19,7 @@ import {
   SAVE_KEY,
   SAVE_VERSION,
   type ChallengeSaveData,
-  type SaveV1,
+  type SaveV2,
   type SettingsV1,
   type WeaponSaveData,
 } from './SaveData';
@@ -54,7 +54,7 @@ export interface ProfileDeps {
 export const RANGE_SLOT_INDEX = 99;
 
 export class Profile {
-  readonly store: SaveStore<SaveV1>;
+  readonly store: SaveStore<SaveV2>;
   /** Every repair and reversion the last load produced, oldest first. */
   readonly loadReport: string[] = [];
 
@@ -64,7 +64,7 @@ export class Profile {
     // Read the M1-M5 settings blob *before* the store loads, so a profile that has never
     // existed still starts with the player's FOV and sensitivity rather than the defaults.
     const fallback = readLegacySettings(deps.fallbackSettings);
-    this.store = new SaveStore<SaveV1>(SAVE_KEY, SAVE_VERSION, defaultSave(fallback), (raw, from) =>
+    this.store = new SaveStore<SaveV2>(SAVE_KEY, SAVE_VERSION, defaultSave(fallback), (raw, from) =>
       migrateSave(raw, from, fallback),
     );
 
@@ -81,8 +81,8 @@ export class Profile {
     this.report();
   }
 
-  get save(): SaveV1 {
-    return this.store.value as SaveV1;
+  get save(): SaveV2 {
+    return this.store.value as SaveV2;
   }
 
   get level(): number {

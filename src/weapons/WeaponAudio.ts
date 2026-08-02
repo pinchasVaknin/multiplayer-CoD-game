@@ -26,9 +26,17 @@ export class WeaponAudio {
 
   constructor(private readonly audio: ProceduralAudio) {}
 
-  /** The shot. Four layers, all scheduled at the same instant. */
-  playGunshot(x: number, y: number, z: number, voice: WeaponVoice): void {
-    const level = voice.level;
+  /**
+   * The shot. Four layers, all scheduled at the same instant.
+   *
+   * `gain` is the M8 mix trim (`engine/AudioMix.ts`). The local player's own weapon comes
+   * in at `MIX.ownWeapon` so that an enemy rifle thirty metres away has somewhere to be
+   * heard — see the measurement in that file. Every layer is scaled by it, so the *balance*
+   * between transient, body, thump and tail is untouched and a ducked shot still sounds
+   * like the same gun.
+   */
+  playGunshot(x: number, y: number, z: number, voice: WeaponVoice, gain = 1): void {
+    const level = voice.level * gain;
     const noise = this.audio.noiseScratch;
 
     // 1. transient
@@ -45,6 +53,7 @@ export class WeaponAudio {
     noise.attack = 0.001;
     noise.decay = 0.013;
     noise.wet = 0.05;
+    noise.roll = 'loud';
     noise.rate = this.rng.range(0.96, 1.05);
     this.audio.noiseBurst(noise);
 
@@ -88,12 +97,14 @@ export class WeaponAudio {
     osc.wet = voice.wet * 0.3;
     osc.filterFreq = 460;
     osc.filterQ = 0.7;
+    osc.roll = 'loud';
     this.audio.oscHit(osc);
   }
 
   /** The click of a hammer falling on nothing. */
   playDryFire(x: number, y: number, z: number): void {
     const noise = this.audio.noiseScratch;
+    noise.roll = 'handling';
     noise.x = x;
     noise.y = y;
     noise.z = z;
@@ -117,6 +128,7 @@ export class WeaponAudio {
    */
   playReloadStep(x: number, y: number, z: number, step: ReloadStep): void {
     const noise = this.audio.noiseScratch;
+    noise.roll = 'handling';
     noise.x = x;
     noise.y = y;
     noise.z = z;
@@ -193,6 +205,7 @@ export class WeaponAudio {
   /** The rustle of the weapon coming to the eye. Quiet, but it sells the transition. */
   playAdsRustle(x: number, y: number, z: number, aiming: boolean): void {
     const noise = this.audio.noiseScratch;
+    noise.roll = 'handling';
     noise.x = x;
     noise.y = y;
     noise.z = z;
@@ -248,6 +261,7 @@ export class WeaponAudio {
    */
   playFleshImpact(x: number, y: number, z: number, headshot: boolean): void {
     const noise = this.audio.noiseScratch;
+    noise.roll = 'impact';
     noise.x = x;
     noise.y = y;
     noise.z = z;
@@ -288,6 +302,7 @@ export class WeaponAudio {
    */
   playDeath(x: number, y: number, z: number): void {
     const osc = this.audio.oscScratch;
+    osc.roll = 'world';
     osc.x = x;
     osc.y = y;
     osc.z = z;
@@ -327,6 +342,7 @@ export class WeaponAudio {
   playImpact(x: number, y: number, z: number, material: number, penetrated: boolean): void {
     const surface = surfaceAtIndex(material);
     const noise = this.audio.noiseScratch;
+    noise.roll = 'impact';
     noise.x = x;
     noise.y = y;
     noise.z = z;

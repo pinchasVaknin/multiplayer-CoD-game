@@ -79,6 +79,89 @@ export function addSpan(
   );
 }
 
+/** An interval on the wall's long axis that is left open. Used for doorways and gates. */
+export type Gap = readonly [number, number];
+
+/**
+ * A wall running along X with doorways cut out of it.
+ *
+ * Foundry spelled its four hall walls out as nine hand-placed spans, which was fine for
+ * nine. Dunes has fourteen buildings and Depot has a perimeter with six gates, and a
+ * doorway authored by arithmetic is a doorway that is 1.6 m wide because the capsule is
+ * 0.7 m — not because the two numbers either side of the gap happened to be typed
+ * correctly. Gaps outside the wall's span are ignored rather than throwing, so a caller
+ * can hand the same door list to both faces of a room.
+ */
+export function addWallAlongX(
+  out: Brush[],
+  material: MaterialKey,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+  z0: number,
+  z1: number,
+  gaps: readonly Gap[] = [],
+  options?: BoxOptions,
+): void {
+  for (const [a, b] of spansAround(x0, x1, gaps)) {
+    addSpan(out, material, a, b, y0, y1, z0, z1, options);
+  }
+}
+
+/** A wall running along Z with doorways cut out of it. The other half of `addWallAlongX`. */
+export function addWallAlongZ(
+  out: Brush[],
+  material: MaterialKey,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+  z0: number,
+  z1: number,
+  gaps: readonly Gap[] = [],
+  options?: BoxOptions,
+): void {
+  for (const [a, b] of spansAround(z0, z1, gaps)) {
+    addSpan(out, material, x0, x1, y0, y1, a, b, options);
+  }
+}
+
+/**
+ * `[from, to]` minus every gap, as the solid intervals that are left.
+ *
+ * Sorted and merged first, so overlapping doors are one opening rather than a zero-width
+ * sliver of wall between them — a sliver being both a rendering artefact and, at 0.02 m,
+ * something the capsule can catch on.
+ */
+function spansAround(from: number, to: number, gaps: readonly Gap[]): Array<[number, number]> {
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  const clipped = gaps
+    .map(([a, b]): [number, number] => [Math.max(lo, Math.min(a, b)), Math.min(hi, Math.max(a, b))])
+    .filter(([a, b]) => b - a > 1e-4)
+    .sort((p, q) => p[0] - q[0]);
+
+  const merged: Array<[number, number]> = [];
+  for (const gap of clipped) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && gap[0] <= last[1] + 1e-4) {
+      if (gap[1] > last[1]) last[1] = gap[1];
+      continue;
+    }
+    merged.push([gap[0], gap[1]]);
+  }
+
+  const out: Array<[number, number]> = [];
+  let cursor = lo;
+  for (const [a, b] of merged) {
+    if (a - cursor > 1e-4) out.push([cursor, a]);
+    cursor = Math.max(cursor, b);
+  }
+  if (hi - cursor > 1e-4) out.push([cursor, hi]);
+  return out;
+}
+
 /**
  * A ramp pitched along X. The top face passes exactly through `(x0, y0)` and `(x1, y1)`.
  *

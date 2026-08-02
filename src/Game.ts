@@ -9,6 +9,7 @@ import {
 } from './ai/DifficultyTiers';
 import { EV, createGameBus, type GameBus } from './core/Events';
 import { Input } from './core/Input';
+import { defaultBindings } from './core/Keybinds';
 import type { InputCommand } from './core/InputCommand';
 import { Loop, MAX_STEPS_PER_FRAME, type FrameSample } from './core/Loop';
 import { DEG2RAD } from './core/MathUtil';
@@ -34,7 +35,7 @@ import { GameScreens } from './GameScreens';
 import { applyEquippedLoadout, asModeId } from './GameLoadout';
 import type { ResolvedLoadout } from './meta/Loadouts';
 import { Profile } from './meta/Profile';
-import { defaultSettings } from './meta/SaveData';
+import { defaultSettings, type SettingsV1 } from './meta/SaveData';
 import { DEFAULT_MAP_ID, DEFAULT_MODE_ID, findMap, findMode } from './modes/ModeRegistry';
 import { DEFAULT_CAMERA_CONFIG, FOV_MAX, FOV_MIN, type CameraConfig } from './player/CameraConfig';
 import { DEFAULT_HEALTH_CONFIG, type HealthConfig } from './player/Health';
@@ -42,6 +43,9 @@ import { DEFAULT_MOVEMENT_CONFIG, cloneMovementConfig, type MovementConfig } fro
 import type { PlayerController } from './player/PlayerController';
 import { ViewmodelLayer } from './player/Viewmodel';
 import type { MenuSelection } from './ui/Menus';
+import { FpsCounter } from './ui/FpsCounter';
+import { palette } from './ui/Palette';
+import { Settings } from './ui/Settings';
 import {
   cloneEquipmentConfig,
   DEFAULT_EQUIPMENT_CONFIG,
@@ -113,6 +117,13 @@ export class Game {
    */
   readonly stats = new FrameStats();
   readonly speedo = new Speedometer();
+  /**
+   * M8. Process-wide, like `stats`: a player who turns on an FPS counter expects it on the
+   * menu as well as in a match, and the HUD is torn down between rounds.
+   */
+  private readonly fpsCounter: FpsCounter;
+  /** M8. The settings screen. Built at boot and kept, like every other front-end screen. */
+  private readonly settingsScreen: Settings;
 
   private readonly scene = new THREE.Scene();
   private readonly renderer: Renderer;
@@ -159,6 +170,8 @@ export class Game {
   private pendingSummary = false;
   /** Whether F1 was open when the match was paused, so resuming can put it back. */
   private overlayWasOpenBeforePause = false;
+  /** Where the settings screen's Back button goes. Captured on entry (M8). */
+  private settingsReturn: GameStateId = 'MENU';
 
   constructor(canvas: HTMLCanvasElement, uiHost: HTMLElement, debugHost: HTMLElement) {
     // M6: one save object for everything (S6.6). Settings used to live in their own store;
@@ -189,6 +202,7 @@ export class Game {
       selection: this.selection,
       onLaunch: () => this.transitionTo('MATCH'),
       onLoadout: () => this.transitionTo('LOADOUT'),
+      onSettings: () => this.transitionTo('SETTINGS'),
       onLoadoutBack: () => this.transitionTo('MENU'),
       onQuitToMenu: () => this.transitionTo('MENU'),
       onResume: () => this.resumeFromPause(),
@@ -203,11 +217,19 @@ export class Game {
       canvas,
       sensitivity: settings.sensitivity,
       invertY: settings.invertY,
+      bindings: settings.bindings,
     });
     this.input.onLockChange((locked) => this.onPointerLockChange(locked));
     this.input.onEscape(() => this.onEscape());
 
-    this.audio.setMasterVolume(settings.masterVolume);
+    this.fpsCounter = new FpsCounter(uiHost, this.stats);
+    this.settingsScreen = new Settings({
+      host: uiHost,
+      read: () => this.profile.settings,
+      onChange: (patch) => this.applySettings(patch),
+      onBack: () => this.transitionTo(this.settingsReturn),
+      onResetBindings: () => this.applySettings({ bindings: defaultBindings() }),
+    });
 
     this.loop = new Loop({
       sim: (tick) => this.simulate(tick),
@@ -223,6 +245,9 @@ export class Game {
     });
 
     this.registerStates();
+    // M8: push the loaded settings through the one apply path, so what is on screen at boot
+    // is what the save says and there is no separate "initial" wiring to drift from it.
+    this.applySettings({});
     window.addEventListener('resize', this.onResize);
     window.addEventListener('pagehide', this.onPageHide);
   }
@@ -268,6 +293,22 @@ export class Game {
    * wants to know — whether the cursor is captured and whether a click would recapture it —
    * are not observable any other way.
    */
+  /** Backing-buffer pixels per CSS pixel. Read by the render-scale sweep (M8). */
+  get rendererPixelRatio(): number {
+    return this.renderer.pixelRatio;
+  }
+
+  /**
+   * The loop, for the hand-over tools (M8).
+   *
+   * Exposed rather than passed, because `installConsoleApi` is called from inside `BOOT`
+   * and the tools it builds outlive every match. Read-only in practice: the only things
+   * that drive the loop are `Game` and the two harnesses that already hold it.
+   */
+  get loopHandle(): Loop {
+    return this.loop;
+  }
+
   get inputState(): Input {
     return this.input;
   }
@@ -359,6 +400,25 @@ export class Game {
         // Back into a match that is still standing: hand the new class over live. A world
         // that was never torn down is the paused case, and `buildWorld` would no-op.
         else if (this.world !== null) this.world.match.applyLoadout(this.applyLoadout());
+      },
+    });
+
+    /**
+     * SETTINGS (M8). A front-end screen with no world, like LOADOUT.
+     *
+     * `settingsReturn` is where Back goes, captured on the way in — the screen is reachable
+     * from the menu and from the pause screen and must come back to whichever one sent it,
+     * because a player who paused a match to fix their sensitivity has a match waiting.
+     */
+    this.states.set('SETTINGS', {
+      enter: (from) => {
+        this.settingsReturn = from === 'PAUSED' ? 'PAUSED' : 'MENU';
+        this.input.clearHeld();
+        this.settingsScreen.show();
+      },
+      exit: (to) => {
+        this.settingsScreen.hide();
+        if (to === 'MENU') this.teardownWorld();
       },
     });
 
@@ -546,6 +606,19 @@ export class Game {
     // from the same registry entry a player's choice would have produced.
     if (options.mode !== null) this.selection.modeId = options.mode;
 
+    /**
+     * M8: `?matches=N` hands the run to `MatchHarness` instead of playing one match here.
+     *
+     * They answer different questions and always did — `BotHarness` proves a *firefight* is
+     * stable, `MatchHarness` proves a *build and teardown cycle* is — and until M8 they were
+     * two tools with two entry points. One flag now picks between them, and the bot count,
+     * speed, tier, map and mode from the same query string apply to both.
+     */
+    if (options.matches > 1) {
+      void this.matchHarness.run(options.matches);
+      return;
+    }
+
     this.transitionTo('MATCH');
     this.world?.startBotHarness(options);
   }
@@ -554,6 +627,52 @@ export class Game {
     this.world?.applyMovementConfig();
     this.cameraConfig.fov = clampFov(this.cameraConfig.fov);
     this.profile.patchSettings({ fov: this.cameraConfig.fov });
+  }
+
+  /**
+   * Apply a settings change, live, and persist it (M8, brief S6.3).
+   *
+   * **One function, called with a patch, that re-applies everything.** The alternative — a
+   * switch on which key changed — is eleven branches that each have to be kept in step with
+   * the screen, and the first one anybody forgets is a setting that silently does nothing,
+   * which is the exact failure S6.3 opens by naming. Re-applying all of them costs a
+   * handful of property writes on a user gesture and cannot drift.
+   *
+   * Persistence is separate and deliberately lazy: `Profile.patchSettings` marks the save
+   * dirty and `SaveStore` coalesces the burst a slider drag produces into one write 250 ms
+   * later. Live is immediate; written is a quarter of a second behind.
+   */
+  applySettings(patch: Partial<SettingsV1>): void {
+    this.profile.patchSettings(patch);
+    const s = this.profile.settings;
+
+    // ---- look ------------------------------------------------------------
+    this.input.setSensitivity(s.sensitivity);
+    this.input.setAdsSensitivity(s.adsSensitivity);
+    this.input.setInvertY(s.invertY);
+    if (patch.bindings !== undefined) this.input.setBindings(s.bindings);
+    this.cameraConfig.fov = clampFov(s.fov);
+
+    // ---- audio -----------------------------------------------------------
+    this.audio.setMasterVolume(s.masterVolume);
+    this.audio.setBusVolume('sfx', s.sfxVolume);
+    this.audio.setBusVolume('music', s.musicVolume);
+    this.audio.setBusVolume('ui', s.uiVolume);
+
+    // ---- video -----------------------------------------------------------
+    this.renderer.setSize(window.innerWidth, window.innerHeight, s.renderScale);
+    this.cameraRig.resize(this.renderer.aspect);
+    this.viewmodel.resize(this.renderer.aspect);
+    this.renderer.setShadowQuality(s.shadowQuality, this.scene);
+    this.renderer.setMotionBlur(s.motionBlur);
+    // A trail of the frame before a resolution change is a smear at the wrong size.
+    this.renderer.resetMotionBlur();
+
+    // ---- presentation ----------------------------------------------------
+    // The palette writes CSS custom properties and notifies the canvases; everything that
+    // draws a gameplay colour reads one of the two. See `ui/Palette.ts`.
+    palette.set(s.colorblind);
+    this.fpsCounter.setVisible(s.showFps);
   }
 
   private onWeaponConfigChanged(): void {
@@ -602,6 +721,8 @@ export class Game {
     const dt = Math.max(0, (now - this.lastRenderMs) / 1000);
     this.lastRenderMs = now;
 
+    this.fpsCounter.update(dt);
+
     const world = this.world;
     if (world === null) {
       // No world: the menu is DOM over an empty canvas, and the canvas still has to be
@@ -625,6 +746,9 @@ export class Game {
     this.drive.tacSprint = sim.tacSprintActive;
     this.drive.slide = sim.slideActive;
     this.drive.adsFraction = match.visual.adsFraction;
+    // M8: the ADS sensitivity multiplier is blended by how far the sights are up, so the
+    // look speed changes with the picture rather than on the button edge.
+    this.input.setAdsFraction(match.visual.adsFraction);
     this.drive.adsFovScale = def.adsFovScale;
     this.drive.adsViewmodelFovScale = def.adsViewmodelFovScale;
 
@@ -654,6 +778,10 @@ export class Game {
     this.audio.update();
 
     match.render(alpha, cam, dt, yaw, pitch);
+    // M8: dust and haze ride the render clock, not the sim tick — they drive no gameplay
+    // value, so S4.1's constant-dt rule does not apply and a fixed step would make the
+    // cloud stutter at frame rates that are not 60.
+    world.particulate?.update(cam.position.x, cam.position.y, cam.position.z, dt);
     world.debug.render(cam, alpha, dt);
 
     /**
@@ -755,6 +883,13 @@ export class Game {
     // panel must not be thrown back into a firefight, and one cancelling a mortar mark must
     // not be dropped onto the pause screen.
     if (this.cancelMortarOverlay()) return;
+    if (this.state === 'SETTINGS') {
+      // A binding row that is waiting for a key eats Escape as "cancel the capture"; only
+      // once nothing is armed does Escape leave the screen.
+      if (this.settingsScreen.handleEscape()) return;
+      this.transitionTo(this.settingsReturn);
+      return;
+    }
     if (this.state === 'LOADOUT') {
       this.transitionTo(this.world === null ? 'MENU' : 'PAUSED');
       return;

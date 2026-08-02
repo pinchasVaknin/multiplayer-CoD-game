@@ -50,9 +50,26 @@ export interface BotHarnessOptions {
   readonly map: string | null;
   /** Mode id to run, or null to use whatever the menu had selected (M7). */
   readonly mode: GameModeId | null;
+  /**
+   * M8. How many matches to play back to back, logging the heap at every boundary.
+   *
+   * 1 is the M3/M7 behaviour: one AFK match that runs until it ends. Above 1, `Game` hands
+   * the run to `MatchHarness` instead, which is the thing that already knows how to build
+   * and tear down a world repeatedly and sample a settled heap between them — S6.5 asks for
+   * "the AFK bot-match harness with a match-count parameter and heap logging at each
+   * boundary", and those were two tools that had never been given one flag.
+   */
+  readonly matches: number;
 }
 
-const DEFAULT_OPTIONS: BotHarnessOptions = { bots: 10, speed: 1, tier: 'MIX', map: null, mode: null };
+const DEFAULT_OPTIONS: BotHarnessOptions = {
+  bots: 10,
+  speed: 1,
+  tier: 'MIX',
+  map: null,
+  mode: null,
+  matches: 1,
+};
 
 const MIX: readonly BotTier[] = ['RECRUIT', 'REGULAR', 'HARDENED', 'VETERAN'];
 
@@ -67,6 +84,16 @@ const MAX_BOTS = 32;
  * so the match is bit-for-bit the one a player would have played (S4.1).
  */
 const MAX_SPEED = 32;
+
+/**
+ * Matches one `?matches=` run will play.
+ *
+ * Ten is the number S6.5's memory question is asked in, and a ceiling exists at all because
+ * each match is a full build and teardown with a settle between: at 32x a ten-match TDM run
+ * is already several wall minutes, and a typo of `matches=1000` should not silently commit
+ * the machine to an afternoon.
+ */
+const MAX_MATCHES = 25;
 
 /**
  * Read the harness flags off a query string. Returns null when this is a normal run,
@@ -85,7 +112,9 @@ export function parseHarnessOptions(search: string): BotHarnessOptions | null {
   const rawMode = (params.get('mode') ?? '').toUpperCase();
   const mode = MODES.some((m) => m.id === rawMode) ? (rawMode as GameModeId) : null;
 
-  return { bots, speed, tier, map, mode };
+  const matches = clampInt(params.get('matches'), DEFAULT_OPTIONS.matches, 1, MAX_MATCHES);
+
+  return { bots, speed, tier, map, mode, matches };
 }
 
 export interface BotHarnessReport {

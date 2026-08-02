@@ -194,6 +194,119 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     stepQ: 3.4,
     stepLevel: 1.24,
   },
+
+  // ---- M8: Dunes ----------------------------------------------------------
+
+  /**
+   * Loose sand. The cheapest thing on any map to shoot through and the quietest to walk
+   * on — which is a real tactical property, not flavour: a sand berm is concealment and
+   * not cover, and a player crossing an open street on Dunes is genuinely harder to hear
+   * than one crossing Foundry's steel floor.
+   */
+  sand: {
+    penetrationDensity: 0.42,
+    impactColor: 0xd8bd90,
+    impactSpark: 0.0,
+    decalStrength: 0.42,
+    decalRadius: 0.11,
+    impactFreq: 620,
+    impactQ: 0.55,
+    impactDecay: 0.07,
+    stepFreq: 780,
+    stepQ: 0.6,
+    stepLevel: 0.66,
+  },
+
+  /**
+   * Mud plaster over block. Slightly softer than poured concrete and considerably softer
+   * than brick, so a Dunes village wall is a wall you can shoot a man through if you know
+   * he is behind it — which is what stops the alleys being a safe route rather than a
+   * risky one.
+   */
+  plaster: {
+    penetrationDensity: 0.74,
+    impactColor: 0xd4bb96,
+    impactSpark: 0.0,
+    decalStrength: 0.78,
+    decalRadius: 0.095,
+    impactFreq: 1250,
+    impactQ: 0.95,
+    impactDecay: 0.11,
+    stepFreq: 1180,
+    stepQ: 0.85,
+    stepLevel: 0.94,
+  },
+
+  /** Fired roof tile. Brittle, bright, and it shatters rather than absorbing. */
+  clayTile: {
+    penetrationDensity: 0.66,
+    impactColor: 0xe08a58,
+    impactSpark: 0.15,
+    decalStrength: 0.72,
+    decalRadius: 0.08,
+    impactFreq: 2050,
+    impactQ: 2.6,
+    impactDecay: 0.13,
+    stepFreq: 1750,
+    stepQ: 1.7,
+    stepLevel: 1.02,
+  },
+
+  /**
+   * Plank. Shared by Dunes' stalls and Depot's pallets. Cheap to penetrate and it *sounds*
+   * cheap — a hollow knock rather than a crack, which is the cue that tells you the thing
+   * you are hiding behind is not going to hold.
+   */
+  wood: {
+    penetrationDensity: 0.48,
+    impactColor: 0xc09a62,
+    impactSpark: 0.0,
+    decalStrength: 0.66,
+    decalRadius: 0.07,
+    impactFreq: 980,
+    impactQ: 1.9,
+    impactDecay: 0.14,
+    stepFreq: 900,
+    stepQ: 1.5,
+    stepLevel: 1.06,
+  },
+
+  // ---- M8: Depot ----------------------------------------------------------
+
+  /** Yard asphalt. Between concrete and rubber: dense enough to stop a round, dull to walk on. */
+  asphalt: {
+    penetrationDensity: 1.05,
+    impactColor: 0x8e939c,
+    impactSpark: 0.0,
+    decalStrength: 0.88,
+    decalRadius: 0.075,
+    impactFreq: 1180,
+    impactQ: 0.8,
+    impactDecay: 0.09,
+    stepFreq: 1120,
+    stepQ: 0.75,
+    stepLevel: 0.88,
+  },
+
+  /**
+   * Painted container plate. Dearer per metre than `rust` — the paint is still on it, so
+   * the plate has not been eaten thin — which means a Depot stack is harder to shoot
+   * through than a Foundry one. That difference is load-bearing on a map whose cover *is*
+   * containers: the stacks have to be worth climbing rather than worth shooting through.
+   */
+  paintedSteel: {
+    penetrationDensity: 1.62,
+    impactColor: 0xa8d0d4,
+    impactSpark: 0.85,
+    decalStrength: 0.62,
+    decalRadius: 0.055,
+    impactFreq: 2850,
+    impactQ: 4.2,
+    impactDecay: 0.2,
+    stepFreq: 2250,
+    stepQ: 2.4,
+    stepLevel: 1.18,
+  },
 };
 
 /** Indexed by the same integer `ColliderSet.materialAt` returns. */

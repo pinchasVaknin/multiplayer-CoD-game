@@ -41,6 +41,8 @@ export interface GameScreensDeps {
   // ---- intents. `Game` owns the state machine; the screens only ask --------
   readonly onLaunch: () => void;
   readonly onLoadout: () => void;
+  /** M8. Open the settings screen from the menu or the pause screen. */
+  readonly onSettings: () => void;
   readonly onLoadoutBack: () => void;
   readonly onQuitToMenu: () => void;
   readonly onResume: () => void;
@@ -66,9 +68,11 @@ export class GameScreens {
       selection: deps.selection,
       onLaunch: deps.onLaunch,
       onLoadout: deps.onLoadout,
+      onSettings: deps.onSettings,
       onResetProgress: () => deps.profile.resetProgress(),
       statusLine: deps.statusLine,
       profileLine: () => profileLine(deps.profile),
+      bindings: () => deps.profile.settings.bindings,
     });
 
     this.loadoutEditor = new LoadoutEditor({
@@ -91,6 +95,7 @@ export class GameScreens {
     // A pause-screen loadout edit comes back through PAUSED, so the world it left is the
     // world it returns to and the class change lands on a live match.
     this.pauseMenu.setOnLoadout(deps.onLoadout);
+    this.pauseMenu.setOnSettings(deps.onSettings);
 
     this.summary = new EndOfMatch({
       // Sized to the largest roster any map asks for, so the board never has to grow.

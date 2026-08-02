@@ -1,5 +1,6 @@
 import { ObjectPool } from '../core/ObjectPool';
 import { Rng } from '../core/Rng';
+import { DISTANCE_PROFILES, type DistanceProfileName } from './AudioMix';
 import {
   buildImpulseResponse,
   buildNoiseBuffer,
@@ -113,6 +114,8 @@ export class AudioGraph {
   private muffle = 0;
   private healthMuffle = 0;
   private flashMuffle = 0;
+  /** M8. A nearby blast, decaying. A third contributor to the same one filter. */
+  private concussionMuffle = 0;
 
   private pool: ObjectPool<Voice> | null = null;
   private readonly active: Voice[] = [];
@@ -328,6 +331,20 @@ export class AudioGraph {
     this.applyMuffle();
   }
 
+  /**
+   * The low-pass after a nearby explosion (M8, brief S6.4).
+   *
+   * A *third* contributor to the same filter rather than a third filter, for the reason the
+   * flash gave for being a second: two low-passes in series compound into a cutoff neither
+   * asked for, and "how muffled is the world" is one quantity. The largest of the three
+   * wins, so being flashed next to a grenade sounds like being flashed rather than like
+   * being flashed twice.
+   */
+  setConcussionMuffle(amount: number): void {
+    this.concussionMuffle = Math.max(0, Math.min(1, amount));
+    this.applyMuffle();
+  }
+
   get muffleAmount(): number {
     return this.muffle;
   }
@@ -336,7 +353,7 @@ export class AudioGraph {
     const filter = this.worldFilter;
     const ctx = this.ctx;
     if (filter === null || ctx === null) return;
-    const combined = Math.max(this.healthMuffle, this.flashMuffle);
+    const combined = Math.max(this.healthMuffle, this.flashMuffle, this.concussionMuffle);
     if (Math.abs(combined - this.muffle) < 0.01) return;
     this.muffle = combined;
     const cutoff = OPEN_CUTOFF * Math.pow(MUFFLED_CUTOFF / OPEN_CUTOFF, combined);
@@ -421,7 +438,7 @@ export class AudioGraph {
     }
     v.filter.Q.setValueAtTime(Math.max(spec.q, 0.0001), now);
 
-    this.routeVoice(v, spec.positional, spec.bus, spec.x, spec.y, spec.z, spec.wet, now);
+    this.routeVoice(v, spec.positional, spec.bus, spec.x, spec.y, spec.z, spec.wet, spec.roll, now);
     this.envelope(v, now, spec.level, spec.attack, decay);
 
     const src = ctx.createBufferSource();
@@ -459,7 +476,7 @@ export class AudioGraph {
     v.filter.frequency.setValueAtTime(Math.max(spec.filterFreq, 40), now);
     v.filter.Q.setValueAtTime(Math.max(spec.filterQ, 0.0001), now);
 
-    this.routeVoice(v, spec.positional, spec.bus, spec.x, spec.y, spec.z, spec.wet, now);
+    this.routeVoice(v, spec.positional, spec.bus, spec.x, spec.y, spec.z, spec.wet, spec.roll, now);
     this.envelope(v, now, spec.level, spec.attack, decay);
 
     const osc = ctx.createOscillator();
@@ -527,6 +544,7 @@ export class AudioGraph {
     this.muffle = 0;
     this.healthMuffle = 0;
     this.flashMuffle = 0;
+    this.concussionMuffle = 0;
     if (ctx === null) return;
     const now = ctx.currentTime;
     this.duckGain?.gain.cancelScheduledValues(now);
@@ -619,6 +637,7 @@ export class AudioGraph {
     y: number,
     z: number,
     wet: number,
+    roll: DistanceProfileName,
     now: number,
   ): void {
     // `music` has no voice path of its own yet; a caller asking for it gets the flat
@@ -632,6 +651,13 @@ export class AudioGraph {
       v.occlusion.frequency.setValueAtTime(OPEN_CUTOFF, now);
       return;
     }
+
+    // M8: the falloff curve is per sound, not per graph. A rifle and a footstep are not the
+    // same size of source, and one curve for both is what made enemy fire inaudible.
+    const profile = DISTANCE_PROFILES[roll];
+    v.panner.refDistance = profile.refDistance;
+    v.panner.rolloffFactor = profile.rolloff;
+    v.panner.maxDistance = profile.maxDistance;
 
     v.panner.positionX.setValueAtTime(x, now);
     v.panner.positionY.setValueAtTime(y, now);

@@ -688,3 +688,217 @@ profile and says so. Reset progress first, or run it on a fresh save.
 
 `resolution()` leaves the profile as it found it: it grants the foregrip, fits it, measures,
 and removes it again.
+
+---
+
+# M8 — the hand-over tools, and the index
+
+M8 adds no second overlay and no second console object. What it adds is the four
+measurements the human runs on hardware this build has never seen, one wall sweep, and this
+index — because seven milestones of tooling documented in seven places is tooling nobody
+finds.
+
+## The index
+
+Everything, in one table. The detail is in the sections above and below.
+
+| Tool | How to reach it | Answers |
+|---|---|---|
+| Debug overlay | `F1` in a match | Frame time, player state, weapon state, AI budget, mode, streaks |
+| Collision visualiser | `F2` | Is the capsule where I think it is; which hash cells are queried |
+| AI visualiser | `F4` | Navmesh, paths, sight lines, cover occupancy, spawn scores |
+| Tuning sliders | `F1`, right column | Every feel constant, live; **COPY CONFIG** writes it back as source |
+| Movement harness | `__operator.report()` | Speeds, slide timings, the speed bound — headless |
+| Weapon harness | `__operator.weaponReport()` | Fire timing, recoil determinism, damage, penetration |
+| Arsenal harness | `__operator.balanceTable()` | TTK across all twelve weapons; attachment deltas |
+| Bot harness | `?harness=botmatch` | An AFK bot match, at up to 32x speed |
+| Match harness | `__operator.runMatches(n)` | Does a build-and-teardown cycle leak |
+| Lane report | `__operator.laneReport()` | Are this map's lanes within 15% of each other |
+| **Snag sweep** | `__operator.snagSweep()` | **Sprint every wall on this map** |
+| **Frame export** | `__operator.frameReport()` | p50/p95/p99/worst, plus the whole buffer, as JSON |
+| **Latency export** | `__operator.latencyReport()` | Input latency in ms and in frames |
+| **Render sweep** | `__operator.renderSweep()` | Which render scale fits this machine |
+| **Allocation probe** | `__operator.allocationProbe()` | Does the per-tick sim path allocate |
+| Save inspector | `F1`, right column | Migration, repair, what a bad save costs you |
+
+## URL flags
+
+All of them compose.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `?harness=botmatch` | — | Boot straight into an AFK bot match. Required for the rest. |
+| `&bots=N` | 10 | Total bots across both sides, 2-32. |
+| `&speed=N` | 1 | Sim seconds per wall second, 1-32. Adds whole 1/60 s ticks; never changes `dt`. |
+| `&tier=NAME` | MIX | `RECRUIT`, `REGULAR`, `HARDENED`, `VETERAN`, or the default spread. |
+| `&map=ID` | menu | `mp_foundry`, `mp_dunes`, `mp_depot`, `mp_greybox`. |
+| `&mode=ID` | menu | `TDM`, `DOM`, `KC`, `FFA`, `SND`, `RANGE`. |
+| `&matches=N` | 1 | **M8.** Above 1, hands the run to the match harness: N matches back to back, heap logged at every boundary. |
+
+Ten matches of Depot Domination with ten bots, as fast as the harness will go:
+
+```
+http://127.0.0.1:5173/?harness=botmatch&map=mp_depot&mode=DOM&bots=10&speed=32&matches=10
+```
+
+## The export envelope
+
+Every M8 tool returns the same wrapper:
+
+```json
+{
+  "tool": "frame-histogram",
+  "at": "2026-08-02T...",
+  "context": {
+    "map": "mp_depot", "mode": "DOMINATION", "state": "MATCH", "bots": 9,
+    "renderScale": 1, "shadowQuality": "medium", "motionBlur": false,
+    "pixelRatio": 1.25, "viewport": "1920x1080", "cores": 8, "userAgent": "..."
+  },
+  "...": "payload"
+}
+```
+
+The context block is the part that makes an export worth keeping. "p99 was 31 ms" is
+indistinguishable from noise unless it also says what it was 31 ms *of* — which map, how
+many bots, at what render scale, on what machine.
+
+`__operator.copyReport(report)` puts any of them on the clipboard as JSON.
+
+---
+
+## Worked example 1 — "is the AI over budget?"
+
+S4.7 gives all game logic 3.0 ms a frame. The AI is the part most likely to spend it.
+
+1. Boot a heavy bot match: `?harness=botmatch&map=mp_depot&bots=10&speed=1`.
+2. `F1`, and read the **AI** section: `decide`, `steer`, `perception` and `path` in
+   milliseconds, plus nodes expanded and deferred requests.
+3. Leave it a minute, then `__operator.frameReport()`.
+
+Read `peaks.mode` and the AI figures against 3.0 ms. If `deferredRequests` is climbing and
+`budgetExhaustedTicks` is non-zero, the pathfinder is the problem and `ai/AiScheduler.ts`
+owns the budget. If `decide` is the cost, it is running too often — the interval is in the
+same file.
+
+**What this looks like when it is fine:** on this build, Depot with nine bots, AI mean
+0.03-0.05 ms and `peakModeMs` around 0.3 ms.
+
+**What it looked like when it was not:** M3 measured AI mean climbing from 0.39 to 1.30 ms
+across a ten-minute soak. The AI was innocent — an uncapped audio voice pool was allocating
+node graphs *inside* the sim tick from a `weapon.fired` handler. The lesson is that this
+read-out tells you where the time went, not whose fault it is; check `Pools` in the same
+overlay before believing the label.
+
+## Worked example 2 — "did the last match leak?"
+
+1. `await __operator.runMatches(3)` — or use `&matches=3`, which is the same code.
+2. Read the boundary table it prints.
+
+Each row is a settled heap sample: the harness provokes a collection and waits before
+reading, because `usedJSHeapSize` immediately after a teardown is mostly garbage nobody has
+collected yet.
+
+**A flat or falling `heapDeltaMB` is the answer you want.** A *monotonic* rise across every
+boundary is a leak, and the place to look is `MatchWorld.dispose` — it is written as the
+exact mirror of its own constructor precisely so that a missing line is visible by reading
+the two halves next to each other.
+
+**What this looks like when it is fine:** M7 measured 29.0 -> 32.9 -> 38.0 -> 34.8 MB across
+three modes; the third boundary *fell*, so nothing was retained.
+
+## Worked example 3 — "does the sim path allocate?"
+
+S4.7 asks for zero allocations in the per-tick sim path.
+
+```js
+await __operator.allocationProbe()
+```
+
+It stops the loop, warms up 5,000 ticks, then runs 300,000 ticks — eighty-three minutes of
+simulated play — sampling the heap ten times, and does the same for an empty control loop.
+
+**Read the control first.** It must be exactly flat. If it is not, the machine is doing
+something else and the run means nothing.
+
+**Then read the shape of `simSeriesMB`.** Flat is no allocation. A sawtooth that returns to
+where it started is garbage being made and collected at the same rate. A staircase that
+never comes down is a leak.
+
+**Why the tool works this way:** the obvious implementation — read `usedJSHeapSize` before
+and after — does not work. Chrome updates that counter in very coarse steps; a calibration
+on this build showed **no movement at all** for 300,000 small objects allocated in a row,
+then a 49 MB jump. A naive before/after therefore reports a confident zero for a path that
+allocates. Anything the probe reports under about 4 bytes/tick is below the floor and should
+be read as "under the resolution of the instrument", not as zero.
+
+**For a per-call-site answer**, the counter is not enough and DevTools is: Performance panel
+-> tick *Memory* -> record ten seconds of a live match -> open the *JS Heap* track, or use
+Memory -> *Allocation instrumentation on timeline*, which attributes every surviving
+allocation to a stack.
+
+## Worked example 4 — "which render scale should this machine use?"
+
+Start a match on the heaviest thing available — Depot, ten bots — and:
+
+```js
+const sweep = await __operator.renderSweep()
+```
+
+Six four-second holds at 1.0 down to 0.5, percentiles at each, and the setting restored to
+whatever it was. `backingPixels` is the number that actually drives fill cost, and it is the
+column to plot against.
+
+Look for the knee. If p99 barely moves between 1.0 and 0.7, the machine is CPU-bound and
+render scale is the wrong lever — check `peaks.mode` and the AI section instead.
+
+## Worked example 5 — "is there anywhere on this map you get stuck?"
+
+```js
+__operator.snagSweep()
+```
+
+`debug/SnagHarness.ts` derives its run lines from the collision world rather than from a
+list somebody typed: every world-axis-aligned collider tall enough to block a player
+contributes one pass per vertical face, offset by the capsule radius, driven both ways with
+sprint held. A wall that exists is a wall that gets swept, and a container that moved during
+tuning moves its own run line with it.
+
+Three numbers matter in the output:
+
+- **`intersectingTicks` must be zero.** Anything else is the capsule inside geometry, which
+  is a hard bug.
+- **`findings`** are places the player stopped making progress *with open space ahead* —
+  caught on a lip, wedged in a slot. Each names the collider and face so it can be walked to.
+- **`deadEnds`** are places the player stopped with a wall in front. Ordinary geometry, not a
+  fault. Reported so that a sweep which found nothing cannot be confused with one that ran
+  nothing.
+
+On this build: Foundry 142 passes, Dunes 260, Depot 192 — zero findings and zero
+intersecting ticks on all three.
+
+---
+
+## M8 panels and settings
+
+There is no new debug panel. The settings screen is a *player* surface, not a debug one, but
+three of its controls are useful while measuring:
+
+- **Render scale** — the same lever `renderSweep` walks, if you want to sit at one value.
+- **Shadow quality** — `off` disables the shadow map outright, which is the quickest way to
+  find out whether the depth pass is your problem.
+- **FPS counter** — a 4 Hz read-out that survives leaving a match, unlike the overlay.
+
+`__operator.settings()` returns the live record and `__operator.applySettings(patch)` applies
+one the same way the screen does, so a script can change a setting and assert what moved.
+`__operator.palette()` returns the live gameplay colours, which is how the colourblind
+acceptance check is made rather than asserted.
+
+## The navmesh read-outs M8 added
+
+`F4` and the AI panel gained three numbers, all of them about Depot:
+
+- **`layers`** — walkable surfaces per column. Two on Foundry and Dunes, three on Depot.
+- **`climbLinks`** — of the total links, how many are mantles rather than walks. Zero on
+  every map that does not set `navClimb`.
+- **`coverage`** — walkable nodes as a fraction of the columns inside `navBounds`. A large
+  drop between two builds of the same map means geometry has closed something off.

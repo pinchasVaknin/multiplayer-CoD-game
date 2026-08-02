@@ -5,12 +5,20 @@
  * a circular import.
  */
 
-export type GameStateId = 'BOOT' | 'MENU' | 'LOADOUT' | 'MATCH' | 'PAUSED' | 'SUMMARY';
+export type GameStateId =
+  | 'BOOT'
+  | 'MENU'
+  | 'LOADOUT'
+  | 'SETTINGS'
+  | 'MATCH'
+  | 'PAUSED'
+  | 'SUMMARY';
 
 export const GAME_STATES: readonly GameStateId[] = [
   'BOOT',
   'MENU',
   'LOADOUT',
+  'SETTINGS',
   'MATCH',
   'PAUSED',
   'SUMMARY',
@@ -27,13 +35,19 @@ export const GAME_STATES: readonly GameStateId[] = [
  * outright. It sits beside MATCH rather than replacing it: the world stays built, the
  * simulation stops advancing, and MATCH is re-entered on resume — which is why the edge
  * runs both ways and why PAUSED can also leave to MENU (quit) but never to SUMMARY.
+ *
+ * **SETTINGS is new in M8** and sits beside LOADOUT: a front-end screen with no world of its
+ * own, reachable from the menu and from the pause screen, returning to whichever it came
+ * from. Like LOADOUT it can be left straight into a match, because a player who has just
+ * fixed their sensitivity should not have to walk back through two menus to use it.
  */
 const LEGAL_TRANSITIONS: Readonly<Record<GameStateId, readonly GameStateId[]>> = {
   BOOT: ['MENU'],
-  MENU: ['LOADOUT', 'MATCH'],
+  MENU: ['LOADOUT', 'SETTINGS', 'MATCH'],
   LOADOUT: ['MENU', 'MATCH', 'PAUSED'],
+  SETTINGS: ['MENU', 'MATCH', 'PAUSED'],
   MATCH: ['SUMMARY', 'MENU', 'PAUSED'],
-  PAUSED: ['MATCH', 'MENU', 'LOADOUT'],
+  PAUSED: ['MATCH', 'MENU', 'LOADOUT', 'SETTINGS'],
   SUMMARY: ['MENU', 'LOADOUT'],
 };
 
