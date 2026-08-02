@@ -48,6 +48,7 @@ import { SCOPE_VIEWMODEL_HIDDEN } from './ui/HudTactical';
 import { MatchHud } from './ui/MatchHud';
 import type { CollisionWorld } from './world/CollisionWorld';
 import { makeRayHit, type RayHit } from './world/Geometry';
+import type { ObjectiveKind } from './world/maps/types';
 import { ViewmodelAnim, makeViewmodelDrive, type ViewmodelDrive } from './weapons/ViewmodelAnim';
 import type { ViewmodelConfig } from './weapons/ViewmodelConfig';
 import { WeaponAudio } from './weapons/WeaponAudio';
@@ -305,6 +306,9 @@ export class Match {
     // mode answers; nothing in `ai/` knows a flag from a bomb site (see `ObjectiveIntent`).
     this.bots.objectives = isObjectiveProvider(this.mode) ? this.mode : null;
     this.bots.freeForAll = deps.mode.freeForAll === true;
+    // There is no such thing as a teammate in FFA, so the friendly-fire gate at the damage
+    // door has to come off or half the lobby is unkillable by the other half.
+    if (deps.mode.freeForAll === true) this.damage.friendlyFire = true;
     this.bots.pushAggressionScale = deps.mode.pushAggressionScale ?? 1;
 
     this.fx = new Fx(deps.anisotropy);
@@ -466,7 +470,11 @@ export class Match {
       },
     });
     // Flags and bomb sites are worth drawing on the minimap; a TDM map is not (M4's note).
-    this.ui.hud.minimap.showObjectives = deps.map.def.objectives.length > 0 && hasObjectiveMode(this.mode);
+    // The *kinds* matter too: Foundry authors flags and bomb sites together, so a mode that
+    // does not filter shows both at once.
+    const kinds = objectiveKindsFor(this.mode);
+    this.ui.hud.minimap.objectiveKinds = kinds;
+    this.ui.hud.minimap.showObjectives = kinds.length > 0;
 
     // Occlusion low-pass through the same spatial-hash raycaster the sim uses (S6.7).
     deps.audio.setOccluder((x, y, z) =>
@@ -656,6 +664,14 @@ export class Match {
     // The targeting map owns the input while it is up — firing confirms the mark rather
     // than pulling the trigger.
     const mortarOpen = this.stepMortarOverlay(cmd);
+    // A hand on a grenade is a hand off the rifle. One flag, read by the weapon and by the
+    // viewmodel, so the gun cannot be fired while it is visibly lowered.
+    //
+    // The held button is part of the test, not just the thrower state. `equipment.simulate`
+    // runs *after* the weapon this tick, so on the very first tick of a cook `busy` is still
+    // last tick's answer and exactly one round escaped - measured, not theorised.
+    const reachingForEquipment = isDown(cmd.buttons, Btn.Lethal) || isDown(cmd.buttons, Btn.Tactical);
+    this.weapons.fireBlocked = this.equipment.thrower.busy || reachingForEquipment;
 
     if (!this.playerDead && !mortarOpen) {
       const sim = this.deps.player.sim;
@@ -680,6 +696,7 @@ export class Match {
     // Streaks tick after the bots that may have just shot one down, and before the flow that
     // may declare the match over and end them all.
     this.streaks.simulate(cmd.tickIndex, cmd);
+    this.syncChopperBody();
     if (!this.playerDead && !this.mortarOverlay.isOpen) this.stepStreakInput(cmd);
     this.stepPlayerRespawn();
     this.stepLowHealthAudio();
@@ -694,6 +711,29 @@ export class Match {
 
     this.prevButtons = cmd.buttons;
     this.latency.expire(performance.now());
+  }
+
+  /**
+   * Take the player's body out of play while they are flying a Chopper Gunner, and put it
+   * back the moment they are not (M7 playtest).
+   *
+   * Driven from the live streak rather than from the activate/expire events, so there is no
+   * state to get stuck: if there is no chopper, the body is in play, every tick, unarguably.
+   * That is the same reasoning the chopper's single-exit rule uses.
+   *
+   * Both flags are needed and they do different jobs. `active` false removes the body from
+   * perception, spawn scoring and bot target selection — nobody comes looking. `invulnerable`
+   * is checked at the damage door and stops anything already in flight (a grenade, a mortar,
+   * a sentry burst) from resolving against a player who is not there.
+   *
+   * This reverses M7's original reading of S6.1's "not invulnerable to a lucky mortar":
+   * playtesting found being killed by something you cannot see, react to or avoid reads as
+   * broken rather than as risk.
+   */
+  private syncChopperBody(): void {
+    const flying = this.streaks.activeChopperFor(PLAYER_ENTITY_ID) !== null;
+    this.playerCombatant.active = !flying;
+    this.playerCombatant.invulnerable = flying;
   }
 
   /**
@@ -723,7 +763,11 @@ export class Match {
     this.overlayPitch = cmd.pitch;
     // Yaw sweeps the mark east/west, pitch north/south. Scaled so a comfortable flick
     // crosses the map rather than nudging it a metre.
-    this.mortarOverlay.moveBy(dYaw * MORTAR_STEER_M_PER_RAD, -dPitch * MORTAR_STEER_M_PER_RAD);
+    //
+    // The yaw term is **negated**: a view yaw increase turns the player left, and the map is
+    // drawn in world axes rather than view axes, so passing it through unchanged sent the
+    // cursor the wrong way. Reported from a live match as inverted X.
+    this.mortarOverlay.moveBy(-dYaw * MORTAR_STEER_M_PER_RAD, -dPitch * MORTAR_STEER_M_PER_RAD);
 
     if (justPressed(cmd.buttons, this.prevButtons, Btn.Fire)) this.mortarOverlay.confirm();
     // The same key that opened it closes it, and the streak stays in hand.
@@ -851,6 +895,7 @@ export class Match {
     drive.visualLateral = this.visual.visualLateral;
     drive.tacSprint = sim.tacSprintActive;
     drive.slide = sim.slideActive;
+    drive.throwing = this.equipment.thrower.busy;
     drive.swapping = this.weapons.inventory.swapping;
     drive.bobPhase = sim.bobPhase;
     drive.speed = sim.speed;
@@ -1072,6 +1117,9 @@ export class Match {
   dispose(): void {
     // First: a live Chopper Gunner has the camera, and nothing else may run until it is back.
     this.streaks.dispose();
+    // The streaks are gone, so the body is unconditionally back in play.
+    this.playerCombatant.active = true;
+    this.playerCombatant.invulnerable = false;
     this.objectives.dispose();
     this.mortarOverlay.dispose();
     this.meta.dispose();
@@ -1141,9 +1189,17 @@ function isObjectiveProvider(mode: GameMode): mode is GameMode & ObjectiveProvid
   return typeof candidate.assign === 'function' && typeof candidate.onArrived === 'function';
 }
 
-/** Whether this mode has objectives worth putting on the minimap (M7). */
-function hasObjectiveMode(mode: GameMode): boolean {
-  return mode instanceof Domination || mode instanceof SearchAndDestroy;
+/**
+ * Which objective kinds the minimap should draw for this mode (M7).
+ *
+ * Empty for a mode with none, which also switches the objective layer off entirely — a
+ * Domination flag on a Team Deathmatch minimap is noise, and an S&D bomb site on a Domination
+ * one is worse than noise because it looks like something you can capture.
+ */
+function objectiveKindsFor(mode: GameMode): readonly ObjectiveKind[] {
+  if (mode instanceof Domination) return ['flag'];
+  if (mode instanceof SearchAndDestroy) return ['bombsite'];
+  return [];
 }
 
 /** Shortest signed angle from `a` to `b`, radians. */

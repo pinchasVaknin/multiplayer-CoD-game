@@ -27,12 +27,38 @@ export type ThrowPhase = 'IDLE' | 'COOKING';
 /** Looking down past this angle drops it at your feet instead of lobbing it. */
 const UNDERHAND_PITCH_RAD = -0.6;
 
+/**
+ * Seconds after a release before the weapon is back in the fight.
+ *
+ * Matches the viewmodel's raise so the gun is visibly up again on the tick firing is allowed.
+ */
+const THROW_FOLLOW_THROUGH = 0.42;
+
+/**
+ * Where a thrown object leaves the hand, relative to the eye.
+ *
+ * Spawning exactly at the eye is why the throw read as coming out of the player's chest: the
+ * grenade appeared at the camera and travelled away from it, with nothing to suggest an arm.
+ * Forward, right and slightly down puts it where the hand is.
+ */
+const HAND_FORWARD = 0.42;
+const HAND_RIGHT = 0.22;
+const HAND_DOWN = 0.12;
+
 export class ThrowController {
   phase: ThrowPhase = 'IDLE';
   /** Seconds the current cook has burned. */
   cook = 0;
   /** Which slot is being cooked. */
   slot: EquipmentSlot = 'lethal';
+  /**
+   * Seconds left of the throw follow-through.
+   *
+   * The release is instantaneous in the sim, but the *arm* is not: the weapon is off screen
+   * and the hand is still coming back. Firing during that window was reported as a bug and it
+   * is one — you cannot shoot a rifle you are not holding.
+   */
+  followThrough = 0;
 
   private prevButtons = 0;
 
@@ -44,7 +70,19 @@ export class ThrowController {
   reset(): void {
     this.phase = 'IDLE';
     this.cook = 0;
+    this.followThrough = 0;
     this.prevButtons = 0;
+  }
+
+  /**
+   * True while the hand is on a grenade rather than on the weapon.
+   *
+   * The one authority for "can this player shoot right now" as far as equipment is concerned:
+   * `WeaponSystem.fireBlocked` reads it, and so does `ViewmodelAnim` to decide whether the
+   * weapon is on screen at all. One flag, so what you see and what you can do agree.
+   */
+  get busy(): boolean {
+    return this.phase === 'COOKING' || this.followThrough > 0;
   }
 
   /** Seconds of fuse left if it were released right now, for the HUD. */
@@ -75,8 +113,16 @@ export class ThrowController {
     if (!alive) {
       this.phase = 'IDLE';
       this.cook = 0;
+      // A corpse is not following through. Without this the flag survives the respawn and
+      // the weapon comes back blocked.
+      this.followThrough = 0;
       return;
     }
+
+    // Before any phase branch, deliberately. The follow-through *begins* when the throw ends
+    // and the phase returns to IDLE, so a decrement inside the COOKING branch can never run —
+    // it left the weapon permanently blocked after a single grenade. Measured, not theorised.
+    if (this.followThrough > 0) this.followThrough = Math.max(0, this.followThrough - DT);
 
     if (this.phase === 'IDLE') {
       if (justPressed(buttons, prev, Btn.Lethal)) this.begin('lethal', inv);
@@ -126,16 +172,24 @@ export class ThrowController {
   ): void {
     this.phase = 'IDLE';
     this.cook = 0;
+    this.followThrough = THROW_FOLLOW_THROUGH;
     if (EquipmentSystem.slotCount(inv, this.slot) <= 0) return;
 
     const underhand = cmd.pitch < UNDERHAND_PITCH_RAD || def.impact === 'plant';
+    // Out of the hand, not out of the camera. Forward along the look, right along its
+    // perpendicular, and a little below eye level.
+    const cp = Math.cos(cmd.pitch);
+    const fx = -Math.sin(cmd.yaw) * cp;
+    const fz = -Math.cos(cmd.yaw) * cp;
+    const rx = Math.cos(cmd.yaw);
+    const rz = -Math.sin(cmd.yaw);
     const thrown = this.system.throwFrom(
       def,
       entityId,
       team,
-      sim.x,
-      sim.y + sim.eyeHeight,
-      sim.z,
+      sim.x + fx * HAND_FORWARD + rx * HAND_RIGHT,
+      sim.y + sim.eyeHeight - HAND_DOWN + Math.sin(cmd.pitch) * HAND_FORWARD,
+      sim.z + fz * HAND_FORWARD + rz * HAND_RIGHT,
       cmd.yaw,
       cmd.pitch,
       sim.vx,

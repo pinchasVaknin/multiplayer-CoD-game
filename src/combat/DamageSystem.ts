@@ -29,6 +29,15 @@ export interface Damageable {
    * identical, so a `Combatant` satisfies this without a cast.
    */
   readonly team?: 'A' | 'B';
+  /**
+   * True while this entity cannot be hurt at all (M7 playtest).
+   *
+   * Only the player's abandoned body uses it, while they are flying a Chopper Gunner. The
+   * check lives here rather than in each damage source for the same reason the friendly-fire
+   * gate does: there is one door into health, and a rule that is not applied at the door is a
+   * rule some future damage source will forget.
+   */
+  readonly invulnerable?: boolean;
 }
 
 export interface DamageRequest {
@@ -197,6 +206,7 @@ export class DamageSystem {
   apply(req: DamageRequest): number {
     const target = this.entities.get(req.targetId);
     if (target === undefined || !target.health.alive) return 0;
+    if (target.invulnerable === true) return 0;
     if (!this.friendlyFire && req.sourceId !== req.targetId) {
       // The gate for every damage source, not just ballistics — which filters friendly
       // rigs out of target selection, so this is the one that will still be here when

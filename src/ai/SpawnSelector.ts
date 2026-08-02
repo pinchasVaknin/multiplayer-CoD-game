@@ -116,6 +116,15 @@ export function makeSpawnInspection(): SpawnInspection {
 }
 
 export class SpawnSelector {
+  /**
+   * Free-for-All: score a candidate spawn against *every* other combatant.
+   *
+   * With teams, a spawn only has to be far from the other side. With seven independent
+   * hostiles there is no such thing as a safe direction, so the nearest-enemy term has to
+   * consider everybody or the mode spawns people on top of each other.
+   */
+  freeForAll = false;
+
   readonly stats: SpawnStats = {
     selections: 0,
     safe: 0,
@@ -371,7 +380,8 @@ export class SpawnSelector {
       const dz = c.z - other.pz;
       const dist = Math.hypot(dx, dz);
 
-      if (other.team === team) {
+      // FFA scores against everybody: seven hostiles rather than one hostile team.
+      if (!this.freeForAll && other.team === team) {
         if (dist < measuredFriendly) measuredFriendly = dist;
         continue;
       }

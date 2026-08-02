@@ -159,7 +159,21 @@ export class BotDirector {
    * FFA keeps the two-team substrate — see `modes/FreeForAll.ts` — and flips this so spawn
    * safety scores against all seven opponents rather than the four on the other side.
    */
-  freeForAll = false;
+  private ffa = false;
+
+  /**
+   * Free-for-All (M7). Propagated to perception and spawn safety, which are the two systems
+   * that decide who counts as an enemy.
+   */
+  get freeForAll(): boolean {
+    return this.ffa;
+  }
+
+  set freeForAll(on: boolean) {
+    this.ffa = on;
+    this.perception.freeForAll = on;
+    this.spawns.freeForAll = on;
+  }
 
   /**
    * Multiplier on every tier's `pushAggression` for this match (M7).

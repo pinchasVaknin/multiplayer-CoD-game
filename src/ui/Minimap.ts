@@ -1,5 +1,5 @@
 import { PROP_SHAPES } from '../world/maps/props';
-import type { Brush, MapDef, ObjectiveDef } from '../world/maps/types';
+import type { Brush, MapDef, ObjectiveDef, ObjectiveKind } from '../world/maps/types';
 
 /**
  * The minimap (brief S6.4): rotating, canvas-drawn, **from the `MapDef`**.
@@ -110,6 +110,16 @@ export class Minimap {
   scrambled = false;
   /** Per-objective ownership, for Domination's flag pips. Empty in a mode without them. */
   readonly objectiveStates: MinimapObjectiveState[] = [];
+
+  /**
+   * Which objective kinds this mode actually uses, or null for all of them.
+   *
+   * `MapDef.objectives` holds *every* objective the map authors — Foundry carries Domination's
+   * three flags and Search & Destroy's two bomb sites together — so drawing the list wholesale
+   * put flags on an S&D minimap and bomb sites on a Domination one. Reported from a live match.
+   * The mode says what it uses and nothing else is drawn.
+   */
+  objectiveKinds: readonly ObjectiveKind[] | null = null;
 
   private scrambleSeed = 0;
 
@@ -314,6 +324,7 @@ export class Minimap {
   private drawObjectives(ctx: CanvasRenderingContext2D, scale: number): void {
     ctx.lineWidth = 2 / scale;
     for (const o of this.objectives) {
+      if (this.objectiveKinds !== null && !this.objectiveKinds.includes(o.kind)) continue;
       // M7: ownership colours the pip and a capture in progress draws an arc around it.
       const state = this.objectiveStates.find((entry) => entry.id === o.id);
       const colour =

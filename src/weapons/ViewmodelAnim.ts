@@ -32,6 +32,15 @@ export interface ViewmodelDrive {
   tacSprint: boolean;
   slide: boolean;
   /**
+   * A grenade is being cooked or has just been released (M7 playtest).
+   *
+   * Lowers the weapon off screen for the duration. The throw used to read as the grenade
+   * leaving the player's chest, because the rifle stayed up the whole time and the projectile
+   * simply appeared beside it. `ThrowController.busy` is the same flag that blocks firing, so
+   * what you see and what you can do cannot disagree.
+   */
+  throwing: boolean;
+  /**
    * A weapon swap is under way (M5, S6.4).
    *
    * `raise` already carries the *timing* of a put-away and a take-out, because `Inventory`
@@ -56,6 +65,7 @@ export interface ViewmodelDrive {
 export function makeViewmodelDrive(): ViewmodelDrive {
   return {
     raise: 1,
+    throwing: false,
     adsFraction: 0,
     reloading: false,
     reloadFraction: 0,
@@ -85,6 +95,9 @@ const EMPTY_TIMES = { down: 0.15, magOut: 0.34, magIn: 0.42, magSeated: 0.58, ra
  */
 const REFERENCE_SIGHT_HEIGHT = 0.0915;
 
+/** How fast the weapon drops for a throw and comes back. Brisk: this is not a swap. */
+const THROW_LOWER_RATE = 14;
+
 const CHARGE_PULL = 0.68;
 const CHARGE_PEAK = 0.75;
 const CHARGE_HOME = 0.81;
@@ -96,6 +109,8 @@ export class ViewmodelAnim {
   private swayPitch = 0;
 
   private adsPose = 0;
+  /** Damped 0..1 throw lower. See `ViewmodelDrive.throwing`. */
+  private throwPose = 0;
   private adsRising = false;
   private lastAdsFraction = 0;
   private lastYaw = 0;
@@ -133,6 +148,7 @@ export class ViewmodelAnim {
     this.swayYaw = 0;
     this.swayPitch = 0;
     this.adsPose = 0;
+    this.throwPose = 0;
     this.adsRising = false;
     this.lastAdsFraction = 0;
     this.idlePhase = 0;
@@ -169,10 +185,16 @@ export class ViewmodelAnim {
     let ry = lerp(cfg.hipYaw, 0, ads);
     let rz = lerp(cfg.hipRoll, 0, ads);
 
+    // A throw lowers the weapon the same way a swap does, through a damped factor so the
+    // gun swings down and back rather than snapping. Folded into `raise` rather than handled
+    // separately, because `raise` is already the one authority for the lowered pose.
+    this.throwPose = damp(this.throwPose, drive.throwing ? 1 : 0, THROW_LOWER_RATE, dt);
+    const effectiveRaise = clamp01(drive.raise) * (1 - this.throwPose);
+
     // `raise` is the sprint-to-fire value. Eased so the gun swings rather than slides,
     // but the timing is untouched: at raise = 1 it is exactly on the base pose.
-    const lowered = easeInOutQuad(1 - clamp01(drive.raise));
-    if (lowered > 0 && drive.swapping) {
+    const lowered = easeInOutQuad(1 - effectiveRaise);
+    if (lowered > 0 && (drive.swapping || this.throwPose > 0.01)) {
       // Put-away / take-out (S6.4): straight down and rolled out of frame, which reads as
       // "this weapon is going away" rather than "this weapon is being carried".
       px = lerp(px, cfg.swapX, lowered);

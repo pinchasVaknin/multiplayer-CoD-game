@@ -24,6 +24,14 @@ export class PlayerCombatant implements Combatant {
 
   /** Cleared for the AFK harness, where the human is a spectator. */
   active = true;
+  /**
+   * True while the player is flying a Chopper Gunner (M7 playtest).
+   *
+   * Clearing `active` alone is not enough: it takes the body out of *perception* and spawn
+   * scoring, but a grenade or a mortar already in the air still resolves against the rig.
+   * This is read at the damage door.
+   */
+  invulnerable = false;
 
   /**
    * Written once a tick by `Match` from the player's own weapon system.

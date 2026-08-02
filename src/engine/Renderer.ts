@@ -166,8 +166,8 @@ export class Renderer {
   }
 }
 
-/** Thermal has no sky, only cold. */
-const THERMAL_BACKGROUND = new THREE.Color(0x05070c);
+/** Thermal has no sky. A flat mid-dark grey, so the horizon is not a black void. */
+const THERMAL_BACKGROUND = new THREE.Color(0x121212);
 
 /**
  * Shared vertex stage: view-space depth is the only thing either fragment stage needs.
@@ -176,31 +176,57 @@ const THERMAL_BACKGROUND = new THREE.Color(0x05070c);
  */
 const THERMAL_VERT = `
 varying float vViewDepth;
+varying vec3 vViewNormal;
 void main() {
   vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
   vViewDepth = -viewPosition.z;
+  // View-space normal, so the grey pass can separate surfaces by facing without needing a
+  // light in the scene. Thermal optics still resolve edges; a depth ramp alone cannot.
+  vViewNormal = normalize(normalMatrix * normal);
   gl_Position = projectionMatrix * viewPosition;
 }
 `;
 
-/** Cold terrain: a slow blue-to-slate ramp so structure is legible without reading as lit. */
+/**
+ * The world, in grayscale.
+ *
+ * The first version ramped on **depth alone**, which meant every fragment at a similar
+ * distance was the same colour and the map read as a black void with orange shapes floating
+ * in it — reported from a live match. A thermal image is monochrome, not absent: it still
+ * shows walls, floors and edges, it just shows them by temperature rather than by albedo.
+ *
+ * So the luminance comes from surface *facing* against a fixed view-space key, which is what
+ * separates a wall from the floor it meets, and depth only darkens gently on top. The result
+ * is a readable grey map that never uses colour, leaving orange exclusively for bodies.
+ */
 const THERMAL_WORLD_FRAG = `
 varying float vViewDepth;
+varying vec3 vViewNormal;
 void main() {
-  float t = clamp(vViewDepth / 90.0, 0.0, 1.0);
-  vec3 near = vec3(0.16, 0.26, 0.40);
-  vec3 far = vec3(0.03, 0.05, 0.10);
-  gl_FragColor = vec4(mix(near, far, t), 1.0);
+  vec3 n = normalize(vViewNormal);
+  float lambert = clamp(dot(n, normalize(vec3(0.35, 0.78, 0.52))), 0.0, 1.0);
+  // Never reaches black: distant geometry has to stay legible or the gun cannot be aimed.
+  float depthFade = 1.0 - 0.42 * clamp(vViewDepth / 130.0, 0.0, 1.0);
+  float lum = (0.16 + 0.60 * lambert) * depthFade;
+  gl_FragColor = vec4(vec3(lum), 1.0);
 }
 `;
 
-/** Bodies: white-hot at range, falling to amber up close, so contacts read at any distance. */
+/**
+ * Bodies: flat, hot orange.
+ *
+ * Unlit and unshaded on purpose — a body is a heat *source*, not a lit surface, and shading it
+ * would make a contact in shadow read as colder than one in the open, which is the opposite of
+ * what thermal shows. It brightens slightly with distance so a far contact still separates
+ * from the grey behind it.
+ */
 const THERMAL_HOT_FRAG = `
 varying float vViewDepth;
+varying vec3 vViewNormal;
 void main() {
-  float t = clamp(vViewDepth / 90.0, 0.0, 1.0);
-  vec3 hot = vec3(1.0, 0.96, 0.86);
-  vec3 warm = vec3(1.0, 0.62, 0.18);
-  gl_FragColor = vec4(mix(warm, hot, t), 1.0);
+  float t = clamp(vViewDepth / 110.0, 0.0, 1.0);
+  vec3 near = vec3(1.0, 0.45, 0.06);
+  vec3 far = vec3(1.0, 0.68, 0.24);
+  gl_FragColor = vec4(mix(near, far, t), 1.0);
 }
 `;

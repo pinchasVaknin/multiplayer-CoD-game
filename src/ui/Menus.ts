@@ -1,5 +1,5 @@
 import type { GameModeId } from '../modes/GameMode';
-import { MAPS, MODES } from '../modes/ModeRegistry';
+import { MAPS, MODES, modesForMap } from '../modes/ModeRegistry';
 
 
 /**
@@ -181,7 +181,9 @@ export class Menus {
   private paintPlay(): void {
     const modeList = this.picker(
       'Mode',
-      MODES.map((m) => ({ id: m.id, name: m.name, blurb: m.blurb })),
+      // Only what this map can run: Domination needs flags and S&D needs bomb sites, and
+      // offering a mode whose objectives the map does not author throws on match build.
+      modesForMap(this.deps.selection.mapId).map((m) => ({ id: m.id, name: m.name, blurb: m.blurb })),
       this.deps.selection.modeId,
       (id) => {
         this.deps.selection.modeId = id as GameModeId;

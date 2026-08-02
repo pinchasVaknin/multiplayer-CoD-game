@@ -94,10 +94,13 @@ export class NoiseField {
   /**
    * Nearest audible noise newer than `afterSerial` made by someone not on `team`, or
    * null. Gunfire carries much further than footsteps, and crouching silences the latter.
+   *
+   * Pass `'NONE'` for the listener's team to discount nothing, which is what Free-for-All
+   * wants: there are no teammates, so no noise is ever somebody else's problem (M7 playtest).
    */
   nearestAudible(
     afterSerial: number,
-    team: BotTeam,
+    team: BotTeam | 'NONE',
     x: number,
     z: number,
     cfg: PerceptionConfig,
@@ -106,7 +109,7 @@ export class NoiseField {
     let bestDist = Infinity;
     for (const r of this.records) {
       if (r.serial <= afterSerial) continue;
-      if (r.team === team) continue;
+      if (team !== 'NONE' && r.team === team) continue;
       const radius = r.kind === NoiseKind.Gunfire ? cfg.gunfireHearing : cfg.footstepHearing;
       const dist = Math.hypot(r.x - x, r.z - z);
       if (dist > radius) continue;
@@ -153,6 +156,17 @@ export interface BlindSource {
 }
 
 export class Perception {
+  /**
+   * Free-for-All: every other combatant is an enemy, whatever side they are nominally on.
+   *
+   * FFA keeps the two-team substrate that spawn safety, the killfeed and `ScoreTeam` are all
+   * written against — see `modes/FreeForAll.ts` — and this is the flag that makes it
+   * irrelevant to *sight*. Without it, half the lobby was invisible to the other half and the
+   * mode played as team deathmatch with a different scoreboard, which is exactly what the
+   * playtest reported.
+   */
+  freeForAll = false;
+
   readonly stats: PerceptionStats = { coneChecks: 0, losRays: 0, sightings: 0 };
   readonly noise = new NoiseField();
 
@@ -221,7 +235,7 @@ export class Perception {
 
     for (const other of roster) {
       if (other === self) continue;
-      if (other.team === self.team) continue;
+      if (!this.freeForAll && other.team === self.team) continue;
       if (!other.participating || !other.health.alive) continue;
 
       const dx = other.px - eyeX;
@@ -292,7 +306,14 @@ export class Perception {
 
   /** Fold any new audible noise into the blackboard as somewhere to go and look. */
   private hear(self: Combatant, bb: BotBlackboard, cfg: PerceptionConfig): void {
-    const heard = this.noise.nearestAudible(bb.noiseCursor, self.team, self.px, self.pz, cfg);
+    // In FFA nobody is a teammate, so no noise is ever discounted as friendly.
+    const heard = this.noise.nearestAudible(
+      bb.noiseCursor,
+      this.freeForAll ? 'NONE' : self.team,
+      self.px,
+      self.pz,
+      cfg,
+    );
     bb.noiseCursor = this.noise.currentSerial;
     if (heard === null) return;
     // A noise is a place, not a person. Positions are jittered by nothing at all — the

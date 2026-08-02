@@ -248,6 +248,14 @@ export class WeaponSystem {
   }
 
   /** One simulation tick. */
+  /**
+   * Set true while something else owns the player's hands (a grenade cook or throw).
+   *
+   * Written by `Match` from `ThrowController.busy` before `step` runs, so there is one
+   * answer to "is the weapon available" and the viewmodel reads the same flag.
+   */
+  fireBlocked = false;
+
   step(cmd: InputCommand, sim: PlayerSim): void {
     copySnapshot(this.curr, this.prev);
 
@@ -262,8 +270,12 @@ export class WeaponSystem {
     const swapLower = this.inventory.step();
 
     const wi = this.input;
-    wi.fireHeld = isDown(buttons, Btn.Fire);
-    wi.firePressed = justPressed(buttons, prevButtons, Btn.Fire);
+    // `fireBlocked` is set by whatever currently owns the hands — right now that is only
+    // the grenade throw. Applied to the *input* rather than to the weapon, so a blocked
+    // trigger behaves exactly like a trigger nobody pulled: no dry-fire click, no auto
+    // reload, and releasing during the block does not queue a shot for when it lifts.
+    wi.fireHeld = !this.fireBlocked && isDown(buttons, Btn.Fire);
+    wi.firePressed = !this.fireBlocked && justPressed(buttons, prevButtons, Btn.Fire);
     wi.adsHeld = isDown(buttons, Btn.Ads);
     wi.reloadPressed = justPressed(buttons, prevButtons, Btn.Reload);
     // Anything that puts the weapon out of the fight lowers it. A slide no longer does:

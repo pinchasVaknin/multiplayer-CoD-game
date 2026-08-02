@@ -49,7 +49,15 @@ export interface TierConfig {
    * close-quarters measurement still describes the same behaviour.
    */
   rangeErrorStart: number;
-  /** Degrees added to the aim cone per 10 m past `rangeErrorStart`. */
+  /**
+   * Degrees added to the aim cone per 10 m past `rangeErrorStart`.
+   *
+   * Roughly doubled after the M7 playtest, which reported bots as still too accurate down a
+   * lane. The term exists because a *constant angular* cone gets easier to shoot inside as
+   * range grows — the linear miss radius at 40 m is four times the radius at 10 m for the
+   * same number of degrees — so a bot that felt fair in a room felt like a laser across a
+   * yard. Nothing inside `rangeErrorStart` changes, so close quarters are untouched.
+   */
   rangeErrorPerTenM: number;
   /** Yaw slew ceiling, degrees per second. A bot may not teleport its aim. */
   turnRateDeg: number;
@@ -126,8 +134,8 @@ export const DEFAULT_TIERS: TierTable = {
     jitterPeriod: 0.34,
     leadFraction: 0.0,
     trackingErrorDeg: 0.5,
-    rangeErrorStart: 14,
-    rangeErrorPerTenM: 1.5,
+    rangeErrorStart: 12,
+    rangeErrorPerTenM: 3.1,
     turnRateDeg: 200,
     burstMin: 2,
     burstMax: 4,
@@ -161,8 +169,8 @@ export const DEFAULT_TIERS: TierTable = {
     jitterPeriod: 0.3,
     leadFraction: 0.25,
     trackingErrorDeg: 0.4,
-    rangeErrorStart: 16,
-    rangeErrorPerTenM: 1.15,
+    rangeErrorStart: 14,
+    rangeErrorPerTenM: 2.4,
     turnRateDeg: 280,
     burstMin: 3,
     burstMax: 5,
@@ -193,8 +201,8 @@ export const DEFAULT_TIERS: TierTable = {
     jitterPeriod: 0.26,
     leadFraction: 0.55,
     trackingErrorDeg: 0.28,
-    rangeErrorStart: 18,
-    rangeErrorPerTenM: 0.8,
+    rangeErrorStart: 16,
+    rangeErrorPerTenM: 1.7,
     turnRateDeg: 380,
     burstMin: 4,
     burstMax: 6,
@@ -225,8 +233,8 @@ export const DEFAULT_TIERS: TierTable = {
     jitterPeriod: 0.22,
     leadFraction: 0.8,
     trackingErrorDeg: 0.18,
-    rangeErrorStart: 20,
-    rangeErrorPerTenM: 0.55,
+    rangeErrorStart: 18,
+    rangeErrorPerTenM: 1.2,
     turnRateDeg: 480,
     // Short, controlled bursts. Measured hit rate was *lower* than Hardened at 5-9 rounds
     // because the weapon's own recoil walks off target inside a long burst — a disciplined
@@ -267,7 +275,7 @@ export const TIER_TUNABLES: Readonly<Record<keyof TierConfig, TunableMeta>> = {
   leadFraction: { label: 'Lead fraction', group: 'Aim', min: 0, max: 1.5, step: 0.01, unit: 'x' },
   trackingErrorDeg: { label: 'Tracking error', group: 'Aim', min: 0, max: 2, step: 0.01, unit: '°' },
   rangeErrorStart: { label: 'Range error from', group: 'Aim', min: 0, max: 60, step: 0.5, unit: 'm' },
-  rangeErrorPerTenM: { label: 'Range error /10m', group: 'Aim', min: 0, max: 6, step: 0.05, unit: '°' },
+  rangeErrorPerTenM: { label: 'Range error /10m', group: 'Aim', min: 0, max: 8, step: 0.05, unit: '°' },
   turnRateDeg: { label: 'Turn rate', group: 'Aim', min: 60, max: 900, step: 10, unit: '°/s' },
 
   burstMin: { label: 'Burst min', group: 'Trigger', min: 1, max: 30, step: 1, unit: '' },
