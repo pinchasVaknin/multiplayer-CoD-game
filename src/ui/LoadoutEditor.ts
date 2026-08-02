@@ -103,7 +103,15 @@ export class LoadoutEditor {
 
   // -- painting ---------------------------------------------------------------
 
+  /**
+   * The slot being edited.
+   *
+   * In an unrestricted mode that is the range's own class rather than one of the five, so a
+   * weapon tried on the range cannot follow the player into a match and a match class cannot
+   * be trampled by an experiment (M7 playtest).
+   */
   private get slot(): LoadoutSlot {
+    if (this.deps.unrestricted()) return this.deps.profile.rangeLoadout();
     const found = this.deps.profile.loadouts[this.slotIndex];
     if (found === undefined) throw new Error(`Loadout slot ${this.slotIndex} does not exist`);
     return found;
@@ -523,6 +531,12 @@ export class LoadoutEditor {
   }
 
   private edit(mutate: (slot: LoadoutSlot) => void): void {
+    if (this.deps.unrestricted()) {
+      mutate(this.deps.profile.rangeLoadout());
+      this.deps.profile.flush();
+      this.paint();
+      return;
+    }
     this.deps.profile.editLoadout(this.slotIndex, mutate);
     this.paint();
   }

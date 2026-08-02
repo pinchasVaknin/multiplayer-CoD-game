@@ -50,6 +50,9 @@ export interface ProfileDeps {
   readonly fallbackSettings: SettingsV1;
 }
 
+/** Slot index reported for the range class. Outside the five, so nothing collides. */
+export const RANGE_SLOT_INDEX = 99;
+
 export class Profile {
   readonly store: SaveStore<SaveV1>;
   /** Every repair and reversion the last load produced, oldest first. */
@@ -126,6 +129,27 @@ export class Profile {
   }
 
   /** The slot that will spawn on the player. Always sanitised. */
+  /**
+   * The Shooting Range's own class (M7 playtest).
+   *
+   * Kept apart from the five competitive slots on purpose. The range is a testbed where
+   * everything is unlocked, and letting it share a slot meant a weapon picked there either
+   * had to survive into a real match — which would defeat progression — or be silently
+   * reverted, which is what made the range feel like it was still locking things.
+   *
+   * Lives in the save so a range setup persists, and is repaired like any other slot.
+   */
+  rangeLoadout(): LoadoutSlot {
+    const existing = this.save.rangeLoadout;
+    if (existing !== undefined) return existing;
+    const fresh = defaultLoadouts()[0];
+    if (fresh === undefined) throw new Error('defaultLoadouts() produced no slots');
+    fresh.name = 'RANGE';
+    this.save.rangeLoadout = fresh;
+    this.store.touch();
+    return fresh;
+  }
+
   equippedLoadout(): LoadoutSlot {
     const existing = this.save.loadouts[this.save.equippedLoadout] ?? this.save.loadouts[0];
     if (existing !== undefined) return existing;
@@ -149,6 +173,10 @@ export class Profile {
    * rather than read from a global so a normal match cannot accidentally get it.
    */
   resolveEquipped(unrestricted = false): ResolvedLoadout {
+    // The range resolves its *own* slot, so nothing chosen there can leak into a real match
+    // and nothing a real match needs can be overwritten by an experiment.
+    if (unrestricted) return resolveLoadout(this.rangeLoadout(), RANGE_SLOT_INDEX);
+
     const index = this.save.equippedLoadout;
     const slot = this.equippedLoadout();
     if (!unrestricted) {

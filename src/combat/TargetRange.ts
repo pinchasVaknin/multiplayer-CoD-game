@@ -67,15 +67,32 @@ function measuredSpecs(): DummySpec[] {
   }));
 }
 
+/**
+ * Three bays, from the M7 playtest (S3 of the fix list).
+ *
+ * The range had grown into a scatter of twelve targets in one space, which meant a burst
+ * meant for a DPS reading clipped a drill dummy and a group meant for the accuracy wall
+ * landed on a faller. Each bay now does exactly one job and low dividers keep them apart:
+ *
+ *   z = -16.4  ACCURACY  the wall and the three bullseyes. No characters at all.
+ *   z = -14    (the marked firing line runs between the two)
+ *   z =  -5.5  DRILL     statics and movers, the only bay with things that behave like people.
+ *   z =  +4.5  DPS       one dummy that cannot die, alone, so a magazine measures one thing.
+ */
+// The accuracy bay holds no dummies at all — it is the wall and the bullseyes, authored in
+// the map rather than here, which is the point of it being its own bay.
+const BAY_DRILL_Z = -5.5;
+const BAY_DPS_Z = 4.5;
+
 const SPECS: readonly DummySpec[] = [
   ...measuredSpecs(),
   {
     id: DUMMY_IDS.popup,
     name: 'POP-UP',
     behaviour: 'popup',
-    x: -11,
+    x: FIRING_LINE.x + 9,
     y: 0,
-    z: -17.0,
+    z: BAY_DRILL_Z + 1.2,
     yaw: FACING_WEST,
     upTime: 3.0,
     downTime: 2.0,
@@ -84,9 +101,9 @@ const SPECS: readonly DummySpec[] = [
     id: DUMMY_IDS.strafe,
     name: 'STRAFE',
     behaviour: 'strafe',
-    x: -4,
+    x: FIRING_LINE.x + 16,
     y: 0,
-    z: -9.4,
+    z: BAY_DRILL_Z - 1.0,
     yaw: FACING_WEST,
     travel: 2.2,
     speed: 2.6,
@@ -103,9 +120,11 @@ const SPECS: readonly DummySpec[] = [
     id: DUMMY_IDS.infinite,
     name: 'DPS — INFINITE',
     behaviour: 'infinite',
+    // Alone in its own bay at a round ten metres: a sustained-damage figure is only
+    // comparable between weapons if nothing else was ever in the way.
     x: FIRING_LINE.x + 10,
     y: 0,
-    z: FIRING_LINE.z,
+    z: BAY_DPS_Z,
     yaw: FACING_WEST,
   },
   /**
@@ -121,7 +140,7 @@ const SPECS: readonly DummySpec[] = [
     behaviour: 'faller',
     x: FIRING_LINE.x + 8,
     y: 0,
-    z: FIRING_LINE.z + 4.2,
+    z: BAY_DRILL_Z,
     yaw: FACING_WEST,
   },
   {
@@ -130,7 +149,7 @@ const SPECS: readonly DummySpec[] = [
     behaviour: 'faller',
     x: FIRING_LINE.x + 20,
     y: 0,
-    z: FIRING_LINE.z + 4.2,
+    z: BAY_DRILL_Z + 2.4,
     yaw: FACING_WEST,
   },
   /** A second mover, further out and quicker, for leading practice. */
@@ -140,7 +159,7 @@ const SPECS: readonly DummySpec[] = [
     behaviour: 'strafe',
     x: FIRING_LINE.x + 24,
     y: 0,
-    z: FIRING_LINE.z - 5.5,
+    z: BAY_DRILL_Z - 2.2,
     yaw: FACING_WEST,
     travel: 4.5,
     speed: 4.2,

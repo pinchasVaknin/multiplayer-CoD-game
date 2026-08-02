@@ -89,6 +89,8 @@ export interface SaveV1 extends Versioned {
   profile: ProfileData;
   weapons: Record<string, WeaponSaveData>;
   loadouts: LoadoutSlot[];
+  /** The Shooting Range's own always-unlocked class (M7 playtest). Optional on old saves. */
+  rangeLoadout?: LoadoutSlot;
   /** Which of the five slots is equipped. */
   equippedLoadout: number;
   challenges: Record<ChallengeId, ChallengeSaveData>;

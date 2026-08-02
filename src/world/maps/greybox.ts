@@ -145,6 +145,39 @@ function brushes(): Brush[] {
   add('hazard', FIRING_LINE_X + 24.81, 2.1, -12.0, 0.02, 4.0, 0.03, { solid: false, shadows: false });
 
   /**
+   * Bullseye plates at 10, 18 and 25 m (M7 playtest).
+   *
+   * Three concentric rings each, drawn as flat non-solid plates 2 cm proud of a backing
+   * board. Rings rather than a solid disc because a group is read by *where it sits in the
+   * scoring rings*, which is the whole reason a bullseye looks like a bullseye — a plain
+   * square tells you the shots landed but not how well.
+   *
+   * Standing free rather than on the far wall so each is at a stated distance from the firing
+   * line, which is what makes two weapons comparable.
+   */
+  for (const range of [10, 18, 25]) {
+    const bx = FIRING_LINE_X + range;
+    const bz = -16.4;
+    // Backing board.
+    add('concreteDark', bx, 1.7, bz, 0.3, 2.0, 2.0);
+    // Rings, outermost first, each one proud of the last so none are coplanar.
+    add('concrete', bx - 0.16, 1.7, bz, 0.02, 1.62, 1.62, { solid: false, shadows: false });
+    add('hazard', bx - 0.18, 1.7, bz, 0.02, 1.06, 1.06, { solid: false, shadows: false });
+    add('concrete', bx - 0.20, 1.7, bz, 0.02, 0.54, 0.54, { solid: false, shadows: false });
+    add('accent', bx - 0.22, 1.7, bz, 0.02, 0.16, 0.16, { solid: false, shadows: false });
+  }
+
+  /**
+   * Bay dividers.
+   *
+   * Waist-high so the three areas read as separate places without turning the room into a
+   * maze or blocking a stray round from reaching the wall behind it. The range is one room
+   * with three jobs, and the jobs should not be able to interfere with each other's targets.
+   */
+  add('concreteDark', FIRING_LINE_X + 13, 0.6, -9.6, 30, 1.2, 0.4);
+  add('concreteDark', FIRING_LINE_X + 13, 0.6, -1.2, 30, 1.2, 0.4);
+
+  /**
    * Lane markers: a stripe on the floor every five metres out to thirty.
    *
    * Non-solid and raised 1 cm, the same treatment M1 gave the firing line. Reading a group at
