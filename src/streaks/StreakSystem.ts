@@ -56,6 +56,16 @@ export interface StreakSystemDeps {
   readonly streakDiscount: (entityId: number) => number;
   /** The local player's id, so the HUD can be told about their streaks only. */
   readonly localId: number;
+  /**
+   * The three streaks this entity has equipped, in key order (M7 playtest).
+   *
+   * Earning is limited to these: six shipped streaks against three keys meant a player who
+   * reached twelve kills held six things and could spend three of them. The class decides
+   * which three, exactly as it decides which three perks.
+   *
+   * Bots have no loadout, so they get the full list and their earning is unchanged.
+   */
+  readonly equippedStreaks: (entityId: number) => readonly StreakId[];
 }
 
 /** Entity ids for streak-owned world objects. Above the bots' range, below nothing. */
@@ -116,7 +126,9 @@ export class StreakSystem implements ObjectiveProvider {
   nextFor(entityId: number): { def: StreakDef; requirement: number } | null {
     const streak = this.deps.score.row(entityId)?.streak ?? 0;
     let best: { def: StreakDef; requirement: number } | null = null;
+    const equipped = this.deps.equippedStreaks(entityId);
     for (const def of STREAK_DEFS) {
+      if (!equipped.includes(def.id)) continue;
       const req = this.requirementFor(def.id, entityId);
       if (req <= streak) continue;
       if (best === null || req < best.requirement) best = { def, requirement: req };
@@ -357,6 +369,7 @@ export class StreakSystem implements ObjectiveProvider {
     const already = this.awardedUpTo.get(entityId) ?? 0;
 
     for (const def of STREAK_DEFS) {
+      if (!this.deps.equippedStreaks(entityId).includes(def.id)) continue;
       const requirement = this.requirementFor(def.id, entityId);
       if (requirement > streak || requirement <= already) continue;
       this.grant(entityId, def.id);

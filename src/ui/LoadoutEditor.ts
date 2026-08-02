@@ -5,6 +5,7 @@ import { levelProgress, prestigeLabel } from '../meta/Levels';
 import { resolveLoadout, type LoadoutSlot } from '../meta/Loadouts';
 import type { Profile } from '../meta/Profile';
 import { attachmentsForWeapon, weaponLevelProgress } from '../meta/Unlocks';
+import { STREAK_DEFS, streakDef } from '../streaks/StreakDefs';
 import { perkDef, perksOfTier, PERK_TIERS, type PerkTier } from '../perks/PerkDefs';
 import { attachmentDef } from '../weapons/Attachments';
 import { ALL_WEAPONS, requireWeapon, type WeaponDef } from '../weapons/WeaponDefs';
@@ -46,7 +47,8 @@ type RowKind =
   | { kind: 'lethal' }
   | { kind: 'tactical' }
   | { kind: 'perk'; tier: PerkTier }
-  | { kind: 'field' };
+  | { kind: 'field' }
+  | { kind: 'streak'; index: 0 | 1 | 2 };
 
 const ROWS: readonly Readonly<{ label: string; row: RowKind }>[] = [
   { label: 'Primary', row: { kind: 'primary' } },
@@ -60,6 +62,11 @@ const ROWS: readonly Readonly<{ label: string; row: RowKind }>[] = [
   { label: 'Perk 2', row: { kind: 'perk', tier: 2 } },
   { label: 'Perk 3', row: { kind: 'perk', tier: 3 } },
   { label: 'Field upgrade', row: { kind: 'field' } },
+  // Three streak rows, labelled with the key that spends each one (M7 playtest). Six shipped
+  // streaks against three keys is a collision only the loadout can resolve.
+  { label: 'Killstreak · key 3', row: { kind: 'streak', index: 0 } },
+  { label: 'Killstreak · key 4', row: { kind: 'streak', index: 1 } },
+  { label: 'Killstreak · key 5', row: { kind: 'streak', index: 2 } },
 ];
 
 export class LoadoutEditor {
@@ -277,6 +284,10 @@ export class LoadoutEditor {
       }
       case 'field':
         return fieldUpgradeDef(slot.fieldUpgrade).name;
+      case 'streak': {
+        const id = slot.streaks[row.index];
+        return id === null || id === undefined ? '—' : streakDef(id).name;
+      }
     }
   }
 
@@ -416,6 +427,35 @@ export class LoadoutEditor {
         break;
       }
 
+      case 'streak': {
+        // NONE first: three is a maximum, not a quota.
+        out.push(
+          this.option('NONE', 'Leave this key empty', slot.streaks[row.index] == null, false, '', () =>
+            this.edit((s) => {
+              s.streaks[row.index] = null;
+            }),
+          ),
+        );
+        for (const def of STREAK_DEFS) {
+          // A streak already on another key is shown but not selectable: equipping the same
+          // one twice would waste a key and is never what somebody meant to do.
+          const usedElsewhere = slot.streaks.some((held, i) => held === def.id && i !== row.index);
+          out.push(
+            this.option(
+              def.name,
+              `${def.requirement} kills · ${def.blurb}`,
+              slot.streaks[row.index] === def.id,
+              usedElsewhere,
+              'ON ANOTHER KEY',
+              () =>
+                this.edit((s) => {
+                  s.streaks[row.index] = def.id;
+                }),
+            ),
+          );
+        }
+        break;
+      }
       case 'field': {
         for (const id of FIELD_UPGRADE_IDS) {
           const def = fieldUpgradeDef(id);

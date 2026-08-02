@@ -30,7 +30,13 @@ import { Domination } from './modes/Domination';
 import { SearchAndDestroy } from './modes/SearchAndDestroy';
 import { StreakAudio } from './streaks/StreakAudio';
 import { StreakSystem } from './streaks/StreakSystem';
-import { DEFAULT_STREAK_CONFIG, streakDef, type StreakConfig } from './streaks/StreakDefs';
+import {
+  DEFAULT_STREAK_CONFIG,
+  STREAK_DEFS,
+  streakDef,
+  type StreakConfig,
+  type StreakId,
+} from './streaks/StreakDefs';
 import type { CamoId } from './meta/Camos';
 import type { ResolvedLoadout } from './meta/Loadouts';
 import type { Profile } from './meta/Profile';
@@ -150,6 +156,9 @@ const MORTAR_MARK_RADIUS = DEFAULT_STREAK_CONFIG.mortarScatter;
  */
 const MORTAR_STEER_M_PER_RAD = 42;
 
+/** Every streak, for entities that have no loadout to narrow it — which is every bot. */
+const ALL_STREAK_IDS: readonly StreakId[] = STREAK_DEFS.map((d) => d.id);
+
 export class Match {
   readonly damage: DamageSystem;
   readonly weapons: WeaponSystem;
@@ -224,6 +233,8 @@ export class Match {
    */
   mortarMarkX = 0;
   mortarMarkZ = 0;
+  /** The player's three equipped streaks, refreshed whenever the class changes. */
+  private equippedStreakIds: readonly StreakId[] = [];
   /** Look angles when the overlay opened, so the mark is steered by the delta. */
   private overlayYaw = 0;
   private overlayPitch = 0;
@@ -430,6 +441,9 @@ export class Match {
       targetable: (id) => (id === PLAYER_ENTITY_ID ? this.meta.state.targetedByStreaks : true),
       visibleToUav: (id) => (id === PLAYER_ENTITY_ID ? this.meta.state.visibleToUav : true),
       streakDiscount: (id) => (id === PLAYER_ENTITY_ID ? this.meta.state.streakDiscount : 0),
+      // The player earns only what their class equips; bots have no class, so they keep the
+      // full list and behave exactly as they did before.
+      equippedStreaks: (id) => (id === PLAYER_ENTITY_ID ? this.equippedStreakIds : ALL_STREAK_IDS),
       context: {
         bus: deps.bus,
         scene: deps.scene,
@@ -450,6 +464,7 @@ export class Match {
     // Care packages are contestable in every mode, so they ride the second provider slot
     // rather than the mode's (see `BotDirector.streakObjectives`).
     this.bots.streakObjectives = this.streaks;
+    this.equippedStreakIds = deps.loadout.streaks.filter((id): id is StreakId => id !== null);
 
     this.objectives = new MatchObjectives({
       bus: deps.bus,
@@ -614,6 +629,7 @@ export class Match {
    * behaviour: you did not keep the magazine, you picked up a different gun.
    */
   applyLoadout(loadout: ResolvedLoadout): void {
+    this.equippedStreakIds = loadout.streaks.filter((id): id is StreakId => id !== null);
     this.equip(0, loadout.primary, loadout.primaryCamo);
     this.equip(1, loadout.secondary, loadout.secondaryCamo);
     this.equipment.inventory.lethal = loadout.lethal;

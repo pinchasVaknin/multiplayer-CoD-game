@@ -83,6 +83,11 @@ export const STREAK_DEFS: readonly StreakDef[] = [
   },
 ];
 
+/** Whether an arbitrary string names a shipped streak. Used by the save repair. */
+export function isStreakId(value: string): value is StreakId {
+  return STREAK_DEFS.some((s) => s.id === value);
+}
+
 export function streakDef(id: StreakId): StreakDef {
   const found = STREAK_DEFS.find((s) => s.id === id);
   if (found === undefined) throw new Error(`Unknown streak "${id}"`);

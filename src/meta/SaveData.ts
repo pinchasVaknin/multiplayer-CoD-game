@@ -1,6 +1,7 @@
 import type { Versioned } from '../core/SaveStore';
 import { ALL_EQUIPMENT, type EquipmentId } from '../equipment/EquipmentDefs';
 import { isPerkId, perkDef, type PerkId } from '../perks/PerkDefs';
+import { isStreakId, type StreakId } from '../streaks/StreakDefs';
 import { ATTACHMENT_IDS, type AttachmentId } from '../weapons/Attachments';
 import { ALL_WEAPONS, WEAPON_DEFS } from '../weapons/WeaponDefs';
 import { CAMO_IDS, isCamoId, type CamoId } from './Camos';
@@ -389,6 +390,30 @@ function normaliseSlot(slot: LoadoutSlot, source: Record<string, unknown>, index
   const upgrade = source['fieldUpgrade'];
   if (typeof upgrade === 'string' && isFieldUpgradeId(upgrade)) slot.fieldUpgrade = upgrade as FieldUpgradeId;
   else if (upgrade !== undefined) losses.push(`loadout ${index + 1} field upgrade "${String(upgrade)}" unknown`);
+
+  /**
+   * Killstreaks (M7 playtest). Absent on every save written before the streak slots existed,
+   * which is why a missing array is silently left at the class default rather than reported:
+   * an upgrade is not a loss. A *present* array with junk in it is reported like anything else.
+   */
+  const streaks = source['streaks'];
+  if (Array.isArray(streaks)) {
+    slot.streaks = [null, null, null];
+    for (let i = 0; i < 3; i++) {
+      const entry = streaks[i];
+      if (entry === null || entry === undefined) continue;
+      if (typeof entry !== 'string' || !isStreakId(entry)) {
+        losses.push(`loadout ${index + 1} killstreak "${String(entry)}" unknown`);
+        continue;
+      }
+      // The same id on two keys wastes one; keep the first and report the second.
+      if (slot.streaks.includes(entry as StreakId)) {
+        losses.push(`loadout ${index + 1} had ${entry} on two keys; removed the second`);
+        continue;
+      }
+      slot.streaks[i] = entry as StreakId;
+    }
+  }
 
   const perks = source['perks'];
   if (!Array.isArray(perks)) return;

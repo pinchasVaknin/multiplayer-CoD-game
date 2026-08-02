@@ -1,4 +1,5 @@
 import type { EquipmentId } from '../equipment/EquipmentDefs';
+import type { StreakId } from '../streaks/StreakDefs';
 import { perkDef, type PerkId, type PerkTier } from '../perks/PerkDefs';
 import { perkWeaponEffects, resolvePerkState, type PerkState } from '../perks/PerkState';
 import { resolveWeaponDef, type AttachmentId } from '../weapons/Attachments';
@@ -40,6 +41,15 @@ export interface LoadoutSlot {
   /** One per tier, indexed 0..2 for tiers 1..3. Null is a legal, empty slot. */
   perks: Array<PerkId | null>;
   fieldUpgrade: FieldUpgradeId;
+  /**
+   * Exactly three killstreaks, in the order keys 3, 4 and 5 spend them (M7 playtest).
+   *
+   * Six shipped streaks and three keys is a collision the player cannot resolve at runtime,
+   * so the choice moves into the class where every other loadout decision already lives. A
+   * null is a legal empty slot for the same reason a perk tier can be empty — somebody may
+   * genuinely want two.
+   */
+  streaks: Array<StreakId | null>;
 }
 
 /** A slot with everything resolved and ready to hand to a match. */
@@ -57,6 +67,8 @@ export interface ResolvedLoadout {
   readonly lethal: EquipmentId;
   readonly tactical: EquipmentId;
   readonly fieldUpgrade: FieldUpgradeId;
+  /** The three equipped streaks, in key order. */
+  readonly streaks: ReadonlyArray<StreakId | null>;
   readonly perkState: PerkState;
 }
 
@@ -104,8 +116,14 @@ function makeSlot(
     tactical,
     perks: [...perks],
     fieldUpgrade,
+    // The three cheapest streaks by default: a fresh profile should be able to earn all of
+    // what it has equipped rather than staring at a Chopper Gunner it will never reach.
+    streaks: [...DEFAULT_STREAKS],
   };
 }
+
+/** What every new class starts with. Cheap enough to actually see in a match. */
+const DEFAULT_STREAKS: ReadonlyArray<StreakId | null> = ['uav', 'care_package', 'mortar'];
 
 export function cloneLoadout(src: LoadoutSlot): LoadoutSlot {
   return {
@@ -116,6 +134,7 @@ export function cloneLoadout(src: LoadoutSlot): LoadoutSlot {
     tactical: src.tactical,
     perks: [...src.perks],
     fieldUpgrade: src.fieldUpgrade,
+    streaks: [...src.streaks],
   };
 }
 
@@ -168,6 +187,7 @@ export function resolveLoadout(slot: LoadoutSlot, slotIndex: number): ResolvedLo
     lethal: slot.lethal,
     tactical: slot.tactical,
     fieldUpgrade: slot.fieldUpgrade,
+    streaks: [...slot.streaks],
     perkState,
   };
 }
