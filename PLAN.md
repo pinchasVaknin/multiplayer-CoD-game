@@ -20,7 +20,7 @@ server: the split first, then the netcode, then everything else on top of it.
 | 6 | Progression and loadouts | **Complete** — see below |
 | 7 | Killstreaks and Modes | **Complete** — see below |
 | 8 | Content and polish | **Complete** — see below |
-| 9 | Headless server split | **In progress** — see "Roadmap update — post-M8" |
+| 9 | Headless server split | **Phases 1–3 complete** — audit, partition, boundary check. Server process not started. |
 | 10 | Netcode foundation | Planned |
 | 11 | Multiplayer completion | Planned |
 
@@ -3359,3 +3359,217 @@ loss, the divergence checker reports zero mismatches in all five modes, and the 
 - **The client is fully untrusted.** Boundary validation and authority are the whole defence. No
   heuristic anti-cheat. Malformed input must never crash the process — that is now a DoS vector.
 - **No accounts, no server database.** Progression stays client-side, with the consequence documented.
+
+---
+
+# Milestone 9 — Headless Server Split
+
+**Status: phases 1–3 complete** (audit, partition, boundary enforcement). Phases 4–6 — the
+server process, the headless harness and the cross-runtime hash — are not started.
+
+## Phase 1 — the audit
+
+Full inventory in [`docs/M9-AUDIT.md`](docs/M9-AUDIT.md). The headline was that the codebase
+was in far better shape than the brief anticipated: **106 of 135 shared-bound files were
+already clean**, and the twenty-nine that were not clustered in four places rather than
+spreading thin.
+
+Three findings changed how the rest of the milestone was planned:
+
+1. **`performance.now()` was never used for gameplay timing.** All fourteen occurrences in
+   shared-bound code were instrumentation — AI budget, navmesh bake duration, map build
+   stats, a debug damage timestamp. Gameplay time was already `tickIndex * DT` everywhere.
+   The shared clock abstraction was therefore needed for *measurement*, not for correctness,
+   which removed the largest risk the brief had predicted.
+2. **The simulation carries poses as loose numbers.** `PlayerSim`, `Combatant`, `Contact`,
+   `RayHit` and every map def are plain scalars. §3 permits Three's math classes in `shared/`
+   on the grounds that rewriting the vector maths would be a large refactor — the allowance
+   turned out to be unnecessary, and `shared/` now imports `three` nowhere at all.
+3. **`Math.random()` is genuinely absent** from gameplay. The only textual match was a comment
+   stating the ban.
+
+## Phase 2 — the partition
+
+`src/` is now `shared/` (121 files), `client/` (99) and `server/` (1). 210 files moved with
+`git mv`; 401 relative import specifiers were rewritten mechanically by a one-shot script, and
+the tree typechecked clean immediately after the move with no hand-editing.
+
+### What split rather than moved
+
+| Was | Shared half | Client half |
+|---|---|---|
+| `core/Loop.ts` | `TickAccumulator`, `DT`, the step cap and the discard rule | `client/engine/FrameLoop.ts` — `requestAnimationFrame`, `performance.now` |
+| `world/MapLoader.ts` | colliders, spatial hash, spawns, nav bounds | `client/world/MapRender.ts` — merged geometry, instanced props, materials, lights, fog |
+| `meta/Camos.ts` | ids, names, unlock prerequisites | `client/meta/CamoTextures.ts` — the `CanvasTexture` generators |
+| `perks/PerksRuntime.ts` | pickup pool, collection, the Tracker reveal *rule* | `client/perks/PerksRenderer.ts` — pickup meshes, the footstep trail |
+| `streaks/SentryGun.ts` | targeting, tracking, firing, turret angles | `client/streaks/StreakMeshes.ts` — legs, body, barrel |
+| `streaks/CarePackage.ts` | drop physics, capture timer, contents roll | crate and beacon meshes |
+| `streaks/ChopperGunner.ts` | flight, gun, damage, `ChopperView` | `client/streaks/ChopperCamera.ts` — the `PerspectiveCamera` |
+| `meta/SaveData.ts` | the schema, migrations, `Versioned` | the `localStorage` read behind `readLegacySettings` |
+
+### The three seams that made it possible
+
+Every place `shared/` genuinely needed something the client had became an interface in
+`shared/`, implemented on both sides:
+
+- **`StreakPresentation`** replaced the `THREE.Scene`, `Fx` pool, `CameraRig` and audio graph
+  that `StreakContext` used to hand every killstreak. Fifteen methods, all plain numbers. The
+  browser supplies `ClientStreakPresentation`; a headless process supplies
+  `SILENT_PRESENTATION`, whose no-ops are the *complete* correct behaviour for a runtime with
+  no output rather than an unfinished implementation.
+- **`ProgressionStore`** replaced the concrete `Profile` that `MatchProgression` and
+  `ChallengeTracker` held. Six methods. Every type in its signatures already lived in
+  `shared/meta/SaveData.ts`, which is the sign the seam was always there and merely undeclared.
+- **`Clock`** and **`LogSink`** (`shared/core/`) — installed by whichever runtime is booting.
+
+### `Bot` no longer owns a `BotMesh`
+
+The offender §6.1 predicted, and the only one. The coupling was one-way — `apply(x, y, z, yaw,
+heightScale)` wrote sim state into the mesh and nothing read back — so the field was deleted
+rather than untangled. In its place `Bot` carries **`BotVisualState`**: a serial counter per
+event (death, spawn, flinch) plus the data each needs. `client/ai/BotRenderer` reconciles its
+mesh set against the roster every frame and starts an animation when a serial moves.
+
+A counter rather than a callback because a frame that never rendered cannot then swallow a
+death, and because it is the shape a replicated event will arrive in at M10.
+
+**One determinism bug fell out of this.** `Bot.onKilled` drew `rng.int(0, DEATH_VARIANTS)`
+from the bot's simulation RNG purely to pick a fall animation. A headless server has no
+animation but would still have had to make that draw or diverge from the browser — and under
+M10 reconciliation, a cosmetic draw sitting in a gameplay stream shifts every subsequent
+spread and aim-error value on a replayed tick. The variant is now derived from
+`(entityId, deathSerial)` via an integer hash, which is the §4.14 per-event seeding discipline
+applied a milestone early, to the one place that needed it.
+
+## Phase 3 — boundary enforcement
+
+### The check is hand-written, and that was not the plan
+
+§6.3 names `dependency-cruiser`, an ESLint boundaries rule, "or an equivalent". It was
+installed first. This project is on **TypeScript 7**, which dependency-cruiser refuses to load
+— it reported `0 modules, 0 dependencies cruised` and **exited zero**. A check that passes
+because it read nothing is worse than no check, because it is trusted. Pinning TypeScript
+backwards to satisfy a linter was not worth it.
+
+`scripts/check-boundaries.mjs` reads the source directly. It does one thing the off-the-shelf
+tools do not, which turns out to matter: **it checks identifiers as well as imports.**
+`shared/` never importing `client/` is only half the boundary — a bare `window.innerWidth`
+crosses it just as completely, and no import graph can see that. Comments and string literals
+are blanked (offsets preserved, so line numbers stay honest) before the identifier scan; the
+naive version produced two false positives on prose about a "multikill window" and a "save
+document" on its first run.
+
+Rules: `shared → client`, `shared → server`, `client → server`, `server → client`,
+`shared → three`, `server → three`, all forbidden. Exit 1 on any violation.
+
+**Demonstrated by breaking it.** A `three` import, a `client/ui/Palette` import and a
+`window.innerWidth` were added to `shared/player/Movement.ts`; all three fired with the file
+and line, exit code 1, and were removed.
+
+### Per-target tsconfigs — the other half
+
+`tsconfig.json` declared `"lib": ["ES2022", "DOM", "DOM.Iterable"]` for the entire tree, which
+meant **the type system could never have caught a DOM reference in simulation code** —
+`window.innerWidth` in the middle of a tick was a perfectly well-typed expression. That is why
+the audit had to be done by grep.
+
+Now: `tsconfig.shared.json` (ES2022 only, no DOM, no Node types), `tsconfig.client.json` (DOM +
+`vite/client`), `tsconfig.server.json` (Node types, no DOM). The root `tsconfig.json` survives
+for editors and Vite and is explicitly *not* a gate — it extends the client target, so an
+editor using it will not flag `document` inside `src/shared`. `npm run check` will.
+
+`tsconfig.server.json` keeps `moduleResolution: "bundler"`. `nodenext` was tried and rejected:
+it demands an explicit `.js` extension on every relative import, which would mean rewriting
+~400 specifiers across `shared/` — a change the browser build would carry for the server's
+benefit, and exactly the coupling this milestone exists to remove.
+
+### `console` is neither DOM nor Node
+
+The first run of `tsconfig.shared.json` found eight `console.*` calls in simulation code that
+nobody had noticed, because `console` is a *host* global belonging to neither library. That
+turned out to be the right question rather than a compiler technicality: §6.4 wants structured
+logging with levels on the server, and a bare `console.warn` in `PlayerController` cannot carry
+a level, a tick number or a timestamp, and cannot be turned off in a ten-minute soak.
+`shared/core/Log.ts` is the seam. The default sink writes to the console, which is what M1–M8
+did and what "console clean" is measured against.
+
+### CI
+
+There was none before this milestone. `.github/workflows/ci.yml` runs the boundary check
+first and alone — if `shared/` has grown an import of `client/`, every type error after it is
+noise about a symbol that should not have been reachable, and a wall of noise is how a real
+failure gets scrolled past — then the three typechecks, then the production build.
+
+## A pre-M9 bug, found while verifying
+
+`mapId` and `modeId` are stored in the save as bare strings and **have never been validated
+against the registry**, though `normaliseSave` has validated every other field since M6. A save
+written before the map ids were prefixed (`foundry` rather than `mp_foundry`) therefore
+survives migration intact and then throws out of `findMap` on the first paint of the main
+menu. The failure presents as a front end permanently stuck on "Loading…" **with a clean
+console**, because the throw happens inside a state-enter handler.
+
+This is older than M9 and unrelated to the split; it surfaced because the browser profile used
+for verification held an old save. Fixed with `resolveMapId` / `resolveModeId`, which fall back
+to the default and log. `findMap` still throws — a *code* path asking for a map that does not
+exist is a bug and should say so.
+
+## Verification
+
+Typecheck clean on all three targets, boundary check clean, production build clean, browser
+console free of errors.
+
+The browser pane in this environment does not composite, so `requestAnimationFrame` never
+fires and the loop cannot be driven normally. The simulation was therefore stepped directly —
+which is, conveniently, exactly what phase 4 will do in Node.
+
+| Map | Mode | Sim seconds to win condition | Sim ms p50 / p95 / p99 | Bot deaths |
+|---|---|---|---|---|
+| Foundry | TDM | 317 | 0.1 / 0.7 / 1.4 | 136 |
+| Foundry | FFA | 408 | 0.1 / 0.8 / 1.9 | 132 |
+| Foundry | S&D | 122 (best of 3, 2–0, sides swapped) | 0.1 / 0.4 / 1.1 | 11 |
+| Dunes | DOM | 509 | 0.1 / 0.4 / 1.0 | 187 |
+| Dunes | TDM | 269 | 0.1 / 0.7 / 1.2 | 111 |
+| Depot | KC | 361 | 0.1 / 0.7 / 1.3 | 149 |
+| Depot | DOM | 589 | 0.1 / 0.5 / 1.1 | 272 |
+
+Every one reached `MATCH_END` and transitioned to SUMMARY. Sim cost is comfortably inside the
+3.0 ms budget of §4.7. **Render frame time was not measured** and the M8 comparison in
+criterion 4 is therefore outstanding: with the tab not compositing, every WebGL call stalls and
+any number taken here would be fiction.
+
+Other checks:
+
+- **All six killstreaks activate and expire.** `StreakRenderer` built one mesh for a live
+  sentry, two with a care package alongside it, and dropped back to one when the package was
+  claimed — the reconcile-and-retire path works in both directions.
+- **The chopper camera takeover survives the split.** `ChopperGunner.activeView` fills a pose
+  and a lens; `ChopperCamera` reproduces the position to 2 dp and the FOV exactly.
+- **Scene graph returns to zero children after teardown**, on three consecutive matches across
+  three different maps, with the child count stable at 11 during each. Nothing the two new
+  renderers create outlives the match.
+- **`BotVisualState` is live**: 13 deaths / 21 respawns observed in a 30 s sample, with derived
+  death variants stable across bots.
+
+## What Milestone 10 needs to know
+
+- **`server/` contains one file.** `NodeClock.ts` implements the shared `Clock` with
+  `process.hrtime.bigint()`. `Loop.ts`, `Match.ts`, the entry point and structured logging are
+  phase 4 and are not written.
+- **The clock and log seams exist and are installed at boot.** `client/main.ts` calls
+  `installClock(browserClock)`. A server entry point must call `installClock(nodeClock)` and
+  `installLogSink(...)` before anything simulates — `nowMs()` throws rather than falling back,
+  deliberately.
+- **`SILENT_PRESENTATION` is the server's killstreak presentation.** Already written, already
+  typed, nothing to implement.
+- **`ProgressionStore` is what a server-side XP implementation must satisfy.** Six methods.
+- **The one Three.js dependency left in shared is none.** The §3 allowance for math classes is
+  unused and the boundary check bans the import outright. If M10 or M11 genuinely needs
+  `Vector3` in shared code, relax `BAN_THREE_IN_SHARED` to a named-export whitelist rather
+  than deleting the rule.
+- **`INetworkTransport` survived the move untouched** and now lives at `shared/net/Transport.ts`.
+  M10's phase 1 is to decide whether it survives contact with a real socket; nothing about M9
+  changed its shape.
+- **Per-event RNG seeding is applied in exactly one place** — the bot death variant. The four
+  free-running streams §4.14 cares about (`WeaponSystem` spread, per-bot `Bot.rng`,
+  `BotDirector`, `MatchEquipment`) are untouched and are phase 6 work.
