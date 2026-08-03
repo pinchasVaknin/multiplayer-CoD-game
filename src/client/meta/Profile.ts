@@ -12,6 +12,7 @@ import {
 } from '../../shared/meta/Loadouts';
 import {
   defaultSave,
+  LEGACY_SETTINGS_KEY,
   makeWeaponSave,
   migrateSave,
   normaliseSave,
@@ -23,7 +24,24 @@ import {
   type SettingsV1,
   type WeaponSaveData,
 } from '../../shared/meta/SaveData';
+import type { ProgressionStore } from '../../shared/meta/ProgressionStore';
 import { sanitiseLoadout, UnlockState, weaponLevelForXp } from '../../shared/meta/Unlocks';
+
+/**
+ * Read the M1-M5 settings blob (M9).
+ *
+ * The `localStorage` call lives here rather than in `shared/meta/SaveData.ts`, which now
+ * takes the raw string. Parsing and validating the blob is a rule; fetching it is a
+ * browser detail. Storage being unavailable is not an error — a browser in private mode
+ * simply has no legacy settings to carry over.
+ */
+function readLegacyBlob(): string | null {
+  try {
+    return window.localStorage.getItem(LEGACY_SETTINGS_KEY);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * The one owner of the save file.
@@ -53,7 +71,7 @@ export interface ProfileDeps {
 /** Slot index reported for the range class. Outside the five, so nothing collides. */
 export const RANGE_SLOT_INDEX = 99;
 
-export class Profile {
+export class Profile implements ProgressionStore {
   readonly store: SaveStore<SaveV2>;
   /** Every repair and reversion the last load produced, oldest first. */
   readonly loadReport: string[] = [];
@@ -63,7 +81,7 @@ export class Profile {
   constructor(deps: ProfileDeps) {
     // Read the M1-M5 settings blob *before* the store loads, so a profile that has never
     // existed still starts with the player's FOV and sensitivity rather than the defaults.
-    const fallback = readLegacySettings(deps.fallbackSettings);
+    const fallback = readLegacySettings(readLegacyBlob(), deps.fallbackSettings);
     this.store = new SaveStore<SaveV2>(SAVE_KEY, SAVE_VERSION, defaultSave(fallback), (raw, from) =>
       migrateSave(raw, from, fallback),
     );

@@ -2,7 +2,7 @@ import type { BotTeam } from '../ai/Combatant';
 import type { BotTier } from '../ai/DifficultyTiers';
 import type { BotState } from '../ai/BotStates';
 import type { HitZone } from '../combat/HitboxRig';
-import type { GameStateId } from '../../client/GameStates';
+import type { GameStateId } from './GameStates';
 import type { StanceId } from '../player/Stance';
 import type { WeaponSlot } from '../weapons/WeaponDefs';
 import { EventBus } from './EventBus';

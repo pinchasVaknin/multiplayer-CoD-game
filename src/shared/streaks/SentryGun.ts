@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import type { Combatant } from '../ai/Combatant';
 import { CombatBehaviour } from '../ai/CombatBehaviour';
 import { BotBlackboard } from '../ai/BotBlackboard';
@@ -73,9 +72,17 @@ export class SentryGun extends Killstreak implements Damageable {
   private readonly request: DamageRequest;
   private readonly ballistics: Ballistics;
   private readonly trace: ShotTrace = makeShotTrace();
-  private readonly group = new THREE.Group();
-  private readonly disposables: Array<{ dispose(): void }> = [];
-  private yawNode: THREE.Object3D | null = null;
+
+  /**
+   * Where the turret is pointing, relative to the base's placed facing (M9).
+   *
+   * The turret used to be a `THREE.Object3D` this class rotated directly. It is two numbers;
+   * `client/streaks/SentryMesh.ts` reads them and rotates its own node. The hitbox rig is
+   * driven from the same aim in `applyPose`, so what a shot tests against and what a player
+   * sees still come from one place — they simply are not the same object any more.
+   */
+  turretYaw = 0;
+  turretPitch = 0;
 
   private fireTimer = 0;
   private reaction = 0;
@@ -112,11 +119,6 @@ export class SentryGun extends Killstreak implements Damageable {
   }
 
   override onActivate(): void {
-    this.buildMesh();
-    this.group.position.set(this.x, this.y, this.z);
-    this.group.rotation.y = this.restYaw;
-    this.ctx.scene.add(this.group);
-
     this.rig.setTransform(this.x, this.y, this.z, this.restYaw);
     this.ctx.damage.register(this);
 
@@ -134,11 +136,11 @@ export class SentryGun extends Killstreak implements Damageable {
         z: this.z,
       };
       this.ctx.bus.emit(EV.StreakDestroyed, ev);
-      this.ctx.blast(this.x, this.y + 0.5, this.z, 2.2, true);
-      this.ctx.audio.sentryDestroyed(this.x, this.y, this.z);
+      this.ctx.present.blast(this.x, this.y + 0.5, this.z, 2.2, true);
+      this.ctx.present.sentryDestroyed(this.x, this.y, this.z);
     });
 
-    this.ctx.audio.sentryDeploy(this.x, this.y, this.z);
+    this.ctx.present.sentryDeploy(this.x, this.y, this.z);
   }
 
   override onTick(_tick: number): boolean {
@@ -195,10 +197,6 @@ export class SentryGun extends Killstreak implements Damageable {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.ctx.damage.unregister(this.entityId);
-    this.ctx.scene.remove(this.group);
-    this.group.clear();
-    for (const d of this.disposables) d.dispose();
-    this.disposables.length = 0;
   }
 
   override describe(): string {
@@ -258,63 +256,22 @@ export class SentryGun extends Killstreak implements Damageable {
     const dz = -Math.cos(yaw) * cp;
 
     this.shotsFired++;
-    this.ctx.audio.sentryShot(this.x, eyeY, this.z);
+    this.ctx.present.sentryShot(this.x, eyeY, this.z);
 
     const def = sentryWeapon(this.ctx.cfg.sentryDamage);
     this.request.weapon = def;
     this.ballistics.fire(this.x, eyeY, this.z, dx, dy, dz, def, this.request, this.trace);
 
-    this.ctx.fx.spawnTracer(this.x, eyeY, this.z, this.trace.endX, this.trace.endY, this.trace.endZ);
+    this.ctx.present.tracer(this.x, eyeY, this.z, this.trace.endX, this.trace.endY, this.trace.endZ);
     if (this.trace.hitTarget) this.shotsHit++;
     if (this.trace.lethal) this.kills++;
   }
 
   private applyPose(): void {
-    if (this.yawNode === null) return;
     // The turret's own yaw is relative to the base, which was placed facing `restYaw`.
-    this.yawNode.rotation.y = angleDelta(this.restYaw, this.combat.aimYaw);
-    this.yawNode.rotation.x = clamp(-this.combat.aimPitch, -0.7, 0.7);
+    this.turretYaw = angleDelta(this.restYaw, this.combat.aimYaw);
+    this.turretPitch = clamp(-this.combat.aimPitch, -0.7, 0.7);
     this.rig.setTransform(this.x, this.y, this.z, this.combat.aimYaw);
-  }
-
-  private buildMesh(): void {
-    const legGeo = new THREE.CylinderGeometry(0.035, 0.05, 0.62, 6);
-    const legMat = new THREE.MeshStandardMaterial({ color: 0x2b3038, roughness: 0.7, metalness: 0.35 });
-    this.disposables.push(legGeo, legMat);
-    for (let i = 0; i < 3; i++) {
-      const leg = new THREE.Mesh(legGeo, legMat);
-      const a = (i / 3) * Math.PI * 2;
-      leg.position.set(Math.cos(a) * 0.16, 0.31, Math.sin(a) * 0.16);
-      leg.rotation.z = Math.cos(a) * 0.28;
-      leg.rotation.x = -Math.sin(a) * 0.28;
-      leg.castShadow = true;
-      this.group.add(leg);
-    }
-
-    const yawNode = new THREE.Group();
-    yawNode.position.y = 0.62;
-    this.group.add(yawNode);
-    this.yawNode = yawNode;
-
-    const bodyGeo = new THREE.BoxGeometry(0.3, 0.22, 0.34);
-    const bodyMat = new THREE.MeshStandardMaterial({
-      // Tinted to the owner's side so the player can tell theirs from an enemy's at a glance.
-      color: this.team === 'A' ? 0x2f5d7c : 0x7c3a2f,
-      roughness: 0.55,
-      metalness: 0.4,
-    });
-    this.disposables.push(bodyGeo, bodyMat);
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    body.castShadow = true;
-    yawNode.add(body);
-
-    const barrelGeo = new THREE.CylinderGeometry(0.028, 0.028, 0.42, 8);
-    const barrelMat = new THREE.MeshStandardMaterial({ color: 0x14181d, roughness: 0.45, metalness: 0.6 });
-    this.disposables.push(barrelGeo, barrelMat);
-    const barrel = new THREE.Mesh(barrelGeo, barrelMat);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.z = -0.28;
-    yawNode.add(barrel);
   }
 }
 

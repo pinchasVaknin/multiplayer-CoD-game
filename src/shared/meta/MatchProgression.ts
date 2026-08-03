@@ -16,7 +16,7 @@ import {
   type MatchFact,
 } from './Challenges';
 import { levelForXp } from './Levels';
-import type { Profile } from '../../client/meta/Profile';
+import type { ProgressionStore } from './ProgressionStore';
 import { weaponLevelForXp } from './Unlocks';
 import {
   emptyXpReport,
@@ -60,7 +60,7 @@ const KILL_RING = 8;
 
 export interface MatchProgressionDeps {
   readonly bus: GameBus;
-  readonly profile: Profile;
+  readonly profile: ProgressionStore;
   readonly score: ScoreSystem;
   readonly tracker: ChallengeTracker;
 }

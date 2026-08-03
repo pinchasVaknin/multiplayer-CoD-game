@@ -9,10 +9,11 @@ import {
 } from '../shared/ai/DifficultyTiers';
 import { EV, createGameBus, type GameBus } from '../shared/core/Events';
 import { Input } from './input/Input';
-import { defaultBindings } from './input/Keybinds';
+import { defaultBindings } from '../shared/core/Keybinds';
 import type { InputCommand } from '../shared/core/InputCommand';
 import { MAX_STEPS_PER_FRAME, type FrameSample } from '../shared/core/Loop';
 import { Loop } from './engine/FrameLoop';
+import { ChopperCamera } from './streaks/ChopperCamera';
 import { DEG2RAD } from '../shared/core/MathUtil';
 import { LocalBotTransport, type INetworkTransport } from '../shared/net/Transport';
 import { CameraRig, type CameraDrive } from './engine/CameraRig';
@@ -27,7 +28,7 @@ import { installConsoleApi } from './debug/ConsoleApi';
 import { Harness } from './debug/Harness';
 import { MatchHarness } from './debug/MatchHarness';
 import { Speedometer } from './debug/Speedometer';
-import { isLegalGameTransition, type GameStateId } from './GameStates';
+import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStates';
 import type { Match } from './ClientMatch';
 import { PLAYER_TEAM } from './ClientMatch';
 import { PLAYER_ENTITY_ID } from '../shared/combat/DamageSystem';
@@ -141,6 +142,8 @@ export class Game {
   private readonly input: Input;
   private readonly loop: Loop;
   private readonly selection: MenuSelection;
+  /** M9. Process-wide: the takeover is per-match, the camera object need not be. */
+  private readonly chopperCamera = new ChopperCamera();
 
   /**
    * The per-match world: the map, the player, the match and its debug tooling.
@@ -820,7 +823,8 @@ export class Game {
      * ends" — a property of one method rather than of four call sites.
      */
     const chopper = match.streaks.activeChopperFor(PLAYER_ENTITY_ID);
-    const takeover = chopper?.activeCamera(this.renderer.aspect) ?? null;
+    // M9: the streak reports a pose and a lens; `ChopperCamera` keeps the actual camera.
+    const takeover = this.chopperCamera.cameraFor(chopper, this.renderer.aspect);
     if (takeover !== null) {
       /**
        * A grey render pass over the world with the bodies drawn by side, not a filter over
@@ -835,8 +839,8 @@ export class Game {
       this.renderer.renderGunship(
         this.scene,
         takeover,
-        match.bots.groupFor(enemyTeam),
-        match.bots.groupFor(PLAYER_TEAM),
+        match.botRenderer.groupFor(enemyTeam),
+        match.botRenderer.groupFor(PLAYER_TEAM),
       );
     } else {
       this.renderer.render(this.scene, cam, this.viewmodel);

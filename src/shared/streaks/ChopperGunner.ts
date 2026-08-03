@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { makeDamageRequest, type DamageRequest } from '../combat/DamageSystem';
 import { Btn, isDown, type InputCommand } from '../core/InputCommand';
 import { DT } from '../core/Loop';
@@ -7,6 +6,26 @@ import { Ballistics, makeShotTrace, type ShotTrace } from '../weapons/Ballistics
 import { Killstreak, type StreakContext } from './KillstreakBase';
 import type { StreakDef } from './StreakDefs';
 import { chopperWeapon } from './StreakWeapons';
+
+/**
+ * The gunship's view, as data (M9). Filled by `ChopperGunner.activeView`.
+ *
+ * A pose and a lens, both plain numbers. `client/streaks/ChopperCamera.ts` turns it into a
+ * `THREE.PerspectiveCamera`; a headless server fills it and ignores it.
+ */
+export interface ChopperView {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  pitch: number;
+  /** Vertical field of view, degrees. Interpolated between wide and zoomed. */
+  fov: number;
+}
+
+export function makeChopperView(): ChopperView {
+  return { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, fov: 55 };
+}
 
 /**
  * Chopper Gunner (brief S6.1): full camera takeover, thermal view, tracking minigun.
@@ -100,7 +119,6 @@ export class ChopperGunner extends Killstreak {
   private orbitAngle = 0;
   private fireTimer = 0;
   private restored = false;
-  private readonly camera = new THREE.PerspectiveCamera(55, 1, 0.5, 400);
   private readonly ballistics: Ballistics;
   private readonly request: DamageRequest;
   private readonly trace: ShotTrace = makeShotTrace();
@@ -183,7 +201,7 @@ export class ChopperGunner extends Killstreak {
     const rate = 1 / Math.max(0.05, cfg.chopperSpinUpSeconds);
     this.spin = clamp(this.spin + (firing ? rate : -rate * 1.6) * DT, 0, 1);
 
-    if (this.spin > 0.02) this.ctx.audio.chopperSpin(this.spin);
+    if (this.spin > 0.02) this.ctx.present.chopperSpin(this.spin);
     if (firing && this.spin > 0.2) this.stepFiring();
   }
 
@@ -191,30 +209,32 @@ export class ChopperGunner extends Killstreak {
     this.age += DT;
     this.updateOrbit();
     // Shake scales with the spin, so a held burst is felt.
-    if (this.spin > 0.05) this.ctx.cameraRig.shake.add(0.02 + this.spin * 0.05);
+    if (this.spin > 0.05) this.ctx.present.shake(0.02 + this.spin * 0.05);
     return this.age < this.def.durationSeconds;
   }
 
   /**
-   * The camera the renderer should use this frame, or null once restored.
+   * Where the gunship's view is this frame, or null once restored.
    *
-   * Returning the camera rather than writing into the rig keeps the takeover from having to
-   * undo anything: `Game` simply asks who owns the view.
+   * **M9.** This used to *be* a `THREE.PerspectiveCamera` the streak owned and mutated. It
+   * is now a pose plus a field of view, and `client/streaks/ChopperCamera.ts` maintains the
+   * actual camera from it. Reporting the view rather than owning it keeps the takeover from
+   * having to undo anything — `Game` still simply asks who owns the frame — and it means a
+   * server can run a Chopper Gunner, resolve its shots and replicate its kills without a
+   * projection matrix existing anywhere in the process.
    */
-  activeCamera(aspect: number): THREE.PerspectiveCamera | null {
-    if (this.restored) return null;
+  activeView(out: ChopperView): boolean {
+    if (this.restored) return false;
+    out.x = this.x;
+    out.y = this.y;
+    out.z = this.z;
+    out.yaw = this.yaw;
+    out.pitch = this.pitch;
     // Post-M8: the FOV is part of the projection, so the zoom has to be applied where the
-    // aspect is. Both are compared before `updateProjectionMatrix`, which is not free and
+    // aspect is. The client compares before `updateProjectionMatrix`, which is not free and
     // must not run on a frame where nothing about the lens changed.
-    const fov = FOV_WIDE + (FOV_ZOOMED - FOV_WIDE) * this.zoom;
-    if (this.camera.aspect !== aspect || Math.abs(this.camera.fov - fov) > 1e-3) {
-      this.camera.aspect = aspect;
-      this.camera.fov = fov;
-      this.camera.updateProjectionMatrix();
-    }
-    this.camera.position.set(this.x, this.y, this.z);
-    this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
-    return this.camera;
+    out.fov = FOV_WIDE + (FOV_ZOOMED - FOV_WIDE) * this.zoom;
+    return true;
   }
 
   /**
@@ -275,17 +295,17 @@ export class ChopperGunner extends Killstreak {
     const dz = -Math.cos(this.yaw) * cp;
 
     this.shotsFired++;
-    this.ctx.audio.chopperShot();
+    this.ctx.present.chopperShot();
 
     const def = chopperWeapon(cfg.chopperDamage);
     this.request.weapon = def;
     this.ballistics.fire(this.x, this.y, this.z, dx, dy, dz, def, this.request, this.trace);
-    this.ctx.fx.spawnTracer(this.x, this.y, this.z, this.trace.endX, this.trace.endY, this.trace.endZ);
+    this.ctx.present.tracer(this.x, this.y, this.z, this.trace.endX, this.trace.endY, this.trace.endZ);
     if (this.trace.hitTarget) this.shotsHit++;
     if (this.trace.lethal) this.kills++;
     // A round that hit the ground kicks dust, so the player can read where they are shooting.
     if (this.trace.hitWorld) {
-      this.ctx.blast(this.trace.endX, this.trace.endY, this.trace.endZ, 1.1, false);
+      this.ctx.present.blast(this.trace.endX, this.trace.endY, this.trace.endZ, 1.1, false);
     }
   }
 }

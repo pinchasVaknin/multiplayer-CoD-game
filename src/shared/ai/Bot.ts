@@ -13,7 +13,12 @@ import type { WeaponDef } from '../weapons/WeaponDefs';
 import { WeaponSystem } from '../weapons/WeaponSystem';
 import { BotBlackboard } from './BotBlackboard';
 import { BotBrain, type BrainDeps } from './BotBrain';
-import { BotMesh, DEATH_VARIANTS, type BotMaterials } from '../../client/ai/BotMesh';
+import {
+  DEATH_VARIANTS,
+  deathVariantFor,
+  makeBotVisualState,
+  type BotVisualState,
+} from './BotVisualState';
 import type { BotState } from './BotStates';
 import type { BotTeam, Combatant } from './Combatant';
 import { CombatBehaviour } from './CombatBehaviour';
@@ -62,9 +67,6 @@ export interface BotDeps {
   readonly tiers: TierTable;
   readonly perceptionConfig: PerceptionConfig;
   readonly brain: BrainDeps;
-  readonly materials: BotMaterials;
-  /** Post-M8: Free-for-All draws every bot in the enemy colour. See `BotMesh`. */
-  readonly hostileLook?: boolean;
 }
 
 const evBotState = { entityId: 0, from: 'IDLE' as BotState, to: 'IDLE' as BotState, tier: 'REGULAR' as BotTier };
@@ -81,7 +83,18 @@ export class Bot implements Combatant, PathClient {
   readonly combat = new CombatBehaviour();
   readonly brain: BotBrain;
   readonly path = new Path();
-  readonly mesh: BotMesh;
+  /**
+   * What a renderer needs to know about this bot beyond its pose (M9).
+   *
+   * Until M9 `Bot` owned a `BotMesh` and called `beginDeath` / `flinch` / `endDeath` on it
+   * directly — simulation state and render state in one object, which is exactly what S6.1
+   * said to look for. The mesh is gone; this struct replaced it. The client watches the
+   * serials, notices when one moves, and drives its own scene object.
+   *
+   * That is the same shape a replicated event arrives in at M10, which is the point: the
+   * server bumps these counters and never knows anything is drawing.
+   */
+  readonly visual: BotVisualState = makeBotVisualState();
   readonly rng: Rng;
 
   /** Live-tunable: the debug panel can promote a bot mid-match. */
@@ -154,7 +167,6 @@ export class Bot implements Combatant, PathClient {
     // the same target do not share a spread sequence.
     this.weapons.reseed(spec.seed ^ 0x5bf0_3d17);
     this.brain = new BotBrain(deps.brain);
-    this.mesh = new BotMesh(spec.team, deps.materials, deps.hostileLook === true);
   }
 
   // -- Combatant ------------------------------------------------------------
@@ -278,8 +290,7 @@ export class Bot implements Combatant, PathClient {
     this.path.clear();
     this.respawnTimer = 0;
     this.deadTime = 0;
-    this.mesh.endDeath();
-    this.mesh.setVisible(true);
+    this.visual.spawnSerial++;
     this.rig.heightScale = 1;
     this.rig.setTransform(x, y, z, yaw);
     this.prevX = x;
@@ -309,7 +320,17 @@ export class Bot implements Combatant, PathClient {
     this.path.clear();
     this.deps.brain.cover.release(this.entityId);
     this.deps.brain.pathfinder.cancel(this);
-    this.mesh.beginDeath(dx, dz, this.rng.int(0, DEATH_VARIANTS));
+
+    // The variant is derived from (entityId, deathSerial), not drawn from `this.rng`
+    // (S4.14). The bot's stream feeds aim error and spread, and spending a value from it
+    // on an animation nothing headless will play would make a replayed tick diverge from
+    // the tick it is replaying. See `BotVisualState.deathVariant`.
+    const v = this.visual;
+    v.deathSerial++;
+    v.deathDirX = dx;
+    v.deathDirZ = dz;
+    v.deathVariant = deathVariantFor(this.entityId, v.deathSerial, DEATH_VARIANTS);
+
     this.noteStateChange(this.brain.state, 'DEAD');
     this.brain.state = 'DEAD';
   }
@@ -321,7 +342,10 @@ export class Bot implements Combatant, PathClient {
     if (!this.blackboard.hasLos) {
       this.blackboard.noteInvestigate(fromX, this.py + 1.2, fromZ);
     }
-    this.mesh.flinch(dx, dz);
+    const v = this.visual;
+    v.flinchSerial++;
+    v.flinchDirX = dx;
+    v.flinchDirZ = dz;
   }
 
   noteStateChange(from: BotState, to: BotState): void {
@@ -399,17 +423,14 @@ export class Bot implements Combatant, PathClient {
     this.currYaw = sim.yaw;
   }
 
-  /** Render pass: interpolate the pose and advance the death / flinch animations. */
-  updateVisual(alpha: number, dt: number): void {
-    this.mesh.advance(dt);
-    const yawDelta = shortestAngle(this.prevYaw, this.currYaw);
-    this.mesh.apply(
-      this.prevX + (this.currX - this.prevX) * alpha,
-      this.prevY + (this.currY - this.prevY) * alpha,
-      this.prevZ + (this.currZ - this.prevZ) * alpha,
-      this.prevYaw + yawDelta * alpha,
-      this.prevScale + (this.currScale - this.prevScale) * alpha,
-    );
+  /** Interpolated facing, radians. Interpolated the short way round. */
+  renderYaw(alpha: number): number {
+    return this.prevYaw + shortestAngle(this.prevYaw, this.currYaw) * alpha;
+  }
+
+  /** Interpolated stance compression, 1 standing. */
+  renderScale(alpha: number): number {
+    return this.prevScale + (this.currScale - this.prevScale) * alpha;
   }
 
   /** Interpolated render position, for debug labels and the minimap later. */
@@ -425,9 +446,6 @@ export class Bot implements Combatant, PathClient {
     return this.prevZ + (this.currZ - this.prevZ) * alpha;
   }
 
-  dispose(): void {
-    this.mesh.dispose();
-  }
 }
 
 function shortestAngle(from: number, to: number): number {

@@ -1,16 +1,13 @@
-import type * as THREE from 'three';
 import type { BotDirector } from '../ai/BotDirector';
 import type { BotTeam, Combatant } from '../ai/Combatant';
 import type { DamageSystem } from '../combat/DamageSystem';
 import type { GameBus } from '../core/Events';
 import type { Rng } from '../core/Rng';
-import type { CameraRig } from '../../client/engine/CameraRig';
-import type { Fx } from '../../client/engine/Fx';
 import type { TierTable } from '../ai/DifficultyTiers';
-import type { StreakAudio } from '../../client/streaks/StreakAudio';
 import type { CollisionWorld } from '../world/CollisionWorld';
 import type { MapDef } from '../world/maps/types';
 import type { StreakConfig, StreakDef } from './StreakDefs';
+import type { StreakPresentation } from './StreakPresentation';
 
 /**
  * What a killstreak is (brief S6.1).
@@ -28,9 +25,12 @@ import type { StreakConfig, StreakDef } from './StreakDefs';
  * not call the player's weapon; it goes through `DamageSystem` like everything else, so its
  * kills feed the killfeed, the score and the challenge tracker with no new wiring.
  *
- * **A streak owns its own scene objects and takes them apart in `onExpire`.** The match's heap
- * harness runs three matches and logs the boundary; a streak that leaves a mesh in the scene is
- * exactly the shape of leak it exists to catch.
+ * **M9: a streak no longer owns scene objects.** It used to — it was handed a `THREE.Scene`
+ * and built meshes into it, which is what stopped `streaks/` loading in Node. What replaced
+ * that is two things: `present`, a port for effects that happen at a moment (a bang, a
+ * tracer, a shake), and plain pose state on the streaks that have a body, which
+ * `client/streaks/StreakRenderer.ts` reconciles meshes against. Neither knows a renderer
+ * exists. The heap harness still catches a leak, because the renderer disposes what it made.
  *
  * `onTick` runs on the fixed 60 Hz sim tick and must never multiply by a frame delta (S4.1).
  * `onRender` is the one place a streak may use a real `dt`, and it is presentation only.
@@ -39,23 +39,19 @@ import type { StreakConfig, StreakDef } from './StreakDefs';
 /** Everything a streak is allowed to touch. Handed in; never reached for. */
 export interface StreakContext {
   readonly bus: GameBus;
-  readonly scene: THREE.Scene;
   readonly world: CollisionWorld;
   readonly damage: DamageSystem;
   readonly bots: BotDirector;
-  readonly audio: StreakAudio;
-  readonly fx: Fx;
-  readonly cameraRig: CameraRig;
+  /**
+   * Sound and effects (M9). A port, not the audio graph — see `StreakPresentation`. On the
+   * server this is `SILENT_PRESENTATION` and every call is correctly a no-op.
+   */
+  readonly present: StreakPresentation;
   readonly mapDef: MapDef;
   readonly cfg: StreakConfig;
   readonly rng: Rng;
   /** The bot difficulty table. A sentry's aim tier is derived from it (S6.1). */
   readonly tiers: TierTable;
-  /**
-   * Draw an explosion. Supplied by `Match` from the M5 equipment Fx rather than imported, so
-   * `streaks/` does not depend on `equipment/` for a puff of light.
-   */
-  readonly blast: (x: number, y: number, z: number, radius: number, bright: boolean) => void;
   /** Bots *and* the player, the same array `ai/` and the modes use. */
   readonly roster: readonly Combatant[];
   /**

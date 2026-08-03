@@ -176,7 +176,7 @@ export class MetaPanel {
     set(
       this.fScavenger,
       `${meta.perks.pickupsCollected}/${meta.perks.pickupsSpawned} mags · ` +
-        `${meta.perks.trailPoints} prints`,
+        `${meta.perksRenderer.trailPoints} prints`,
     );
     set(this.fMetaMs, meta.lastMs.toFixed(3));
 

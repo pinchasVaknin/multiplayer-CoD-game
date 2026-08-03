@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { SchedulerConfig } from '../shared/ai/AiScheduler';
 import { BotDirector } from '../shared/ai/BotDirector';
+import { BotRenderer } from './ai/BotRenderer';
 import type { BotTeam } from '../shared/ai/Combatant';
 import type { PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
 import { PlayerCombatant } from '../shared/ai/PlayerCombatant';
@@ -11,7 +12,7 @@ import { Rng } from '../shared/core/Rng';
 import { TargetRange } from './combat/TargetRange';
 import { EV, type GameBus } from '../shared/core/Events';
 import type { Input } from './input/Input';
-import { inputLabel } from './input/Keybinds';
+import { inputLabel } from '../shared/core/Keybinds';
 import { Btn, isDown, justPressed, type InputCommand } from '../shared/core/InputCommand';
 import { DT } from '../shared/core/Loop';
 import { DEG2RAD } from '../shared/core/MathUtil';
@@ -30,6 +31,8 @@ import { MortarOverlay } from './ui/MortarOverlay';
 import { Domination } from '../shared/modes/Domination';
 import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
 import { StreakAudio } from './streaks/StreakAudio';
+import { ClientStreakPresentation } from './streaks/ClientStreakPresentation';
+import { StreakRenderer } from './streaks/StreakRenderer';
 import { StreakSystem } from '../shared/streaks/StreakSystem';
 import {
   DEFAULT_STREAK_CONFIG,
@@ -187,6 +190,8 @@ export class Match {
   readonly playerHealth: Health;
   readonly playerCombatant: PlayerCombatant;
   readonly bots: BotDirector;
+  /** The bodies. Client-only from M9 — the director owns the roster, not the meshes. */
+  readonly botRenderer: BotRenderer;
 
   // ---- M4: the match, as opposed to the firefight -------------------------
   readonly score: ScoreSystem;
@@ -201,6 +206,8 @@ export class Match {
   readonly meta: MatchMeta;
   /** M7: killstreaks. Owns every streak entity in the world. */
   readonly streaks: StreakSystem;
+  /** The sentry and care-package bodies. Client-only from M9 — see `StreakRenderer`. */
+  readonly streakRenderer: StreakRenderer;
   /** M7: flags, capture rings, dog tags and the bomb, as things in the world. */
   readonly objectives: MatchObjectives;
   /** M7: the mortar targeting map. Built once; only rasterises when first opened. */
@@ -311,7 +318,10 @@ export class Match {
       player: this.playerCombatant,
       seed: deps.seed,
     });
-    deps.scene.add(this.bots.group);
+    // M9: the bodies are the client's, not the director's. `BotRenderer` reconciles its
+    // mesh set against the roster each frame and drives the animations off `BotVisualState`.
+    this.botRenderer = new BotRenderer(this.bots);
+    deps.scene.add(this.botRenderer.group);
 
     // ---- the mode ---------------------------------------------------------
     this.score = new ScoreSystem(deps.bus);
@@ -503,21 +513,26 @@ export class Match {
       equippedStreaks: (id) => (id === PLAYER_ENTITY_ID ? this.equippedStreakIds : ALL_STREAK_IDS),
       context: {
         bus: deps.bus,
-        scene: deps.scene,
         world: deps.world,
         damage: this.damage,
         bots: this.bots,
-        audio: new StreakAudio(deps.audio),
-        fx: this.fx,
-        cameraRig: deps.cameraRig,
+        // M9: one port instead of a scene, an Fx pool, a camera rig and an audio graph.
+        // The server hands the same streaks `SILENT_PRESENTATION` and they do not notice.
+        present: new ClientStreakPresentation(
+          new StreakAudio(deps.audio),
+          this.fx,
+          deps.cameraRig,
+          (x, y, z, radius, bright) => this.equipment.fx.spawnBlast(x, y, z, radius, bright),
+        ),
         mapDef: deps.map.def,
         cfg: deps.streakConfig ?? DEFAULT_STREAK_CONFIG,
         rng: new Rng(deps.seed ^ 0x5bd1_e995),
         tiers: deps.tiers,
-        blast: (x, y, z, radius, bright) => this.equipment.fx.spawnBlast(x, y, z, radius, bright),
         roster: this.bots.roster,
       },
     });
+    this.streakRenderer = new StreakRenderer(this.streaks);
+    deps.scene.add(this.streakRenderer.group);
     // Care packages are contestable in every mode, so they ride the second provider slot
     // rather than the mode's (see `BotDirector.streakObjectives`).
     this.bots.streakObjectives = this.streaks;
@@ -1164,11 +1179,12 @@ export class Match {
     this.anim.update(drive, this.deps.viewmodelConfig, dt);
 
     this.range?.updateVisuals(alpha, camera);
-    this.bots.updateVisuals(alpha, dt);
+    this.botRenderer.update(alpha, dt);
     this.fx.update(dt);
     this.equipment.render(alpha, dt, camera);
     this.meta.render(dt);
     this.streaks.render(dt, alpha);
+    this.streakRenderer.update();
 
     // A dead player is not holding a rifle — and a scoped one is looking through an optic
     // rather than at a weapon, so the viewmodel hands off to the scope overlay (M7). See
@@ -1481,7 +1497,8 @@ export class Match {
     this.score.dispose();
     this.ui.dispose();
     this.bots.dispose();
-    this.deps.scene.remove(this.bots.group);
+    this.botRenderer.dispose();
+    this.streakRenderer.dispose();
     if (this.range !== null) {
       this.range.dispose();
       this.deps.scene.remove(this.range.group);

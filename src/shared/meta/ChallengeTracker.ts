@@ -7,7 +7,7 @@ import {
   type MatchFact,
   type WeaponStatKey,
 } from './Challenges';
-import type { Profile } from '../../client/meta/Profile';
+import type { ProgressionStore } from './ProgressionStore';
 
 /**
  * Challenge progress, driven off facts rather than off a clock (brief S6.5).
@@ -46,7 +46,7 @@ export class ChallengeTracker {
   private readonly matchRules: ChallengeDef[] = [];
   private readonly absoluteRules: ChallengeDef[] = [];
 
-  constructor(private readonly profile: Profile) {
+  constructor(private readonly profile: ProgressionStore) {
     for (const def of CHALLENGES) {
       switch (def.rule.kind) {
         case 'kill':

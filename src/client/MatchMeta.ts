@@ -13,6 +13,7 @@ import type { Profile } from './meta/Profile';
 import type { XpReport } from '../shared/meta/XpRules';
 import { FieldUpgradeRuntime } from '../shared/perks/FieldUpgrade';
 import { PerksRuntime } from '../shared/perks/PerksRuntime';
+import { PerksRenderer } from './perks/PerksRenderer';
 import type { PerkState } from '../shared/perks/PerkState';
 import type { Health } from '../shared/player/Health';
 import type { PlayerController } from '../shared/player/PlayerController';
@@ -64,6 +65,8 @@ export class MatchMeta {
   readonly tracker: ChallengeTracker;
   readonly progression: MatchProgression;
   readonly perks: PerksRuntime;
+  /** The pickups and the tracker trail. Client-only from M9. */
+  readonly perksRenderer: PerksRenderer;
   readonly fieldUpgrade: FieldUpgradeRuntime;
 
   /** Wall time inside the last `simulate`, ms. Reported in F1 (S7, criterion 9). */
@@ -90,12 +93,13 @@ export class MatchMeta {
 
     this.perks = new PerksRuntime({
       bus: deps.bus,
-      scene: deps.scene,
       roster: deps.bots.roster,
       weapons: deps.weapons,
       localTeam: deps.localTeam,
     });
     this.perks.setPerks(this.perkState);
+    // M9: the pickups and the tracker trail are drawn here rather than by the runtime.
+    this.perksRenderer = new PerksRenderer(this.perks, deps.bus, deps.scene);
 
     this.fieldUpgrade = new FieldUpgradeRuntime({
       bus: deps.bus,
@@ -138,7 +142,7 @@ export class MatchMeta {
   }
 
   render(dt: number): void {
-    this.perks.render(dt);
+    this.perksRenderer.render(dt);
   }
 
   /**
@@ -166,6 +170,7 @@ export class MatchMeta {
     this.deps.player.speedScale = 1;
     this.progression.dispose();
     this.perks.dispose();
+    this.perksRenderer.dispose();
   }
 
   // -- internals --------------------------------------------------------------

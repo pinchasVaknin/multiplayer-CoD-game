@@ -61,7 +61,7 @@ export class MortarStrike extends Killstreak {
   }
 
   override onActivate(): void {
-    this.ctx.audio.mortarInbound(this.markX, 0, this.markZ);
+    this.ctx.present.mortarInbound(this.markX, 0, this.markZ);
   }
 
   override onTick(_tick: number): boolean {
@@ -102,8 +102,8 @@ export class MortarStrike extends Killstreak {
     const z = this.markZ + Math.sin(angle) * radius;
     const y = groundAt(this.ctx, x, z);
 
-    this.ctx.blast(x, y + 0.4, z, cfg.mortarRadius, true);
-    this.ctx.audio.mortarImpact(x, y, z);
+    this.ctx.present.blast(x, y + 0.4, z, cfg.mortarRadius, true);
+    this.ctx.present.mortarImpact(x, y, z);
 
     // Everything inside the blast, friend or foe. A mortar does not check dog tags — and the
     // brief explicitly wants a chopper gunner's abandoned body to be catchable by one.

@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import type { DamageSystem } from '../combat/DamageSystem';
 import { EV, type GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
@@ -14,7 +13,6 @@ import { AiScheduler, type SchedulerConfig } from './AiScheduler';
 import { Bot } from './Bot';
 import { drawBotWeapon } from './BotArsenal';
 import type { BrainDeps } from './BotBrain';
-import { buildBotMaterials, type BotMaterials } from '../../client/ai/BotMesh';
 import type { BotTeam, Combatant } from './Combatant';
 import { CoverIndex } from './Cover';
 import type { ObjectiveProvider } from './ObjectiveIntent';
@@ -210,18 +208,6 @@ export class BotDirector {
    */
   inputFrozen = false;
 
-  readonly group = new THREE.Group();
-  /**
-   * The roster, split by side, as two scene graph nodes (post-M8).
-   *
-   * Built for the Chopper Gunner's IFF: the gunship view draws team-mates dark and enemies
-   * hot, and doing that per *object* would mean the renderer walking the bot list and knowing
-   * what a team is. Two groups means the render pass is handed "these are cold, those are
-   * hot" and stays a render pass. They are children of `group`, so everything that already
-   * adds, removes or disposes the roster as one node is untouched.
-   */
-  readonly groupA = new THREE.Group();
-  readonly groupB = new THREE.Group();
   readonly nav: NavGrid;
   readonly perception: Perception;
   readonly pathfinder: Pathfinder;
@@ -234,7 +220,6 @@ export class BotDirector {
 
   private readonly deps: BotDirectorDeps;
   private readonly brainDeps: BrainDeps;
-  private readonly materials: BotMaterials;
   private readonly byId = new Map<number, Bot>();
   private readonly rng: Rng;
   private readonly choice: SpawnChoice = makeSpawnChoice();
@@ -243,12 +228,7 @@ export class BotDirector {
 
   constructor(deps: BotDirectorDeps) {
     this.deps = deps;
-    this.group.name = 'bots';
-    this.groupA.name = 'bots:A';
-    this.groupB.name = 'bots:B';
-    this.group.add(this.groupA, this.groupB);
     this.rng = new Rng(deps.seed);
-    this.materials = buildBotMaterials();
 
     this.nav = bakeNavmesh(deps.world, deps.mapDef.navBounds, {
       cellSize: NAV_CELL,
@@ -358,17 +338,12 @@ export class BotDirector {
             tiers: this.deps.tiers,
             perceptionConfig: this.deps.perceptionConfig,
             brain: this.brainDeps,
-            materials: this.materials,
-            // Post-M8: no teams means no team colours. `Match` sets `freeForAll` from the
-            // registry entry before `populate` is ever called, so this is already correct.
-            hostileLook: this.ffa,
           },
         );
         this.bots.push(bot);
         this.roster.push(bot);
         this.byId.set(bot.entityId, bot);
         this.deps.damage.register(bot);
-        this.groupFor(team).add(bot.mesh.group);
         this.spawnBot(bot);
         index++;
       }
@@ -377,16 +352,9 @@ export class BotDirector {
     add('B', teamB);
   }
 
-  /** The scene node holding one side's bodies. See `groupA`. */
-  groupFor(team: BotTeam): THREE.Group {
-    return team === 'A' ? this.groupA : this.groupB;
-  }
-
   clear(): void {
     for (const bot of this.bots) {
       this.deps.damage.unregister(bot.entityId);
-      this.groupFor(bot.team).remove(bot.mesh.group);
-      bot.dispose();
     }
     this.bots.length = 0;
     this.byId.clear();
@@ -464,11 +432,6 @@ export class BotDirector {
     scheduler.endTick();
   }
 
-  /** Render pass. Visual only: interpolation and the death animation. */
-  updateVisuals(alpha: number, dt: number): void {
-    for (const bot of this.bots) bot.updateVisual(alpha, dt);
-  }
-
   /** Pick a spawn for anybody on `team`, including the player. Never fails. */
   selectSpawn(team: BotTeam, selfId: number, out: SpawnChoice): boolean {
     return this.spawns.select(team, this.roster, selfId, this.tick, out);
@@ -495,8 +458,6 @@ export class BotDirector {
     for (const off of this.unsubscribe) off();
     this.unsubscribe.length = 0;
     this.clear();
-    this.materials.dispose();
-    this.group.clear();
   }
 
   // -- internals ------------------------------------------------------------

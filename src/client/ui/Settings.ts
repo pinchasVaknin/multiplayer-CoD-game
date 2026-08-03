@@ -6,7 +6,7 @@ import {
   type ActionDef,
   type ActionId,
   type BindingMap,
-} from '../input/Keybinds';
+} from '../../shared/core/Keybinds';
 import {
   COLORBLIND_MODES,
   SHADOW_QUALITIES,

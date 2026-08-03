@@ -1,4 +1,4 @@
-import { Btn } from '../../shared/core/InputCommand';
+import { Btn } from './InputCommand';
 
 /**
  * The bindable actions and the table that maps physical inputs onto them (brief S6.3).

@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import type { Combatant } from '../ai/Combatant';
 import type { ObjectiveTarget } from '../ai/ObjectiveIntent';
 import { makeObjectiveTarget, type MutableObjectiveTarget } from '../ai/ObjectiveIntent';
@@ -38,10 +37,6 @@ export class CarePackage extends Killstreak {
   /** What is inside. Rolled at activation so the debug panel can see it before it lands. */
   readonly contents: StreakDef;
 
-  private readonly group = new THREE.Group();
-  private readonly geometry: THREE.BufferGeometry;
-  private readonly material: THREE.MeshStandardMaterial;
-  private readonly beaconMaterial: THREE.MeshBasicMaterial;
   private readonly target: MutableObjectiveTarget = makeObjectiveTarget();
   private readonly packageId: number;
   private groundY = 0;
@@ -61,10 +56,6 @@ export class CarePackage extends Killstreak {
     this.y = 0;
     this.packageId = instanceId;
     this.contents = rollContents(ctx);
-
-    this.geometry = new THREE.BoxGeometry(0.9, 0.72, 0.9);
-    this.material = new THREE.MeshStandardMaterial({ color: 0x3d4a3a, roughness: 0.78, metalness: 0.08 });
-    this.beaconMaterial = new THREE.MeshBasicMaterial({ color: 0xffb340, toneMapped: false });
   }
 
   override onActivate(): void {
@@ -73,22 +64,9 @@ export class CarePackage extends Killstreak {
     this.groundY = this.probeGround(this.x, this.z);
     this.y = this.groundY + cfg.packageDropHeight;
 
-    const crate = new THREE.Mesh(this.geometry, this.material);
-    crate.castShadow = true;
-    crate.receiveShadow = true;
-    this.group.add(crate);
-
-    // A thin bright post so the crate is findable across a map without a HUD marker.
-    const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 3.2, 6), this.beaconMaterial);
-    beacon.position.y = 1.9;
-    this.group.add(beacon);
-
-    this.group.position.set(this.x, this.y, this.z);
-    this.ctx.scene.add(this.group);
-
     const ev = { packageId: this.packageId, ownerTeam: this.ownerTeam, x: this.x, y: this.y, z: this.z };
     this.ctx.bus.emit(EV.CarePackageDropped, ev);
-    this.ctx.audio.packageDrop(this.x, this.y, this.z);
+    this.ctx.present.packageDrop(this.x, this.y, this.z);
   }
 
   override onTick(_tick: number): boolean {
@@ -100,9 +78,8 @@ export class CarePackage extends Killstreak {
       if (this.y <= this.groundY) {
         this.y = this.groundY;
         this.landed = true;
-        this.ctx.audio.packageLand(this.x, this.y, this.z);
+        this.ctx.present.packageLand(this.x, this.y, this.z);
       }
-      this.group.position.y = this.y;
       return true;
     }
 
@@ -129,11 +106,8 @@ export class CarePackage extends Killstreak {
   }
 
   override onExpire(): void {
-    this.ctx.scene.remove(this.group);
-    this.group.clear();
-    this.geometry.dispose();
-    this.material.dispose();
-    this.beaconMaterial.dispose();
+    /* Nothing to take apart: from M9 the crate's mesh belongs to the client renderer, which
+       disposes it when this instance leaves `StreakSystem.active`. */
   }
 
   override describe(): string {
@@ -188,7 +162,7 @@ export class CarePackage extends Killstreak {
       name: this.contents.name,
     };
     this.ctx.bus.emit(EV.CarePackageClaimed, ev);
-    this.ctx.audio.packageClaimed(this.x, this.y, this.z);
+    this.ctx.present.packageClaimed(this.x, this.y, this.z);
   }
 
   /**

@@ -41,7 +41,7 @@ export class Uav extends Killstreak {
     for (const c of this.ctx.roster) {
       this.contacts.push({ entityId: c.entityId, x: 0, z: 0, age: Infinity, active: false });
     }
-    this.ctx.audio.uavSweep(0);
+    this.ctx.present.uavSweep(0);
   }
 
   override onTick(_tick: number): boolean {
@@ -50,7 +50,7 @@ export class Uav extends Killstreak {
     this.sweepAngle = (this.sweepAngle + (TAU / this.ctx.cfg.uavSweepSeconds) * DT) % TAU;
 
     // A revolution wrapped: that is one audible sweep.
-    if (this.sweepAngle < this.previousAngle) this.ctx.audio.uavSweep(this.age);
+    if (this.sweepAngle < this.previousAngle) this.ctx.present.uavSweep(this.age);
 
     for (const contact of this.contacts) contact.age += DT;
 

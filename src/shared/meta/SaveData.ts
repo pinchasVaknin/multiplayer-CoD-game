@@ -1,5 +1,4 @@
-import { defaultBindings, normaliseBindings, type BindingMap } from '../../client/input/Keybinds';
-import type { Versioned } from '../../client/meta/SaveStore';
+import { defaultBindings, normaliseBindings, type BindingMap } from '../core/Keybinds';
 import { ALL_EQUIPMENT, type EquipmentId } from '../equipment/EquipmentDefs';
 import { isPerkId, perkDef, type PerkId } from '../perks/PerkDefs';
 import { isStreakId, type StreakId } from '../streaks/StreakDefs';
@@ -116,6 +115,17 @@ export interface ChallengeSaveData {
   completed: boolean;
 }
 
+/**
+ * Anything a versioned store can migrate.
+ *
+ * **M9.** Declared here rather than in `SaveStore`. The schema and its version number are
+ * a rule about the save format; the store that puts it in `localStorage` is a browser
+ * detail. `client/meta/SaveStore.ts` imports this, not the other way round.
+ */
+export interface Versioned {
+  version: number;
+}
+
 export interface SaveV2 extends Versioned {
   version: 3;
   profile: ProfileData;
@@ -181,14 +191,12 @@ export function defaultSettings(modeId: string, mapId: string, fov: number): Set
  * would otherwise reset everybody's FOV, sensitivity and volume to defaults — a small
  * loss, but exactly the kind this milestone exists to refuse. The legacy key is read once
  * and never written, so the old blob stays where it is and a downgrade still works.
+ *
+ * **M9.** Takes the raw string rather than reading `localStorage` itself. Parsing and
+ * validating a save is a rule and stays shared; *where the bytes come from* is the client's
+ * business — see `LEGACY_SETTINGS_KEY`, which the caller reads with.
  */
-export function readLegacySettings(fallback: SettingsV1): SettingsV1 {
-  let raw: string | null = null;
-  try {
-    raw = window.localStorage.getItem(LEGACY_SETTINGS_KEY);
-  } catch {
-    return fallback;
-  }
+export function readLegacySettings(raw: string | null, fallback: SettingsV1): SettingsV1 {
   if (raw === null) return fallback;
 
   let parsed: unknown;

@@ -7,11 +7,14 @@
  *
  * If storage is unavailable (private browsing, blocked cookies, quota) the store
  * silently degrades to in-memory. The game must not break because a save failed.
+ *
+ * **M9.** Client-only, per S6.2 — it is a `localStorage` wrapper. The save *schema* and
+ * its migrations live in `shared/meta/SaveData.ts`, because the server awards progression
+ * from M10 and has to agree about what a save contains.
  */
+import type { Versioned } from '../../shared/meta/SaveData';
 
-export interface Versioned {
-  version: number;
-}
+export type { Versioned };
 
 /**
  * Convert persisted data from an older schema. Return `null` to reject the payload

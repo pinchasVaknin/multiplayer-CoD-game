@@ -1,6 +1,6 @@
 import { clamp, DEG2RAD, wrapAngle } from '../../shared/core/MathUtil';
 import { Btn, CommandRing, type InputCommand } from '../../shared/core/InputCommand';
-import { Keybinds, LocalBtn, mouseInput, type BindingMap } from './Keybinds';
+import { Keybinds, LocalBtn, mouseInput, type BindingMap } from '../../shared/core/Keybinds';
 
 /**
  * The only place in the project that touches keyboard, mouse or pointer lock.

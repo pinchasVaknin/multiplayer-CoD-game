@@ -1,4 +1,4 @@
-import { inputLabel, type ActionId, type BindingMap } from '../input/Keybinds';
+import { inputLabel, type ActionId, type BindingMap } from '../../shared/core/Keybinds';
 import type { GameModeId } from '../../shared/modes/GameMode';
 import { MAPS, MODES, modesForMap } from '../../shared/modes/ModeRegistry';
 

@@ -19,7 +19,7 @@ import { Killstreak } from './KillstreakBase';
  */
 export class CounterUav extends Killstreak {
   override onActivate(): void {
-    this.ctx.audio.counterUav();
+    this.ctx.present.counterUav();
   }
 
   override onTick(_tick: number): boolean {
