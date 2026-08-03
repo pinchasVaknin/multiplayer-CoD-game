@@ -3711,3 +3711,137 @@ stream as the likeliest divergence; the RNG's four words are hashed alongside th
   `kind` so it cannot drift from the truth, plus pending commands, RTT and the tick.
 - **Structured logging** — levels, text or JSON (JSON automatically when stdout is not a TTY),
   warnings and errors to stderr so a redirected run still shows failures.
+
+## Verification — phases 4 and 6
+
+### 2. A complete match in Node, no browser, no DOM shim
+
+```
+INF   0.013s Match   FOUNDRY: 102 colliders, 1162 hash entries across 1728 cells.
+INF   0.093s Match   TEAM DEATHMATCH on FOUNDRY: 5 vs 5 bots, seed 1.
+INF 248.602s server  TDM on mp_foundry: A wins 75-47 (Score limit) in 248.5s of simulation
+                     across 14911 ticks.
+```
+
+248.5 s of simulation in 248.7 s of wall clock — real-time pacing held to within 200 ms over
+four minutes. Exit code 0.
+
+### 5. Cross-runtime hashes
+
+| | Node 24 (V8 13.6.233.17) | Chrome 148.0.7778.280 |
+|---|---|---|
+| 3600 ticks (60 s) | `9768816b` | `9768816b` |
+| **7200 ticks (120 s)** | **`99a3605a`** | **`99a3605a`** |
+
+Method: FNV-1a 32-bit over the raw little-endian IEEE 754 bytes of pose, velocity, stance,
+ground normal, eye and capsule height, bob phase, magazine, reserve, ADS fraction, spread, and
+the weapon RNG's four state words — per tick, unquantised. Verified at 7200 ticks, twice the
+3600 the criterion asks for.
+
+### 6. Server tick jitter over a ten-minute headless run
+
+36,000 ticks in 600.086 s, Domination on Depot, ten bots:
+
+| | |
+|---|---|
+| **Delivered rate** | **60.001 Hz** |
+| Jitter p50 | **16.614 ms** (ideal 16.667) |
+| Jitter p99 | **24.259 ms** |
+| Jitter min / max | 2.662 / 31.613 ms |
+| Ticks late | 297 of 36,000 (**0.83%**) |
+| **Ticks dropped** | **0** |
+| Mean sim cost | 0.285 ms/tick against S4.7's 3.0 ms |
+| Heap | 6.9 → 10.1 MB across the ten minutes |
+
+**The p99 is a Windows number, and it should be re-measured on the deployment host.** The
+default timer resolution on Windows is ~15.6 ms, which is most of a tick: `setTimeout` cannot
+reliably wake inside one, so a deadline is occasionally missed and the loop delivers the
+backlog immediately after — which is exactly the min of 2.662 ms sitting under a max of 31.613.
+
+The drift correction is doing its job regardless, and that is the number that matters: the
+*rate* is 60.001 Hz over ten minutes and **nothing was dropped**, so the tick count and the
+match clock are exact even where the instantaneous spacing is not. An accumulating error would
+have shown here as a rate below 60 and did not.
+
+For M10: this is a per-host property, not a property of the loop. Measure it again on the Linux
+box before attributing any snapshot-cadence jitter to the network.
+
+### 7. Heap across five consecutive headless matches
+
+Boot 6.2 MB, then after each match: **8.9 → 9.0 → 9.1 → 9.2 → 9.3 MB**. 1,360 seconds of
+simulation across five full matches for 0.4 MB of growth after the first — flat, with the
+`--expose-gc` collection taken before each sample. Wall clock for the whole run: 7.8 s.
+
+### 8. Bot hit rate by tier, headless versus M3
+
+| Tier | M3 (live 8v8, browser) | M9 (headless, 5 matches aggregated) |
+|---|---|---|
+| Recruit | 9.0% | **9.7%** (228/2362) |
+| Regular | 13.2% | **17.7%** (1086/6127) |
+| Hardened | 10.4% | **16.9%** (1210/7143) |
+| Veteran | 11.9% | **17.2%** (238/1386) |
+
+The same shape: Recruit clearly lowest, the upper three flat and bunched. That flatness is not
+a regression — M3 measured and explained it at the time (*"flat, because each tier is also
+fighting itself and higher tiers strafe and peek far more"*), and reported the fixed-target
+figures separately for the monotonic ladder. Recruit, the tier least affected by that
+confound, lands within 0.7 points of its browser number.
+
+### 9. Types, `any`, consoles
+
+`tsc --noEmit` clean on all three targets. **Zero `any`**, zero `@ts-expect-error`, zero
+non-null assertions in the M9 files. Browser console clean of errors across the full sweep.
+**Server stderr: 0 bytes** across the five-match run.
+
+### 4 / phase 5. The browser build after the split
+
+All five modes across all three maps, each run to `MATCH_END` and through to SUMMARY, after the
+`SimMath` swap had touched movement:
+
+| Map | Mode | Sim seconds | Sim ms p50 / p95 / p99 |
+|---|---|---|---|
+| Foundry | TDM | 314 | 0.0 / 0.2 / 0.4 |
+| Foundry | FFA | 509 | 0.0 / 0.2 / 0.4 |
+| Foundry | S&D | 122 (best of 3, 2-0, sides swapped) | 0.0 / 0.1 / 0.2 |
+| Dunes | DOM | 479 | 0.0 / 0.1 / 0.3 |
+| Depot | KC | 380 | 0.0 / 0.2 / 0.4 |
+
+All six killstreaks activate and expire; `StreakRenderer` builds one mesh for a live sentry,
+two with a care package, and retires them on expiry. The Chopper Gunner takeover reproduces its
+pose to 2 dp and its FOV exactly through `ChopperCamera`. The scene graph returns to **zero**
+children after teardown on three consecutive matches across three maps. Progression persists
+across matches.
+
+**Render frame time is still not measured** and criterion 4's comparison against the M8 numbers
+remains open — the pane in this environment does not composite, so `requestAnimationFrame`
+never fires and every WebGL call stalls. Any p50/p95/p99 taken here would be fiction. It needs
+a real display.
+
+### A bug in the harness, found by running it
+
+The ten-minute jitter run exited 1. That was the tool, not the server: `--minutes` is a
+deliberate cap, and a run that stops because it was told to has not failed. Hitting the cap is
+now a normal end with exit 0 and a `cappedAtMinutes` field in the run record; a match that ends
+with no winner and *no* cap still exits 1, because that means the mode never terminated.
+
+## What Milestone 10 needs to know
+
+- **`server/` is seven files**: `Loop`, `Match`, `Spectator`, `NodeClock`, `log`, `main`,
+  `hashRun`. No transport, no session, no protocol — M9 built none, by instruction.
+- **The determinism floor is `shared/core/SimMath.ts`.** Anything added to `shared/` that
+  reaches for `Math.sin`/`cos`/`tan` will fail the boundary check. If a future need arises for
+  another transcendental in the sim path, probe it with `mathDigest()` across both runtimes
+  *before* using it — `exp`, `pow`, `sqrt`, `atan2`, `log` and `hypot` were checked and agree,
+  and nothing else has been.
+- **Run the hash check after any sim change.** `npm run hashes`, then the browser half, then
+  `scripts/diff-hashes.mjs`. It is cheap (60 ms in Node, ~100 ms in the browser) and it is the
+  only thing that will catch a divergence before it becomes a reconciliation mystery.
+- **The server loop never drops ticks and must keep that property.** Its catch-up is bounded
+  and it rebases with a warning past the cap; if `ticksDropped` is ever non-zero in a run
+  record, the tick count has diverged from the clock and every client is now wrong.
+- **`SILENT_PRESENTATION` and `ProgressionStore` are the two seams already waiting.** Streaks
+  and server-side XP need no further inversion — they need implementations.
+- **`INetworkTransport` is at `shared/net/Transport.ts`, untouched by M9.** M10 phase 1 is to
+  decide whether it survives contact with a real socket; nothing here pre-judged that.
+- **The debug overlay reports the simulation source** from the transport's own `kind`. When
+  the remote transport lands, that readout changes with no further work.

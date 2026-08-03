@@ -282,11 +282,24 @@ async function main(): Promise<number> {
     results.push(args.asap ? await runMatchAsap(args, i) : await runMatchPaced(args, i));
   }
 
+  /**
+   * A match that stopped without a winner.
+   *
+   * Only a failure when nobody asked it to stop. `--minutes` is a *deliberate* cap — the
+   * ten-minute jitter run of S8 criterion 6 wants exactly 600 seconds of ticks and does not
+   * care who was winning — so hitting it is a normal end, and reporting a non-zero exit for
+   * it would make that measurement look like a crash in CI. Without a cap, a match that ends
+   * with no winner means the mode never terminated, which is a real fault.
+   */
   let incomplete = 0;
   for (const r of results) {
     if (r === null) {
-      incomplete++;
-      log.warn('a match did not reach a win condition.');
+      if (args.minutes > 0) {
+        log.info(`stopped at the ${args.minutes}-minute cap, as asked.`);
+      } else {
+        incomplete++;
+        log.warn('a match did not reach a win condition.');
+      }
       continue;
     }
     log.info(
@@ -299,6 +312,7 @@ async function main(): Promise<number> {
     matches: args.matches,
     completed: args.matches - incomplete,
     incomplete,
+    cappedAtMinutes: args.minutes > 0 ? args.minutes : null,
     heapMb: heapMb(),
   });
 
