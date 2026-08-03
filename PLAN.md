@@ -20,7 +20,7 @@ server: the split first, then the netcode, then everything else on top of it.
 | 6 | Progression and loadouts | **Complete** — see below |
 | 7 | Killstreaks and Modes | **Complete** — see below |
 | 8 | Content and polish | **Complete** — see below |
-| 9 | Headless server split | **Phases 1–4 and 6 complete** — audit, partition, boundary check, server process, cross-runtime determinism. Phase 5 (client parity) verified as part of each. |
+| 9 | Headless server split | **Complete** — see below |
 | 10 | Netcode foundation | Planned |
 | 11 | Multiplayer completion | Planned |
 
@@ -3364,13 +3364,20 @@ loss, the divergence checker reports zero mismatches in all five modes, and the 
 
 # Milestone 9 — Headless Server Split
 
-**Status: phases 1–4 and 6 complete.** The audit, the partition, boundary enforcement in CI,
-the headless server process and the cross-runtime determinism proof. Phase 5 ("the client
-keeps working") is not a separate body of work — it is the thing verified after every one of
-the others, and its results are reported in each section below.
+**Status: complete.** All six phases. Phase 5 ("the client keeps working") is not a separate
+body of work — it is the thing verified after every one of the others, and its results are
+reported in each section below.
 
-**The gate is met.** A full ten-bot TDM runs to its win condition in Node with no browser open
-and no DOM shim, and the browser build still plays all five modes on all three maps.
+**The gate is met, on both halves.** A full ten-bot TDM runs to its win condition in Node with
+no browser open and no DOM shim; and the browser build still plays all five modes on all three
+maps, confirmed by playtest on a real display (see "Verification").
+
+The milestone's one surprise is worth carrying forward on its own: `Math.sin` and `Math.cos`
+are **not bit-identical across V8 versions**, which the cross-runtime hash caught at tick 149
+of 3600. Everything the simulation does with angles now goes through
+[`shared/core/SimMath.ts`](src/shared/core/SimMath.ts), and the boundary check enforces it.
+Had this reached M10 it would have presented as unreproducible reconciliation errors with two
+plausible homes.
 
 ## Phase 1 — the audit
 
@@ -3812,10 +3819,16 @@ pose to 2 dp and its FOV exactly through `ChopperCamera`. The scene graph return
 children after teardown on three consecutive matches across three maps. Progression persists
 across matches.
 
-**Render frame time is still not measured** and criterion 4's comparison against the M8 numbers
-remains open — the pane in this environment does not composite, so `requestAnimationFrame`
-never fires and every WebGL call stalls. Any p50/p95/p99 taken here would be fiction. It needs
-a real display.
+**Render frame time was not measured in this environment.** The pane does not composite, so
+`requestAnimationFrame` never fires and every WebGL call stalls; any p50/p95/p99 taken here
+would have been fiction, so none was reported.
+
+**Closed by playtest on a real display**, not by measurement here. The human ran `npm run dev`
+against the finished milestone and confirmed: movement feel identical, TTK unchanged,
+hitmarkers and audio still mapping to the simulation, console clean, no visual or mechanical
+regression. Criterion 4 is satisfied on that basis and the distinction is recorded rather than
+smoothed over — the numeric frame-time comparison against the M8 table was never taken, and
+if M10 needs a frame-time baseline it will have to be measured fresh.
 
 ### A bug in the harness, found by running it
 
