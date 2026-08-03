@@ -25,8 +25,11 @@ Then open <http://127.0.0.1:5173>. Click **Play**, pick a mode and a map, and pr
 **Start match**.
 
 ```bash
-npm run typecheck
+npm run check
 ```
+
+`check` is the gate: the target-boundary check, then a typecheck of each of the three targets
+separately. `npm run build` runs it before building.
 
 ```bash
 npm run build
@@ -34,6 +37,46 @@ npm run build
 
 Requires Node 18+ and a Chromium-based browser. The game needs pointer lock, which means it
 needs a click to start and a secure context (`localhost` counts).
+
+### The headless server (M9)
+
+The simulation runs without a browser. This boots, loads Foundry, plays a ten-bot Team
+Deathmatch to its win condition at a real 60 Hz, logs the result and exits:
+
+```bash
+npm run server
+```
+
+A match is four to five minutes of simulated time, and paced mode takes that long in wall
+clock — which is what a server does. For a stability run, `--asap` drops the pacing and runs
+five matches in about eight seconds, logging one JSON record per match boundary with the
+result, sim cost, heap and per-tier bot hit rate:
+
+```bash
+npm run harness
+```
+
+Anything else is flags: `--map mp_depot --mode DOM --bots 10 --tier VETERAN --seed 7
+--minutes 10 --json`.
+
+### Proving both runtimes agree
+
+The same fixed sequence of input commands, through the same `shared/` modules, in Node and in
+the browser. The per-tick state hashes must match exactly.
+
+```bash
+npm run hashes
+```
+
+Then in the browser console: `__operator.determinism.download()`, and
+
+```bash
+node scripts/diff-hashes.mjs node-hashes.json browser-hashes.json
+```
+
+It reports the first divergent tick and the field that differs — and reports a *maths*
+disagreement first when there is one, because that causes the state divergence. See
+`src/shared/core/SimMath.ts` for why `Math.sin` and `Math.cos` are banned in `shared/`.
 
 ### Press F11
 

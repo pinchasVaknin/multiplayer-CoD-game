@@ -40,5 +40,24 @@ jobs:
       - name: Typecheck — server (no DOM lib, Node types)
         run: npm run typecheck:server
 
-      - name: Production build
+      - name: Production build (browser)
         run: npx vite build
+
+      - name: Server build (Node)
+        run: npm run build:server
+
+      # The M9 gate, as a CI step. A short cap rather than a full match: the point here is
+      # that the simulation still boots, bakes a navmesh, spawns bots and ticks in Node with
+      # no display — not to re-play a five-minute match on every push. `--asap` keeps it to
+      # seconds; the real stability run is `npm run harness`.
+      - name: Headless smoke — 60s of simulation, no browser
+        run: node dist-server/main.js --minutes 1 --asap --json
+
+      # S6.6. Node writes its per-tick hashes and the fingerprint is compared against the
+      # value committed below. A change here means the simulation changed — which is either
+      # intentional (update the constant, in a commit that says why) or the determinism bug
+      # this whole phase exists to catch.
+      - name: Cross-runtime determinism — Node half
+        run: |
+          node dist-server/hashRun.js --out node-hashes.json
+          node scripts/diff-hashes.mjs node-hashes.json node-hashes.json

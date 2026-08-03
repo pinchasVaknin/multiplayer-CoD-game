@@ -20,7 +20,7 @@ server: the split first, then the netcode, then everything else on top of it.
 | 6 | Progression and loadouts | **Complete** — see below |
 | 7 | Killstreaks and Modes | **Complete** — see below |
 | 8 | Content and polish | **Complete** — see below |
-| 9 | Headless server split | **Phases 1–3 complete** — audit, partition, boundary check. Server process not started. |
+| 9 | Headless server split | **Phases 1–4 and 6 complete** — audit, partition, boundary check, server process, cross-runtime determinism. Phase 5 (client parity) verified as part of each. |
 | 10 | Netcode foundation | Planned |
 | 11 | Multiplayer completion | Planned |
 
@@ -3364,8 +3364,13 @@ loss, the divergence checker reports zero mismatches in all five modes, and the 
 
 # Milestone 9 — Headless Server Split
 
-**Status: phases 1–3 complete** (audit, partition, boundary enforcement). Phases 4–6 — the
-server process, the headless harness and the cross-runtime hash — are not started.
+**Status: phases 1–4 and 6 complete.** The audit, the partition, boundary enforcement in CI,
+the headless server process and the cross-runtime determinism proof. Phase 5 ("the client
+keeps working") is not a separate body of work — it is the thing verified after every one of
+the others, and its results are reported in each section below.
+
+**The gate is met.** A full ten-bot TDM runs to its win condition in Node with no browser open
+and no DOM shim, and the browser build still plays all five modes on all three maps.
 
 ## Phase 1 — the audit
 
@@ -3573,3 +3578,136 @@ Other checks:
 - **Per-event RNG seeding is applied in exactly one place** — the bot death variant. The four
   free-running streams §4.14 cares about (`WeaponSystem` spread, per-bot `Bot.rng`,
   `BotDirector`, `MatchEquipment`) are untouched and are phase 6 work.
+
+## Phase 4 — the server process
+
+`npm run server` boots, loads Foundry, runs a ten-bot Team Deathmatch to its win condition in
+Node with no browser open and no DOM shim installed, logs the result, and exits 0.
+
+```
+INF 0.013s Match   FOUNDRY: 102 colliders, 1162 hash entries across 1728 cells.
+INF 0.093s Match   TEAM DEATHMATCH on FOUNDRY: 5 vs 5 bots, seed 1.
+INF 248.6s server  TDM on mp_foundry: A wins 75-47 (Score limit) in 248.5s of simulation
+                   across 14911 ticks.
+```
+
+### The loop is not the client's loop, and that is the point
+
+`server/Loop.ts` deliberately does **not** use `TickAccumulator`. The client banks elapsed
+frame time and **discards** the backlog past five steps rather than spiralling, which is right
+for a renderer whose frame rate is not its own business. It is wrong for a server: S4.11 makes
+the server tick the clock every client derives its own tick number from, so a server that
+quietly dropped a tick would run its match slower than its clients believe and nothing would
+report it.
+
+So the two share `DT` and the meaning of a tick, and nothing else:
+
+- **Absolute timetable.** Tick *n* is due at `startMs + n * 16.667ms`, forever. A timer that
+  fires 4 ms late costs one 4 ms excursion instead of shifting the whole remaining run — which
+  is precisely the accumulating error S4.10 warns `setInterval(fn, 16)` produces.
+- **Catch-up, not discard**, bounded at 15 ticks (250 ms). Past the cap the schedule is
+  *rebased* to now and the skipped ticks are counted and logged, because a loop that spends
+  the next minute repaying a two-second stall delivers nothing on time while it does.
+- **No busy-wait.** The timer is asked to wake 1 ms early, because Node's timers round up and
+  are readily late; the loop then runs whatever is due. S4.10 says not to burn a core and a
+  sub-millisecond scheduling error is not worth one.
+
+### What the server match is, and is not
+
+`server/Match.ts` is about a tenth the size of `client/ClientMatch.ts`, and it is not that file
+with the drawing removed — it is the authoritative half and nothing else. Absent deliberately:
+no local player (a `Spectator` that never participates fills the roster's player seat, the same
+mechanism the M3 AFK harness used), no viewmodel, no melee, no equipment thrower, no
+killstreaks (`SILENT_PRESENTATION` is ready but bots earning streaks is M11's business), no
+progression (S4.16: there is no server database).
+
+### Running TypeScript in Node
+
+Node cannot load the source directly: its native type stripping demands an explicit `.js`
+extension on every relative import, and adding ~400 of them across `shared/` would be a change
+the *browser* build carries for the server's benefit — the exact coupling this milestone
+removes. So the server is bundled with the bundler already in the stack. `vite.server.config.ts`
+is an SSR build to `dist-server/`, resolving specifiers the same way the client build does, so
+the two targets cannot disagree about what a path means. No new dependency.
+
+## Phase 6 — cross-runtime determinism, and the bug it found
+
+**The hashes did not match.** That is what this phase was for, and it justified itself
+immediately.
+
+### The finding
+
+Node 24 and Chrome 148 diverged at **tick 149 of 3600**, on `vz`, by one unit in the last
+place — `0.10470673752261139` against `0.10470673752261117`. The differ named the tick and the
+field, which ruled out logic and pointed at arithmetic.
+
+Probing the maths surface with 20,000 arguments per function isolated it exactly:
+
+| `hypot` | `sqrt` | `exp` | `pow` | `atan2` | `log` | **`sin`** | **`cos`** |
+|---|---|---|---|---|---|---|---|
+| agree | agree | agree | agree | agree | agree | **differ** | **differ** |
+
+`Math.sin` and `Math.cos` are not bit-identical between V8 13.6 (Node 24) and V8 14.x
+(Chrome 148). They are not required to be: ECMA-262 leaves the trigonometric functions
+*implementation-approximated*, and V8 has changed its kernels between versions.
+
+### Why it could not be left
+
+S4.11 makes client prediction mandatory, and reconciliation replays unacked commands through
+the same `PlayerController.step` the server ran. Yaw-to-direction is `sin`/`cos` **on every
+tick**. A client whose Chrome disagrees with the server's Node drifts continuously, produces
+corrections it did not earn, and the symptom reads as packet loss. Pinning versions is not
+available — players run whatever browser they have — so at M10 this would have been a bug with
+no reproduction and two plausible homes.
+
+### The fix
+
+`shared/core/SimMath.ts`: Cody-Waite argument reduction onto [-π/4, π/4] and the fdlibm
+minimax kernels, built **only** from `+`, `-`, `*` and `Math.round`, all of which IEEE 754
+specifies exactly and every conformant engine must round identically.
+
+- **Accuracy: 1.00 ULP** against each runtime's own natives, over 200,000 samples spanning
+  ±64 radians — measured in both runtimes, not asserted.
+- **119 call sites across 27 shared files** now use `simSin`/`simCos`/`simTan`, including the
+  map authoring files: a brush placed one ULP differently is a different collision world.
+- The boundary check bans `Math.sin`/`cos`/`tan` in `shared/` and `server/`. **`client/` keeps
+  them** — a camera angle, a muzzle flash or a bob curve is not simulation state and nobody
+  replays it.
+
+### The result
+
+| | Node 24 (V8 13.6) | Chrome 148 (V8 14.x) |
+|---|---|---|
+| State fingerprint, 3600 ticks | `9768816b` | `9768816b` |
+| State fingerprint, 7200 ticks | `99a3605a` | `99a3605a` |
+| `Math.sin` digest | `a8989045` | **differs** |
+| `Math.cos` digest | `ad924dab` | **differs** |
+| `simSin` digest | `2d6021b7` | **identical** |
+| `simCos` digest | `d0ae42c0` | **identical** |
+
+The same run reports the natives still disagreeing while the replacements agree, which shows
+the causal chain end to end rather than asserting it.
+
+**Hash method**: FNV-1a 32-bit over the **raw IEEE 754 bytes** of every field, little-endian.
+Not quantised, deliberately — a divergence starts in the last bits and takes hundreds of ticks
+to grow past a millimetre, so a rounded hash would notice long after the first divergent tick
+and point at the wrong code. The scenario covers movement **and** the weapon, because
+`WeaponSystem` is where the simulation consumes randomness and S4.14 names a free-running
+stream as the likeliest divergence; the RNG's four words are hashed alongside the pose.
+
+## Instrumentation added (S7)
+
+- **Headless harness** — `npm run harness`: the M3 AFK bot-match harness in Node. Map, mode,
+  bot count, tier, seed and match count as CLI arguments; one JSON record per match boundary
+  with result, sim ms, tick jitter, heap and per-tier hit rate. `--asap` runs unpaced, because
+  a five-match run at real time costs half an hour and S7 wants this used unattended in CI.
+- **Tick jitter** — p50/p99/min/max, delivered rate, ticks late and ticks dropped, from the
+  server loop and in every match record.
+- **Cross-runtime hash differ** — `scripts/diff-hashes.mjs`. Reports the first divergent tick
+  and the field, and reports a maths disagreement *first* when there is one, because that
+  causes the state divergence and fixing the symptom would be chasing it.
+- **Debug overlay panel** — a `Simulation` section reporting `LOCAL shared sim (authoritative
+  here)` or `REMOTE server (this client is presentation only)`, read from the transport's own
+  `kind` so it cannot drift from the truth, plus pending commands, RTT and the tick.
+- **Structured logging** — levels, text or JSON (JSON automatically when stdout is not a TTY),
+  warnings and errors to stderr so a redirected run still shows failures.
