@@ -262,12 +262,16 @@ export class ScoreSystem {
     this.totals[team].rounds++;
   }
 
-  /** Swap both teams' totals. Used when a mode swaps sides between rounds. */
-  swapTeams(): void {
-    const a = this.totals.A;
-    this.totals.A = this.totals.B;
-    this.totals.B = a;
-  }
+  /**
+   * There is deliberately no `swapTeams` (round 2). See `MatchFlow.swapSides`.
+   *
+   * There was one, and it is the Search & Destroy scoring bug: a side swap moved every team
+   * total to the other team, so the round Team B won before half-time was credited to Team A
+   * after it. `'A'` and `'B'` name *teams of players*, not ends of a map — a player's
+   * `PlayerScore.team` does not change at half-time either — so the score has to stay with
+   * the people who earned it. Swapping ends changes which spawn zones a team draws from, and
+   * that is the whole of what it changes.
+   */
 
   /** Zero the per-round figures but keep the match ones. */
   resetRound(): void {

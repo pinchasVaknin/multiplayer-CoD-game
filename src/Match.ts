@@ -62,6 +62,7 @@ import { WeaponAudio } from './weapons/WeaponAudio';
 import { Melee } from './weapons/Melee';
 import type { WeaponDef } from './weapons/WeaponDefs';
 import { buildWeaponModel, type WeaponModel } from './weapons/WeaponMesh';
+import { buildKnifeModel, type KnifeModel } from './weapons/KnifeMesh';
 import { WeaponSystem, type WeaponSnapshot } from './weapons/WeaponSystem';
 
 /**
@@ -175,6 +176,8 @@ export class Match {
   readonly weaponAudio: WeaponAudio;
   /** One per inventory slot; only the active one is visible. */
   readonly models: WeaponModel[];
+  /** The knife viewmodel. Alongside the weapons rather than among them — see the constructor. */
+  private readonly knifeModel: KnifeModel;
   /** The camo each slot is wearing, so a rebuild does not lose it. */
   private readonly slotCamos: Array<CamoId | null> = [];
   /** The visible one. Reassigned on a swap. */
@@ -364,6 +367,19 @@ export class Match {
     this.model.root.visible = true;
     this.fx.attachMuzzle(this.model.muzzle);
     this.anim = new ViewmodelAnim(this.model);
+
+    /**
+     * The knife (round 2). One static model, built with the weapons and hidden until it swings.
+     *
+     * Not an entry in `models`: that array is the inventory, indexed by slot, and everything
+     * that walks it — `equip`, `showSlot`, the camo bookkeeping — would have to special-case a
+     * third element that is not a weapon. A knife is a thing you *do*, which is the same reason
+     * `Melee` is not a `Weapon`; see the header of `weapons/Melee.ts`.
+     */
+    this.knifeModel = buildKnifeModel(deps.anisotropy);
+    this.knifeModel.root.visible = false;
+    deps.viewmodel.add(this.knifeModel.root);
+    this.anim.setKnife(this.knifeModel.root);
 
     this.ui = new MatchHud({
       bus: deps.bus,
@@ -1157,18 +1173,50 @@ export class Match {
     // `SCOPE_VIEWMODEL_HIDDEN`: the tube is a solid cylinder on the sight line and would
     // otherwise fill the middle of the scope picture.
     const scoped = def.scope !== undefined && this.visual.adsFraction >= SCOPE_VIEWMODEL_HIDDEN;
-    this.model.root.visible = !this.playerDead && !scoped;
+    /**
+     * A knife swing takes the rifle off screen entirely (round 2).
+     *
+     * `melee.busy` is the same flag that sets `weapons.fireBlocked` in `simulate`, so what is
+     * in frame and what the player can do are one fact read twice — the contract the throw
+     * animation already follows. It is deliberately `busy` and not `fraction > 0`: the
+     * fraction is zero on the first tick of a wind-up, and swapping the meshes a tick late
+     * would show the rifle for one frame after the blade should have replaced it.
+     */
+    const knifing = !this.playerDead && this.melee.busy;
+    this.model.root.visible = !this.playerDead && !scoped && !knifing;
+    this.knifeModel.root.visible = knifing;
 
     const state = this.ui.state;
-    state.mag = weapon.mag;
-    state.reserve = weapon.reserve;
-    state.magSize = def.magSize;
+    /**
+     * The ammunition readout follows whichever gun the player is actually holding (round 2).
+     *
+     * A gunship belt is the same four facts a rifle magazine is — how many, out of how many,
+     * is it being fed, and how far through — so it goes through the same four fields rather
+     * than growing a second ammo widget that would have to be positioned, styled and hidden.
+     * The grounded rifle's numbers are *wrong* to show during a takeover for the same reason
+     * `weapons.suspended` exists: the player is not holding it, and the last thing they need
+     * while flying is a magazine count that never moves.
+     */
+    const chopper = this.streaks.activeChopperFor(PLAYER_ENTITY_ID);
+    if (chopper !== null) {
+      state.mag = chopper.mag;
+      state.magSize = chopper.magSize;
+      state.reserve = 0;
+      state.reserveInfinite = true;
+      state.reloading = chopper.reloading;
+      state.reloadFraction = chopper.reloadFraction;
+    } else {
+      state.mag = weapon.mag;
+      state.magSize = def.magSize;
+      state.reserve = weapon.reserve;
+      state.reserveInfinite = false;
+      state.reloading = weapon.reloading;
+      state.reloadFraction = this.visual.reloadFraction;
+    }
     state.spreadDeg = this.weapons.spreadDeg;
     state.adsFraction = this.visual.adsFraction;
     state.fovDeg = this.deps.cameraRig.fov;
     state.viewportHeight = window.innerHeight;
-    state.reloading = weapon.reloading;
-    state.reloadFraction = this.visual.reloadFraction;
     state.health = this.playerHealth.current;
     state.healthMax = this.playerHealth.max;
     state.dead = this.playerDead;
@@ -1446,6 +1494,9 @@ export class Match {
       model.dispose();
     }
     this.models.length = 0;
+    this.anim.setKnife(null);
+    this.deps.viewmodel.remove(this.knifeModel.root);
+    this.knifeModel.dispose();
     this.deps.audio.setOccluder(null);
     this.deps.audio.resetMatchState();
   }

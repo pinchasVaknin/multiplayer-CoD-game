@@ -256,10 +256,19 @@ function villageHalf(): Brush[] {
   const pz1 = ROW_MID + BLOCK_HZ;
   addSpan(out, 'plaster', px0, px1, -0.15, BUILD_TOP, pz0, pz1);
   roof(out, px0, px1, pz0, pz1, PERCH_OVERHANG);
-  // A parapet on the street edge of the perch: chest-high cover on the one position that
-  // can see the whole lane, so holding it is a choice rather than a free kill.
-  addSpan(out, 'plaster', px0 - EAVE - PERCH_OVERHANG, px0 - EAVE - PERCH_OVERHANG + 0.4, ROOF_TOP - 0.1, ROOF_TOP + 1.0, pz0 - EAVE, pz1 + EAVE);
-  addSpan(out, 'plaster', px0 - EAVE - PERCH_OVERHANG, px1 + EAVE, ROOF_TOP - 0.1, ROOF_TOP + 0.45, pz0 - EAVE, pz0 - EAVE + 0.4);
+  /**
+   * A parapet on the street edge of the perch: chest-high cover on the one position that
+   * can see the whole lane, so holding it is a choice rather than a free kill.
+   *
+   * Both courses are inset from the roof's edges, and by *different* amounts from each other
+   * (round 2). They were flush: each parapet's outer faces sat in exactly the same planes as
+   * the roof slab's, and where the two courses meet at the corner they shared their base
+   * plane as well — three coincident-face pairs on the one rooftop the map is designed to be
+   * fought over. Two centimetres is invisible as masonry and total as depth ordering.
+   */
+  const roofX0 = px0 - EAVE - PERCH_OVERHANG;
+  addSpan(out, 'plaster', roofX0 + 0.02, roofX0 + 0.42, ROOF_TOP - 0.1, ROOF_TOP + 1.0, pz0 - EAVE + 0.02, pz1 + EAVE - 0.02);
+  addSpan(out, 'plaster', roofX0 + 0.05, px1 + EAVE - 0.02, ROOF_TOP - 0.07, ROOF_TOP + 0.45, pz0 - EAVE + 0.05, pz0 - EAVE + 0.45);
 
   passage(out, ROW_MID);
   solidBlock(out, COL_X, ROW_MID);
@@ -480,8 +489,13 @@ function objectives(): ObjectiveDef[] {
     { id: 'dom_a', kind: 'flag', label: 'A', position: { x: -25, y: 0, z: 13 }, radius: 4 },
     { id: 'dom_b', kind: 'flag', label: 'B', position: { x: 0, y: 0, z: 0 }, radius: 4.5 },
     { id: 'dom_c', kind: 'flag', label: 'C', position: { x: 25, y: 0, z: -13 }, radius: 4 },
-    { id: 'snd_a', kind: 'bombsite', label: 'A', position: { x: -14, y: 0, z: -19.5 }, radius: 3.5 },
-    { id: 'snd_b', kind: 'bombsite', label: 'B', position: { x: 14, y: 0, z: -7 }, radius: 3.5 },
+    // Round 2: both sites move into the +Z half, which is the *defenders'* end — the
+    // attacking end is invariably the '-Z' zones, before and after the half-time swap. See
+    // the long note in `depot.ts`, which is where the reasoning is written out.
+    { id: 'snd_a', kind: 'bombsite', label: 'A', position: { x: 14, y: 0, z: 19.5 }, radius: 3.5 },
+    { id: 'snd_b', kind: 'bombsite', label: 'B', position: { x: -14, y: 0, z: 24 }, radius: 3.5 },
+    /** Where the bomb lies at the start of a round: the middle of the attackers' spawn line. */
+    { id: 'snd_bomb', kind: 'bombspawn', label: 'X', position: { x: 0, y: 0, z: -33.83 }, radius: 1 },
   ];
 }
 

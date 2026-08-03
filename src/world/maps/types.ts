@@ -198,7 +198,21 @@ export interface CoverPoint {
   height: 'low' | 'high';
 }
 
-export type ObjectiveKind = 'flag' | 'hardpoint' | 'bombsite' | 'capture';
+/**
+ * `bombspawn` is round 2, and it is a *position* rather than a zone.
+ *
+ * Search & Destroy used to derive where the bomb starts by averaging the attacking side's
+ * spawn zones. That was wrong in two ways at once. It averaged in the deep fallback zones
+ * that sit past the centre line — which drags the mean toward mid-map — and, worse, it keyed
+ * off the attacking *team* rather than the attacking *end*: after the half-time swap, Team A
+ * attacks while playing out of the zones labelled `'B'`, so the average put the bomb at the
+ * far end of the map, in the defenders' base. That is the reported "the bomb is spawning far
+ * away", and no amount of better averaging fixes it, because the fact being averaged is not
+ * the fact the mode needs.
+ *
+ * A map knows where its attackers muster. It says so.
+ */
+export type ObjectiveKind = 'flag' | 'hardpoint' | 'bombsite' | 'capture' | 'bombspawn';
 
 export interface ObjectiveDef {
   id: string;

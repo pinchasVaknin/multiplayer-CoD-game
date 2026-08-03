@@ -185,6 +185,22 @@ function addMerged(
  */
 const cachedSurfaces = new Map<string, Map<SurfaceKey, THREE.MeshStandardMaterial>>();
 
+/**
+ * The uncamouflaged surface set, for a viewmodel that is not a weapon (round 2).
+ *
+ * The knife shares these rather than building its own gunmetal and polymer. It is the same
+ * decision the camo cache is: three canvases exist per process, and a second set painted for
+ * one small model would be three more uploads for three images that already exist — and, more
+ * to the point, a blade lit differently from the rifle it replaces would read as a different
+ * game. A camo is deliberately not offered: camo is a property of a *weapon*, and the knife
+ * is not one.
+ */
+export function sharedWeaponSurfaces(
+  anisotropy: number,
+): ReadonlyMap<SurfaceKey, THREE.MeshStandardMaterial> {
+  return sharedSurfaces(anisotropy, null);
+}
+
 function sharedSurfaces(
   anisotropy: number,
   camo: CamoId | null,

@@ -153,7 +153,7 @@ export const DEFAULT_MOVEMENT_CONFIG: MovementConfig = {
   slideEye: 0.55,
 
   /**
-   * 0.5, raised from 0.35 post-M8.
+   * 0.55, raised from 0.35 (post-M8) and then from 0.5 (round 2).
    *
    * Playtesting reported being stopped by kerbs, pallet edges and the small rocks on Dunes
    * and having to jump over things a walking person would not notice. 0.35 m is a tall kerb
@@ -161,18 +161,34 @@ export const DEFAULT_MOVEMENT_CONFIG: MovementConfig = {
    * 0.36-0.48 m band, which was exactly high enough to block and exactly low enough that
    * being blocked read as a bug rather than as an obstacle.
    *
-   * It stays clear of `mantleMinHeight`, which moves up with it: the two ranges must not
-   * overlap, or an obstacle would be both silently stepped and vault-detected on the same
-   * tick and which one you got would depend on your approach speed.
+   * **Round 2 asked for it again, and this number was never what was wrong.** Measured
+   * headless against a flat step, the shipped 0.5 m config cleared *nothing*: a 0.30 m step
+   * blocked a walking capsule for three solid seconds. The defect was in the step-up
+   * sequence, not in its budget — see the long note in `Movement.integrateMotion`. With that
+   * fixed, 0.5 already cleared 0.65 m, so this last 5 cm is headroom rather than the fix, and
+   * it is deliberately small for the reason below.
+   *
+   * The ceiling on it is the 0.7 m `crate`, which is the greybox's auto-vault test bed and
+   * has to stay a vault. It stays clear of `mantleMinHeight`, which moves up with it: the two
+   * ranges must not overlap, or an obstacle would be both silently stepped and vault-detected
+   * on the same tick and which one you got would depend on your approach speed.
+   *
+   * One honest caveat, measured rather than assumed: the *effective* ceiling is about 0.70 m,
+   * not 0.55. Once the capsule is raised, its bottom hemisphere meets a step's top corner at
+   * a contact normal inside `maxSlopeDeg`, so it climbs the last few centimetres as if the
+   * corner were a ramp. That is a property of capsule-versus-box de-penetration and not of
+   * this table; it is why the number here is kept well under the crate rather than tuned up
+   * to it.
    */
-  stepHeight: 0.5,
+  stepHeight: 0.55,
   maxSlopeDeg: 46,
   groundSnapDist: 0.4,
   collisionSkin: 0.005,
 
-  // Post-M8: raised from 0.4 to stay above `stepHeight`. Anything the capsule can silently
-  // step over must not also be a vault, or the same ledge produces two different animations.
-  mantleMinHeight: 0.55,
+  // Raised with `stepHeight` (0.4 -> 0.55 post-M8 -> 0.6 in round 2) to stay above it.
+  // Anything the capsule can silently step over must not also be a vault, or the same ledge
+  // produces two different animations.
+  mantleMinHeight: 0.6,
   mantleMaxHeight: 1.6,
   mantleDuration: 0.4,
   mantleReach: 0.95,

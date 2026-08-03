@@ -151,6 +151,23 @@ export interface StreakConfig {
   readonly chopperDamage: number;
   /** Seconds of held trigger before the barrels reach full rate. */
   readonly chopperSpinUpSeconds: number;
+  /**
+   * Rounds in a belt, and the seconds it takes to feed the next one (round 2 playtest).
+   *
+   * The report was that the gun's unlimited ammunition made a held trigger "too overpowered",
+   * and it is right for a reason worth writing down: at 900 rpm the only thing that was ever
+   * bounding the streak's damage was its 30-second timer, so the optimal way to fly it was to
+   * hold the trigger from the first frame to the last and sweep. There was no decision in it.
+   *
+   * A belt is what puts one back. 50 rounds is 3.3 seconds of sustained fire at full rate,
+   * which is long enough to work a group of three and short enough that a miss costs
+   * something; 2.4 seconds of feed is long enough to be felt and short enough not to waste a
+   * meaningful slice of a 30-second streak. The ammunition is still *unlimited* — the belt
+   * always comes back — so nothing about the streak's length changes. What changes is that
+   * the gunner now has to pick which five seconds matter.
+   */
+  readonly chopperMagSize: number;
+  readonly chopperReloadSeconds: number;
 }
 
 export const DEFAULT_STREAK_CONFIG: StreakConfig = {
@@ -183,6 +200,8 @@ export const DEFAULT_STREAK_CONFIG: StreakConfig = {
   chopperRpm: 900,
   chopperDamage: 26,
   chopperSpinUpSeconds: 0.85,
+  chopperMagSize: 50,
+  chopperReloadSeconds: 2.4,
 };
 
 export function cloneStreakConfig(src: StreakConfig): StreakConfig {

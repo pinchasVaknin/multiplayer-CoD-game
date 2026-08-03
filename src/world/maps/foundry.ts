@@ -421,8 +421,13 @@ function objectives(): ObjectiveDef[] {
     { id: 'dom_a', kind: 'flag', label: 'A', position: { x: -19, y: 0, z: 15 }, radius: 4 },
     { id: 'dom_b', kind: 'flag', label: 'B', position: { x: 0, y: 0, z: 0 }, radius: 4 },
     { id: 'dom_c', kind: 'flag', label: 'C', position: { x: 19, y: 0, z: -15 }, radius: 4 },
-    { id: 'snd_a', kind: 'bombsite', label: 'A', position: { x: -18, y: 0, z: -14 }, radius: 3.5 },
-    { id: 'snd_b', kind: 'bombsite', label: 'B', position: { x: 14, y: 0, z: -19 }, radius: 3.5 },
+    // Round 2: both sites move into the +Z half, which is the *defenders'* end — the
+    // attacking end is invariably the '-Z' zones, before and after the half-time swap. See
+    // the long note in `depot.ts`, which is where the reasoning is written out.
+    { id: 'snd_a', kind: 'bombsite', label: 'A', position: { x: 18, y: 0, z: 14 }, radius: 3.5 },
+    { id: 'snd_b', kind: 'bombsite', label: 'B', position: { x: -14, y: 0, z: 19 }, radius: 3.5 },
+    /** Where the bomb lies at the start of a round: the middle of the attackers' spawn line. */
+    { id: 'snd_bomb', kind: 'bombspawn', label: 'X', position: { x: 0, y: 0, z: -21.17 }, radius: 1 },
   ];
 }
 

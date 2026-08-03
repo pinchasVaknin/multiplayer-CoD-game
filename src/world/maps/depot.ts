@@ -20,8 +20,9 @@ import type { Brush, CoverPoint, LaneDef, MapDef, ObjectiveDef, PropDef, SpawnZo
  * ## Three heights, and the rule that generated them
  *
  * ```
- *   5.20   the gantry bridge across the middle of the yard
- *   5.14   the tops of the two-high container stacks
+ *   5.26   the gantry bridge across the middle of the yard
+ *   5.20   the trim cap on top of a two-high container stack
+ *   5.14   the walking surface of a two-high container stack
  *   2.60   container roofs — the level the map is actually fought on
  *   0.00   the yard
  * ```
@@ -34,10 +35,12 @@ import type { Brush, CoverPoint, LaneDef, MapDef, ObjectiveDef, PropDef, SpawnZo
  * lower roof for 2.6 -> 4.1 -> 5.14. The two gantry stairs are the nav-legal alternative
  * for anyone, bot or player, who would rather walk.
  *
- * The bridge is at 5.20 against a stack's 5.14. The 0.06 m difference is deliberate: it is
- * far inside `stepHeight` so it links in both directions, and making them *equal* would
- * have put two walking surfaces at an identical height touching in plan, which is the
- * coplanar case this map exists to avoid.
+ * The bridge is at 5.26 against a stack's 5.14. The difference is deliberate: it is far
+ * inside `stepHeight` so it links in both directions, and making them *equal* would have put
+ * two walking surfaces at an identical height touching in plan, which is the coplanar case
+ * this map exists to avoid. It was 5.20 until round 2, which satisfied the rule against the
+ * stack's *structural* top and missed its 0.06 m trim cap — the cap reaches exactly 5.20,
+ * so the bridge and the cap shared a plane wherever the two crossed.
  *
  * ## What the bots needed
  *
@@ -104,6 +107,12 @@ const CONTAINER_H = 2.6;
 /** How far a stacked container is sunk into the one below it. Anti-z-fighting. */
 const STACK_SINK = 0.06;
 /**
+ * How far a stacked container is nudged across its own width. Anti-z-fighting (round 2).
+ *
+ * The sink handles the roofs; this handles the sides. See `stackProps`.
+ */
+const STACK_SIDE_NUDGE = 0.04;
+/**
  * How far the upper box of a two-high stack is shifted along its own length.
  *
  * 2.8 m leaves a 2.8 x 2.5 ledge of exposed lower roof, which is the landing for the climb
@@ -131,8 +140,23 @@ const ROOF_1 = CONTAINER_H;
 const CRATE_STANDOFF = 1.25 + 0.55;
 const PALLET_STANDOFF = CRATE_STANDOFF + 0.55 + 0.65;
 
-/** The gantry bridge. See the file comment for why this is 5.2 and not 5.14. */
-const DECK_TOP = 5.2;
+/**
+ * The gantry bridge. See the file comment for why this is not 5.14.
+ *
+ * 5.2 -> 5.26 in round 2, and the six centimetres are a z-fighting fix rather than a layout
+ * change. The file comment's rule — "the bridge must not be at the same height as a stack
+ * top" — was written against a stack's *structural* top at 5.14 and missed that the
+ * container's decorative cap plate reaches 2.66 locally, which on a two-high stack is
+ * exactly 5.20: the same plane as the deck, over the 0.31 m² where the bridge crosses a
+ * stack, on a surface players walk along. The upper leg segments topped out at 5.20 too, for
+ * another 0.13 m² each.
+ *
+ * At 5.26 both are swallowed: the cap sits 0.06 below the deck and the legs end inside the
+ * slab. Every height relationship the map depends on survives — 5.26 against a stack's 5.14
+ * is 0.12 m, still far inside `stepHeight`, so the bridge and the stacks still link in both
+ * directions.
+ */
+const DECK_TOP = 5.26;
 const DECK_THICK = 0.32;
 const DECK_HALF_W = 1.6;
 /** How far the bridge reaches either side of the origin. */
@@ -266,12 +290,24 @@ function shed(): Brush[] {
     [-18, -15.5],
   ] as const;
 
-  addWallAlongX(out, 'paintedSteel', SHED_X0, SHED_X1, y0, SHED_TOP, -SHED_HZ, -SHED_HZ + 0.5, doors);
-  addWallAlongX(out, 'paintedSteel', SHED_X0, SHED_X1, y0, SHED_TOP, SHED_HZ - 0.5, SHED_HZ, doors);
-  addSpan(out, 'paintedSteel', SHED_X0, SHED_X0 + 0.5, y0, SHED_TOP, -SHED_HZ + 0.5, SHED_HZ - 0.5);
+  /**
+   * Walls stop 0.12 m short of the roof line and are swallowed by the roof slab (round 2).
+   *
+   * They used to end at exactly `SHED_TOP`, and so does the roof — five wall tops and two
+   * roof slabs, all with an upward face in the plane `y = 6`, overlapping across the 0.5 m
+   * wall thickness. That is up to 2.75 m² of coincident face per pair, and it is on a *top*
+   * surface, which on this map means it is what the gantry bridge and the Chopper Gunner
+   * look down at. Coincident faces cannot be separated by any depth precision, so this is
+   * one of the places the "structures jitter" report is coming from and no renderer setting
+   * would have fixed it.
+   */
+  const wallTop = SHED_TOP - 0.12;
+  addWallAlongX(out, 'paintedSteel', SHED_X0, SHED_X1, y0, wallTop, -SHED_HZ, -SHED_HZ + 0.5, doors);
+  addWallAlongX(out, 'paintedSteel', SHED_X0, SHED_X1, y0, wallTop, SHED_HZ - 0.5, SHED_HZ, doors);
+  addSpan(out, 'paintedSteel', SHED_X0, SHED_X0 + 0.5, y0, wallTop, -SHED_HZ + 0.5, SHED_HZ - 0.5);
   // East face: two jambs with an 8 m loading front between them.
-  addSpan(out, 'paintedSteel', SHED_X1 - 0.5, SHED_X1, y0, SHED_TOP, -SHED_HZ + 0.5, -4);
-  addSpan(out, 'paintedSteel', SHED_X1 - 0.5, SHED_X1, y0, SHED_TOP, 4, SHED_HZ - 0.5);
+  addSpan(out, 'paintedSteel', SHED_X1 - 0.5, SHED_X1, y0, wallTop, -SHED_HZ + 0.5, -4);
+  addSpan(out, 'paintedSteel', SHED_X1 - 0.5, SHED_X1, y0, wallTop, 4, SHED_HZ - 0.5);
 
   // Roof in two slabs with a 2 m light slot: an interior lit only by the hemisphere on a
   // night map is a black box you cannot fight in, and a slot costs nothing.
@@ -381,7 +417,19 @@ function stackProps(): PropDef[] {
   for (const s of STACKS) {
     out.push({ shape: 'containerBlue', position: { x: s.x, y: 0, z: s.z }, rotationY: s.yaw });
     if (s.levels === 2) {
-      const p = local(s, s.shift * STACK_OFFSET, 0);
+      /**
+       * The upper box is nudged across its own width as well as along it (round 2).
+       *
+       * `STACK_SINK` stops the two roofs sharing a plane, which was the case M8 knew about.
+       * It does nothing about the *sides*: a stack shifted only along its length leaves the
+       * upper and lower boxes with identical `z` extents, so their long faces are exactly
+       * coplanar wherever they overlap in height — a 0.06 m strip, the sink, running the
+       * whole 3.2 m the boxes share. Coincident faces flicker at any depth precision, and a
+       * flickering line at the seam of every two-high stack on the map is a lot of lines.
+       *
+       * 4 cm across a 2.5 m container is invisible as alignment and decisive as depth.
+       */
+      const p = local(s, s.shift * STACK_OFFSET, STACK_SIDE_NUDGE);
       out.push({
         shape: 'containerBlue',
         position: { x: p.x, y: CONTAINER_H - STACK_SINK, z: p.z },
@@ -585,8 +633,26 @@ function objectives(): ObjectiveDef[] {
     { id: 'dom_a', kind: 'flag', label: 'A', position: { x: -LANE_X, y: 0, z: 0 }, radius: 4 },
     { id: 'dom_b', kind: 'flag', label: 'B', position: { x: 0, y: 0, z: 0 }, radius: 4.5 },
     { id: 'dom_c', kind: 'flag', label: 'C', position: { x: LANE_X, y: 0, z: 0 }, radius: 4 },
-    { id: 'snd_a', kind: 'bombsite', label: 'A', position: { x: -16, y: 0, z: -20 }, radius: 3.5 },
-    { id: 'snd_b', kind: 'bombsite', label: 'B', position: { x: 10, y: 0, z: -12 }, radius: 3.5 },
+    /**
+     * The two bomb sites, moved into the +Z half in round 2.
+     *
+     * They were at z = -20 and z = -12, which is the half the *attackers* play from — so the
+     * side that had to plant spawned on top of both sites and the side that had to stop them
+     * started a map's length away. That is the reported "the plant sites are near the team
+     * with the bomb", and it was true in both rounds rather than one: `swapAfterRound` and
+     * `SearchAndDestroy.attackers` are in step with `SpawnSelector`'s swap, so the attacking
+     * end is invariably the `'B'`-labelled zones at -Z. Sites therefore belong at +Z, always,
+     * and they do not move with the swap — which is exactly how a real S&D map works.
+     *
+     * Placed about two thirds of the way into the defenders' half: far enough that taking one
+     * is a push through the whole map, close enough to their spawn (5-6 m) that they are
+     * genuinely defending home ground. Checked against the collision world rather than
+     * eyeballed — both sites are open floor with cover on two or three sides.
+     */
+    { id: 'snd_a', kind: 'bombsite', label: 'A', position: { x: 16, y: 0, z: 20 }, radius: 3.5 },
+    { id: 'snd_b', kind: 'bombsite', label: 'B', position: { x: -10, y: 0, z: 16 }, radius: 3.5 },
+    /** Where the bomb lies at the start of a round: the middle of the attackers' spawn line. */
+    { id: 'snd_bomb', kind: 'bombspawn', label: 'X', position: { x: 0, y: 0, z: -28.33 }, radius: 1 },
   ];
 }
 
@@ -646,27 +712,44 @@ export const DEPOT_MAP: MapDef = {
    */
   lights: [
     /**
-     * Post-M8: the hemisphere goes 0.62 -> 0.95 and its ground term is lifted.
+     * The fill, re-derived in linear space (round 2). Post-M8 raised the intensity and it
+     * was not close; this raises the *colours*, which is where the darkness actually was.
      *
-     * Playtesting found corners of the yard genuinely unplayable — not atmospheric, black.
-     * The masts are point lights with `decay: 2` and a 30 m range, so the falloff between
-     * two of them is real inverse-square darkness, and the only thing filling it was a
-     * hemisphere at 0.62 whose *lower* half (0x14181f) is almost black. Anything below waist
-     * height between the pools therefore received essentially no light at all.
+     * The post-M8 pass moved the hemisphere 0.62 -> 0.95 and the report came back unchanged:
+     * "STILL pitch black". The reason is that intensity was never the small number. Three
+     * converts an authored sRGB hex into the linear working space before it multiplies by
+     * intensity, and 0x323d50 — which *looks* like a usable slate blue in a swatch — is
+     * linear (0.032, 0.047, 0.078). Against Foundry's 0x9db4d0 at linear (0.337, 0.454,
+     * 0.630) that is a fill roughly **fourteen times darker**, so a 53% intensity bump moved
+     * the floor of the image by an amount no eye can see. The old ground term, 0x232a34, is
+     * linear (0.016, 0.023, 0.034): black with a rounding error on it.
      *
-     * The fix is deliberately in the fill and not in the masts: raising the mast intensity
-     * would have made the pools blow out while leaving the gaps between them just as dark,
-     * which is the opposite of the note. Lifting the hemisphere raises the *floor* of the
-     * image — the darkest part of the frame comes up, the lit parts barely move, and the
-     * night reads as night rather than as a fault. The ground colour carries most of it
-     * because a cargo yard at night is lit from below by its own asphalt.
+     * So both colours come up and the intensity comes back down. The numbers below land at
+     * about 40-45% of Foundry's daylight fill, which is the point the yard becomes legible
+     * between the mast pools without the masts ceasing to read as pools. It is still, by a
+     * wide margin, the darkest map in the game.
+     *
+     * The ground term carries proportionally more than the sky term, unchanged from M8's
+     * reasoning and still right: a cargo yard at night is lit from below by its own asphalt,
+     * and the surfaces that were unplayable were the ones facing downward and sideways.
      */
-    { kind: 'hemisphere', skyColor: 0x323d50, groundColor: 0x232a34, intensity: 0.95 },
+    { kind: 'hemisphere', skyColor: 0x6d7f9c, groundColor: 0x4d5766, intensity: 1.2 },
     {
       kind: 'directional',
       color: 0x9fb4d8,
-      // Nudged with the hemisphere so the stacks keep a readable silhouette against it.
-      intensity: 0.62,
+      /**
+       * Nudged with the hemisphere so the stacks keep a readable silhouette against it.
+       *
+       * Round 2 takes it 0.62 -> 1.15. It is still under half of Foundry's 2.35 and reads as
+       * a moon rather than a sun, but it is now strong enough to separate a container from
+       * the yard behind it at range — which is what "some directional structure" was always
+       * supposed to buy and, at 0.62 against a black fill, never did.
+       *
+       * A brighter key makes the shadow overrides below *less* critical rather than more:
+       * the acne this map fights is a fixed depth-quantisation artefact whose visibility is
+       * inversely proportional to the lighting term it sits in. They stay as authored.
+       */
+      intensity: 1.15,
       direction: { x: -0.3, y: -0.88, z: -0.37 },
       castShadow: true,
       shadowExtent: 46,
@@ -674,6 +757,19 @@ export const DEPOT_MAP: MapDef = {
       shadowBias: -0.0006,
       shadowNormalBias: 0.055,
     },
+    /**
+     * The six masts. Same intensity, longer reach (round 2).
+     *
+     * The M8 note is right that mast *intensity* is the wrong lever — it brightens the middle
+     * of a pool that was never the problem and does nothing to the gaps. The cutoff distance
+     * is a different lever with a different shape: `distanceFalloff` multiplies the
+     * inverse-square term by `(1 - (d/cutoff)^4)^2`, which is ~1 near the mast and collapses
+     * to zero at the cutoff, so moving 30 -> 36 leaves the pool centres untouched and lifts
+     * the 15-25 m band between two masts by about a quarter. That band is the yard.
+     *
+     * Free in a forward renderer: every light is evaluated for every lit fragment whatever
+     * its range, so a longer cutoff costs no fill.
+     */
     ...MAST_POSITIONS.map(
       (p) =>
         ({
@@ -681,7 +777,7 @@ export const DEPOT_MAP: MapDef = {
           color: 0xffd39a,
           intensity: 90,
           position: { x: p.x, y: 8.0, z: p.z },
-          distance: 30,
+          distance: 36,
           decay: 2,
         }) as const,
     ),
@@ -689,11 +785,18 @@ export const DEPOT_MAP: MapDef = {
   ambient: {
     // Kept in step with the hemisphere light above — these are the same two colours, and a
     // scene whose fog disagrees with its ambient produces a horizon that darkens the wrong way.
-    skyColor: 0x323d50,
-    groundColor: 0x232a34,
-    fogColor: 0x151a22,
-    fogNear: 38,
-    fogFar: 120,
+    // That rule is why these move with the lights in round 2 rather than being left behind:
+    // a fog at 0x151a22 in front of surfaces now lit four times brighter would have put the
+    // far half of the yard back where it started, and the fix would have looked partial for
+    // the third time.
+    skyColor: 0x6d7f9c,
+    groundColor: 0x4d5766,
+    fogColor: 0x2c3444,
+    // Pushed out from 38 m. The yard's diagonal is about 89 m, so a fog starting at 38 was
+    // greying the middle of the map — on a night map that reads as the darkness the report
+    // is about, not as depth.
+    fogNear: 48,
+    fogFar: 130,
   },
 
   /** Cold haze rather than dust: it catches the mast pools and gives them a shape. */

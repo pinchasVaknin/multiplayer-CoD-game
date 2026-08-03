@@ -50,7 +50,7 @@ export const FIRING_LINE = { x: -20, z: -14 } as const;
  * to measure.
  */
 /**
- * Laterals re-fanned post-M8.
+ * Laterals re-fanned post-M8, and the 25 m dummy moved again in round 2.
  *
  * The M7 set (-1.4, +2.2, -2.6, +4.6) put the 15 m dummy at a bearing of +8.4° and the 40 m
  * dummy at +6.6°, which is the same direction as far as a 0.5 m-wide silhouette is
@@ -61,11 +61,20 @@ export const FIRING_LINE = { x: -20, z: -14 } as const;
  * `r` hides a band of half-width `w · R/r` at every range `R` beyond it, centred on
  * `lateral · R/r`. Every pair below clears that band with a metre to spare, so each of the
  * four is visible from the firing line with all the others standing.
+ *
+ * **Round 2: the 25 m dummy goes -2.4 -> +1.2.** The shadow cone is not only cast by other
+ * dummies — the bullseye boards are 1.4 m of solid brush at 10, 16 and 22 m, and re-fanning
+ * them out of the north wall (see `maps/greybox.ts`) moved the 16 m board's cone to cover
+ * -4.2..-2.0 at 25 m. The 25 m dummy was sitting inside it. The lateral it moves to is the
+ * gap between the 22 m board's cone and the corridor to the penetration bay, which is the
+ * only free band on that side of the lane; the whole set is checked against the real
+ * collision world rather than against this arithmetic, because the arithmetic is what put a
+ * board in a wall last time.
  */
 const MEASURED: readonly Readonly<{ id: number; range: number; lateral: number }>[] = [
   { id: DUMMY_IDS.r5, range: 5, lateral: 2.4 },
   { id: DUMMY_IDS.r15, range: 15, lateral: 1.6 },
-  { id: DUMMY_IDS.r25, range: 25, lateral: -2.4 },
+  { id: DUMMY_IDS.r25, range: 25, lateral: 1.2 },
   { id: DUMMY_IDS.r40, range: 40, lateral: 8.0 },
 ];
 

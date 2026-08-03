@@ -250,17 +250,50 @@ export function integrateMotion(sim: PlayerSim, cfg: MovementConfig, world: Coll
    * to step over things it had just been retuned to step over. What actually matters is that
    * the capsule got far enough up to have a chance of clearing the obstacle, and a few
    * centimetres is that.
+   *
+   * ## The forward probe is a radius, not a tick (round 2)
+   *
+   * Post-M8 raised `stepHeight` to 0.5 m and the report came back "still getting stuck on
+   * small stairs". The height was never the problem. This is rise, advance, drop — which is
+   * the classic three-sweep step-up, and the classic version works on an **axis-aligned box**
+   * whose bottom is flat: nudge it 7 cm forward over the step and 7 cm of its underside is
+   * already above the tread, so the drop lands on the tread.
+   *
+   * A capsule's bottom is a hemisphere, and it is only over a tread once its *centre* has
+   * passed the lip — which takes a full `capsuleRadius`, 0.35 m. A walking tick advances
+   * 0.075 m. So the old sequence raised the capsule, shuffled it 7 cm (still 27 cm short of
+   * the edge), dropped it, and the descending hemisphere clipped the step's top corner. That
+   * corner's contact normal is about 27° off vertical — steeper than `maxSlopeDeg`, so it is
+   * a *wall*, so de-penetration pushed the capsule back off it and down to the floor. Net
+   * horizontal progress: zero. And because the sequence then reported `steppedUp` and
+   * restored the velocity the collision had killed, it did that silently, every tick, for as
+   * long as the player held forward. That is the bug, and it is why the ledges that snagged
+   * were exactly the ones between `groundSnapDist` and hip height.
+   *
+   * The advance is therefore `max(what the player asked for, radius + skin)`: the probe is
+   * asking "is there a tread up here", and that question cannot be answered from 27 cm short
+   * of it. The pop is bounded by the radius, happens once per obstacle rather than per tick,
+   * and is the same thing every engine that steps a capsule does.
+   *
+   * The acceptance test gained the missing half of its job with it. "Came back down onto
+   * walkable ground" was never sufficient — the floor the player was already standing on
+   * satisfies it — so it now also has to have *got somewhere*, measured after the drop rather
+   * than before it.
    */
   if (sim.blockedHorizontally && sim.wasGrounded && cfg.stepHeight > 0) {
     world.moveCapsule(startX, startY, startZ, 0, cfg.stepHeight, 0, r, h, stepRise);
     const rise = stepRise.y - startY;
     if (rise > MIN_STEP_RISE) {
-      world.moveCapsule(stepRise.x, stepRise.y, stepRise.z, dx, 0, dz, r, h, stepForward);
-      const steppedDistance = Math.hypot(stepForward.x - startX, stepForward.z - startZ);
-      if (steppedDistance > achieved + 0.005) {
+      // Scale the commanded delta up to at least a radius, keeping its direction.
+      const probeScale = desired > 1e-6 ? Math.max(1, (r + cfg.collisionSkin) / desired) : 0;
+      world.moveCapsule(stepRise.x, stepRise.y, stepRise.z, dx * probeScale, 0, dz * probeScale, r, h, stepForward);
+      const probedDistance = Math.hypot(stepForward.x - startX, stepForward.z - startZ);
+      if (probedDistance > achieved + 0.005) {
         world.moveCapsule(stepForward.x, stepForward.y, stepForward.z, 0, -(rise + 0.02), 0, r, h, stepDrop);
-        // Only accept if we came back down onto walkable ground no lower than we started.
-        if (stepDrop.grounded && stepDrop.y >= startY - 0.02) {
+        const steppedDistance = Math.hypot(stepDrop.x - startX, stepDrop.z - startZ);
+        // Accept only if we came back down onto walkable ground no lower than we started
+        // *and* the landing is further along than simply walking into the thing was.
+        if (stepDrop.grounded && stepDrop.y >= startY - 0.02 && steppedDistance > achieved + 0.005) {
           hx = stepDrop.x;
           hy = stepDrop.y;
           hz = stepDrop.z;

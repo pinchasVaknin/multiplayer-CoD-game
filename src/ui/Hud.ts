@@ -54,6 +54,15 @@ export interface HudState {
   mag: number;
   reserve: number;
   magSize: number;
+  /**
+   * Draw the reserve as an infinity glyph instead of a count (round 2).
+   *
+   * The Chopper Gunner's belt has a size and a feed but no pool behind it, and writing some
+   * large number in the reserve slot would be inventing a fact. A flag rather than a
+   * sentinel value in `reserve`, because a `-1` that means "infinite" is a number every
+   * arithmetic comparison in this file would get wrong.
+   */
+  reserveInfinite: boolean;
   /** Current cone half-angle, degrees. */
   spreadDeg: number;
   adsFraction: number;
@@ -91,6 +100,7 @@ export function makeHudState(): HudState {
     mag: 0,
     reserve: 0,
     magSize: 30,
+    reserveInfinite: false,
     spreadDeg: 0,
     adsFraction: 0,
     fovDeg: 90,
@@ -494,7 +504,7 @@ export class Hud {
       this.lastMagText = magText;
       this.ammoMag.textContent = magText;
     }
-    const reserveText = String(state.reserve);
+    const reserveText = state.reserveInfinite ? '∞' : String(state.reserve);
     if (reserveText !== this.lastReserveText) {
       this.lastReserveText = reserveText;
       this.ammoReserve.textContent = reserveText;

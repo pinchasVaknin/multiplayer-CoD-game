@@ -983,3 +983,39 @@ __operator.game.bus.on('weapon.meleeSwing', (p) => console.log(p));
 
 A swing that reports `hit: false` at the full 2 m reach found no target; one that reports
 `hit: false` at a shorter range was blocked by world geometry between the eye and the target.
+
+Round 2 gave it a blade (`weapons/KnifeMesh.ts`). The state machine and the event are
+unchanged; what changed is that the rifle is hidden for the duration and the knife is posed
+from `Melee.fraction` by `ViewmodelAnim.poseKnife`. The strike keyframe is pinned to `0.222`,
+which is `WINDUP_SECONDS / (WINDUP_SECONDS + RECOVER_SECONDS)` — if either timing is retuned,
+that constant has to move with it or the blade will be somewhere other than extended on the
+frame the hitbox test runs.
+
+---
+
+# Post-M8, round 2 — what is newly observable
+
+**The Chopper Gunner's belt.** `describe()` on the streak now carries it, and the HUD shows it
+through the ordinary ammunition readout with an infinity glyph in the reserve slot:
+
+```js
+__operator.match().streaks.activeChopperFor(0)   // .mag, .magSize, .reloading, .reloadFraction
+```
+
+**Where the S&D bomb starts.** Authored per map rather than derived, so it can be read without
+a live match:
+
+```js
+__operator.game.world.map.def.objectives.filter((o) => o.kind === 'bombspawn')
+```
+
+**Whether the depth buffer is actually 24-bit.** The z-fighting fix depends on it, and it is a
+driver decision rather than ours — worth checking on any machine that still reports flicker:
+
+```js
+const gl = document.querySelector('canvas').getContext('webgl2');
+({ depth: gl.getParameter(gl.DEPTH_BITS), stencil: gl.getParameter(gl.STENCIL_BITS) })
+```
+
+24 and 8 is what the build asks for. A 16 there means the driver refused, and trim lips will
+fight at range no matter what the maps do.

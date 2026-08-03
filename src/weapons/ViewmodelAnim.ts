@@ -1,5 +1,6 @@
 import { angleDelta, clamp, clamp01, damp, DEG2RAD, lerp, smoothstep } from '../core/MathUtil';
 import type { ViewmodelConfig } from './ViewmodelConfig';
+import type * as THREE from 'three';
 import type { WeaponModel } from './WeaponMesh';
 
 /**
@@ -112,18 +113,42 @@ const CHARGE_PEAK = 0.75;
 const CHARGE_HOME = 0.81;
 
 /**
- * The knife swing, as an offset on the weapon's own pose (post-M8).
+ * The knife swing: three poses and where they land in the swing (round 2).
  *
- * Tuned to read as "the rifle is shoved aside while the other hand comes across": down and
- * to the right, rolled hard, with a forward lunge on `Z` that peaks at the strike. Metres
- * and degrees, matching every other pose constant in `ViewmodelConfig`.
+ * Post-M8 animated this as an offset on the *rifle's* pose, because there was no knife to
+ * animate — the melee was a weapon bash. There is a blade now (`weapons/KnifeMesh.ts`), the
+ * rifle is hidden for the duration, and the arc below is the knife's own.
+ *
+ * The two fractions are not free numbers: `Melee` runs a 0.12 s wind-up and a 0.42 s
+ * recovery, so the strike tick lands at 0.12 / 0.54 = **0.222** through the swing, and
+ * `STRIKE_AT` is that. Anything else and the blade would be somewhere other than extended on
+ * the one frame the hitbox test runs — which is the whole contract between an animation and a
+ * hit: what you saw is what was tested.
+ *
+ * `READY` is off the bottom-right corner. It is where the swing starts and ends, so the blade
+ * enters and leaves frame rather than appearing, and — because the pose is a pure function of
+ * a fraction that returns to zero — a swing cut short by a death or a respawn cannot leave the
+ * knife stranded on screen.
  */
-const MELEE_SWEEP_X = 0.075;
-const MELEE_SWEEP_Y = -0.055;
-const MELEE_SWEEP_Z = 0.11;
-const MELEE_PITCH = -13;
-const MELEE_YAW = 21;
-const MELEE_ROLL = -34;
+const WINDUP_AT = 0.13;
+const STRIKE_AT = 0.222;
+
+interface KnifePose {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  /** Degrees, matching every other pose constant in `ViewmodelConfig`. */
+  readonly pitch: number;
+  readonly yaw: number;
+  readonly roll: number;
+}
+
+/** Off frame, low and right. */
+const KNIFE_READY: KnifePose = { x: 0.30, y: -0.26, z: -0.02, pitch: 24, yaw: -38, roll: 50 };
+/** Cocked back over the shoulder of the swing, edge turned in. */
+const KNIFE_WINDUP: KnifePose = { x: 0.32, y: -0.09, z: 0.12, pitch: 8, yaw: -66, roll: 66 };
+/** Driven forward and across the centre line: the frame the hitbox test runs on. */
+const KNIFE_STRIKE: KnifePose = { x: -0.11, y: -0.02, z: -0.40, pitch: -8, yaw: 26, roll: -26 };
 
 export class ViewmodelAnim {
   private swayX = 0;
@@ -142,9 +167,22 @@ export class ViewmodelAnim {
   private primed = false;
 
   private model: WeaponModel;
+  /**
+   * The knife, if this match built one. Posed by `poseKnife`, never by the weapon path.
+   *
+   * Held here rather than beside the weapon because the swing is *hand* motion, and the sway
+   * and idle drift it borrows are this class's state. `Match` owns whether it is visible; this
+   * owns where it is.
+   */
+  private knife: THREE.Object3D | null = null;
 
   constructor(model: WeaponModel) {
     this.model = model;
+  }
+
+  /** Attach the knife viewmodel. Called once per match; null unsets it. */
+  setKnife(knife: THREE.Object3D | null): void {
+    this.knife = knife;
   }
 
   /**
@@ -265,32 +303,6 @@ export class ViewmodelAnim {
       this.model.chargingHandle.position.set(0, 0, 0);
     }
 
-    /**
-     * ---- melee (post-M8) ---------------------------------------------------
-     *
-     * The rifle is *not* replaced by a knife mesh. The player's off hand comes across with
-     * the blade and the weapon rolls out of the way to make room for it, which is what a
-     * quick-knife looks like in this genre and — more to the point — is what can be built
-     * out of the transforms that already exist. A second viewmodel to build, camo, dispose
-     * and keep in step with a swap would be a large amount of machinery for a 0.5 s arc.
-     *
-     * `sin(pi * f)` is zero at both ends by construction, so the pose cannot leave the
-     * weapon displaced if a swing is cut short by a death or a respawn — the drive simply
-     * goes back to 0 and the arc is already there.
-     */
-    const swing = clamp01(drive.melee);
-    if (swing > 0) {
-      const arc = Math.sin(Math.PI * swing);
-      // Fast in, slower out: the strike is at `arc`'s peak and the recovery is the long half.
-      const thrust = Math.sin(Math.PI * Math.pow(swing, 0.7));
-      px += MELEE_SWEEP_X * arc;
-      py += MELEE_SWEEP_Y * arc;
-      pz += MELEE_SWEEP_Z * thrust;
-      rx += MELEE_PITCH * arc;
-      ry += MELEE_YAW * arc;
-      rz += MELEE_ROLL * thrust;
-    }
-
     // ---- bob ----------------------------------------------------------------
     const bobScale = lerp(1, cfg.bobAdsScale, aimed);
     const speedRatio = drive.grounded ? clamp01(drive.speed / Math.max(drive.speedRef, 0.1)) : 0;
@@ -324,6 +336,63 @@ export class ViewmodelAnim {
     const root = this.model.root;
     root.position.set(px, py, pz);
     root.rotation.set(rx * DEG2RAD, ry * DEG2RAD, rz * DEG2RAD);
+
+    this.poseKnife(drive, cfg);
+  }
+
+  /**
+   * The knife's own arc (round 2). Three keyframes, blended by where the swing is.
+   *
+   * Deliberately *not* an offset on the weapon pose the way the M8 bash was: the rifle is
+   * hidden while this runs, so there is nothing to offset from, and a knife held in the other
+   * hand does not inherit the rifle's ADS, reload or sprint poses.
+   *
+   * It does inherit the bob, the sway and the idle drift, because those belong to the player
+   * rather than to whatever they are holding — a blade that stayed perfectly still while the
+   * world bobbed around it would read as a decal on the screen. `drive.melee` is
+   * `Melee.fraction`, which is 0 whenever the state machine is idle, so a swing interrupted by
+   * a death simply stops being drawn.
+   */
+  private poseKnife(drive: ViewmodelDrive, cfg: ViewmodelConfig): void {
+    const knife = this.knife;
+    if (knife === null) return;
+    const t = clamp01(drive.melee);
+    if (t <= 0) return;
+
+    let from: KnifePose;
+    let to: KnifePose;
+    let k: number;
+    if (t < WINDUP_AT) {
+      from = KNIFE_READY;
+      to = KNIFE_WINDUP;
+      k = smoothstep(0, WINDUP_AT, t);
+    } else if (t < STRIKE_AT) {
+      from = KNIFE_WINDUP;
+      to = KNIFE_STRIKE;
+      // Deliberately not smoothed on the way in: a slash accelerates into the target and the
+      // 0.05 s between these two poses is the only part of the animation the player reads.
+      k = (t - WINDUP_AT) / (STRIKE_AT - WINDUP_AT);
+    } else {
+      from = KNIFE_STRIKE;
+      to = KNIFE_READY;
+      k = smoothstep(STRIKE_AT, 1, t);
+    }
+
+    const speedRatio = drive.grounded ? clamp01(drive.speed / Math.max(drive.speedRef, 0.1)) : 0;
+    const bobUp = Math.sin(drive.bobPhase * 2) * cfg.bobAmount * speedRatio;
+    const bobSide = Math.sin(drive.bobPhase) * cfg.bobLateral * speedRatio;
+    const idle = cfg.idleAmplitude;
+
+    knife.position.set(
+      lerp(from.x, to.x, k) + this.swayX + bobSide + Math.sin(this.idlePhase) * idle,
+      lerp(from.y, to.y, k) + this.swayY + bobUp + Math.sin(this.idlePhase * 1.7) * idle * 0.6,
+      lerp(from.z, to.z, k),
+    );
+    knife.rotation.set(
+      (lerp(from.pitch, to.pitch, k) + this.swayPitch) * DEG2RAD,
+      (lerp(from.yaw, to.yaw, k) + this.swayYaw) * DEG2RAD,
+      lerp(from.roll, to.roll, k) * DEG2RAD,
+    );
   }
 
   // -- channels -------------------------------------------------------------

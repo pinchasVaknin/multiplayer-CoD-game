@@ -9,7 +9,14 @@ import { makeRayHit, type RayHit } from '../world/Geometry';
 import { AR_DEFAULT, cloneWeaponDef, type WeaponDef } from './WeaponDefs';
 
 /**
- * The knife (post-M8 playtest).
+ * The knife (post-M8 playtest; given a blade in round 2).
+ *
+ * The state machine below is unchanged — QA's report was that the mechanic "works well
+ * technically and kills in one hit" and only the *presentation* was wrong. Post-M8 shipped it
+ * as a weapon bash because a second viewmodel looked like a lot of machinery for a half-second
+ * arc. It is not, as it turns out: a knife has no magazine, no charging handle, no muzzle and
+ * no sights, so it is one static group and one three-pose arc. See `weapons/KnifeMesh.ts` for
+ * the model and `ViewmodelAnim.poseKnife` for the swing; nothing in this file needed to know.
  *
  * ## Why it is its own system and not a weapon
  *

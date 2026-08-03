@@ -48,7 +48,22 @@ export class CameraRig {
 
   constructor(cfg: CameraConfig, aspect: number) {
     this.fov = cfg.fov;
-    this.camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.05, 400);
+    /**
+     * Near 0.12 m, raised from 0.05 (round 2). Depth precision, not framing.
+     *
+     * A perspective depth buffer resolves about `z² · (far − near) / (near · far · (2^bits − 1))`
+     * metres at distance `z`, so the *near* plane is the whole term: at 0.05 m it made this
+     * an 8000:1 depth range, and on a driver that hands back a 16-bit buffer — which is
+     * allowed, and more likely with `stencil: false`, see `Renderer` — that is 3 cm of
+     * resolution at 10 m. Every decorative trim in every map sits 1-2 cm proud of the surface
+     * it marks. That is the "structures jitter and shake" report: not one bad brush, a depth
+     * buffer too coarse to separate a lip from its wall.
+     *
+     * 0.12 m is 2.4x the precision everywhere for nothing, and it costs no visible framing:
+     * the capsule radius is 0.35 m, so the eye can never be within 12 cm of a wall face, and
+     * the gun is drawn by the viewmodel pass with its own 0.008 near plane.
+     */
+    this.camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.12, 400);
     this.camera.rotation.order = 'YXZ';
   }
 

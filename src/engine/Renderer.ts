@@ -52,7 +52,21 @@ export class Renderer {
       canvas,
       antialias: true,
       powerPreference: 'high-performance',
-      stencil: false,
+      /**
+       * Round 2: `stencil: false` -> true, and it is a *depth* decision.
+       *
+       * Nothing here draws a stencil. The reason to ask for one is that the pair is what
+       * drivers actually allocate: a context asking for depth-without-stencil is free to hand
+       * back `DEPTH_COMPONENT16`, and several do, where depth-plus-stencil is
+       * `DEPTH24_STENCIL8` on every implementation this game can run on. Sixteen bits across
+       * a 0.12-400 m frustum cannot separate a 1 cm trim lip from the wall behind it at
+       * ordinary combat range, which is the reported jitter; twenty-four bits has two orders
+       * of magnitude in hand.
+       *
+       * The cost is 8 bits per sample on the MSAA buffer and no fill: the clears here are
+       * explicit and none of them touch stencil.
+       */
+      stencil: true,
       alpha: false,
     });
     this.three.autoClear = false;
@@ -198,6 +212,23 @@ export class Renderer {
    * a render pass that knows nothing about teams: it is handed the cold ones and the hot
    * ones and draws them differently.
    *
+   * ## Why the sky is the *renderer's* clear colour and not `scene.background` (round 2)
+   *
+   * This is three passes that share one depth buffer and one colour buffer, and that only
+   * works if passes two and three do not clear. `autoClear` is off for exactly that reason —
+   * but `scene.background`, when it holds a `Color`, is not a passive backdrop: three's
+   * background stage sets `forceClear` and calls `renderer.clear(autoClearColor,
+   * autoClearDepth, ...)` *regardless* of `autoClear`. Those two flags default to true and
+   * nothing here was turning them off, so every one of the three `render` calls wiped the
+   * one before it. The player saw the last pass only: a flat background with orange enemies
+   * floating on it, no map and no team-mates. That is verbatim the post-M8 report, and both
+   * halves of it — "the world is pitch black" and "teammates are invisible" — are this one
+   * line.
+   *
+   * So the optic's sky is set as the *renderer's* clear colour and cleared once, by hand,
+   * and the scene's background is nulled for the duration. A null background leaves
+   * `forceClear` false, which leaves `autoClear` in charge, which is off.
+   *
    * Nothing is post-processed and no render target is allocated, which is what keeps this
    * inside the frame budget on integrated graphics.
    */
@@ -210,6 +241,8 @@ export class Renderer {
     const previousOverride = scene.overrideMaterial;
     const previousBackground = scene.background;
     const previousFog = scene.fog;
+    this.three.getClearColor(previousClear);
+    const previousClearAlpha = this.three.getClearAlpha();
 
     // Bodies are hidden for the world pass and drawn by the two that follow. Without this
     // they would be shaded as terrain first and then overdrawn, which costs a pass and — on
@@ -220,10 +253,14 @@ export class Renderer {
     if (cold !== null) cold.visible = false;
 
     scene.overrideMaterial = this.gunshipWorld();
-    // Fog and a sky colour are lighting cues, and the optic has neither.
-    scene.background = GUNSHIP_BACKGROUND;
+    // Fog and a sky colour are lighting cues, and the optic has neither. The optic's own
+    // flat sky is the clear colour rather than the scene background — see the note above.
+    scene.background = null;
     scene.fog = null;
+    this.three.setClearColor(GUNSHIP_BACKGROUND, 1);
 
+    // The one clear of the three passes. Everything after this shares the depth buffer it
+    // writes, which is what makes a body behind a container stay behind it.
     this.three.clear(true, true, false);
     this.three.render(scene, camera);
     scene.overrideMaterial = previousOverride;
@@ -236,6 +273,7 @@ export class Renderer {
 
     scene.background = previousBackground;
     scene.fog = previousFog;
+    this.three.setClearColor(previousClear, previousClearAlpha);
   }
 
   /**
@@ -376,20 +414,39 @@ export function rememberShadowAuthoring(
  */
 const GUNSHIP_BACKGROUND = new THREE.Color(0x1e2226);
 
+/** Scratch for saving the renderer's clear colour across a gunship frame. */
+const previousClear = new THREE.Color();
+
 /**
  * Shared vertex stage: view-space depth is the only thing either fragment stage needs.
  *
  * `viewDepth` is negated because view space looks down -Z, so this is a positive distance.
+ *
+ * **Instancing has to be applied by hand** (round 2). An override material replaces whatever
+ * a mesh was built with, and half of what a map draws is `THREE.InstancedMesh` — every
+ * container, crate, barrier and pillar. three declares `instanceMatrix` for us (the
+ * `USE_INSTANCING` define comes from the object, not the material) but only its *own* shader
+ * chunks consume it, so a custom vertex stage that ignores the attribute collapses every
+ * instance onto the origin. On Depot the containers are the map, so the optic showed a bare
+ * yard with a knot of geometry in the middle of it. `mat3(instanceMatrix)` is a pure
+ * rotation here — placements are yaw-and-translate, never scaled — so it composes with the
+ * normal matrix directly.
  */
 const GUNSHIP_VERT = `
 varying float vViewDepth;
 varying vec3 vViewNormal;
 void main() {
-  vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+  vec3 objectNormal = normal;
+  vec4 localPosition = vec4(position, 1.0);
+  #ifdef USE_INSTANCING
+    localPosition = instanceMatrix * localPosition;
+    objectNormal = mat3(instanceMatrix) * objectNormal;
+  #endif
+  vec4 viewPosition = modelViewMatrix * localPosition;
   vViewDepth = -viewPosition.z;
   // View-space normal, so the grey pass can separate surfaces by facing without needing a
   // light in the scene. Thermal optics still resolve edges; a depth ramp alone cannot.
-  vViewNormal = normalize(normalMatrix * normal);
+  vViewNormal = normalize(normalMatrix * objectNormal);
   gl_Position = projectionMatrix * viewPosition;
 }
 `;
@@ -435,13 +492,24 @@ void main() {
  * grey terrain is instantly separable from one that is brighter, so a glance at the picture
  * sorts the map into three categories without reading any of them. A slight lift with
  * distance keeps a far team-mate from disappearing into a shadowed corner entirely.
+ *
+ * Round 2 adds a shallow facing term and lifts the floor off pure black. The report asked
+ * for team-mates that are "identifiable but don't distract", and a flat 0.03 silhouette is
+ * neither: at that value a team-mate standing over a shadowed seam has no edge at all and
+ * reads as a hole in the picture rather than as a person. 0.07-0.20 stays well under the
+ * world pass's 0.27 floor — so a team-mate is still unambiguously the darkest thing in the
+ * frame — while the facing term gives the silhouette enough internal structure to count as
+ * one body rather than two overlapping ones.
  */
 const GUNSHIP_COLD_FRAG = `
 varying float vViewDepth;
 varying vec3 vViewNormal;
 void main() {
+  vec3 n = normalize(vViewNormal);
+  float key = clamp(dot(n, normalize(vec3(0.35, 0.86, 0.38))), 0.0, 1.0);
   float t = clamp(vViewDepth / 120.0, 0.0, 1.0);
-  gl_FragColor = vec4(vec3(mix(0.03, 0.12, t)), 1.0);
+  float lum = mix(0.05, 0.14, t) + 0.06 * key;
+  gl_FragColor = vec4(vec3(lum), 1.0);
 }
 `;
 

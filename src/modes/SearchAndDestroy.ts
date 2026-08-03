@@ -288,8 +288,20 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
     this.roundOutcome = null;
     this.cancelInteract();
     for (const site of this.sites) site.reset('NONE');
-    // Sides are swapped by `MatchFlow` after `swapAfterRound`; the attacking role rides along
-    // with it, so whoever is on the attacking end of the map is attacking.
+    /**
+     * Sides are swapped by `MatchFlow` after `swapAfterRound`; the attacking role rides along
+     * with it, so whoever is on the attacking end of the map is attacking.
+     *
+     * The invariant this expresses, written out because two files and three maps depend on
+     * it (round 2): **the attacking end never changes.** `MatchFlow.advanceRound` swaps when
+     * `swapSidesAfterRound === roundIndex - 1` and `SpawnSelector` implements a swap by
+     * having each team draw from the other team's zones, so before the swap Team B attacks
+     * out of the `'B'` zones and after it Team A attacks out of the `'B'` zones. Both
+     * conditions are driven from the same constant, so they cannot drift apart.
+     *
+     * That is why the bomb sites are authored in one place on each map and never move, and
+     * why `resetBomb` can read a single authored point rather than tracking the swap.
+     */
     this.attackers = round > this.config.swapAfterRound ? 'A' : 'B';
     this.resetBomb();
   }
@@ -369,14 +381,46 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
   }
 
   /**
-   * Put the bomb back on the ground at the attacking side's spawn.
+   * Put the bomb back on the ground at the attackers' base — the point the *map* names.
    *
-   * Averaged over that side's spawn zones rather than dropped on one of them, so it sits in
-   * the middle of where the attackers appear instead of favouring whoever spawned on top of
-   * it. Falls back to the map origin if a map somehow authors no zones for the side.
+   * ## Why this is authored and no longer derived (round 2)
+   *
+   * It used to average the attacking side's spawn zones, and the report was "the bomb is
+   * spawning far away". Two separate faults, and the second one is the interesting one.
+   *
+   * The mean was taken over *every* zone the side owns, including the deep fallbacks each map
+   * places past the centre line for a team that has been pushed off its own end. Those drag
+   * the average toward mid-map, so even in the best case the bomb sat some way in front of
+   * the spawn line rather than on it.
+   *
+   * The real fault is that it filtered on `zone.team !== this.attackers`, and after the
+   * half-time swap that is the wrong set of zones. `SpawnSelector` implements a side swap by
+   * having each team draw from the *other* team's zones, so from round two Team A attacks
+   * while spawning out of the zones labelled `'B'`. The bomb went to the zones labelled
+   * `'A'` — the defenders' base, the other end of the map. Not far away: as far away as it
+   * is possible to be.
+   *
+   * The mode could be taught the swap, and then it would have two facts about the same thing
+   * to keep in step with `SpawnSelector`. A map already knows where its attackers muster, so
+   * it says so, and there is one fact. `MatchFlow`'s swap schedule and `swapAfterRound` are
+   * in step by construction, which means the attacking end never changes — it is always the
+   * `-Z` end — so a single authored point is correct for every round of every match.
+   *
+   * The old average survives as a fallback for a map that authors no `bombspawn`, so a map
+   * added later fails soft rather than dropping the bomb at the origin.
    */
   private resetBomb(): void {
     this.carrierId = -1;
+    this.bombY = 0;
+
+    for (const def of this.deps.mapDef.objectives) {
+      if (def.kind !== 'bombspawn') continue;
+      this.bombX = def.position.x;
+      this.bombY = def.position.y;
+      this.bombZ = def.position.z;
+      return;
+    }
+
     let sx = 0;
     let sz = 0;
     let n = 0;
@@ -387,7 +431,6 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
       n++;
     }
     this.bombX = n > 0 ? sx / n : 0;
-    this.bombY = 0;
     this.bombZ = n > 0 ? sz / n : 0;
   }
 

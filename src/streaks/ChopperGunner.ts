@@ -81,6 +81,22 @@ export class ChopperGunner extends Killstreak {
    */
   zoom = 0;
 
+  /**
+   * Rounds left in the belt, and the feed timer (round 2 playtest).
+   *
+   * Live state rather than a derived number because the HUD, the audio and the fire gate all
+   * ask the same two questions — *can it shoot* and *how far through the feed is it* — and a
+   * belt reconstructed from a shot count in three places is three places that can disagree
+   * about when the gun is empty.
+   *
+   * `reloadTimer` counts *down*, and `reloading` is simply "is it above zero". The spin is
+   * bled off while it runs, so a reload is felt as the barrels dropping and picking up again
+   * rather than as a number changing in the corner: the first half-second after a feed is at
+   * a third of the rate, exactly as the first burst of the streak is.
+   */
+  mag: number;
+  reloadTimer = 0;
+
   private orbitAngle = 0;
   private fireTimer = 0;
   private restored = false;
@@ -100,6 +116,23 @@ export class ChopperGunner extends Killstreak {
     this.ballistics = new Ballistics(ctx.world, ctx.damage, ctx.bus);
     this.request = makeDamageRequest(chopperWeapon(ctx.cfg.chopperDamage));
     this.request.sourceId = ownerId;
+    this.mag = ctx.cfg.chopperMagSize;
+  }
+
+  /** Belt size, so the HUD can draw "27 / 50" without knowing where the config lives. */
+  get magSize(): number {
+    return this.ctx.cfg.chopperMagSize;
+  }
+
+  /** True while the belt is being fed. The gun cannot fire and the barrels wind down. */
+  get reloading(): boolean {
+    return this.reloadTimer > 0;
+  }
+
+  /** 0..1 through the feed, for the HUD's progress bar. 0 when not reloading. */
+  get reloadFraction(): number {
+    const total = Math.max(0.05, this.ctx.cfg.chopperReloadSeconds);
+    return this.reloadTimer > 0 ? clamp(1 - this.reloadTimer / total, 0, 1) : 0;
   }
 
   override onActivate(): void {
@@ -109,7 +142,9 @@ export class ChopperGunner extends Killstreak {
     this.updateOrbit();
     this.yaw = Math.atan2(-(0 - this.x), -(0 - this.z));
     this.pitch = -0.5;
-    void cfg;
+    // A streak always begins on a full belt: the first thing the gunner does is shoot.
+    this.mag = cfg.chopperMagSize;
+    this.reloadTimer = 0;
   }
 
   /**
@@ -125,13 +160,26 @@ export class ChopperGunner extends Killstreak {
     this.yaw = cmd.yaw;
     this.pitch = clamp(cmd.pitch, -80 * DEG2RAD, -6 * DEG2RAD);
 
-    const firing = isDown(cmd.buttons, Btn.Fire);
     const cfg = this.ctx.cfg;
     // The optic. Held, not toggled, matching every other ADS in the game.
     const zoomTarget = isDown(cmd.buttons, Btn.Ads) ? 1 : 0;
     this.zoom = clamp(this.zoom + (zoomTarget - this.zoom) * ZOOM_RATE * DT, 0, 1);
+
+    // The belt (round 2). A feed is a hard gate on the trigger, not a modifier on it: the
+    // button is read the same way, and the gun simply is not able to answer it.
+    if (this.reloadTimer > 0) {
+      this.reloadTimer -= DT;
+      if (this.reloadTimer <= 0) {
+        this.reloadTimer = 0;
+        this.mag = cfg.chopperMagSize;
+      }
+    }
+    const firing = isDown(cmd.buttons, Btn.Fire) && this.reloadTimer <= 0 && this.mag > 0;
+
     // Heat-up: the barrels wind toward full rate while held and unwind when released, so the
-    // first half-second of a burst is deliberately slower than the rest.
+    // first half-second of a burst is deliberately slower than the rest. A feed unwinds them
+    // too, which is what makes the reload something the gunner hears and feels rather than
+    // reads — and it means the round after a feed costs the same spin-up the first one did.
     const rate = 1 / Math.max(0.05, cfg.chopperSpinUpSeconds);
     this.spin = clamp(this.spin + (firing ? rate : -rate * 1.6) * DT, 0, 1);
 
@@ -180,11 +228,13 @@ export class ChopperGunner extends Killstreak {
     this.restored = true;
     this.spin = 0;
     this.zoom = 0;
+    this.reloadTimer = 0;
   }
 
   override describe(): string {
     const hitRate = this.shotsFired > 0 ? ((this.shotsHit / this.shotsFired) * 100).toFixed(1) : '—';
-    return `CHOPPER ${this.secondsRemaining.toFixed(1)}s · spin ${(this.spin * 100).toFixed(0)}% · ${this.shotsHit}/${this.shotsFired} (${hitRate}%)`;
+    const belt = this.reloading ? 'FEED' : `${this.mag}/${this.magSize}`;
+    return `CHOPPER ${this.secondsRemaining.toFixed(1)}s · spin ${(this.spin * 100).toFixed(0)}% · ${belt} · ${this.shotsHit}/${this.shotsFired} (${hitRate}%)`;
   }
 
   get isRestored(): boolean {
@@ -209,6 +259,15 @@ export class ChopperGunner extends Killstreak {
     this.fireTimer -= DT;
     if (this.fireTimer > 0) return;
     this.fireTimer = interval;
+
+    // Spend the round first, and start the feed on the one that empties the belt rather than
+    // on the next trigger pull: an empty gun that waits to be asked is an empty gun that
+    // silently eats a click.
+    this.mag--;
+    if (this.mag <= 0) {
+      this.mag = 0;
+      this.reloadTimer = cfg.chopperReloadSeconds;
+    }
 
     const cp = Math.cos(this.pitch);
     const dx = -Math.sin(this.yaw) * cp;

@@ -123,63 +123,86 @@ function brushes(): Brush[] {
   add('metal', -9.75, 1.95, 8.85, 7.5, 0.9, 0.3);
 
   /**
-   * M7: the accuracy wall (M6 playtest item).
+   * The accuracy wall is gone (round 2 playtest).
    *
-   * A flat, clean, light face at a stated range, put there for one job: empty a magazine into
-   * it and *look at the group*. Spread is the one weapon property with no honest read-out —
-   * `spread.hipBase` is a cone half-angle in degrees and nobody can picture that — so the only
-   * way to compare two weapons is to see two patterns side by side.
+   * M7 put a 7.2 x 4.2 m metal face at a round 25 m for one job: empty a magazine into it and
+   * look at the group. The job is real. The face was in the wrong room.
    *
-   * Three things make it work. It is **plain**, so the holes are the only marks on it. It is
-   * **big** (7 m x 4 m), so even a shotgun at range keeps its whole pattern on the face. And it
-   * is at a **round 25 m** from the firing line, so a group measured here is a number that can
-   * be written down and compared.
+   * It stood at `x = 5` spanning `z = -15.6 .. -8.4`, which is *across the measurement lane*.
+   * From the firing line at (-20, -14) — the one place the range is laid out to be used from
+   * — it blocked the penetration bay at 42 m, the 40 m dummy, and every bullseye behind it,
+   * which is verbatim the report: "a giant, irrelevant wall blocking the line of sight". It
+   * also crossed the `z = -9.6` bay divider, so two solid brushes intersected, and its
+   * underside sat exactly on `y = 0` against a floor whose top face is exactly `y = 0` —
+   * both of which this file's own header forbids, and both of which are z-fighting.
    *
-   * Sunk 5 cm into the wall behind it rather than sitting flush, which is the same rule every
-   * floor-sitting brush in this map follows: no two coplanar faces, so no z-fighting.
+   * It is removed rather than relocated, and the reason is arithmetic rather than taste: a
+   * 7.2 m face has 3.6 m of half-width, and at 25 m in a room this size there is no lateral
+   * offset that does not shadow the penetration bay, the 40 m dummy or the bullseyes. A
+   * target that big does not fit in this range alongside everything else that is already in
+   * it. The bullseyes below do the same job with scoring rings on them, which is strictly
+   * more information than a blank plate gives.
    */
-  add('metal', FIRING_LINE_X + 25, 2.1, -12.0, 0.35, 4.2, 7.2);
-  // A hairline centre cross, non-solid and 1 cm proud, so it cannot be shot away and cannot
-  // z-fight with the face it marks.
-  add('hazard', FIRING_LINE_X + 24.81, 2.1, -12.0, 0.02, 0.03, 7.0, { solid: false, shadows: false });
-  add('hazard', FIRING_LINE_X + 24.81, 2.1, -12.0, 0.02, 4.0, 0.03, { solid: false, shadows: false });
 
   /**
-   * Bullseye plates at 10, 16 and 22 m (M7 playtest; re-laid out post-M8).
+   * Bullseye plates at 10, 16 and 22 m (M7 playtest; re-laid out post-M8 and again in round 2).
    *
    * Three concentric rings each, drawn as flat plates proud of a backing board. Rings rather
    * than a solid disc because a group is read by *where it sits in the scoring rings*, which
    * is the whole reason a bullseye looks like a bullseye — a plain square tells you the shots
    * landed but not how well.
    *
-   * ## Three things were wrong with the M7 layout and all three are fixed here
+   * ## What M7 got wrong, and what post-M8 got wrong fixing it
    *
-   * **They were in a line.** All three sat at `z = -16.4`, so from the firing line at
-   * (-20, -14) they were at bearings of 13.5°, 7.6° and 5.5° — the 10 m board stood squarely
-   * in front of the other two and the far ones were unusable. `LATERALS` below fans them,
-   * and the `x` of each is then solved so the straight-line distance from the firing line is
-   * exactly the stated range rather than approximately it. The laterals are chosen so no
-   * board falls inside the *shadow cone* a nearer one casts — a board is 2 m wide, so at
-   * twice the range it hides a 4 m band, which is what caught the M7 layout out.
+   * **M7: they were in a line.** All three sat at `z = -16.4`, so the 10 m board stood
+   * squarely in front of the other two and the far ones were unusable.
    *
-   * **No decals landed on them.** The rings were `solid: false`, so a round passed straight
-   * through every one of them and stopped on the backing board — where the decal was placed
-   * 6 mm proud of a face that is itself 1 cm *behind* the outermost ring. Every hole was
-   * inside the ring plate that was supposed to be showing it. The rings are solid now, so a
-   * round stops on the surface the player is aiming at and the group appears where they are
-   * looking. They cannot be "shot away": a brush is not destructible.
+   * **M7: no decals landed on them.** The rings were `solid: false`, so a round passed
+   * straight through every one and stopped on the backing board, where the decal was placed
+   * behind the ring that was supposed to be showing it. The rings are solid now.
    *
-   * **Their faces were coplanar.** 2 cm plates spaced 2 cm apart touch exactly, and two
-   * coincident faces are the textbook z-fighting case — which is what the post-M8 report of
-   * models that "severely jitter as you approach" was describing. `RING_GAP` puts a
-   * millimetre-scale air gap between every pair, so no two faces ever share a plane.
+   * **M7: their faces were coplanar.** 2 cm plates spaced 2 cm apart touch exactly, which is
+   * the textbook depth fight. `RING_GAP` puts an air gap between every pair.
+   *
+   * **Post-M8 fanned them into the north wall.** The fix for the first item chose laterals
+   * of -4.6 and -3.6, which put the boards' centres at `z = -18.6` and `-17.6`. The north
+   * wall's interior face is at `z = -18` and a board is 2 m wide, so the 10 m board was
+   * entirely inside the wall and the 16 m board was half inside it — reported as "targets
+   * spawning completely inside the left wall", and the visible half of each was a plate
+   * interpenetrating a wall, which is also where a good deal of the remaining jitter was
+   * coming from. Fanning is correct; fanning without a bound is not.
+   *
+   * ## The bound, in round 2
+   *
+   * There are four separate claims on the lateral space at these ranges and the boards get
+   * what is left:
+   *
+   *  - the **north wall** at `z = -18`, so a board's near edge stops at `z = -17.4`;
+   *  - the corridor from the firing line to the two **penetration dummies** at 42.5 m;
+   *  - the corridor to the **40 m dummy**;
+   *  - and each other's **shadow cone** — a board of half-width `w` at range `r` hides a band
+   *    of half-width `w · R/r` centred on `lateral · R/r` at every range `R` beyond it.
+   *
+   * Three 2 m boards do not fit in what remains, which is why the post-M8 pass ended up in
+   * the wall: the free band on the north side is about 2 m wide and three boards fanned
+   * across it shadow each other. So the boards are **1.4 m** rather than 2 m, and the rings
+   * scale with them. That is the trade, stated plainly: a smaller face, in exchange for three
+   * boards that are all simultaneously visible, all in open air, and none of which is
+   * standing in front of anything else in the room.
    */
   const BULLSEYE_RANGES = [10, 16, 22] as const;
-  /** Metres off the firing line's own `z`, per range. See the shadow-cone note above. */
-  const BULLSEYE_LATERALS = [-4.6, -3.6, -1.0] as const;
+  /** Metres off the firing line's own `z`, per range. See the bound above. */
+  const BULLSEYE_LATERALS = [-2.7, -2.0, -0.85] as const;
+  /** Board face, metres. Narrowed from 2.0 in round 2 so three of them fan without shadowing. */
+  const BOARD_WIDTH = 1.4;
+  const BOARD_HEIGHT = 1.6;
+  const BOARD_Y = 1.5;
   /** Plate thickness and the air gap between consecutive plates, metres. */
   const RING_THICK = 0.02;
   const RING_GAP = 0.01;
+  /** Ring faces, outermost first. Sized to sit inside `BOARD_WIDTH` with a margin. */
+  const RING_SIZES = [1.14, 0.74, 0.38, 0.12] as const;
+  const RING_MATERIALS = ['concrete', 'hazard', 'concrete', 'accent'] as const;
   for (let i = 0; i < BULLSEYE_RANGES.length; i++) {
     const range = BULLSEYE_RANGES[i] ?? 10;
     const lateral = BULLSEYE_LATERALS[i] ?? 0;
@@ -189,15 +212,16 @@ function brushes(): Brush[] {
     const bx = FIRING_LINE_X + Math.sqrt(Math.max(0, range * range - lateral * lateral));
     const bz = -14 + lateral;
     // Backing board.
-    add('concreteDark', bx, 1.7, bz, 0.3, 2.0, 2.0);
+    add('concreteDark', bx, BOARD_Y, bz, 0.3, BOARD_HEIGHT, BOARD_WIDTH);
     // Rings, outermost first. Each sits one thickness plus a gap in front of the last, so
     // consecutive plates never share a face and a decal on one is never buried in the next.
     const pitch = RING_THICK + RING_GAP;
     const face = 0.15 + RING_GAP;
-    add('concrete', bx - face - pitch * 0, 1.7, bz, RING_THICK, 1.62, 1.62, { shadows: false });
-    add('hazard', bx - face - pitch * 1, 1.7, bz, RING_THICK, 1.06, 1.06, { shadows: false });
-    add('concrete', bx - face - pitch * 2, 1.7, bz, RING_THICK, 0.54, 0.54, { shadows: false });
-    add('accent', bx - face - pitch * 3, 1.7, bz, RING_THICK, 0.16, 0.16, { shadows: false });
+    for (let r = 0; r < RING_SIZES.length; r++) {
+      const size = RING_SIZES[r] ?? 0.1;
+      const material = RING_MATERIALS[r] ?? 'concrete';
+      add(material, bx - face - pitch * r, BOARD_Y, bz, RING_THICK, size, size, { shadows: false });
+    }
   }
 
   /**
@@ -206,9 +230,21 @@ function brushes(): Brush[] {
    * Waist-high so the three areas read as separate places without turning the room into a
    * maze or blocking a stray round from reaching the wall behind it. The range is one room
    * with three jobs, and the jobs should not be able to interfere with each other's targets.
+   *
+   * Two round-2 changes, both measured against the real collision world:
+   *
+   * **Sunk 10 cm below the floor.** Their undersides were at exactly `y = 0` against a floor
+   * whose top face is at exactly `y = 0` — the coplanar case this file's header rules out and
+   * every other floor-sitting brush here already respects.
+   *
+   * **1.2 m -> 0.9 m.** At 1.2 m they were not dividing the bays, they were hiding them: a
+   * sightline from the firing line's eye height to a drill-bay target crosses `z = -9.6` at
+   * about 45% of the way there, so a 1.2 m divider cut everything below the target's chest.
+   * Every mover in the drill bay was a torso. 0.9 m still reads unmistakably as a boundary
+   * and every target in the room is now whole from the firing line.
    */
-  add('concreteDark', FIRING_LINE_X + 13, 0.6, -9.6, 30, 1.2, 0.4);
-  add('concreteDark', FIRING_LINE_X + 13, 0.6, -1.2, 30, 1.2, 0.4);
+  add('concreteDark', FIRING_LINE_X + 13, 0.4, -9.6, 30, 1.0, 0.4);
+  add('concreteDark', FIRING_LINE_X + 13, 0.4, -1.2, 30, 1.0, 0.4);
 
   /**
    * Lane markers: a stripe on the floor every five metres out to thirty.
@@ -254,10 +290,16 @@ function brushes(): Brush[] {
     });
   }
   // Hazard trim around the lip so the pit reads as a hazard, not a texture seam.
+  //
+  // The two side strips stop short of the ends rather than running the full 6.4 m (round 2).
+  // At full length all four strips shared the same 0.01-0.05 m slab and crossed at the pit's
+  // four corners, so each corner was a quarter of a square metre of *exactly* coincident top
+  // face — the one flicker case no depth precision can help with, on the floor, at the one
+  // piece of geometry in this room the player is meant to walk carefully around.
   add('hazard', 9, 0.03, 1.9, 6.4, 0.04, 0.25, { solid: false, shadows: false });
   add('hazard', 9, 0.03, 8.1, 6.4, 0.04, 0.25, { solid: false, shadows: false });
-  add('hazard', 6.1, 0.03, 5, 0.25, 0.04, 6.4, { solid: false, shadows: false });
-  add('hazard', 11.9, 0.03, 5, 0.25, 0.04, 6.4, { solid: false, shadows: false });
+  add('hazard', 6.1, 0.03, 5, 0.25, 0.04, 5.8, { solid: false, shadows: false });
+  add('hazard', 11.9, 0.03, 5, 0.25, 0.04, 5.8, { solid: false, shadows: false });
 
   // ---- east alcove: 1.2 m shelf under a 2.45 m roof ---------------------
   // Mantling up leaves 1.25 m of headroom, so the vault must finish crouched.
@@ -313,12 +355,20 @@ function props(): PropDef[] {
   // 1.5 m crates: full mantle.
   put('crateTall', 0, 14.5, 0.2);
   put('crateTall', 17.5, 13, -0.3);
-  put('crateTall', -13, -6, 0.5);
+  // Was (-13, -6), which is inside the drill bay and squarely between the firing line and
+  // both the pop-up and the 8 m faller — a 1.5 m box hiding the two targets the bay exists
+  // for. Moved to the open floor west of the ramp (round 2).
+  put('crateTall', -15.5, 10, 0.5);
 
   // 1.0 m barriers: vault height, and cover for M3's bots.
-  put('barrier', 8, -8, 0);
+  //
+  // Two of the four moved south in round 2. (8, -8) stood in the sightline from the firing
+  // line to the 40 m dummy and (-3, -9.5) in the one to the 24 m strafe target, so both were
+  // cutting a target off at the knee from the only place the range is used from. They are
+  // still four barriers and still bot cover; they are simply no longer in the lane.
+  put('barrier', 8, -2.6, 0);
   put('barrier', 11, -8.6, 0.35);
-  put('barrier', -3, -9.5, Math.PI / 2);
+  put('barrier', -6.5, 1.2, Math.PI / 2);
   put('barrier', 20, 0, Math.PI / 2);
 
   // Pillars: tall oriented obstacles, and something for shadows to fall across.

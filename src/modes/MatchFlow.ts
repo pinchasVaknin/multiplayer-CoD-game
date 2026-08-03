@@ -245,10 +245,21 @@ export class MatchFlow {
   /**
    * Change ends. Public because it is the one part of round support that TDM never
    * exercises, and a side swap nobody can run is a side swap nobody knows is broken.
+   *
+   * **It does not touch the score (round 2).** It used to call `score.swapTeams()`, and that
+   * is the reported "S&D scoring is inverted": Team B wins round one, the sides change, and
+   * the round is now showing against Team A — who then only need one more to be declared the
+   * 2-0 winner of a match they are actually drawing. Every downstream consumer inherited it,
+   * because `endRound` reads `score.team('A').rounds` to decide whether the match is over.
+   *
+   * The rule the bug broke is that `'A'` and `'B'` are teams of people, not ends of a map.
+   * Nothing else about a swap moves with the ends either — `Combatant.team` does not change,
+   * `PlayerScore.team` does not change — so a score that did was the one thing out of step.
+   * What a swap changes is which spawn zones each team draws from, which is `onSidesSwapped`
+   * on the next line and is all of it.
    */
   swapSides(): void {
     this.swapped = !this.swapped;
-    this.deps.score.swapTeams();
     this.deps.onSidesSwapped(this.swapped);
     evSwapped.afterRound = this.roundIndex;
     this.deps.bus.emit(EV.SidesSwapped, evSwapped);
