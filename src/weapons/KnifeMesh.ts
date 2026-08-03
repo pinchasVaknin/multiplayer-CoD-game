@@ -39,6 +39,20 @@ export interface KnifeModel {
   dispose(): void;
 }
 
+/**
+ * Viewmodel exaggeration (round 3).
+ *
+ * The geometry below is authored at life size — a 168 mm blade on a 110 mm grip — and life
+ * size is the wrong size for the lower corner of a screen. The rifle gets away with it by
+ * being 700 mm long; a knife at the same scale is a detail, which is the "barely visible"
+ * half of the report that moving it into frame does not fix. 1.3 puts the blade at 218 mm,
+ * which reads as a weapon at arm's length without becoming a machete.
+ *
+ * On the root, so `poseKnife` keeps writing plain position and rotation and the two concerns
+ * stay separate.
+ */
+const KNIFE_SCALE = 1.3;
+
 /** How hard the blade's four-gon section is squashed across. 0.22 gives a ~9 mm blade. */
 const BLADE_FLATTEN = 0.22;
 /** Half-height of the blade section, metres. */
@@ -50,6 +64,7 @@ export function buildKnifeModel(anisotropy: number): KnifeModel {
   const surfaces = sharedWeaponSurfaces(anisotropy);
   const root = new THREE.Group();
   root.name = 'viewmodel:knife';
+  root.scale.setScalar(KNIFE_SCALE);
 
   const bySurface = new Map<SurfaceKey, THREE.BufferGeometry[]>();
   const push = (key: SurfaceKey, geometry: THREE.BufferGeometry): void => {

@@ -234,7 +234,10 @@ export function loadMap(
           // Both are per-map overridable from M8: Depot's night key is weak enough that
           // the acne Foundry never shows is the brightest thing in the frame.
           l.shadow.bias = light.shadowBias ?? -0.0004;
-          l.shadow.normalBias = light.shadowNormalBias ?? 0.035;
+          // Round 3: scaled by the tier, because the distance this has to cover is one
+          // shadow texel and a texel is a function of the map size. See `SHADOW_TIERS`.
+          const authoredNormalBias = light.shadowNormalBias ?? 0.035;
+          l.shadow.normalBias = authoredNormalBias * tier.biasScale;
           // PCF taps are spread by this radius; it is where shadow softness comes from
           // now that PCFSoftShadowMap is gone. Midday sun wants a much smaller number
           // than an industrial skylight does.
@@ -242,7 +245,7 @@ export function loadMap(
           l.shadow.radius = authoredRadius * (tier.radiusScale === 0 ? 1 : tier.radiusScale);
           // Remember what the map asked for, so a later quality change scales the intent
           // rather than compounding on the previous scaling.
-          rememberShadowAuthoring(l.shadow, authoredRadius, light.castShadow);
+          rememberShadowAuthoring(l.shadow, authoredRadius, light.castShadow, authoredNormalBias);
           l.shadow.camera.updateProjectionMatrix();
         }
         root.add(l);

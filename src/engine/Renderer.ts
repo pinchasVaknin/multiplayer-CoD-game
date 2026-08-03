@@ -16,11 +16,27 @@ import type { ViewmodelLayer } from '../player/Viewmodel';
  * `off` disables the shadow map outright rather than shrinking it to nothing. A 256-texel
  * shadow is worse than no shadow: it is a rectangle of noise under everything.
  */
-export const SHADOW_TIERS: Readonly<Record<ShadowQuality, { size: number; radiusScale: number }>> = {
-  off: { size: 0, radiusScale: 0 },
-  low: { size: 1024, radiusScale: 0.6 },
-  medium: { size: 2048, radiusScale: 1 },
-  high: { size: 4096, radiusScale: 1.6 },
+/**
+ * `biasScale` is round 3, and it closes a tier-dependent shimmer.
+ *
+ * `normalBias` is a distance in *world metres* that a shadow lookup is pushed along the
+ * surface normal to stop a surface shadowing itself. The distance it has to cover is one
+ * shadow texel, and a texel is `2 * shadowExtent / size` metres — so halving the map size
+ * doubles the texel and the authored bias stops covering it. On the **low** tier every map
+ * was running a bias of about half a texel, which is the textbook acne case: a fine moving
+ * speckle over every large surface, worst at grazing angles, and exactly the kind of thing a
+ * report calls flickering. Medium was marginal at 1.05 texels and high was over-biased.
+ *
+ * Scaling by `2048 / size` keeps every tier at whatever the map author chose in texels rather
+ * than in metres, so the setting changes sharpness and cost and stops changing correctness.
+ */
+export const SHADOW_TIERS: Readonly<
+  Record<ShadowQuality, { size: number; radiusScale: number; biasScale: number }>
+> = {
+  off: { size: 0, radiusScale: 0, biasScale: 1 },
+  low: { size: 1024, radiusScale: 0.6, biasScale: 2 },
+  medium: { size: 2048, radiusScale: 1, biasScale: 1 },
+  high: { size: 4096, radiusScale: 1.6, biasScale: 0.5 },
 };
 
 /**
@@ -130,6 +146,9 @@ export class Renderer {
       }
       light.castShadow = authored.castShadow;
       shadow.radius = authored.radius * tier.radiusScale;
+      // Round 3: the bias follows the tier too, or changing quality changes whether the map
+      // has acne on it. See `SHADOW_TIERS`.
+      shadow.normalBias = authored.normalBias * tier.biasScale;
       if (shadow.mapSize.width !== tier.size) {
         shadow.mapSize.set(tier.size, tier.size);
         // The existing target is the old size; it has to go or nothing changes on screen.
@@ -385,7 +404,10 @@ export class Renderer {
  * A `WeakMap` because the key is a light that belongs to a map, and a map is disposed
  * between matches: entries go with it and there is nothing to clean up.
  */
-const shadowAuthoring = new WeakMap<THREE.LightShadow, { radius: number; castShadow: boolean }>();
+const shadowAuthoring = new WeakMap<
+  THREE.LightShadow,
+  { radius: number; castShadow: boolean; normalBias: number }
+>();
 
 /** Whether `descendant` sits anywhere below `node`. Used by the gunship body passes. */
 function isAncestorOf(node: THREE.Object3D, descendant: THREE.Object3D): boolean {
@@ -402,8 +424,9 @@ export function rememberShadowAuthoring(
   shadow: THREE.LightShadow,
   radius: number,
   castShadow: boolean,
+  normalBias: number,
 ): void {
-  shadowAuthoring.set(shadow, { radius, castShadow });
+  shadowAuthoring.set(shadow, { radius, castShadow, normalBias });
 }
 
 /**

@@ -62,8 +62,21 @@ export class CameraRig {
      * 0.12 m is 2.4x the precision everywhere for nothing, and it costs no visible framing:
      * the capsule radius is 0.35 m, so the eye can never be within 12 cm of a wall face, and
      * the gun is drawn by the viewmodel pass with its own 0.008 near plane.
+     *
+     * **Round 3 takes it to 0.20 m, and the honest note is that this is not what fixes the
+     * remaining flicker.** Measured on the reporting machine, the buffer is already 24-bit and
+     * resolves 0.002 mm at 2 m and 0.050 mm at 10 m — two to three orders of magnitude finer
+     * than the 1-2 cm a trim lip stands proud of its wall, so no authored geometry in this
+     * game can be losing a depth test to precision. The lift is taken because it is free and
+     * because it widens the margin on a driver that reports something worse; what was actually
+     * shaking is in `Movement.integrateMotion`, where a step-up firing every tick against a
+     * wall was re-seating the camera every tick.
+     *
+     * The ceiling on this number is the grey-box's 1.25 m overhang: crouched underneath it the
+     * eye sits at `crouchEye` 0.95, so there is 0.30 m of headroom and a near plane above that
+     * would clip a hole in the soffit when the player looks up.
      */
-    this.camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.12, 400);
+    this.camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.2, 400);
     this.camera.rotation.order = 'YXZ';
   }
 

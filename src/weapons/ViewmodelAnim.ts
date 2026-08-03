@@ -125,10 +125,23 @@ const CHARGE_HOME = 0.81;
  * the one frame the hitbox test runs — which is the whole contract between an animation and a
  * hit: what you saw is what was tested.
  *
- * `READY` is off the bottom-right corner. It is where the swing starts and ends, so the blade
- * enters and leaves frame rather than appearing, and — because the pose is a pure function of
- * a fraction that returns to zero — a swing cut short by a death or a respawn cannot leave the
+ * `READY` is the lower right of frame. It is where the swing starts and ends, so the blade
+ * enters and leaves rather than appearing, and — because the pose is a pure function of a
+ * fraction that returns to zero — a swing cut short by a death or a respawn cannot leave the
  * knife stranded on screen.
+ *
+ * ## These are absolute poses, and round 2 wrote them as if they were offsets
+ *
+ * The bash they replaced was an *offset* on the rifle's pose, so its numbers were small
+ * displacements around a weapon already sitting at `hipZ = -0.33`. The first knife keyframes
+ * kept that scale and lost the base, which put the whole wind-up half of the swing outside the
+ * viewmodel frustum: at 65° vertical, `READY` sat 13x the half-width off the right edge and
+ * `WINDUP` was at **positive Z — behind the camera**. Only the strike instant was ever
+ * rasterised, which is exactly the "barely visible" report.
+ *
+ * Every pose below is checked against the frustum: the fist stays between 0.24 m and 0.46 m
+ * deep, where the frame is 0.28-0.53 m wide either side of centre, so the blade is on screen
+ * for the whole 0.54 s and crosses the middle of it at the strike.
  */
 const WINDUP_AT = 0.13;
 const STRIKE_AT = 0.222;
@@ -143,12 +156,18 @@ interface KnifePose {
   readonly roll: number;
 }
 
-/** Off frame, low and right. */
-const KNIFE_READY: KnifePose = { x: 0.30, y: -0.26, z: -0.02, pitch: 24, yaw: -38, roll: 50 };
-/** Cocked back over the shoulder of the swing, edge turned in. */
-const KNIFE_WINDUP: KnifePose = { x: 0.32, y: -0.09, z: 0.12, pitch: 8, yaw: -66, roll: 66 };
-/** Driven forward and across the centre line: the frame the hitbox test runs on. */
-const KNIFE_STRIKE: KnifePose = { x: -0.11, y: -0.02, z: -0.40, pitch: -8, yaw: 26, roll: -26 };
+/** Lower right of frame, blade angled in across the view. Where the swing starts and ends. */
+const KNIFE_READY: KnifePose = { x: 0.26, y: -0.17, z: -0.30, pitch: 16, yaw: -34, roll: 46 };
+/** Cocked back to the right, edge turned in. The tip leaves frame; the fist does not. */
+const KNIFE_WINDUP: KnifePose = { x: 0.26, y: -0.08, z: -0.27, pitch: 4, yaw: -60, roll: 60 };
+/**
+ * Driven forward through the centre of the screen: the frame the hitbox test runs on.
+ *
+ * The yaw is what makes it read. At `yaw: 0` the blade points straight down -Z and the player
+ * sees it end-on, which is a short bright line and nothing else; at 40° it sweeps across the
+ * middle of the view broadside, which is the whole picture of a slash.
+ */
+const KNIFE_STRIKE: KnifePose = { x: -0.05, y: -0.04, z: -0.46, pitch: -6, yaw: 40, roll: -28 };
 
 export class ViewmodelAnim {
   private swayX = 0;
@@ -356,8 +375,18 @@ export class ViewmodelAnim {
   private poseKnife(drive: ViewmodelDrive, cfg: ViewmodelConfig): void {
     const knife = this.knife;
     if (knife === null) return;
+    /**
+     * No early-out at `t === 0`, and that is a fix rather than an oversight (round 3).
+     *
+     * `Melee.fraction` is exactly 0 on the first tick of a wind-up — the timer has not been
+     * decremented yet — while `Melee.busy`, which is what `Match` shows the mesh on, is
+     * already true. Skipping the pose on that tick left the knife on whatever transform it
+     * last had, and on the first swing of a match that is the identity: the blade rendered
+     * for one frame at the origin, which in viewmodel space is *inside the camera*. The
+     * blend below reduces to exactly `KNIFE_READY` at 0, so posing unconditionally is both
+     * correct and simpler than a special case.
+     */
     const t = clamp01(drive.melee);
-    if (t <= 0) return;
 
     let from: KnifePose;
     let to: KnifePose;

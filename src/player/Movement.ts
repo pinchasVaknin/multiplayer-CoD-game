@@ -34,6 +34,26 @@ const DEBUG_CONTACT_CAP = 16;
 const MIN_STEP_RISE = 0.04;
 
 /**
+ * How much of the requested move must be *lost* before a step-up is even attempted (round 3).
+ *
+ * The round-2 gate was "achieved less than desired by a millimetre", which is not a test for
+ * an obstacle — it is a test for having touched anything at all. Walking on a ramp trips it
+ * every few ticks from ordinary de-penetration jitter, and sliding along a wall trips it
+ * permanently. Measured against a flat step, a wall and an 18° ramp, the three cases separate
+ * cleanly and with a wide margin:
+ *
+ * ```
+ *                      achieved / desired      climbed
+ *   real step               0.00 - 0.39      0.25 - 0.51 m
+ *   wall, 45° into it       0.77 - 0.97      0.005 m
+ *   ramp, walking up        0.91 - 0.99      0.05 - 0.11 m
+ * ```
+ *
+ * A step stops you; a wall and a ramp shave you. 0.5 sits in the gap with room either side.
+ */
+const STEP_BLOCKED_FRACTION = 0.5;
+
+/**
  * Contact capture for the collision visualiser. Off by default and costing one
  * branch per pass when off; the debug overlay flips `capture` on.
  */
@@ -279,8 +299,33 @@ export function integrateMotion(sim: PlayerSim, cfg: MovementConfig, world: Coll
    * walkable ground" was never sufficient — the floor the player was already standing on
    * satisfies it — so it now also has to have *got somewhere*, measured after the drop rather
    * than before it.
+   *
+   * ## What that cost, and the two gates that pay it back (round 3)
+   *
+   * A radius-long probe is a *query*, and round 2 let its answer become the *move*. Whenever
+   * the sequence was attempted and accepted, the capsule advanced up to 0.355 m in one tick —
+   * and it was attempted whenever the horizontal pass lost so much as a millimetre. Sliding
+   * diagonally along a wall loses a millimetre on every tick forever, so it fired on every
+   * tick forever: measured, **20.6 m/s** against a flat wall at a walk speed of 4.6, and 7.3
+   * up an 18° ramp. That is the "wall-strafing super speed" report and it is entirely this.
+   *
+   * Two gates, because the two bad cases fail for different reasons and neither test catches
+   * both:
+   *
+   *  - **`STEP_BLOCKED_FRACTION`** — a step *stops* you, a wall or a ramp only shaves you. The
+   *    measured separation is 0.39 against 0.77, so half the requested distance is the gate.
+   *    This is what excludes ramps, which do genuinely gain height and would otherwise pass
+   *    any climb test.
+   *  - **an actual climb** — the landing must be above where the capsule started by more than
+   *    `MIN_STEP_RISE`. This is what excludes walls, which block hard enough to pass the first
+   *    gate when you run at them steeply but climb 5 mm, not 50 cm.
+   *
+   * `sim.blockedHorizontally` keeps its old, looser meaning: `PlayerController` reads it to
+   * decide whether a sprint should auto-vault, and that is a question about touching something
+   * rather than about being stopped by it.
    */
-  if (sim.blockedHorizontally && sim.wasGrounded && cfg.stepHeight > 0) {
+  const stepBlocked = desired > 1e-4 && achieved < desired * STEP_BLOCKED_FRACTION;
+  if (stepBlocked && sim.wasGrounded && cfg.stepHeight > 0) {
     world.moveCapsule(startX, startY, startZ, 0, cfg.stepHeight, 0, r, h, stepRise);
     const rise = stepRise.y - startY;
     if (rise > MIN_STEP_RISE) {
@@ -291,9 +336,12 @@ export function integrateMotion(sim: PlayerSim, cfg: MovementConfig, world: Coll
       if (probedDistance > achieved + 0.005) {
         world.moveCapsule(stepForward.x, stepForward.y, stepForward.z, 0, -(rise + 0.02), 0, r, h, stepDrop);
         const steppedDistance = Math.hypot(stepDrop.x - startX, stepDrop.z - startZ);
-        // Accept only if we came back down onto walkable ground no lower than we started
-        // *and* the landing is further along than simply walking into the thing was.
-        if (stepDrop.grounded && stepDrop.y >= startY - 0.02 && steppedDistance > achieved + 0.005) {
+        const climbed = stepDrop.y - startY;
+        // Accept only if we came back down onto walkable ground *higher than we left*, and
+        // the landing is further along than simply walking into the thing was. Landing at the
+        // same height means there was nothing to climb: the probe found the floor it started
+        // on, and taking its distance is the speed exploit.
+        if (stepDrop.grounded && climbed > MIN_STEP_RISE && steppedDistance > achieved + 0.005) {
           hx = stepDrop.x;
           hy = stepDrop.y;
           hz = stepDrop.z;
