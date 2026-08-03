@@ -1,4 +1,5 @@
 import type { BotTier } from '../ai/DifficultyTiers';
+import { logger } from '../core/Log';
 import type { MapDef } from '../world/maps/types';
 import { DEPOT_MAP } from '../world/maps/depot';
 import { DUNES_MAP } from '../world/maps/dunes';
@@ -11,6 +12,8 @@ import { KillConfirmed } from './KillConfirmed';
 import { Range } from './Range';
 import { SearchAndDestroy, SND_CONFIG } from './SearchAndDestroy';
 import { Tdm } from './Tdm';
+
+const log = logger('ModeRegistry');
 
 /**
  * What the menu can offer, and how a match is built from a choice (brief S6.7).
@@ -241,4 +244,34 @@ export function findMap(id: string): MapEntry {
   const found = MAPS.find((m) => m.id === id);
   if (found === undefined) throw new Error(`Unknown map "${id}"`);
   return found;
+}
+
+/**
+ * The map a *saved setting* names, or the default if it names one that no longer exists.
+ *
+ * Found while verifying M9, and older than M9. `normaliseSave` has validated every other
+ * field of the save since M6 but has never checked `mapId` or `modeId` against this
+ * registry — they are stored as bare strings. A save written before the map ids were
+ * prefixed (`foundry` rather than `mp_foundry`) therefore survives migration intact and
+ * then throws out of `findMap` on the first paint of the main menu, which presents as a
+ * front end permanently stuck on "Loading…" with a clean console, because the throw
+ * happens inside a state-enter handler.
+ *
+ * A stale id in a save is not an exceptional condition — it is what happens to anybody who
+ * played an earlier build — so it resolves rather than throws. `findMap` keeps throwing,
+ * because a *code* path asking for a map that does not exist is a bug and should say so.
+ */
+export function resolveMapId(id: string): MapEntry {
+  const found = MAPS.find((m) => m.id === id);
+  if (found !== undefined) return found;
+  log.warn(`saved map "${id}" no longer exists; falling back to ${DEFAULT_MAP_ID}.`);
+  return findMap(DEFAULT_MAP_ID);
+}
+
+/** As `resolveMapId`, for the mode. Same reasoning, same failure. */
+export function resolveModeId(id: string): ModeEntry {
+  const found = MODES.find((m) => m.id === id);
+  if (found !== undefined) return found;
+  log.warn(`saved mode "${id}" no longer exists; falling back to ${DEFAULT_MODE_ID}.`);
+  return findMode(DEFAULT_MODE_ID);
 }

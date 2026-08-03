@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    /** The browser target: DOM, Web Audio, Canvas, and Vite's import.meta types. */
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"]
+  },
+  /**
+   * `src/shared` is included as well as `src/client`, because the client imports it and the
+   * two must typecheck *together* — a change to a shared signature has to fail here, not at
+   * runtime. `tsconfig.shared.json` is what proves shared/ stands on its own without the DOM;
+   * this proves the client still agrees with it.
+   */
+  "include": ["src/client", "src/shared", "vite.config.ts"]
+}

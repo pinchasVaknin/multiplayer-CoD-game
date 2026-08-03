@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    /**
+     * Node, and only Node. No "DOM": the server has no renderer, no DOM and no Web Audio,
+     * and S3 says so — the compiler should refuse a `document` reference here for the same
+     * reason it refuses one in shared/.
+     *
+     * Resolution stays `bundler`, matching `tsconfig.base.json` and the rest of the tree.
+     * `nodenext` was tried first and rejected: it requires an explicit `.js` extension on
+     * every relative import, which would mean rewriting ~400 specifiers across `shared/` —
+     * a change the browser build would carry for the server's benefit, and precisely the
+     * kind of coupling this milestone exists to remove. The server is bundled for Node by
+     * Vite's SSR build (`npm run build:server`), which resolves the same way the client does.
+     */
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src/server", "src/shared"]
+}

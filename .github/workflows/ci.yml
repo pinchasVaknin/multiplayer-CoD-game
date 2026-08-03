@@ -1,0 +1,44 @@
+name: CI
+
+# M9, S6.3: "enforced in CI, not by discipline."
+#
+# There was no CI before this milestone. The partition between shared/, client/ and server/
+# is the first thing in this project that a human cannot be trusted to remember for two more
+# milestones, so it gets a machine that checks every push.
+#
+# The boundary check runs first and on its own. If shared/ has grown an import of client/,
+# every type error after it is noise about a symbol that should not have been reachable —
+# and a wall of noise is how a real failure gets scrolled past.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Target boundaries (shared/ must load in Node)
+        run: npm run check:boundaries
+
+      - name: Typecheck — shared (no DOM lib)
+        run: npm run typecheck:shared
+
+      - name: Typecheck — client
+        run: npm run typecheck:client
+
+      - name: Typecheck — server (no DOM lib, Node types)
+        run: npm run typecheck:server
+
+      - name: Production build
+        run: npx vite build

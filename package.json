@@ -3,17 +3,27 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "OPERATOR - browser arena FPS. Milestone 1: core loop and movement.",
+  "description": "OPERATOR - arena FPS. Milestone 9: the simulation leaves the browser.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run check && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+
+    "//check": "The gate. Boundaries first: a partition violation makes the type errors that follow meaningless noise, so it is the thing that speaks.",
+    "check": "npm run check:boundaries && npm run typecheck",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+
+    "//typecheck": "Three targets, not one. shared/ compiles without the DOM lib, which is what makes a stray `document` a compile error instead of a crash in Node.",
+    "typecheck": "npm run typecheck:shared && npm run typecheck:client && npm run typecheck:server",
+    "typecheck:shared": "tsc -p tsconfig.shared.json --noEmit",
+    "typecheck:client": "tsc -p tsconfig.client.json --noEmit",
+    "typecheck:server": "tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@types/node": "^26.1.2",
     "@types/three": "^0.185.1",
     "typescript": "^7.0.2",
     "vite": "^8.1.5"

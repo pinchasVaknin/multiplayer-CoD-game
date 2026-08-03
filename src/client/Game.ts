@@ -38,7 +38,14 @@ import { applyEquippedLoadout, asModeId } from './GameLoadout';
 import type { ResolvedLoadout } from '../shared/meta/Loadouts';
 import { Profile } from './meta/Profile';
 import { defaultSettings, type SettingsV1 } from '../shared/meta/SaveData';
-import { DEFAULT_MAP_ID, DEFAULT_MODE_ID, findMap, findMode } from '../shared/modes/ModeRegistry';
+import {
+  DEFAULT_MAP_ID,
+  DEFAULT_MODE_ID,
+  findMap,
+  findMode,
+  resolveMapId,
+  resolveModeId,
+} from '../shared/modes/ModeRegistry';
 import { DEFAULT_CAMERA_CONFIG, FOV_MAX, FOV_MIN, type CameraConfig } from './player/CameraConfig';
 import { DEFAULT_HEALTH_CONFIG, type HealthConfig } from '../shared/player/Health';
 import { DEFAULT_MOVEMENT_CONFIG, cloneMovementConfig, type MovementConfig } from '../shared/player/MovementConfig';
@@ -185,9 +192,19 @@ export class Game {
     });
     const settings = this.profile.settings;
     this.cameraConfig.fov = clampFov(settings.fov);
+    /**
+     * The saved selection, resolved against the registry rather than trusted.
+     *
+     * `normaliseSave` validates every other field of the save but stores `mapId` and
+     * `modeId` as bare strings, so a save written before the map ids were prefixed carries
+     * `foundry` where the registry now has `mp_foundry`. Resolving here rather than at each
+     * of the six `findMap`/`findMode` call sites means the selection is *known good* from
+     * construction on, and those calls keep throwing — which is correct for a code path
+     * that asks for a map that does not exist.
+     */
     this.selection = {
-      modeId: asModeId(settings.modeId),
-      mapId: settings.mapId,
+      modeId: resolveModeId(asModeId(settings.modeId)).id,
+      mapId: resolveMapId(settings.mapId).id,
     };
 
     this.renderer = new Renderer(canvas);

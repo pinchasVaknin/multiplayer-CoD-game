@@ -1,4 +1,7 @@
 import { copyCommand, type InputCommand, type MutableInputCommand } from '../core/InputCommand';
+import { logger } from '../core/Log';
+
+const log = logger('LocalBotTransport');
 
 /**
  * The netcode boundary (brief S2).
@@ -102,7 +105,7 @@ export class LocalBotTransport implements INetworkTransport {
       // than replaying a stale backlog, and say so once.
       if (!this.overflowWarned) {
         this.overflowWarned = true;
-        console.warn('[LocalBotTransport] queue overflow; dropping oldest commands.');
+        log.warn('queue overflow; dropping oldest commands.');
       }
       this.head = (this.head + 1) % this.capacity;
       this.count--;

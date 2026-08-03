@@ -1,4 +1,5 @@
 import { defaultBindings, normaliseBindings, type BindingMap } from '../core/Keybinds';
+import { logger } from '../core/Log';
 import { ALL_EQUIPMENT, type EquipmentId } from '../equipment/EquipmentDefs';
 import { isPerkId, perkDef, type PerkId } from '../perks/PerkDefs';
 import { isStreakId, type StreakId } from '../streaks/StreakDefs';
@@ -15,6 +16,8 @@ import {
   type LoadoutSlot,
   type WeaponLoadout,
 } from './Loadouts';
+
+const log = logger('Save');
 
 /**
  * The save file (brief S6.6), and the migration that must never cost anybody their unlocks.
@@ -203,7 +206,7 @@ export function readLegacySettings(raw: string | null, fallback: SettingsV1): Se
   try {
     parsed = JSON.parse(raw);
   } catch {
-    console.info('[Save] legacy settings were unreadable; using defaults.');
+    log.info('legacy settings were unreadable; using defaults.');
     return fallback;
   }
   if (!isRecord(parsed)) return fallback;
@@ -216,7 +219,7 @@ export function readLegacySettings(raw: string | null, fallback: SettingsV1): Se
   out.renderScale = num(parsed['renderScale'], fallback.renderScale);
   if (typeof parsed['modeId'] === 'string') out.modeId = parsed['modeId'];
   if (typeof parsed['mapId'] === 'string') out.mapId = parsed['mapId'];
-  console.info('[Save] carried settings over from the M1-M5 store.');
+  log.info('carried settings over from the M1-M5 store.');
   return out;
 }
 
@@ -584,12 +587,12 @@ export function migrateSave(raw: unknown, fromVersion: number, fallbackSettings:
   const { save, losses } = normaliseSave(upgraded, fallbackSettings);
   save.version = SAVE_VERSION;
 
-  console.info(
-    `[Save] migrated v${fromVersion} -> v${SAVE_VERSION}: level ${save.profile.level}, ` +
+  log.info(
+    `migrated v${fromVersion} -> v${SAVE_VERSION}: level ${save.profile.level}, ` +
       `${save.profile.xp} XP, ${Object.keys(save.weapons).length} weapons, ` +
       `${losses.length} field(s) repaired.`,
   );
-  for (const line of losses) console.info(`[Save]   ${line}`);
+  for (const line of losses) log.info(`  ${line}`);
   return save;
 }
 

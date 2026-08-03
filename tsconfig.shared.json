@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    /**
+     * No "DOM". This is the M9 audit's headline finding turned into a build gate.
+     *
+     * Until M9 one tsconfig covered the whole tree with `["ES2022", "DOM", "DOM.Iterable"]`,
+     * which meant the type system could never catch a DOM reference in simulation code —
+     * `window.innerWidth` in the middle of a tick was a perfectly well-typed expression.
+     *
+     * Compiling shared/ against the ES library alone makes the compiler the second half of
+     * the boundary check: `scripts/check-boundaries.mjs` catches the identifiers it knows
+     * about, and this catches everything else in the DOM surface, including whatever gets
+     * added to it after this file was written.
+     *
+     * No "types" either: pulling in @types/node here would hand shared/ `process`, `Buffer`
+     * and the Node timers, none of which exist in a browser.
+     */
+    "lib": ["ES2022"],
+    "types": []
+  },
+  "include": ["src/shared"]
+}

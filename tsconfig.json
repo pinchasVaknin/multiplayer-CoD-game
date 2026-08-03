@@ -1,25 +1,22 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
-
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "noImplicitReturns": true,
-
-    "isolatedModules": true,
-    "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
-    "noEmit": true,
-    "useDefineForClassFields": true,
-    "forceConsistentCasingInFileNames": true
-  },
-  "include": ["src", "vite.config.ts"]
+  /**
+   * Editor convenience only. **This file is not a gate.**
+   *
+   * The gates are the three target configs, and `npm run typecheck` runs all of them:
+   *
+   *   tsconfig.shared.json   src/shared            no DOM lib, no Node types
+   *   tsconfig.client.json   src/client + shared   DOM, Web Audio, vite/client
+   *   tsconfig.server.json   src/server + shared   Node types, no DOM lib
+   *
+   * A root config exists at all so that an editor has something to resolve every file
+   * against, and so Vite finds the transform options it expects. It extends the *client*
+   * target because that is what `vite build` compiles and what most editing is against.
+   *
+   * The consequence is worth stating plainly, because it is a trap: **an editor using this
+   * config will not flag `document` inside `src/shared`,** since this config has the DOM
+   * library. `npm run check` will, and so will CI. If you are working in `shared/` and want
+   * the compiler honest in your editor, point it at `tsconfig.shared.json`.
+   */
+  "extends": "./tsconfig.client.json",
+  "include": ["src", "scripts", "vite.config.ts"]
 }

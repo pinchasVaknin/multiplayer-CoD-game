@@ -1,3 +1,4 @@
+import { logger } from './Log';
 /**
  * Generic free-list pool.
  *
@@ -34,8 +35,8 @@ export class ObjectPool<T> {
     // Exhausted. Grow, but complain once so the initial size gets fixed.
     if (this.grewAt < 0) {
       this.grewAt = this.created;
-      console.warn(
-        `[ObjectPool:${this.label}] exhausted at ${this.created} items and grew. ` +
+      logger(`ObjectPool:${this.label}`).warn(
+        `exhausted at ${this.created} items and grew. ` +
           `Raise its initial size to avoid mid-frame allocation.`,
       );
     }

@@ -1,4 +1,5 @@
 import type { DamageSystem } from '../combat/DamageSystem';
+import { logger } from '../core/Log';
 import { EV, type GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
 import { Rng } from '../core/Rng';
@@ -20,6 +21,8 @@ import { BOT_TIERS, type BotTier, type PerceptionConfig, type TierTable } from '
 import { NoiseKind, Perception } from './Perception';
 import { Pathfinder } from './Pathing';
 import { makeSpawnChoice, SpawnSelector, type SpawnChoice } from './SpawnSelector';
+
+const log = logger('BotDirector');
 
 /**
  * Everything that turns a pile of AI classes into a firefight.
@@ -464,7 +467,7 @@ export class BotDirector {
 
   private spawnBot(bot: Bot): void {
     if (!this.selectSpawn(bot.team, bot.entityId, this.choice)) {
-      console.warn(`[BotDirector] no spawn candidate for team ${bot.team}; navmesh may be empty.`);
+      log.warn(`no spawn candidate for team ${bot.team}; navmesh may be empty.`);
       return;
     }
     bot.spawn(this.choice.x, this.choice.y + 0.05, this.choice.z, this.choice.yaw);

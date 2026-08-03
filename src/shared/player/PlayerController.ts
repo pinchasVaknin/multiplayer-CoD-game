@@ -1,3 +1,4 @@
+import { logger } from '../core/Log';
 import { EV, type GameBus, type SlideEndReason } from '../core/Events';
 import { Btn, isDown, justPressed, type InputCommand } from '../core/InputCommand';
 import { DT } from '../core/Loop';
@@ -16,6 +17,8 @@ import type { MovementConfig } from './MovementConfig';
 import { copySnapshot, makeSnapshot, PlayerSim, type PlayerSnapshot } from './PlayerState';
 import { beginSlide, canStartSlide, endSlide, stepSlide } from './Slide';
 import { capsuleHeightFor, eyeHeightFor, isLegalStanceTransition, type StanceId } from './Stance';
+
+const log = logger('PlayerController');
 
 /**
  * Consumes exactly one InputCommand per tick and advances the player.
@@ -574,7 +577,7 @@ export class PlayerController {
     const sim = this.sim;
     if (sim.stance === next) return;
     if (!isLegalStanceTransition(sim.stance, next)) {
-      console.warn(`[PlayerController] illegal stance transition ${sim.stance} -> ${next}`);
+      log.warn(`illegal stance transition ${sim.stance} -> ${next}`);
       return;
     }
     evStance.entityId = this.entityId;
