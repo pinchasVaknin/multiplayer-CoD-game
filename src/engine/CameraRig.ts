@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { damp, DEG2RAD, lerp } from '../core/MathUtil';
+import { clamp, damp, DEG2RAD, lerp } from '../core/MathUtil';
 import type { CameraConfig } from '../player/CameraConfig';
 import { CameraShake } from '../player/CameraShake';
 import type { PlayerSnapshot } from '../player/PlayerState';
@@ -33,6 +33,29 @@ export interface CameraDrive {
   adsViewmodelFovScale: number;
 }
 
+/**
+ * Taken off the capsule radius before it is used as eye-to-wall clearance (round 4).
+ *
+ * The eye does not sit exactly on the capsule axis: `bobLateralScale` swings it sideways by
+ * `bobAmplitude * bobLateralScale` — 21 mm at the shipped values — and the collision skin lets
+ * the capsule rest 5 mm inside a surface. 50 mm covers both with room for a heavier bob than
+ * anyone would tune, and it is subtracted rather than measured because `resize` has no
+ * `CameraConfig` to read and a near plane that changed with the bob phase would be worse than
+ * one that is slightly conservative.
+ */
+const CLEARANCE_ALLOWANCE = 0.05;
+/** How much of the geometric limit to actually use. The rest is margin. */
+const NEAR_SAFETY = 0.8;
+const NEAR_MIN = 0.01;
+/**
+ * Ceiling on the derived near plane.
+ *
+ * 0.12 is the value round 2 shipped and round 4 was asked to return to, and at the default
+ * 90° / 16:9 the derivation lands on it anyway. Keeping it as a cap rather than a constant is
+ * what stops a narrow FOV from pushing the plane out far enough to clip something else.
+ */
+const NEAR_MAX = 0.12;
+
 /** Visual state, kept out of the sim: none of this affects gameplay. */
 export class CameraRig {
   readonly camera: THREE.PerspectiveCamera;
@@ -46,43 +69,53 @@ export class CameraRig {
   private roll = 0;
   private readonly right = new THREE.Vector3();
 
-  constructor(cfg: CameraConfig, aspect: number) {
+  /** Metres of wall the eye is guaranteed to be behind. See `nearFor`. */
+  private readonly clearance: number;
+
+  constructor(cfg: CameraConfig, aspect: number, capsuleRadius: number) {
     this.fov = cfg.fov;
-    /**
-     * Near 0.12 m, raised from 0.05 (round 2). Depth precision, not framing.
-     *
-     * A perspective depth buffer resolves about `z² · (far − near) / (near · far · (2^bits − 1))`
-     * metres at distance `z`, so the *near* plane is the whole term: at 0.05 m it made this
-     * an 8000:1 depth range, and on a driver that hands back a 16-bit buffer — which is
-     * allowed, and more likely with `stencil: false`, see `Renderer` — that is 3 cm of
-     * resolution at 10 m. Every decorative trim in every map sits 1-2 cm proud of the surface
-     * it marks. That is the "structures jitter and shake" report: not one bad brush, a depth
-     * buffer too coarse to separate a lip from its wall.
-     *
-     * 0.12 m is 2.4x the precision everywhere for nothing, and it costs no visible framing:
-     * the capsule radius is 0.35 m, so the eye can never be within 12 cm of a wall face, and
-     * the gun is drawn by the viewmodel pass with its own 0.008 near plane.
-     *
-     * **Round 3 takes it to 0.20 m, and the honest note is that this is not what fixes the
-     * remaining flicker.** Measured on the reporting machine, the buffer is already 24-bit and
-     * resolves 0.002 mm at 2 m and 0.050 mm at 10 m — two to three orders of magnitude finer
-     * than the 1-2 cm a trim lip stands proud of its wall, so no authored geometry in this
-     * game can be losing a depth test to precision. The lift is taken because it is free and
-     * because it widens the margin on a driver that reports something worse; what was actually
-     * shaking is in `Movement.integrateMotion`, where a step-up firing every tick against a
-     * wall was re-seating the camera every tick.
-     *
-     * The ceiling on this number is the grey-box's 1.25 m overhang: crouched underneath it the
-     * eye sits at `crouchEye` 0.95, so there is 0.30 m of headroom and a near plane above that
-     * would clip a hole in the soffit when the player looks up.
-     */
-    this.camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.2, 400);
+    this.clearance = Math.max(0.05, capsuleRadius - CLEARANCE_ALLOWANCE);
+    this.camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.12, 400);
+    this.camera.near = this.nearFor(cfg.fov, aspect);
     this.camera.rotation.order = 'YXZ';
   }
 
   resize(aspect: number): void {
     this.camera.aspect = aspect;
+    // The horizontal field of view is a function of the aspect, and the near plane is a
+    // function of that — a window dragged wider must move it. See `nearFor`.
+    this.camera.near = this.nearFor(this.camera.fov, aspect);
     this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * The largest near plane that cannot clip a wall the player is standing against (round 4).
+   *
+   * Round 3 raised this to a constant 0.20 m for depth precision and put a grey wedge through
+   * the geometry at the edge of the screen. The mistake was geometric: the capsule radius
+   * bounds how close the eye gets to a wall **along the wall's normal**, and the near plane
+   * clips on **view-space depth**. A point on that wall out at the corner of the screen is at
+   * `clearance · cos(halfHorizontalFov)`, which is a lot less than `clearance`:
+   *
+   * ```
+   *                                        hFOV    min view depth
+   *   90 FOV, 16:9 (the default)           121°       0.159 m      <- 0.20 clipped
+   *   90 + tac sprint + slide              140°       0.111 m      <- 0.12 clips too
+   *   FOV 120, 16:9                        144°       0.100 m
+   *   FOV 120 + adds, 21:9                 164°       0.045 m
+   * ```
+   *
+   * So reverting to 0.12 fixes the screenshot and leaves the same bug latent for anyone who
+   * slides, tac-sprints or plays at a wide FOV — which is not a fix, it is the same fix that
+   * has come back twice. The number is derived instead, from the two things that actually
+   * decide it, and recomputed wherever either changes. At the shipped defaults it evaluates to
+   * the 0.12 the report asked for; it only ever goes *down* from there, and 24-bit depth has
+   * the headroom to spare (0.6 mm at 10 m even at the 0.01 floor).
+   */
+  private nearFor(fovDeg: number, aspect: number): number {
+    const halfHorizontal = Math.atan(Math.tan(fovDeg * 0.5 * DEG2RAD) * Math.max(aspect, 0.1));
+    const limit = this.clearance * Math.cos(halfHorizontal);
+    return clamp(limit * NEAR_SAFETY, NEAR_MIN, NEAR_MAX);
   }
 
   /** Called from the landing event. `impactSpeed` is downward m/s at contact. */
@@ -133,6 +166,9 @@ export class CameraRig {
     this.fov = damp(this.fov, targetFov, cfg.fovRate, dt);
     if (Math.abs(this.camera.fov - this.fov) > 0.01) {
       this.camera.fov = this.fov;
+      // Sprinting and sliding widen the lens by up to 24°, which pulls the corner of the
+      // screen closer to the wall beside you. The near plane follows it — see `nearFor`.
+      this.camera.near = this.nearFor(this.fov, this.camera.aspect);
       this.camera.updateProjectionMatrix();
     }
     // Pulling the viewmodel FOV in with the world FOV is what makes the sights appear to

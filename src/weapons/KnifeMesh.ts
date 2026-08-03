@@ -35,7 +35,26 @@ import type { SurfaceKey } from './WeaponMeshParts';
  */
 
 export interface KnifeModel {
+  /** Blade, guard, grip and fist. Posed as one rigid object by `ViewmodelAnim.poseKnife`. */
   readonly root: THREE.Group;
+  /**
+   * The forearm, which is *not* a child of `root` (round 4).
+   *
+   * The report was that the hand "completely detaches from the player's body" once the poses
+   * moved into frame — and it did, because there was nothing behind the fist. At `READY` the
+   * fist had been sitting essentially on the camera, so the cut-off wrist was behind the near
+   * plane and nobody saw it; moving the pose forward to make the knife visible made the stump
+   * visible with it.
+   *
+   * It cannot be part of `root`, because `root` rotates through 100° of yaw across the swing
+   * and a rigidly attached arm would swing with it and point at the ceiling. An arm connects
+   * two points — a shoulder that does not move and a fist that does — so it is built as a unit
+   * length along -Z and then aimed and stretched between them each frame. `KNIFE_SHOULDER` is
+   * behind the camera, so the far end is always off-screen and the arm always runs out of
+   * frame at the bottom right, which is the "cutoff point hidden off-screen" the report asked
+   * for.
+   */
+  readonly arm: THREE.Group;
   dispose(): void;
 }
 
@@ -59,6 +78,10 @@ const BLADE_FLATTEN = 0.22;
 const BLADE_HALF = 0.021;
 /** Height the blade and grip sit above the fist's centre line. */
 const LINE_Y = 0.012;
+
+/** Forearm thickness at each end, metres. Not scaled by `KNIFE_SCALE` — see the build. */
+const ARM_WRIST_RADIUS = 0.048;
+const ARM_ELBOW_RADIUS = 0.062;
 
 export function buildKnifeModel(anisotropy: number): KnifeModel {
   const surfaces = sharedWeaponSurfaces(anisotropy);
@@ -104,10 +127,12 @@ export function buildKnifeModel(anisotropy: number): KnifeModel {
     push('gunmetal', g);
   };
 
-  // The hand. Not detailed: it is behind the guard and mostly off the edge of the frame, and
-  // its whole job is to stop the knife reading as a floating object.
+  // The hand, and the cuff that covers the joint where the forearm meets it. The cuff is a
+  // little wider than the arm on purpose: the fist yaws with the blade and the arm does not,
+  // so without it the seam opens at the extremes of the swing.
   box('glove', 0.072, 0.082, 0.100, 0, -0.004, 0.052);
   box('glove', 0.076, 0.030, 0.052, 0, 0.030, 0.020);
+  box('glove', 0.096, 0.096, 0.046, 0, 0.000, 0.098);
 
   // Grip, slightly nose-down so the blade sits along the natural line of a held knife.
   box('polymer', 0.030, 0.038, 0.110, 0, LINE_Y - 0.002, -0.010, 0.06);
@@ -136,13 +161,38 @@ export function buildKnifeModel(anisotropy: number): KnifeModel {
     disposables.push(merged);
   }
 
+  /**
+   * The forearm: one unit long down -Z, so `lookAt` plus a Z scale spans any two points.
+   *
+   * Tapered from the elbow to the wrist, and deliberately *not* scaled by `KNIFE_SCALE` — the
+   * knife is exaggerated because it is a prop being read at a glance, an arm is exaggerated
+   * by being long, and scaling its radius with the blade would produce a forearm thicker than
+   * the fist on the end of it.
+   */
+  const arm = new THREE.Group();
+  arm.name = 'viewmodel:knife:arm';
+  const sleeve = new THREE.CylinderGeometry(ARM_WRIST_RADIUS, ARM_ELBOW_RADIUS, 1, 10, 1);
+  sleeve.rotateX(-Math.PI / 2);
+  sleeve.translate(0, 0, -0.5);
+  const gloveMaterial = surfaces.get('glove');
+  if (gloveMaterial !== undefined) {
+    const armMesh = new THREE.Mesh(sleeve, gloveMaterial);
+    armMesh.name = 'viewmodel:knife:forearm';
+    arm.add(armMesh);
+    disposables.push(sleeve);
+  } else {
+    sleeve.dispose();
+  }
+
   return {
     root,
+    arm,
     dispose(): void {
       // Geometry only. The materials and their textures are shared for the life of the
       // process and are released by `disposeWeaponSurfaces`, exactly as a weapon's are.
       for (const d of disposables) d.dispose();
       root.clear();
+      arm.clear();
     },
   };
 }

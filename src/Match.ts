@@ -378,8 +378,10 @@ export class Match {
      */
     this.knifeModel = buildKnifeModel(deps.anisotropy);
     this.knifeModel.root.visible = false;
+    this.knifeModel.arm.visible = false;
     deps.viewmodel.add(this.knifeModel.root);
-    this.anim.setKnife(this.knifeModel.root);
+    deps.viewmodel.add(this.knifeModel.arm);
+    this.anim.setKnife(this.knifeModel.root, this.knifeModel.arm);
 
     this.ui = new MatchHud({
       bus: deps.bus,
@@ -1185,6 +1187,7 @@ export class Match {
     const knifing = !this.playerDead && this.melee.busy;
     this.model.root.visible = !this.playerDead && !scoped && !knifing;
     this.knifeModel.root.visible = knifing;
+    this.knifeModel.arm.visible = knifing;
 
     const state = this.ui.state;
     /**
@@ -1494,8 +1497,9 @@ export class Match {
       model.dispose();
     }
     this.models.length = 0;
-    this.anim.setKnife(null);
+    this.anim.setKnife(null, null);
     this.deps.viewmodel.remove(this.knifeModel.root);
+    this.deps.viewmodel.remove(this.knifeModel.arm);
     this.knifeModel.dispose();
     this.deps.audio.setOccluder(null);
     this.deps.audio.resetMatchState();

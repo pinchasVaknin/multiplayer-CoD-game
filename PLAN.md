@@ -3105,3 +3105,115 @@ Typecheck and production build clean. Headless harnesses against the real module
    either side, but a map with a very shallow ramp into a wall is the case that would squeeze
    it.
 3. **The knife's 1.3x scale and 40° strike yaw.** Both are looks, not logic.
+
+---
+
+# Post-M8, round 4 — the jitter, found
+
+Four items: three regressions round 3 introduced, and the jitter that had survived three
+rounds. They turn out to be two facts.
+
+## The jitter was a five-millimetre bounce, and it was in the collision resolver
+
+Rounds 2 and 3 answered "structures jitter when you get close" with a 24-bit depth buffer, two
+near-plane changes, a coincident-face sweep across four maps and a step-up rewrite. None of it
+touched the cause, because none of it asked the first question: **what does the camera do when
+the player is standing perfectly still?**
+
+Measured, on flat ground, no input:
+
+```
+  y: 5.00  0.00  5.00  0.00  0.00  0.00  5.00  0.00   mm
+```
+
+A five-millimetre vertical limit cycle at twenty-odd hertz — exactly `collisionSkin`. Gravity
+was applied on every tick regardless of being grounded, driving the capsule 2.7 mm into the
+floor; `resolve` pushed it back out by `depth + skin`, which overshoots to 5 mm *above* the
+floor; from there nothing is touching, so the next tick finds no contact and `groundSnap` pulls
+it back down. Forever.
+
+Five millimetres is nothing at arm's length and 0.82° of pitch against a wall 0.35 m away —
+about ten pixels of judder at this FOV. **That is why the report always said "up close"**: the
+bounce is everywhere, and you can only see it when something is near enough to reference it
+against. Every previous round went looking for a rendering bug because the symptom looked like
+one.
+
+The same accumulation was the ice-slide. `projectVelocity` removes the component of velocity
+going *into* a surface and correctly leaves the tangential part, so on a slope gravity's
+downhill component built up every tick until friction balanced it: 292 mm of creep in three
+seconds on 18°, 766 mm on 44°. And it was the missing 5% on ramp ascent.
+
+One wrong assumption behind all three: that a player standing on the floor is falling. Gravity
+now resumes the moment the ground stops being there, and `groundSnapDist` keeps the player
+attached over crests and down slopes, which is the job it already had.
+
+## The near plane was geometry, not taste
+
+Round 3 raised it to a constant 0.20 m and put a grey wedge through the world at the edge of
+the screen. The mistake: the capsule radius bounds how close the eye gets to a wall **along the
+wall's normal**, and the near plane clips on **view-space depth**. A point on that wall at the
+corner of the screen sits at `clearance · cos(halfHorizontalFov)`, which is much less:
+
+```
+                                    hFOV    min view depth
+  90 FOV, 16:9 (the default)        121°       0.159 m     <- 0.20 clipped
+  90 + tac sprint + slide           140°       0.111 m     <- 0.12 clips too
+  FOV 120, 16:9                     144°       0.100 m
+  FOV 120 + adds, 21:9              164°       0.045 m
+```
+
+So reverting to 0.12 fixes the screenshot and leaves the same bug latent for anyone who slides,
+tac-sprints or plays wide — which is not a fix, it is the fix that has now come back twice. It
+is derived instead, from the FOV, the aspect and the capsule radius, and recomputed wherever
+any of them changes. At the shipped defaults it evaluates to 0.118, which is the 0.12 the
+report asked for; it only ever goes down from there.
+
+## The knife had no arm, and then had one aimed backwards
+
+Moving the poses into frame in round 3 made the *stump* visible: at the old `READY` the fist
+had been sitting on the camera, so nobody ever saw where the wrist ended.
+
+A forearm cannot be a child of the knife — the knife yaws through 100° across the swing and a
+rigidly attached arm would swing with it. An arm connects two points, so it is built one unit
+long down -Z and then aimed and stretched between a fixed shoulder and the fist each frame. The
+shoulder is *behind the camera*, so the elbow end is always outside the near plane and the arm
+runs off the bottom-right of frame with no visible end.
+
+The first implementation used `Object3D.lookAt`, and the measurement caught it: `lookAt`
+resolves against `matrixWorld` and treats its argument as a **world** position, while these are
+viewmodel-local coordinates on an object parented to a moving camera. It aimed the arm at
+exactly 180° from the fist — the wrist landed twice the arm's length from the hand.
+`setFromUnitVectors` asks the question in the space the numbers are actually in, and the wrist
+now lands on the fist to within 0 mm at every point of the swing.
+
+## Verification
+
+Typecheck and production build clean. Headless harness against the real modules, plus live
+`__operator` reads in a running match.
+
+| Claim | Measured |
+|---|---|
+| Standing still, flat floor | y peak-to-peak **5.00 mm -> 0.00 mm** |
+| Standing still, against a wall | 5.00 mm -> 0.00 mm |
+| Standing still, on an 18° ramp | 31.1 mm -> 0.00 mm, horizontal drift 95.9 -> 0.0 mm/s |
+| Ice-slide, 10 / 18 / 30 / 44° | 159 / 292 / 520 / 766 mm in 3 s -> **0 mm at every angle** |
+| Ramp ascent | 4.38 -> **4.66 m/s** surface speed (flat reference 4.60) |
+| Jump apex | 0.902 m against `jumpHeight` 0.95 — unchanged, the jump tick is guarded |
+| Fall from 6 m | 0.82 s against a free-fall ideal of 0.82 s; `justLanded` fires |
+| Walking off a 0.3 m ledge | 0 airborne ticks, stays glued |
+| Steps | 0.30 / 0.55 / 0.70 m clear, 0.75 refused — unchanged |
+| Unwalkable 60° slope | still slides 2041 mm — steep ground is still not standable |
+| Near plane, derived | 4:3 0.120, 16:9 0.118, 21:9 0.094; 12-106 mm of margin in every case |
+| Near plane vs the limit | safe at 90, 101, 114, 120 and 144 vertical FOV, 16:9 and 21:9 |
+| Knife arm | wrist lands on the fist to **0 mm** across the swing; arm 64.5-89.7 cm; elbow at z +0.28, always behind the camera |
+
+## Left for the human
+
+1. **The jitter, on a screen.** It is a measured zero now rather than an argument, but the
+   pane still does not composite here so it has not been *seen* still.
+2. **Whether zero slide is right.** The player no longer slides on any walkable slope, up to
+   `maxSlopeDeg` 46°. That is the usual choice for a shooter and it is a choice; if a steep
+   ramp should shed you, it wants an explicit slide-above-N-degrees rule rather than a return
+   to accumulating gravity.
+3. **The shoulder anchor.** `KNIFE_SHOULDER` at (0.30, -0.45, 0.28) is where the arm appears
+   to come from. It is a look, and it is one number to move.

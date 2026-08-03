@@ -251,8 +251,48 @@ export class PlayerController {
       clampHorizontalSpeed(sim, limit);
     }
 
-    sim.vy -= cfg.gravity * DT;
-    if (sim.vy < -cfg.maxFallSpeed) sim.vy = -cfg.maxFallSpeed;
+    /**
+     * ---- gravity, which does not press into ground already underfoot (round 4) ---------
+     *
+     * This used to run unconditionally, and standing still was therefore never *still*. The
+     * measured symptom, on flat ground, with no input at all:
+     *
+     * ```
+     *   y: 5.00  0.00  5.00  0.00  0.00  0.00  5.00  0.00   mm
+     * ```
+     *
+     * a 5 mm vertical limit cycle — exactly `collisionSkin` — running at twenty-odd hertz
+     * forever. Gravity drives the capsule 2.7 mm into the floor each tick; `resolve` pushes
+     * it back out by `depth + skin`, which overshoots to 5 mm *above* the floor; from there
+     * it is no longer touching anything, so the next tick has no contact, `groundSnap` pulls
+     * it back down, and the cycle repeats. Five millimetres is nothing at arm's length and
+     * 0.82° of pitch against a wall 0.35 m away — about ten pixels of judder at this FOV,
+     * which is why the report is specifically *"when the player gets right up close"*. It is
+     * visible only when there is something near enough to reference it against.
+     *
+     * That is the jitter. It was never the depth buffer and never the step-up, and rounds 2
+     * and 3 spent themselves on both.
+     *
+     * The same accumulation is the ice-slide on ramps. `projectVelocity` removes the
+     * component of velocity going *into* the surface and correctly leaves the tangential
+     * part — so on a slope, gravity's downhill component builds up every tick until friction
+     * balances it, which is a steady creep downhill with no input. Measured before this:
+     * 292 mm in three seconds on 18°, 766 mm on 44°.
+     *
+     * Both are the same wrong assumption: that a player standing on the floor is falling. A
+     * grounded player is *supported*. Gravity resumes the moment the ground stops being
+     * there, and `groundSnapDist` — 0.4 m — is what keeps the player attached walking over a
+     * crest or down a slope, which is the job it already had.
+     *
+     * The two guards are exactly the two ways `vy` can legitimately be non-falling on a
+     * grounded tick: a jump was just issued, or a mantle/slide wrote an upward velocity.
+     */
+    if (sim.grounded && !sim.jumpedThisTick && sim.vy <= 0) {
+      sim.vy = 0;
+    } else {
+      sim.vy -= cfg.gravity * DT;
+      if (sim.vy < -cfg.maxFallSpeed) sim.vy = -cfg.maxFallSpeed;
+    }
 
     // ---- collision -------------------------------------------------------
     integrateMotion(sim, cfg, this.world);

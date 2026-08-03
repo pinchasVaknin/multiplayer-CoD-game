@@ -193,7 +193,13 @@ export class Game {
     this.debugHost = debugHost;
     this.viewmodel = new ViewmodelLayer(this.cameraConfig);
     this.viewmodel.resize(this.renderer.aspect);
-    this.cameraRig = new CameraRig(this.cameraConfig, this.renderer.aspect);
+    // The capsule radius is what bounds how close the eye can get to a wall, and therefore
+    // how far out the near plane may sit before it clips one. See `CameraRig.nearFor`.
+    this.cameraRig = new CameraRig(
+      this.cameraConfig,
+      this.renderer.aspect,
+      this.movementConfig.capsuleRadius,
+    );
 
     this.screens = new GameScreens({
       host: uiHost,

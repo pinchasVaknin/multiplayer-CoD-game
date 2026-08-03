@@ -1,6 +1,7 @@
 import { angleDelta, clamp, clamp01, damp, DEG2RAD, lerp, smoothstep } from '../core/MathUtil';
 import type { ViewmodelConfig } from './ViewmodelConfig';
 import type * as THREE from 'three';
+import { Vector3 } from 'three';
 import type { WeaponModel } from './WeaponMesh';
 
 /**
@@ -169,6 +170,18 @@ const KNIFE_WINDUP: KnifePose = { x: 0.26, y: -0.08, z: -0.27, pitch: 4, yaw: -6
  */
 const KNIFE_STRIKE: KnifePose = { x: -0.05, y: -0.04, z: -0.46, pitch: -6, yaw: 40, roll: -28 };
 
+/**
+ * Where the forearm comes from. Behind the camera, low and to the right (round 4).
+ *
+ * Positive Z is *behind* the eye, which is the whole point: the elbow end of the arm is
+ * always outside the near plane, so the arm enters frame from the bottom-right corner and
+ * has no visible end. The player sees a forearm running off the edge of the screen, which is
+ * what an arm attached to a body looks like from inside its own head.
+ */
+const KNIFE_SHOULDER = new Vector3(0.3, -0.45, 0.28);
+/** The axis the forearm geometry is built along. See `KnifeMesh`. */
+const ARM_AXIS = new Vector3(0, 0, -1);
+
 export class ViewmodelAnim {
   private swayX = 0;
   private swayY = 0;
@@ -194,14 +207,19 @@ export class ViewmodelAnim {
    * owns where it is.
    */
   private knife: THREE.Object3D | null = null;
+  /** The forearm, aimed from a fixed shoulder at the fist every frame. See `poseKnife`. */
+  private knifeArm: THREE.Object3D | null = null;
+  /** Scratch for the arm's aim. Reused: this runs every frame of a swing. */
+  private readonly fistAt = new Vector3();
 
   constructor(model: WeaponModel) {
     this.model = model;
   }
 
-  /** Attach the knife viewmodel. Called once per match; null unsets it. */
-  setKnife(knife: THREE.Object3D | null): void {
+  /** Attach the knife viewmodel and its forearm. Called once per match; null unsets them. */
+  setKnife(knife: THREE.Object3D | null, arm: THREE.Object3D | null = null): void {
     this.knife = knife;
+    this.knifeArm = arm;
   }
 
   /**
@@ -422,6 +440,34 @@ export class ViewmodelAnim {
       (lerp(from.yaw, to.yaw, k) + this.swayYaw) * DEG2RAD,
       lerp(from.roll, to.roll, k) * DEG2RAD,
     );
+
+    /**
+     * Aim the forearm from the shoulder to wherever the fist ended up.
+     *
+     * The sleeve is built one unit long down -Z, so rotating -Z onto the shoulder-to-fist
+     * direction and scaling Z by the distance spans the two points exactly. Only Z is scaled:
+     * stretching the other two axes would fatten the arm as it extends.
+     *
+     * **Not `Object3D.lookAt`**, which was the first attempt and is silently wrong here:
+     * `lookAt` resolves against `matrixWorld` and treats its argument as a *world* position,
+     * and these poses are viewmodel-local coordinates on an object parented to a camera that
+     * moves with the player. Measured, it aimed the arm at exactly 180° from the fist — the
+     * wrist landed twice the arm's length away from the hand it was supposed to join.
+     * `setFromUnitVectors` asks the question that is actually being asked, in the space the
+     * numbers are actually in.
+     *
+     * The shoulder is behind the camera, so the elbow end is always outside the near plane
+     * and the arm reads as running off the bottom of the screen rather than as ending.
+     */
+    const arm = this.knifeArm;
+    if (arm === null) return;
+    this.fistAt.copy(knife.position).sub(KNIFE_SHOULDER);
+    const reach = this.fistAt.length();
+    if (reach > 1e-4) this.fistAt.divideScalar(reach);
+    else this.fistAt.set(0, 0, -1);
+    arm.position.copy(KNIFE_SHOULDER);
+    arm.quaternion.setFromUnitVectors(ARM_AXIS, this.fistAt);
+    arm.scale.set(1, 1, Math.max(0.05, reach));
   }
 
   // -- channels -------------------------------------------------------------
