@@ -3,6 +3,7 @@ import { capsuleBoxPenetration, makeContact, type Contact, type RayHit } from '.
 import { Raycaster } from './Raycaster';
 import { SpatialHash } from './SpatialHash';
 import type { Box } from './maps/types';
+import { simCos } from '../core/SimMath';
 
 /**
  * The one collision scheme (brief S4.3): swept capsule against static oriented boxes,
@@ -83,7 +84,7 @@ export class CollisionWorld {
   readonly hash: SpatialHash;
 
   /** cos of the steepest walkable slope. Set from MovementConfig at load. */
-  private minGroundY = Math.cos((46 * Math.PI) / 180);
+  private minGroundY = simCos((46 * Math.PI) / 180);
   private skin = 0.005;
 
   private readonly candidates = new Int32Array(CANDIDATE_CAP);
@@ -105,7 +106,7 @@ export class CollisionWorld {
   }
 
   configure(maxSlopeDeg: number, skin: number): void {
-    this.minGroundY = Math.cos((maxSlopeDeg * Math.PI) / 180);
+    this.minGroundY = simCos((maxSlopeDeg * Math.PI) / 180);
     this.skin = skin;
   }
 

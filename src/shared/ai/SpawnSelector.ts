@@ -5,6 +5,7 @@ import type { SpawnZone } from '../world/maps/types';
 import { opposingTeam, type BotTeam, type Combatant } from './Combatant';
 import type { PerceptionConfig } from './DifficultyTiers';
 import type { Perception } from './Perception';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * Where somebody comes back (brief S6.9).
@@ -164,8 +165,8 @@ export class SpawnSelector {
         // among the candidates rather than being jittered away from.
         const angle = rng.float() * Math.PI * 2;
         const radius = s === 0 ? 0 : Math.sqrt(rng.float()) * zone.radius;
-        const x = zone.position.x + Math.cos(angle) * radius;
-        const z = zone.position.z + Math.sin(angle) * radius;
+        const x = zone.position.x + simCos(angle) * radius;
+        const z = zone.position.z + simSin(angle) * radius;
         const cell = nav.nearestCell(x, zone.position.y, z, 6);
         if (cell < 0) continue;
         this.candidateList.push({
@@ -407,7 +408,7 @@ export class SpawnSelector {
    */
   private measure(c: Candidate, roster: readonly Combatant[], selfId: number, team: BotTeam): void {
     const cfg = this.perceptionConfig;
-    const halfCone = Math.cos(cfg.visionConeDeg * 0.5 * DEG2RAD);
+    const halfCone = simCos(cfg.visionConeDeg * 0.5 * DEG2RAD);
     measuredDistance = Infinity;
     measuredFriendly = Infinity;
     measuredCone = false;
@@ -428,8 +429,8 @@ export class SpawnSelector {
 
       if (dist < measuredDistance) measuredDistance = dist;
       if (dist > cfg.visionRange || dist < 1e-4) continue;
-      const fx = -Math.sin(other.yaw);
-      const fz = -Math.cos(other.yaw);
+      const fx = -simSin(other.yaw);
+      const fz = -simCos(other.yaw);
       if ((dx * fx + dz * fz) / dist < halfCone) continue;
       measuredCone = true;
       if (measuredVisible) continue;

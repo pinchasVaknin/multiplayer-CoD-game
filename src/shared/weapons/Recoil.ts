@@ -2,6 +2,7 @@ import { DT } from '../core/Loop';
 import { clamp01, damp, DEG2RAD, lerp, TAU } from '../core/MathUtil';
 import type { Rng } from '../core/Rng';
 import type { WeaponDef } from './WeaponDefs';
+import { simCos, simSin, simTan } from '../core/SimMath';
 
 /**
  * Recoil and spread (brief S6.2).
@@ -196,8 +197,8 @@ export class Recoil {
     if (spreadDeg > 1e-5) {
       const radius = Math.sqrt(rng.float()) * spreadDeg * DEG2RAD;
       const angle = rng.float() * TAU;
-      ax = Math.tan(Math.cos(angle) * radius);
-      ay = Math.tan(Math.sin(angle) * radius);
+      ax = simTan(simCos(angle) * radius);
+      ay = simTan(simSin(angle) * radius);
     }
     out.spreadDeg = spreadDeg;
     aimWithOffset(yaw, pitch, ax, ay, out);
@@ -219,10 +220,10 @@ export function aimWithOffset(
   ay: number,
   out: AimSample,
 ): void {
-  const cp = Math.cos(pitch);
-  const sp = Math.sin(pitch);
-  const sy = Math.sin(yaw);
-  const cy = Math.cos(yaw);
+  const cp = simCos(pitch);
+  const sp = simSin(pitch);
+  const sy = simSin(yaw);
+  const cy = simCos(yaw);
 
   // Forward for this project's convention: yaw 0 looks down -Z.
   let fx = -sy * cp;
@@ -280,8 +281,8 @@ export function pelletOffset(
   }
   const radius = Math.sqrt(index / (count - 1)) * spreadDeg * DEG2RAD * radiusJitter;
   const angle = rotation + index * GOLDEN_ANGLE;
-  out.ax = Math.tan(Math.cos(angle) * radius);
-  out.ay = Math.tan(Math.sin(angle) * radius);
+  out.ax = simTan(simCos(angle) * radius);
+  out.ay = simTan(simSin(angle) * radius);
 }
 
 /**

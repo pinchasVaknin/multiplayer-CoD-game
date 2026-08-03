@@ -4,6 +4,7 @@ import { EV, type GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
 import { clamp01, RAD2DEG } from '../core/MathUtil';
 import type { EquipmentConfig } from './EquipmentConfig';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * Who is flashed, and how badly (brief S6.3).
@@ -129,8 +130,8 @@ export class FlashField implements BlindSource {
     // Angle between where the target is looking and the direction to the blast. The
     // horizontal plane only: a flash on the floor in front of you is still in your eyes.
     const flat = Math.hypot(dx, dz);
-    const fx = -Math.sin(target.yaw);
-    const fz = -Math.cos(target.yaw);
+    const fx = -simSin(target.yaw);
+    const fz = -simCos(target.yaw);
     const cos = flat < 1e-4 ? 1 : (dx * fx + dz * fz) / flat;
     const angleDeg = Math.acos(Math.max(-1, Math.min(1, cos))) * RAD2DEG;
 

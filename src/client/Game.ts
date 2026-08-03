@@ -587,6 +587,7 @@ export class Game {
       audio: this.audio,
       input: this.input,
       loop: this.loop,
+      transport: this.transport,
       uiHost: this.uiHost,
       debugHost: this.debugHost,
       stats: this.stats,

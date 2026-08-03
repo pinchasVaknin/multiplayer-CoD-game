@@ -5,6 +5,7 @@ import { makeRayHit, type RayHit } from '../world/Geometry';
 import type { BotBlackboard } from './BotBlackboard';
 import type { BotTeam, Combatant } from './Combatant';
 import type { PerceptionConfig, TierConfig } from './DifficultyTiers';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * Sight and hearing (brief S6.3).
@@ -220,9 +221,9 @@ export class Perception {
       return;
     }
 
-    const halfCone = Math.cos(cfg.visionConeDeg * 0.5 * DEG2RAD);
-    const fx = -Math.sin(self.yaw);
-    const fz = -Math.cos(self.yaw);
+    const halfCone = simCos(cfg.visionConeDeg * 0.5 * DEG2RAD);
+    const fx = -simSin(self.yaw);
+    const fz = -simCos(self.yaw);
 
     let bestId = -1;
     let bestScore = Infinity;

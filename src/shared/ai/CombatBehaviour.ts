@@ -4,6 +4,7 @@ import type { Rng } from '../core/Rng';
 import type { BotBlackboard } from './BotBlackboard';
 import type { TierConfig } from './DifficultyTiers';
 import type { WeaponCombatProfile } from './WeaponProfile';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * How a bot aims and when it pulls the trigger (brief S6.4).
@@ -92,8 +93,8 @@ export class CombatBehaviour {
    */
   onContact(tier: TierConfig, rng: Rng): void {
     const angle = rng.float() * TAU;
-    this.errYaw = Math.cos(angle) * tier.firstBurstConeDeg;
-    this.errPitch = Math.sin(angle) * tier.firstBurstConeDeg;
+    this.errYaw = simCos(angle) * tier.firstBurstConeDeg;
+    this.errPitch = simSin(angle) * tier.firstBurstConeDeg;
     this.wanderYaw = this.errYaw;
     this.wanderPitch = this.errPitch;
     this.wanderTimer = 0;
@@ -152,8 +153,8 @@ export class CombatBehaviour {
       const angle = rng.float() * TAU;
       // sqrt weighting keeps the point uniform over the disc rather than centre-heavy.
       const radius = Math.sqrt(rng.float()) * cone;
-      this.wanderYaw = Math.cos(angle) * radius;
-      this.wanderPitch = Math.sin(angle) * radius;
+      this.wanderYaw = simCos(angle) * radius;
+      this.wanderPitch = simSin(angle) * radius;
       this.wanderTimer = wide ? tier.jitterPeriod * 1.5 : tier.jitterPeriod;
     }
 

@@ -13,6 +13,7 @@ import { ScopeState } from './Scope';
 import type { ViewmodelConfig } from './ViewmodelConfig';
 import { makeWeaponInput, type Weapon, type WeaponInput } from './WeaponBase';
 import type { WeaponDef } from './WeaponDefs';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * The seam between "the player pressed a button" and "a round landed".
@@ -212,6 +213,20 @@ export class WeaponSystem {
   /** Deterministic replay: the spread cone is seeded, never `Math.random` (S6.2). */
   reseed(seed: number): void {
     this.rng.reseed(seed);
+  }
+
+  /**
+   * Read the spread stream's state into `out` (M9, S6.6).
+   *
+   * The cross-runtime hash folds this in alongside the pose. Two runtimes whose player is in
+   * the same place but whose spread stream has advanced by a different number of draws *have*
+   * diverged — the next shot will prove it — and a hash that only covered position would call
+   * that agreement and let it through to M10 as an unexplainable reconciliation error.
+   *
+   * `out` is caller-owned and reused; nothing is allocated.
+   */
+  rngState(out: Int32Array): void {
+    this.rng.saveState(out);
   }
 
   /**
@@ -476,10 +491,10 @@ export class WeaponSystem {
     const ads = clamp01(this.inventory.active.adsFraction);
     const yaw = cmd.yaw;
     const pitch = cmd.pitch;
-    const cp = Math.cos(pitch);
-    const sp = Math.sin(pitch);
-    const sy = Math.sin(yaw);
-    const cy = Math.cos(yaw);
+    const cp = simCos(pitch);
+    const sp = simSin(pitch);
+    const sy = simSin(yaw);
+    const cy = simCos(yaw);
 
     const fx = -sy * cp;
     const fy = sp;

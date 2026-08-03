@@ -17,6 +17,7 @@ import type { MovementConfig } from './MovementConfig';
 import { copySnapshot, makeSnapshot, PlayerSim, type PlayerSnapshot } from './PlayerState';
 import { beginSlide, canStartSlide, endSlide, stepSlide } from './Slide';
 import { capsuleHeightFor, eyeHeightFor, isLegalStanceTransition, type StanceId } from './Stance';
+import { simCos, simSin } from '../core/SimMath';
 
 const log = logger('PlayerController');
 
@@ -190,10 +191,10 @@ export class PlayerController {
     }
 
     // ---- wish direction, in world space ---------------------------------
-    const fx = -Math.sin(sim.yaw);
-    const fz = -Math.cos(sim.yaw);
-    const rx = Math.cos(sim.yaw);
-    const rz = -Math.sin(sim.yaw);
+    const fx = -simSin(sim.yaw);
+    const fz = -simCos(sim.yaw);
+    const rx = simCos(sim.yaw);
+    const rz = -simSin(sim.yaw);
     let wishX = rx * cmd.moveX + fx * cmd.moveZ;
     let wishZ = rz * cmd.moveX + fz * cmd.moveZ;
     // Direction and magnitude are separated deliberately. Normalising by the *clamped*
@@ -375,12 +376,12 @@ export class PlayerController {
       (isDown(buttons, Btn.Sprint) ? NOCLIP_BOOST : 1) *
       (isDown(buttons, Btn.Ads) ? NOCLIP_PRECISE : 1);
 
-    const cp = Math.cos(sim.pitch);
-    const fx = -Math.sin(sim.yaw) * cp;
-    const fy = Math.sin(sim.pitch);
-    const fz = -Math.cos(sim.yaw) * cp;
-    const rx = Math.cos(sim.yaw);
-    const rz = -Math.sin(sim.yaw);
+    const cp = simCos(sim.pitch);
+    const fx = -simSin(sim.yaw) * cp;
+    const fy = simSin(sim.pitch);
+    const fz = -simCos(sim.yaw) * cp;
+    const rx = simCos(sim.yaw);
+    const rz = -simSin(sim.yaw);
 
     let vx = rx * cmd.moveX + fx * cmd.moveZ;
     let vy = fy * cmd.moveZ;

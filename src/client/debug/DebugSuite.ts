@@ -16,6 +16,7 @@ import type { PlayerController } from '../../shared/player/PlayerController';
 import type { ViewmodelConfig } from '../../shared/weapons/ViewmodelConfig';
 import type { WeaponDef } from '../../shared/weapons/WeaponDefs';
 import type { LoadedMap } from '../world/MapRender';
+import type { INetworkTransport } from '../../shared/net/Transport';
 import type { EquipmentConfig } from '../../shared/equipment/EquipmentConfig';
 import { AiDebug } from './AiDebug';
 import { AiPanel } from './AiPanel';
@@ -63,6 +64,8 @@ export interface DebugSuiteContext {
   readonly cameraRig: CameraRig;
   readonly map: LoadedMap;
   readonly mapEntry: MapEntry;
+  /** M9 (S7): what the overlay reports as the source of simulation. */
+  readonly transport: INetworkTransport;
   readonly match: Match;
   readonly movementConfig: MovementConfig;
   readonly cameraConfig: CameraConfig;
@@ -139,6 +142,7 @@ export class DebugSuite {
       movementConfig: ctx.movementConfig,
       cameraConfig: ctx.cameraConfig,
       mapStats: ctx.map.stats,
+      transport: ctx.transport,
       stats: ctx.stats,
       speedo: ctx.speedo,
       onConfigChanged: ctx.onConfigChanged,

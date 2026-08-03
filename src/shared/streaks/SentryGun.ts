@@ -13,6 +13,7 @@ import { makeRayHit, type RayHit } from '../world/Geometry';
 import { Killstreak, type StreakContext } from './KillstreakBase';
 import type { StreakDef } from './StreakDefs';
 import { sentryWeapon } from './StreakWeapons';
+import { simCos, simSin } from '../core/SimMath';
 
 /** Module-level scratch. The sim path allocates nothing (S4.7). */
 const scratchRay: RayHit = makeRayHit();
@@ -250,10 +251,10 @@ export class SentryGun extends Killstreak implements Damageable {
     const eyeY = this.y + SENTRY_EYE_HEIGHT;
     const yaw = this.combat.aimYaw;
     const pitch = this.combat.aimPitch;
-    const cp = Math.cos(pitch);
-    const dx = -Math.sin(yaw) * cp;
-    const dy = Math.sin(pitch);
-    const dz = -Math.cos(yaw) * cp;
+    const cp = simCos(pitch);
+    const dx = -simSin(yaw) * cp;
+    const dy = simSin(pitch);
+    const dz = -simCos(yaw) * cp;
 
     this.shotsFired++;
     this.ctx.present.sentryShot(this.x, eyeY, this.z);

@@ -6,6 +6,7 @@ import { Ballistics, makeShotTrace, type ShotTrace } from '../weapons/Ballistics
 import { Killstreak, type StreakContext } from './KillstreakBase';
 import type { StreakDef } from './StreakDefs';
 import { chopperWeapon } from './StreakWeapons';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * The gunship's view, as data (M9). Filled by `ChopperGunner.activeView`.
@@ -266,8 +267,8 @@ export class ChopperGunner extends Killstreak {
   private updateOrbit(): void {
     const cfg = this.ctx.cfg;
     this.orbitAngle += cfg.chopperOrbitSpeed * DT;
-    this.x = Math.cos(this.orbitAngle) * cfg.chopperOrbitRadius;
-    this.z = Math.sin(this.orbitAngle) * cfg.chopperOrbitRadius;
+    this.x = simCos(this.orbitAngle) * cfg.chopperOrbitRadius;
+    this.z = simSin(this.orbitAngle) * cfg.chopperOrbitRadius;
     this.y = cfg.chopperHeight;
   }
 
@@ -289,10 +290,10 @@ export class ChopperGunner extends Killstreak {
       this.reloadTimer = cfg.chopperReloadSeconds;
     }
 
-    const cp = Math.cos(this.pitch);
-    const dx = -Math.sin(this.yaw) * cp;
-    const dy = Math.sin(this.pitch);
-    const dz = -Math.cos(this.yaw) * cp;
+    const cp = simCos(this.pitch);
+    const dx = -simSin(this.yaw) * cp;
+    const dy = simSin(this.pitch);
+    const dz = -simCos(this.yaw) * cp;
 
     this.shotsFired++;
     this.ctx.present.chopperShot();

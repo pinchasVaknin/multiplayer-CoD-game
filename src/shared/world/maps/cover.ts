@@ -1,4 +1,5 @@
 import type { CoverPoint, PropDef, PropShapeId } from './types';
+import { simCos, simSin } from '../../core/SimMath';
 
 /**
  * Deriving `coverPoints` from prop placements (brief S6.5).
@@ -106,8 +107,8 @@ export function emitCoverPoint(
   height: CoverPoint['height'],
   y = 0,
 ): void {
-  const c = Math.cos(yaw);
-  const s = Math.sin(yaw);
+  const c = simCos(yaw);
+  const s = simSin(yaw);
   // Local face normal into world space, same yaw convention the prop mesher uses.
   const wx = faceX * c + faceZ * s;
   const wz = -faceX * s + faceZ * c;

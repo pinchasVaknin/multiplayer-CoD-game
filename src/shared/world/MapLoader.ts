@@ -2,6 +2,7 @@ import { ColliderSet } from './ColliderSet';
 import { CollisionWorld } from './CollisionWorld';
 import { PROP_SHAPES } from './maps/props';
 import type { Box, MapDef, SpawnZone } from './maps/types';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * Turns a `MapDef` into the things the *simulation* needs from a map: the collider set,
@@ -64,8 +65,8 @@ export function loadMapCollision(def: MapDef): LoadedCollision {
   const worldOffset = { x: 0, y: 0, z: 0 };
   for (const placement of def.props) {
     const shape = PROP_SHAPES[placement.shape];
-    const c = Math.cos(placement.rotationY);
-    const s = Math.sin(placement.rotationY);
+    const c = simCos(placement.rotationY);
+    const s = simSin(placement.rotationY);
     for (const part of shape.parts) {
       if (!part.solid) continue;
       worldOffset.x = placement.position.x + part.offset.x * c + part.offset.z * s;

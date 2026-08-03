@@ -6,3 +6,12 @@ dist/
 
 # Local editor/agent tooling. launch.json holds a machine-specific node path.
 .claude/
+
+# M9: server bundle and harness run artifacts
+dist-server/
+node-hashes*.json
+browser-hashes*.json
+harness-*.jsonl
+harness-*.err
+jitter-*.jsonl
+jitter-*.err

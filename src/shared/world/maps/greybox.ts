@@ -1,5 +1,6 @@
 import { deriveCoverPoints, emitCoverPoint } from './cover';
 import type { Brush, CoverPoint, MapDef, PropDef, SpawnZone } from './types';
+import { simCos, simSin } from '../../core/SimMath';
 
 /**
  * MP_TESTBED - the M1 grey-box room (brief S5.6).
@@ -104,8 +105,8 @@ function brushes(): Brush[] {
     // Top surface runs from (x=-18, y=0) to (x=-13.5, y=1.5).
     const midX = -18 + MAIN_RAMP_RUN / 2;
     const midY = MAIN_RAMP_RISE / 2;
-    const nx = -Math.sin(MAIN_RAMP_ANGLE);
-    const ny = Math.cos(MAIN_RAMP_ANGLE);
+    const nx = -simSin(MAIN_RAMP_ANGLE);
+    const ny = simCos(MAIN_RAMP_ANGLE);
     out.push({
       position: {
         x: midX - nx * (MAIN_RAMP_THICK / 2),
@@ -275,8 +276,8 @@ function brushes(): Brush[] {
     // Top surface runs from (z=8, y=-3) up to (z=2, y=0).
     const midZ = 5;
     const midY = -PIT_DEPTH / 2;
-    const ny = Math.cos(PIT_RAMP_ANGLE);
-    const nz = Math.sin(PIT_RAMP_ANGLE);
+    const ny = simCos(PIT_RAMP_ANGLE);
+    const nz = simSin(PIT_RAMP_ANGLE);
     out.push({
       position: {
         x: 10.3,

@@ -5,6 +5,7 @@ import type { PlayerSim } from '../player/PlayerState';
 import type { EquipmentConfig } from './EquipmentConfig';
 import type { EquipmentDef, EquipmentSlot } from './EquipmentDefs';
 import { EquipmentSystem, type EquipmentInventory } from './EquipmentSystem';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * The player's half of throwing: cooking, releasing and running out (brief S6.3).
@@ -178,17 +179,17 @@ export class ThrowController {
     const underhand = cmd.pitch < UNDERHAND_PITCH_RAD || def.impact === 'plant';
     // Out of the hand, not out of the camera. Forward along the look, right along its
     // perpendicular, and a little below eye level.
-    const cp = Math.cos(cmd.pitch);
-    const fx = -Math.sin(cmd.yaw) * cp;
-    const fz = -Math.cos(cmd.yaw) * cp;
-    const rx = Math.cos(cmd.yaw);
-    const rz = -Math.sin(cmd.yaw);
+    const cp = simCos(cmd.pitch);
+    const fx = -simSin(cmd.yaw) * cp;
+    const fz = -simCos(cmd.yaw) * cp;
+    const rx = simCos(cmd.yaw);
+    const rz = -simSin(cmd.yaw);
     const thrown = this.system.throwFrom(
       def,
       entityId,
       team,
       sim.x + fx * HAND_FORWARD + rx * HAND_RIGHT,
-      sim.y + sim.eyeHeight - HAND_DOWN + Math.sin(cmd.pitch) * HAND_FORWARD,
+      sim.y + sim.eyeHeight - HAND_DOWN + simSin(cmd.pitch) * HAND_FORWARD,
       sim.z + fz * HAND_FORWARD + rz * HAND_RIGHT,
       cmd.yaw,
       cmd.pitch,

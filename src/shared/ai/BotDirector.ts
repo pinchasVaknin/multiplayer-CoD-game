@@ -21,6 +21,7 @@ import { BOT_TIERS, type BotTier, type PerceptionConfig, type TierTable } from '
 import { NoiseKind, Perception } from './Perception';
 import { Pathfinder } from './Pathing';
 import { makeSpawnChoice, SpawnSelector, type SpawnChoice } from './SpawnSelector';
+import { simCos } from '../core/SimMath';
 
 const log = logger('BotDirector');
 
@@ -245,7 +246,7 @@ export class BotDirector {
       // that does not ask for them bakes exactly the graph M3 baked.
       mantleHeight: deps.mapDef.navClimb === true ? deps.movement.mantleMaxHeight : 0,
       dropHeight: deps.mapDef.navClimb === true ? NAV_DROP_HEIGHT : 0,
-      minGroundY: Math.cos(deps.movement.maxSlopeDeg * (Math.PI / 180)),
+      minGroundY: simCos(deps.movement.maxSlopeDeg * (Math.PI / 180)),
       seeds: deps.mapDef.spawns.map((s) => s.position),
       layers: deps.mapDef.navLayers ?? NAV_DEFAULT_LAYERS,
     });

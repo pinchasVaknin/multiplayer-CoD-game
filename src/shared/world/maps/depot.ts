@@ -9,6 +9,7 @@ import {
 } from './build';
 import { deriveCoverPoints, emitCoverPoint } from './cover';
 import type { Brush, CoverPoint, LaneDef, MapDef, ObjectiveDef, PropDef, SpawnZone } from './types';
+import { simCos, simSin } from '../../core/SimMath';
 
 /**
  * MP_DEPOT — the second M8 map (brief S6.2).
@@ -392,8 +393,8 @@ function trimHalf(): Brush[] {
  * `PROP_SHAPES`.
  */
 function local(s: StackDef, along: number, across: number): { x: number; z: number } {
-  const c = Math.cos(s.yaw);
-  const sn = Math.sin(s.yaw);
+  const c = simCos(s.yaw);
+  const sn = simSin(s.yaw);
   return { x: s.x + along * c + across * sn, z: s.z - along * sn + across * c };
 }
 
@@ -570,8 +571,8 @@ function coverPoints(placements: readonly PropDef[]): CoverPoint[] {
     if (s.levels !== 2) continue;
     const ledge = local(s, -s.shift * 2.6, 0);
     // Facing back along the stack, i.e. through the upper box.
-    const fx = Math.cos(s.yaw) * s.shift;
-    const fz = -Math.sin(s.yaw) * s.shift;
+    const fx = simCos(s.yaw) * s.shift;
+    const fz = -simSin(s.yaw) * s.shift;
     for (const sign of [1, -1]) {
       emitCoverPoint(out, sign * ledge.x, sign * ledge.z, 0, sign * fx, sign * fz, 0.1, 'low', ROOF_1);
     }
@@ -870,7 +871,7 @@ function auditLanes(): void {
 
   for (const s of STACKS) {
     // Half-extent along world X: 3.0 for a container lying along X, 1.25 across it.
-    const alongX = Math.abs(Math.cos(s.yaw)) > 0.5;
+    const alongX = Math.abs(simCos(s.yaw)) > 0.5;
     const hx = alongX ? 3.0 : 1.25;
     check(`stack at (${s.x}, ${s.z})`, s.x, hx);
     if (s.levels === 2) {

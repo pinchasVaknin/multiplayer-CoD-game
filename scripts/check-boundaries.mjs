@@ -107,6 +107,24 @@ const BROWSER_GLOBALS = [
 
 const GLOBAL_CHECKED_PARTITIONS = new Set(['shared', 'server']);
 
+/**
+ * Maths whose result is not bit-identical across JavaScript engines.
+ *
+ * ECMA-262 leaves `sin`, `cos` and `tan` implementation-approximated, and the M9
+ * cross-runtime check proved that is not theoretical: Node 24 (V8 13.6) and Chrome 148
+ * (V8 14.x) disagree, which showed up as the simulation diverging on tick 149 of 3600.
+ * Everything else the simulation uses — `sqrt`, `exp`, `pow`, `atan2`, `log`, `hypot` —
+ * agreed, so the ban is narrow rather than a blanket one.
+ *
+ * `shared/core/SimMath.ts` provides `simSin`/`simCos`/`simTan`, built from operations IEEE
+ * 754 specifies exactly. Client-side code is free to use the natives: a camera angle is not
+ * simulation state and nobody replays it.
+ */
+const NON_DETERMINISTIC_MATH = ['sin', 'cos', 'tan'];
+
+/** Files allowed to name them: the replacement itself, and the tool that compares the two. */
+const MATH_EXEMPT = new Set(['shared/core/SimMath.ts', 'shared/debug/Determinism.ts']);
+
 // ---------------------------------------------------------------------------
 
 function walk(dir, out = []) {
@@ -232,7 +250,26 @@ for (const abs of files) {
     }
   }
 
-  // ---- 2. browser globals -------------------------------------------------
+  // ---- 2. engine-dependent maths ------------------------------------------
+  // Only where the result is simulation state. `client/` draws with it and nobody replays
+  // a camera angle, so the natives stay available there — see `shared/core/SimMath.ts`.
+  if (GLOBAL_CHECKED_PARTITIONS.has(from) && !MATH_EXEMPT.has(rel)) {
+    for (const fn of NON_DETERMINISTIC_MATH) {
+      const re = new RegExp(`\\bMath\\.${fn}\\s*\\(`, 'g');
+      let m;
+      while ((m = re.exec(code)) !== null) {
+        const line = code.slice(0, m.index).split('\n').length;
+        report(
+          rel,
+          line,
+          `${from}-no-engine-math`,
+          `Math.${fn} is not bit-identical across engines — use sim${fn[0].toUpperCase()}${fn.slice(1)} from shared/core/SimMath`,
+        );
+      }
+    }
+  }
+
+  // ---- 3. browser globals -------------------------------------------------
   if (!GLOBAL_CHECKED_PARTITIONS.has(from)) continue;
 
   for (const name of BROWSER_GLOBALS) {

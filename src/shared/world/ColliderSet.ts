@@ -1,4 +1,5 @@
 import { materialIndex, type MaterialKey, type Vec3Lit } from './maps/types';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * Write a rotation basis (columns = local axes in world space) into `out` at `offset`.
@@ -12,12 +13,12 @@ export function writeBasis(
   out: Float32Array | number[],
   offset = 0,
 ): void {
-  const cy = Math.cos(rotationY);
-  const sy = Math.sin(rotationY);
-  const cx = Math.cos(rotationX);
-  const sx = Math.sin(rotationX);
-  const cz = Math.cos(rotationZ);
-  const sz = Math.sin(rotationZ);
+  const cy = simCos(rotationY);
+  const sy = simSin(rotationY);
+  const cx = simCos(rotationX);
+  const sx = simSin(rotationX);
+  const cz = simCos(rotationZ);
+  const sz = simSin(rotationZ);
 
   out[offset] = cz * cy + sz * sx * sy;
   out[offset + 1] = sz * cx;

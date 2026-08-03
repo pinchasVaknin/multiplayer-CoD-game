@@ -5,6 +5,7 @@ import { makeRayHit, type RayHit } from '../world/Geometry';
 import { Killstreak, type StreakContext } from './KillstreakBase';
 import type { StreakDef } from './StreakDefs';
 import { mortarWeapon } from './StreakWeapons';
+import { simCos, simSin } from '../core/SimMath';
 
 /** Module-level scratch: the sim path allocates nothing (S4.7). */
 const scratchRay: RayHit = makeRayHit();
@@ -98,8 +99,8 @@ export class MortarStrike extends Killstreak {
     const cfg = this.ctx.cfg;
     const angle = this.ctx.rng.float() * TAU;
     const radius = Math.sqrt(this.ctx.rng.float()) * cfg.mortarScatter;
-    const x = this.markX + Math.cos(angle) * radius;
-    const z = this.markZ + Math.sin(angle) * radius;
+    const x = this.markX + simCos(angle) * radius;
+    const z = this.markZ + simSin(angle) * radius;
     const y = groundAt(this.ctx, x, z);
 
     this.ctx.present.blast(x, y + 0.4, z, cfg.mortarRadius, true);

@@ -1,3 +1,4 @@
+import { simCos, simSin } from '../core/SimMath';
 /**
  * Oriented-box hitbox rig (brief S6.3).
  *
@@ -133,8 +134,8 @@ export class HitboxRig {
     this.z = z;
     if (yaw !== this.yaw) {
       this.yaw = yaw;
-      this.cos = Math.cos(yaw);
-      this.sin = Math.sin(yaw);
+      this.cos = simCos(yaw);
+      this.sin = simSin(yaw);
     }
   }
 

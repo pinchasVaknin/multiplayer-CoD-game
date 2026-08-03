@@ -1,4 +1,5 @@
 import type { Brush, MaterialKey, PropDef, PropShapeId } from './types';
+import { simCos, simSin } from '../../core/SimMath';
 
 /**
  * Authoring helpers for the map DSL.
@@ -220,8 +221,8 @@ export function rampAlongZ(
   // With `rotationX = phi` the box's local +Z is `(0, -sin phi, cos phi)`, so descending
   // toward +Z is a positive angle. Same convention the grey-box pit ramp uses.
   const angle = Math.atan2(-dy, dz);
-  const ny = Math.cos(angle);
-  const nz = Math.sin(angle);
+  const ny = simCos(angle);
+  const nz = simSin(angle);
   out.push({
     position: {
       x: xCenter,

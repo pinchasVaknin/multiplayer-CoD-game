@@ -7,6 +7,7 @@ import type { PlayerSim } from '../player/PlayerState';
 import type { CollisionWorld } from '../world/CollisionWorld';
 import { makeRayHit, type RayHit } from '../world/Geometry';
 import { AR_DEFAULT, cloneWeaponDef, type WeaponDef } from './WeaponDefs';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * The knife (post-M8 playtest; given a blade in round 2).
@@ -216,10 +217,10 @@ export class Melee {
     const ox = sim.x;
     const oy = sim.y + sim.eyeHeight;
     const oz = sim.z;
-    const cp = Math.cos(sim.pitch);
-    const dx = -Math.sin(sim.yaw) * cp;
-    const dy = Math.sin(sim.pitch);
-    const dz = -Math.cos(sim.yaw) * cp;
+    const cp = simCos(sim.pitch);
+    const dx = -simSin(sim.yaw) * cp;
+    const dy = simSin(sim.pitch);
+    const dz = -simCos(sim.yaw) * cp;
 
     let bestT = MELEE_RANGE;
     let bestId = -1;

@@ -6,6 +6,7 @@ import { capsuleFits } from './Movement';
 import type { MovementConfig } from './MovementConfig';
 import type { PlayerSim } from './PlayerState';
 import type { StanceId } from './Stance';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * Ledge detection and the vault itself (brief S5.1: ledges 0.4-1.6 m, 0.4 s vault).
@@ -52,8 +53,8 @@ export function detectMantle(
 ): boolean {
   if (sim.mantleCooldown > 0) return false;
 
-  const fx = -Math.sin(sim.yaw);
-  const fz = -Math.cos(sim.yaw);
+  const fx = -simSin(sim.yaw);
+  const fz = -simCos(sim.yaw);
 
   // 1. Find the wall.
   const reach = cfg.capsuleRadius + cfg.mantleReach;

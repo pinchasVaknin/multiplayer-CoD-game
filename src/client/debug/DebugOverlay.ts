@@ -18,6 +18,7 @@ import {
   type MovementConfig,
 } from '../../shared/player/MovementConfig';
 import type { PlayerController } from '../../shared/player/PlayerController';
+import type { INetworkTransport } from '../../shared/net/Transport';
 import type { MapStats } from '../world/MapRender';
 import type { CollisionDebug } from './CollisionDebug';
 import { FrameStats } from './FrameStats';
@@ -49,6 +50,13 @@ export interface DebugContext {
   movementConfig: MovementConfig;
   cameraConfig: CameraConfig;
   mapStats: MapStats;
+  /**
+   * The command path between input and simulation (M9, S7).
+   *
+   * `kind` is `'local'` today and `'remote'` from M10. The overlay reports it verbatim
+   * rather than inferring it, so the readout cannot drift from the truth.
+   */
+  transport: INetworkTransport;
   /**
    * Owned by `Game` from M4, not by the overlay.
    *
@@ -132,6 +140,10 @@ export class DebugOverlay {
   private fBudget: Field;
   private fBreakdown: Field;
   private fStreaks: Field;
+  /** M9 (S7): which simulation is driving this client. See the Simulation section. */
+  private fSimSource: Field;
+  private fSimTransport: Field;
+  private fSimTick: Field;
 
   // Player fields
   private fPos: Field;
@@ -216,6 +228,20 @@ export class DebugOverlay {
 
     const mapLine = perf.addField('Map');
     mapLine.el.textContent = `${ctx.mapStats.colliders} col · ${ctx.mapStats.hashCells} cells · AO ${ctx.mapStats.aoMs.toFixed(0)}ms`;
+
+    // ---- SIMULATION SOURCE (M9, S7) --------------------------------------
+    //
+    // "Add a panel showing which simulation is driving the client — local shared sim today,
+    // remote server from M10 — so the distinction is never ambiguous."
+    //
+    // It is one line today and will stay one line. The value comes from it being *present*
+    // before there is a second answer: at M10 a bug report saying "prediction feels wrong"
+    // is a different bug depending on what this says, and adding the readout at the same
+    // time as the thing it distinguishes would mean nobody trusts it yet.
+    const sim = this.section('Simulation', left);
+    this.fSimSource = sim.addField('Driven by');
+    this.fSimTransport = sim.addField('Transport');
+    this.fSimTick = sim.addField('Tick / sim time');
 
     // ---- PLAYER ----------------------------------------------------------
     const player = this.section('Player', left);
@@ -430,6 +456,24 @@ export class DebugOverlay {
       this.fStreaks,
       `${stats.lastStreakMs.toFixed(3)} ms / ${stats.lastStreakCount} ` +
         `(peak ${stats.peakStreakMs.toFixed(2)} ms / ${stats.peakStreakCount})`,
+    );
+
+    // M9 (S7). `kind` comes from the transport itself rather than from a flag here, so the
+    // readout cannot disagree with reality — which is the entire point of having it.
+    const t = this.ctx.transport;
+    set(
+      this.fSimSource,
+      t.kind === 'local'
+        ? 'LOCAL shared sim (authoritative here)'
+        : 'REMOTE server (this client is presentation only)',
+    );
+    set(
+      this.fSimTransport,
+      `${t.kind} · ${t.isOpen ? 'open' : 'closed'} · ${t.pending} pending · rtt ${t.rttMs.toFixed(1)}ms`,
+    );
+    set(
+      this.fSimTick,
+      `${this.ctx.loop.currentTick} · ${this.ctx.loop.simTime.toFixed(1)}s`,
     );
 
     set(this.fPos, `${sim.x.toFixed(2)} ${sim.y.toFixed(2)} ${sim.z.toFixed(2)}`);

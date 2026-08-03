@@ -10,6 +10,11 @@ import { sanitiseLoadout, UnlockState } from '../../shared/meta/Unlocks';
 import { PERKS, type PerkId } from '../../shared/perks/PerkDefs';
 import { STREAK_DEFS, type StreakId } from '../../shared/streaks/StreakDefs';
 import { PLAYER_ENTITY_ID } from '../../shared/combat/DamageSystem';
+import {
+  DETERMINISM_DEFAULTS,
+  runDeterminismScenario,
+  runFingerprint,
+} from '../../shared/debug/Determinism';
 import { perkWeaponEffects, resolvePerkState } from '../../shared/perks/PerkState';
 import { ATTACHMENTS, resolveWeaponDef } from '../../shared/weapons/Attachments';
 import { ALL_WEAPONS, type WeaponDef } from '../../shared/weapons/WeaponDefs';
@@ -221,6 +226,45 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
       lastWriteMs: game.profile.store.lastWriteMs,
       persistent: game.profile.store.isPersistent,
     }),
+
+    /**
+     * The browser half of the cross-runtime determinism check (M9, S6.6).
+     *
+     * Runs the identical fixed command sequence `dist-server/hashRun.js` runs, through the
+     * identical `shared/` modules, and produces the identical shape of output. If the two
+     * fingerprints match, the simulation is the same program in both runtimes.
+     *
+     *   __operator.determinism.fingerprint()   -> compare against the Node run at a glance
+     *   __operator.determinism.download()      -> browser-hashes.json, for the differ
+     */
+    determinism: {
+      run: (ticks = DETERMINISM_DEFAULTS.ticks, seed = DETERMINISM_DEFAULTS.seed) =>
+        runDeterminismScenario({ ticks, seed }),
+      fingerprint: (ticks = DETERMINISM_DEFAULTS.ticks, seed = DETERMINISM_DEFAULTS.seed) =>
+        runFingerprint(runDeterminismScenario({ ticks, seed })),
+      payload: (ticks = DETERMINISM_DEFAULTS.ticks, seed = DETERMINISM_DEFAULTS.seed) => {
+        const samples = runDeterminismScenario({ ticks, seed });
+        return {
+          runtime: 'browser',
+          version: navigator.userAgent,
+          ticks: samples.length,
+          seed,
+          fingerprint: runFingerprint(samples),
+          samples,
+        };
+      },
+      download: (ticks = DETERMINISM_DEFAULTS.ticks, seed = DETERMINISM_DEFAULTS.seed) => {
+        const payload = api.determinism.payload(ticks, seed);
+        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'browser-hashes.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        return payload.fingerprint;
+      },
+    },
   };
   Object.defineProperty(window, '__operator', { value: api, configurable: true });
 }

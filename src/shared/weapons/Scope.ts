@@ -1,6 +1,7 @@
 import { DT } from '../core/Loop';
 import { clamp01, TAU } from '../core/MathUtil';
 import type { ScopeProfile, WeaponDef } from './WeaponDefs';
+import { simSin } from '../core/SimMath';
 
 /**
  * The sniper scope (brief S6.1): visible breath sway, hold-breath on Shift, and the glint
@@ -100,8 +101,8 @@ export class ScopeState {
     const amp = scope.swayDeg * clamp01(adsFraction) * holdScale * fatigue;
 
     const w = scope.swayRate * TAU;
-    this.swayYaw = Math.sin(this.phase * w) * amp;
-    this.swayPitch = Math.sin(this.phase * w * 0.61 + 1.3) * amp * 0.62;
+    this.swayYaw = simSin(this.phase * w) * amp;
+    this.swayPitch = simSin(this.phase * w * 0.61 + 1.3) * amp * 0.62;
   }
 
   /**

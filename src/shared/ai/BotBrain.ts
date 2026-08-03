@@ -12,6 +12,7 @@ import {
 } from './ObjectiveIntent';
 import type { Perception } from './Perception';
 import type { Pathfinder } from './Pathing';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * The bot's decision layer (brief S6.2).
@@ -398,7 +399,7 @@ export class BotBrain {
     } else if (travelling && (wishX !== 0 || wishZ !== 0)) {
       // Look where you are going, plus a slow sweep so a patrolling bot scans.
       this.lookSweep += DT;
-      const sweep = this.state === 'PATROL' ? Math.sin(this.lookSweep * 0.7) * 26 * DEG2RAD : 0;
+      const sweep = this.state === 'PATROL' ? simSin(this.lookSweep * 0.7) * 26 * DEG2RAD : 0;
       combat.lookToward(tier, Math.atan2(-wishX, -wishZ) + sweep, 0);
     } else if (bb.investigateValid) {
       const dx = bb.investigateX - bot.px;
@@ -406,7 +407,7 @@ export class BotBrain {
       combat.lookToward(tier, Math.atan2(-dx, -dz), 0);
     } else {
       this.lookSweep += DT;
-      combat.lookToward(tier, combat.aimYaw + Math.sin(this.lookSweep * 0.5) * 0.4 * DT, 0);
+      combat.lookToward(tier, combat.aimYaw + simSin(this.lookSweep * 0.5) * 0.4 * DT, 0);
     }
 
     cmd.yaw = combat.aimYaw;
@@ -417,8 +418,8 @@ export class BotBrain {
       this.updateStrafe(bot, tier.strafeBias, tier.strafePeriod);
       if (this.strafing) {
         const yaw = combat.aimYaw;
-        const rx = Math.cos(yaw) * this.strafeSide;
-        const rz = -Math.sin(yaw) * this.strafeSide;
+        const rx = simCos(yaw) * this.strafeSide;
+        const rz = -simSin(yaw) * this.strafeSide;
         if (this.canStep(bot, rx, rz)) {
           wishX += rx;
           wishZ += rz;
@@ -477,10 +478,10 @@ export class BotBrain {
       const nx = wishX * inv;
       const nz = wishZ * inv;
       const yaw = cmd.yaw;
-      const fx = -Math.sin(yaw);
-      const fz = -Math.cos(yaw);
-      const rx = Math.cos(yaw);
-      const rz = -Math.sin(yaw);
+      const fx = -simSin(yaw);
+      const fz = -simCos(yaw);
+      const rx = simCos(yaw);
+      const rz = -simSin(yaw);
       // Inverse of PlayerController's wish basis, so `moveX/moveZ` mean what they mean
       // for a human holding the same direction.
       cmd.moveZ = nx * fx + nz * fz;
@@ -666,8 +667,8 @@ export class BotBrain {
 
     for (const sweep of [0, 30, -30, 60, -60]) {
       const angle = base + sweep * DEG2RAD;
-      const x = bot.px + Math.cos(angle) * radius;
-      const z = bot.pz + Math.sin(angle) * radius;
+      const x = bot.px + simCos(angle) * radius;
+      const z = bot.pz + simSin(angle) * radius;
       const cell = nav.cellAtY(x, bot.py, z);
       if (cell < 0) continue;
       this.setGoal('PUSH', nav.centerX(nav.indexOfX(cell)), nav.heightAt(cell), nav.centerZ(nav.indexOfZ(cell)));
@@ -689,8 +690,8 @@ export class BotBrain {
 
     for (const sweep of [70, 100, 45, 130]) {
       const angle = base + side * sweep * DEG2RAD;
-      const x = bb.lastKnownX + Math.cos(angle) * radius;
-      const z = bb.lastKnownZ + Math.sin(angle) * radius;
+      const x = bb.lastKnownX + simCos(angle) * radius;
+      const z = bb.lastKnownZ + simSin(angle) * radius;
       /**
        * The flank is around the target — and, on a map with a deck, sometimes *above* it.
        *

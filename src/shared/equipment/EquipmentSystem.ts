@@ -10,6 +10,7 @@ import { equipmentDef, type EquipmentDef, type EquipmentId, type EquipmentSlot }
 import { FlashField } from './FlashField';
 import { ProjectilePool, type Projectile } from './Projectile';
 import { SmokeField } from './SmokeField';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * Everything thrown, and everything it does (brief S6.3).
@@ -132,10 +133,10 @@ export class EquipmentSystem {
   ): Projectile | null {
     const cfg = this.cfg;
     const loft = (pitch + def.throwLoftDeg * DEG2RAD);
-    const cp = Math.cos(loft);
-    const sp = Math.sin(loft);
-    const sy = Math.sin(yaw);
-    const cy = Math.cos(yaw);
+    const cp = simCos(loft);
+    const sp = simSin(loft);
+    const sy = simSin(yaw);
+    const cy = simCos(yaw);
     const dx = -sy * cp;
     const dy = sp;
     const dz = -cy * cp;
@@ -243,9 +244,9 @@ export class EquipmentSystem {
     if (p.pollTimer > 0) return;
     p.pollTimer = this.cfg.triggerInterval;
 
-    const half = Math.cos(p.def.triggerArcDeg * 0.5 * DEG2RAD);
-    const fx = -Math.sin(p.yaw);
-    const fz = -Math.cos(p.yaw);
+    const half = simCos(p.def.triggerArcDeg * 0.5 * DEG2RAD);
+    const fx = -simSin(p.yaw);
+    const fz = -simCos(p.yaw);
 
     for (const c of this.roster) {
       if (!c.participating) continue;

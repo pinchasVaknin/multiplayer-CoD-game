@@ -10,6 +10,7 @@ import type { EquipmentConfig } from './EquipmentConfig';
 import { ALL_EQUIPMENT, type EquipmentDef } from './EquipmentDefs';
 import type { EquipmentSystem } from './EquipmentSystem';
 import { previewTrajectory } from './Projectile';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * Bots throwing grenades, gated by difficulty tier, without blowing themselves up
@@ -189,10 +190,10 @@ export class BotThrower {
     pitch: number,
   ): number {
     const loft = pitch + def.throwLoftDeg * DEG2RAD;
-    const cp = Math.cos(loft);
-    const sp = Math.sin(loft);
-    const sy = Math.sin(yaw);
-    const cy = Math.cos(yaw);
+    const cp = simCos(loft);
+    const sp = simSin(loft);
+    const sy = simSin(yaw);
+    const cy = simCos(yaw);
     const dx = -sy * cp;
     const dy = sp;
     const dz = -cy * cp;

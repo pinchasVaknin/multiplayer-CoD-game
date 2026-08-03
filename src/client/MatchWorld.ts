@@ -4,6 +4,7 @@ import type { PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
 import { EV, type GameBus } from '../shared/core/Events';
 import type { Input } from './input/Input';
 import type { Loop } from './engine/FrameLoop';
+import type { INetworkTransport } from '../shared/net/Transport';
 import type { CameraRig } from './engine/CameraRig';
 import type { ProceduralAudio } from './engine/ProceduralAudio';
 import type { ProceduralTextures } from './engine/ProceduralTextures';
@@ -99,6 +100,8 @@ export interface MatchWorldDeps {
 
   // ---- what this particular match is --------------------------------------
   readonly mapEntry: MapEntry;
+  /** M9 (S7): handed to the debug overlay, which reports the source of simulation. */
+  readonly transport: INetworkTransport;
   readonly modeEntry: ModeEntry;
   readonly loadout: ResolvedLoadout;
 
@@ -194,6 +197,7 @@ export class MatchWorld {
       cameraRig: deps.cameraRig,
       map,
       mapEntry: deps.mapEntry,
+      transport: deps.transport,
       match: this.match,
       movementConfig: deps.movementConfig,
       cameraConfig: deps.cameraConfig,

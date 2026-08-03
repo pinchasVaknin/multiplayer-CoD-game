@@ -1,6 +1,7 @@
 import type { NavGrid } from '../world/Navmesh';
 import type { CoverPoint } from '../world/maps/types';
 import type { Perception } from './Perception';
+import { simCos, simSin } from '../core/SimMath';
 
 /**
  * Cover points, validated and scored (brief S6.5).
@@ -142,8 +143,8 @@ export class CoverIndex {
       if (threatDist < 1.5) continue;
 
       // The cover has to be oriented against the threat, not merely near it.
-      const fx = -Math.sin(slot.facingYaw);
-      const fz = -Math.cos(slot.facingYaw);
+      const fx = -simSin(slot.facingYaw);
+      const fz = -simCos(slot.facingYaw);
       const facing = (toThreatX * fx + toThreatZ * fz) / threatDist;
       if (facing < 0.15) continue;
 
@@ -223,12 +224,12 @@ export class CoverIndex {
   peekOffsetX(slotIndex: number, side: number): number {
     const slot = this.slots[slotIndex];
     if (slot === undefined) return 0;
-    return Math.cos(slot.facingYaw) * side;
+    return simCos(slot.facingYaw) * side;
   }
 
   peekOffsetZ(slotIndex: number, side: number): number {
     const slot = this.slots[slotIndex];
     if (slot === undefined) return 0;
-    return -Math.sin(slot.facingYaw) * side;
+    return -simSin(slot.facingYaw) * side;
   }
 }
