@@ -93,6 +93,29 @@ export class Health {
     this.lastDelta = 0;
   }
 
+  /**
+   * Adopt a replicated health value (M10).
+   *
+   * The server owns health on a dedicated server, so the client's copy is a *display* of it
+   * rather than a simulation of it. Setting the field directly would leave `alive` and
+   * `changedThisTick` stale — and those two drive the death screen, the low-health vignette
+   * and the heartbeat, so a client whose health arrived by assignment would show full health
+   * on a corpse.
+   *
+   * `sinceDamage` is reset on a decrease so the muffle and the regen-delay read-out behave as
+   * they do locally; nothing here starts a local regeneration, because the server is the only
+   * thing entitled to give health back.
+   */
+  setReplicated(current: number, alive: boolean): void {
+    const before = this.current;
+    const clamped = current < 0 ? 0 : current > this.cfg.max ? this.cfg.max : current;
+    this.current = clamped;
+    this.alive = alive;
+    this.changedThisTick = clamped !== before;
+    this.lastDelta = clamped - before;
+    if (clamped < before) this.sinceDamage = 0;
+  }
+
   /** Restore to full without clearing the damage timer's meaning. */
   healFull(): void {
     if (!this.alive) return;

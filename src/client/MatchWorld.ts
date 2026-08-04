@@ -238,6 +238,22 @@ export class MatchWorld {
     });
 
     /**
+     * Point the session at the match, now that both exist.
+     *
+     * These are the two places replicated state lands. They are assigned here rather than
+     * passed into the session's constructor because the session is built first — the match's
+     * renderer needs its actor list — so the reference can only be handed over afterwards.
+     */
+    if (this.net !== null) {
+      this.net.onMatchState = (phase, secondsRemaining, phaseSeconds, round) => {
+        this.match.flow.applyReplicated(phase, secondsRemaining, phaseSeconds, round);
+      };
+      this.net.onLocalState = (health, alive) => {
+        this.match.applyReplicatedSelf(health, alive);
+      };
+    }
+
+    /**
      * Dial out.
      *
      * Deliberately not awaited: the world is built synchronously on entering MATCH and the

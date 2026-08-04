@@ -699,6 +699,54 @@ export class Match {
   }
 
   /**
+   * Adopt the local player's replicated health and liveness (M10 playtest fix).
+   *
+   * The server owns whether this player is alive; before this the client decided for itself
+   * and got it wrong in the only way that matters. `onPlayerKilled` keys on
+   * `PLAYER_ENTITY_ID`, which is entity **0** — the server's empty spectator seat — while a
+   * connected human is entity 1 or above. So the death path never fired, the death screen
+   * never appeared, and `stepPlayerRespawn` (the only thing that clears `playerDead`) is
+   * skipped in networked matches anyway. Three separate notions of "am I dead", one of them
+   * authoritative and none of them talking to each other.
+   *
+   * Now there is one: this. Called on every change to the replicated health or alive bit.
+   */
+  applyReplicatedSelf(health: number, alive: boolean): void {
+    if (!this.isNetworked) return;
+
+    this.playerHealth.setReplicated(health, alive);
+
+    if (!alive && !this.playerDead) {
+      this.onPlayerKilled();
+      return;
+    }
+    if (alive && this.playerDead) this.respawnNetworked();
+  }
+
+  /**
+   * Come back to life where the server already put us.
+   *
+   * Everything `respawnPlayer` does **except choose a position**: no `selectSpawn`, no
+   * `player.spawn`, no `setView`. The server picked the spawn point, the snapshot carried it,
+   * and prediction has already adopted it — re-spawning locally would fight the authoritative
+   * position and yank the camera somewhere the server disagrees with.
+   *
+   * What it does do is the per-life reset the rest of the client depends on: full health, a
+   * reloaded weapon on the right slot, the sights down, the knife put away.
+   */
+  private respawnNetworked(): void {
+    this.playerHealth.reset();
+    this.weapons.reset();
+    // A reset is not a swap and emits no `weapon.swapped`, so the visible model has to be
+    // told separately or it keeps whatever was in frame when the player died.
+    this.showSlot(this.weapons.inventory.activeSlotIndex);
+    this.melee.reset();
+    this.playerCombatant.syncRig();
+    this.playerDead = false;
+    this.playerRespawnTimer = 0;
+  }
+
+  /**
    * Replicated freeze state, written by the net session from the snapshot header.
    *
    * Held here rather than read from the session because `inputFrozen` is consulted from the
@@ -826,7 +874,10 @@ export class Match {
 
   /** One sim tick. Called from Game.simulate after the player has stepped. */
   simulate(cmd: InputCommand): void {
-    this.playerHealth.step();
+    // Health is server-owned in a networked match (S4.15) and arrives replicated. Stepping it
+    // here as well would run a *second* regeneration curve against the authoritative one and
+    // the bar would visibly disagree with the damage the player is taking.
+    if (!this.isNetworked) this.playerHealth.step();
     // The rig follows the capsule on the *tick*, and before anything resolves a shot
     // against it, so a bot's round is tested against where the player was when it fired.
     this.playerCombatant.syncRig();

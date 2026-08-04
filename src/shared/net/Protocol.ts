@@ -14,8 +14,15 @@
  * The check is the first thing the handshake does, before a single gameplay byte is decoded.
  */
 
-/** Bump on any layout change to any message in this file. */
-export const PROTOCOL_VERSION = 1;
+/**
+ * Bump on any layout change to any message in this file.
+ *
+ * v2: the snapshot header gained match phase, phase seconds and round (M10 playtest fix).
+ * The HUD reads those off the client's own `MatchFlow`, which on a dedicated server never
+ * ticks — so without them the banner and the clock showed their construction-time values for
+ * the whole match.
+ */
+export const PROTOCOL_VERSION = 2;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'

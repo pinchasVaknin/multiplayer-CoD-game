@@ -76,6 +76,18 @@ export interface HeadlessClientReport {
   readonly deaths: number;
   /** Remote entities currently tracked. */
   readonly remotes: number;
+  /** Deaths this client has been through. */
+  readonly deathCycles: number;
+  /**
+   * Metres travelled **since the most recent respawn**.
+   *
+   * The unattended detector for a frozen player. A client that dies and comes back unable to
+   * move looks completely healthy on every other number here — it is connected, its RTT is
+   * fine, it is receiving snapshots and mispredicting nothing — because standing still is
+   * something a client does correctly. This is the one figure that goes to zero and stays
+   * there, which is exactly the M10 playtest bug.
+   */
+  readonly metresSinceRespawn: number;
 }
 
 export class HeadlessClient {
@@ -104,6 +116,10 @@ export class HeadlessClient {
 
   /** Live state of this client's own entity, from the snapshot. */
   private alive = true;
+  private deathCycles = 0;
+  private metresSinceRespawn = 0;
+  private lastX = Number.NaN;
+  private lastZ = Number.NaN;
 
   constructor(opts: HeadlessClientOptions) {
     this.opts = opts;
@@ -180,6 +196,8 @@ export class HeadlessClient {
       killsDealt: this.killsDealt,
       deaths: this.deaths,
       remotes: this.net.remotes.size,
+      deathCycles: this.deathCycles,
+      metresSinceRespawn: Math.round(this.metresSinceRespawn * 10) / 10,
     };
   }
 
@@ -318,11 +336,37 @@ export class HeadlessClient {
     this.pitch = Math.atan2(dy, Math.hypot(dx, dz));
   }
 
-  /** Track our own liveness from the snapshot, so a dead client stops trying to move. */
+  /**
+   * Track our own liveness, and how far we have moved since coming back.
+   *
+   * The distance is measured off the *predicted* controller rather than the snapshot,
+   * because that is what the player would see and it is what stops moving when the input
+   * pipeline is suppressed.
+   */
   private readOwnEntity(): void {
     const own = this.net.remotes.get(this.net.entityId);
     if (own === undefined) return;
-    this.alive = (own.latest.flags & EFlag.Alive) !== 0;
+    const alive = (own.latest.flags & EFlag.Alive) !== 0;
+
+    if (alive && !this.alive) {
+      // Respawned: start the odometer again from wherever the server put us.
+      this.deathCycles++;
+      this.metresSinceRespawn = 0;
+      this.lastX = Number.NaN;
+      this.lastZ = Number.NaN;
+    }
+    this.alive = alive;
+
+    if (!alive) return;
+    const sim = this.controller.sim;
+    if (Number.isFinite(this.lastX) && Number.isFinite(this.lastZ)) {
+      const step = Math.hypot(sim.x - this.lastX, sim.z - this.lastZ);
+      // Ignore the metre-scale jump a correction can produce; this is an odometer, not a
+      // displacement, and a teleport is not distance the player walked.
+      if (step < 1) this.metresSinceRespawn += step;
+    }
+    this.lastX = sim.x;
+    this.lastZ = sim.z;
   }
 }
 

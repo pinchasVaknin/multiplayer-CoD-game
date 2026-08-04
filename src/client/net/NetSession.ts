@@ -6,9 +6,10 @@ import { logger } from '../../shared/core/Log';
 import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
 import type { NetConditions } from '../../shared/net/NetSim';
 import { NetClient, type NetClientState } from '../../shared/net/NetClient';
-import { SFlag } from '../../shared/net/Messages';
-import { weaponIdAt } from '../../shared/net/Snapshot';
+import { phaseAt, SFlag } from '../../shared/net/Messages';
+import { EFlag, weaponIdAt } from '../../shared/net/Snapshot';
 import type { PlayerController } from '../../shared/player/PlayerController';
+import type { MatchPhase } from '../../shared/modes/MatchFlow';
 import { WEAPON_DEFS } from '../../shared/weapons/WeaponDefs';
 import { BrowserLink } from './BrowserLink';
 import { RemoteActor } from './RemoteActor';
@@ -64,6 +65,32 @@ export class NetSession {
   timeLeft = -1;
   frozen = false;
   matchOver = false;
+
+  /**
+   * Where replicated match state is applied.
+   *
+   * Set by `MatchWorld` once the match exists. A callback rather than a direct reference
+   * because the session is constructed *before* the match — the match's renderer needs the
+   * session's actor list at construction — so the dependency can only point this way.
+   */
+  onMatchState: ((phase: MatchPhase, secondsRemaining: number, phaseSeconds: number, round: number) => void) | null =
+    null;
+
+  /**
+   * Where the local player's replicated health and liveness are applied.
+   *
+   * The client had three independent notions of "am I dead" — `NetClient.localAlive`,
+   * `ClientMatch.playerDead` and the local `Health` object — and only the first was driven by
+   * the server. That divergence is what let a respawned player stay frozen: the suppression
+   * that stopped their movement and the state that would have lifted it were different facts.
+   * This makes the server's answer the only one.
+   */
+  onLocalState: ((health: number, alive: boolean) => void) | null = null;
+
+  private lastScoreA = -1;
+  private lastScoreB = -1;
+  private lastLocalHealth = -1;
+  private lastLocalAlive = true;
 
   private readonly deps: NetSessionDeps;
   private readonly interpolationDelayMs: number;
@@ -236,6 +263,44 @@ export class NetSession {
     this.frozen = (h.flags & SFlag.InputFrozen) !== 0;
     this.matchOver = (h.flags & SFlag.MatchOver) !== 0;
 
+    /**
+     * Push the replicated match clock into the client's own inert `MatchFlow`.
+     *
+     * The HUD reads phase, round and both clocks straight off that object, and on a dedicated
+     * server nothing ticks it. Without this the banner sat on "GET READY - 3" and the match
+     * clock on 10:00 for the whole game.
+     */
+    if (this.client.state === 'joined') {
+      this.onMatchState?.(phaseAt(h.phase), Math.max(0, h.timeLeft), h.phaseSeconds, h.round);
+    }
+
+    /**
+     * The score, as the event the HUD already listens for.
+     *
+     * Re-emitted rather than poked into the banner, so it travels the identical path a local
+     * score change does (S3). Edge-triggered, because the HUD's handler is a subscription and
+     * firing it twenty times a second with an unchanged value is work for nothing.
+     */
+    if (h.scoreA !== this.lastScoreA || h.scoreB !== this.lastScoreB) {
+      this.lastScoreA = h.scoreA;
+      this.lastScoreB = h.scoreB;
+      evScore.teamA = h.scoreA;
+      evScore.teamB = h.scoreB;
+      this.deps.bus.emit(EV.ScoreChanged, evScore);
+    }
+
+    // The local player's own health and liveness, from our own entity in the snapshot.
+    const own = this.client.remotes.get(this.client.entityId);
+    if (own !== undefined) {
+      const alive = (own.latest.flags & EFlag.Alive) !== 0;
+      const health = own.latest.health;
+      if (health !== this.lastLocalHealth || alive !== this.lastLocalAlive) {
+        this.lastLocalHealth = health;
+        this.lastLocalAlive = alive;
+        this.onLocalState?.(health, alive);
+      }
+    }
+
     this.syncActors();
     return steps;
   }
@@ -344,3 +409,9 @@ const evLand = {
 };
 
 const evJump = { entityId: 0, x: 0, y: 0, z: 0, horizontalSpeed: 0 };
+
+/**
+ * `limit` is left at zero: the score limit is a mode rule the client already holds, and the
+ * HUD only redraws it when a `ScoreChanged` carries a non-zero one.
+ */
+const evScore = { teamA: 0, teamB: 0, limit: 0 };

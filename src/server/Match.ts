@@ -450,11 +450,26 @@ export class ServerMatch {
 
   private spawnPlayer(player: NetPlayer): void {
     if (!this.bots.selectSpawn(player.team, player.entityId, this.spawnChoice)) {
-      // `selectSpawn` is documented never to fail, and if that ever stops being true the
-      // honest response is to leave the player where they are rather than drop them at the
-      // world origin inside a wall.
-      log.warn(`no spawn available for entity ${player.entityId}.`);
-      return;
+      /**
+       * `selectSpawn` is documented never to fail. If that ever stops being true, falling
+       * back matters more than it looks: this is the only path back to `alive`, so returning
+       * early here leaves the player dead **forever** — and a permanently dead player is not
+       * a visibly broken one, it is a player who can still look around and cannot walk. That
+       * is indistinguishable from a movement bug and would be debugged as one.
+       *
+       * So take the map's first authored spawn instead. It may be a poor spawn; it is not a
+       * lost life.
+       */
+      const fallback = this.mapEntry.def.spawns?.[0];
+      if (fallback === undefined) {
+        log.error(`no spawn available for entity ${player.entityId} and no map fallback.`);
+        return;
+      }
+      log.warn(`no scored spawn for entity ${player.entityId}; using the map's first.`);
+      this.spawnChoice.x = fallback.position.x;
+      this.spawnChoice.y = fallback.position.y;
+      this.spawnChoice.z = fallback.position.z;
+      this.spawnChoice.yaw = fallback.facingYaw;
     }
     const c = this.spawnChoice;
     player.spawn(c.x, c.y, c.z, c.yaw);

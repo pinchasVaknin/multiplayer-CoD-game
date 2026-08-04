@@ -251,6 +251,8 @@ async function main(): Promise<number> {
       hitRate: r.shotsFired === 0 ? 0 : round(r.hitsDealt / r.shotsFired),
       killsDealt: r.killsDealt,
       deaths: r.deaths,
+      deathCycles: r.deathCycles,
+      metresSinceRespawn: r.metresSinceRespawn,
       remotes: r.remotes,
     });
   }

@@ -267,6 +267,12 @@ export interface SnapshotHeader {
   timeLeft: number;
   /** `SFlag` bits. Match phase, which S4.15 lists as server-authoritative round state. */
   flags: number;
+  /** Index into `MATCH_PHASES`. The HUD's banner reads the phase, not just the frozen bit. */
+  phase: number;
+  /** Seconds left of the warm-up or round-end hold. Drives the 3-2-1 countdown. */
+  phaseSeconds: number;
+  /** Round number, for the modes that have them. */
+  round: number;
   /**
    * How often this client's commands have recently arrived too late to use, 0-60.
    *
@@ -322,6 +328,10 @@ export function writeSnapshotHeader(w: ByteWriter, h: SnapshotHeader): void {
   w.i16(Math.round(h.timeLeft));
   w.u8v(h.flags);
   w.u8v(h.starvation);
+  w.u8v(h.phase);
+  // Tenths, so a 3-2-1 countdown ticks smoothly rather than in whole seconds.
+  w.u16(Math.max(0, Math.round(h.phaseSeconds * 10)));
+  w.u8v(Math.min(255, Math.max(0, h.round)));
 }
 
 /** The owner block, flagged so a spectating or unspawned client can omit it entirely. */
@@ -549,6 +559,9 @@ export function readSnapshotHeader(r: ByteReader, out: SnapshotHeader): void {
   out.timeLeft = r.i16();
   out.flags = r.u8v();
   out.starvation = r.u8v();
+  out.phase = r.u8v();
+  out.phaseSeconds = r.u16() / 10;
+  out.round = r.u8v();
 }
 
 export function makeSnapshotHeader(): SnapshotHeader {
@@ -563,7 +576,27 @@ export function makeSnapshotHeader(): SnapshotHeader {
     timeLeft: -1,
     flags: 0,
     starvation: 0,
+    phase: 0,
+    phaseSeconds: 0,
+    round: 1,
   };
+}
+
+/**
+ * Wire order for `MatchPhase`. Index, not string — one byte instead of a length-prefixed word.
+ *
+ * Mirrors `MATCH_PHASES` in `shared/modes/MatchFlow.ts`; the two are asserted to agree by
+ * `phaseIndex` returning 0 for anything unrecognised, which is WARMUP and is the safe answer.
+ */
+export const WIRE_PHASES = ['WARMUP', 'LIVE', 'ROUND_END', 'MATCH_END'] as const;
+
+export function phaseIndex(phase: string): number {
+  const at = WIRE_PHASES.indexOf(phase as (typeof WIRE_PHASES)[number]);
+  return at < 0 ? 0 : at;
+}
+
+export function phaseAt(index: number): (typeof WIRE_PHASES)[number] {
+  return WIRE_PHASES[index] ?? 'WARMUP';
 }
 
 /** True when an owner block follows. */

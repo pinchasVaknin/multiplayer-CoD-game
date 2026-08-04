@@ -3,7 +3,7 @@ import { nowMs } from '../shared/core/Clock';
 import { Btn, isDown } from '../shared/core/InputCommand';
 import { logger } from '../shared/core/Log';
 import { metric } from './log';
-import { makeSnapshotHeader, SFlag, type SnapshotHeader } from '../shared/net/Messages';
+import { makeSnapshotHeader, phaseIndex, SFlag, type SnapshotHeader } from '../shared/net/Messages';
 import { EFlag, makeEntitySnapshot, weaponIndexOf, type EntitySnapshot } from '../shared/net/Snapshot';
 import { describeConfig, type ServerConfig } from './Config';
 import { ServerLoop, type TickJitter } from './Loop';
@@ -239,6 +239,9 @@ export class GameServer {
       h.flags =
         (this.match.inputFrozen ? SFlag.InputFrozen : 0) | (flow.isOver ? SFlag.MatchOver : 0);
       h.starvation = player.input.takeStarvation();
+      h.phase = phaseIndex(flow.currentPhase);
+      h.phaseSeconds = flow.phaseSecondsRemaining;
+      h.round = flow.round;
 
       const frame = encoder.encode(
         h,

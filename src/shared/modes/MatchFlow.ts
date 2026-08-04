@@ -129,6 +129,29 @@ export class MatchFlow {
     return Math.max(0, limit - this.phaseTicks * DT);
   }
 
+  /**
+   * Adopt match state from the server (M10).
+   *
+   * On a dedicated server this flow is the only one running its clock; every client holds an
+   * inert copy whose `simulate` is never called. Without this the client's copy sits at
+   * whatever it was constructed with, and the HUD — which reads `currentPhase`,
+   * `secondsRemaining` and `phaseSecondsRemaining` straight off it — shows the *initial*
+   * state forever. Measured before this existed: the banner stuck on "GET READY - 3" and the
+   * clock frozen at 10:00 for a match that was minutes in and had a score of 6-14.
+   *
+   * Fields are written directly rather than by advancing the clock, because the server's
+   * value is the answer and re-deriving it here would be a second clock to disagree with.
+   * `phaseTicks` is back-computed from the remaining phase seconds so `phaseSecondsRemaining`
+   * — which the countdown banner reads — returns the replicated number rather than a stale one.
+   */
+  applyReplicated(phase: MatchPhase, secondsRemaining: number, phaseSeconds: number, round: number): void {
+    this.phase = phase;
+    this.roundIndex = round;
+    this.ticksRemaining = Math.max(0, Math.round(secondsRemaining / DT));
+    const limit = phase === 'WARMUP' ? WARMUP_SECONDS : this.roundEndSeconds;
+    this.phaseTicks = Math.max(0, Math.round((limit - phaseSeconds) / DT));
+  }
+
   get isLive(): boolean {
     return this.phase === 'LIVE';
   }
