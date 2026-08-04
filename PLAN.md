@@ -4127,6 +4127,82 @@ Stated plainly rather than buried.
    design. `npm run hashes` plus the browser half and `diff-hashes.mjs` should be re-run and
    the new fingerprint recorded before M11 relies on it.
 
+## Playtest round 1 — the two bugs, and the one cause
+
+Found by human playtest against the dedicated server. Both are the same mistake stated twice:
+**M10 switched off the client's local match authority and never connected the replicated
+replacement.** The client kept reading state that nothing was writing any more.
+
+### 1. The HUD sat on "GET READY - 3" and 10:00 for the whole match
+
+`MatchHud` reads phase, round and both clocks straight off the client's own `MatchFlow`, and
+in a networked match that object never ticks — `simulate` skips it, deliberately, because the
+server is running the real one. So it displayed its construction values forever. Measured in
+the browser: banner `WARMUP / 600 s / 3 s` while the replicated truth was `523 s` and the
+score was 6-14.
+
+Only a `frozen` bit was being replicated, which was enough for input suppression and useless
+for a HUD. The snapshot header now carries **phase, phase seconds and round** alongside the
+time and score, and `MatchFlow.applyReplicated` adopts them. Score goes out as the
+`ScoreChanged` event the HUD already subscribes to, so it travels the identical path a local
+score change does (S3).
+
+**`PROTOCOL_VERSION` is now 2.** The header layout changed.
+
+### 2. Frozen after respawn — look worked, movement did not
+
+The client had **three separate notions of "am I dead"**: `NetClient.localAlive`,
+`ClientMatch.playerDead`, and the local `Health` object. Only the first was driven by the
+server, and the other two were unreachable:
+
+- `onPlayerKilled` keys on `PLAYER_ENTITY_ID`, which is entity **0** — the server's empty
+  spectator seat — while a connected human is entity 1 or above. The death path never fired.
+- `stepPlayerRespawn`, the only thing that clears `playerDead`, is skipped when networked.
+
+So the state that suppressed movement and the state that would have lifted it were different
+facts that never spoke to each other. That is why the symptom was so specific: mouse look is
+applied at render rate straight into `Input`, entirely outside the command pipeline, so it
+kept working while every movement axis was being zeroed.
+
+`ClientMatch.applyReplicatedSelf` now takes the replicated health and alive bit off this
+client's own entity and drives all of it — death on the falling edge, `respawnNetworked` on
+the rising one. That reset does everything `respawnPlayer` does **except choose a position**:
+the server picked the spawn, the snapshot carried it, and prediction has already adopted it,
+so re-spawning locally would fight the authoritative position and yank the camera. Local
+health regeneration is also off when networked, because running a second regen curve against
+the authoritative one made the bar disagree with the damage being taken.
+
+### Two things closed alongside
+
+- **`spawnPlayer` now falls back** to the map's first authored spawn if the scored selector
+  ever fails, instead of returning early. The old path left the player dead *forever*, and a
+  permanently dead player is not visibly broken — they can look around and cannot walk, which
+  is indistinguishable from a movement bug and would be debugged as one. The selector never
+  failed in any run; that is precisely why the failure mode was worth closing.
+- **The headless client reports `metresSinceRespawn`**, so this class of bug is catchable
+  unattended. A client frozen after respawn looks healthy on every other number — connected,
+  good RTT, receiving snapshots, mispredicting nothing — because standing still is something
+  a client does correctly. Distance is the only figure that goes to zero and stays there.
+
+### Verification
+
+| | |
+|---|---|
+| 90 s runner, 8 bots | 1 death, **173 m travelled after respawn** |
+| Browser, death cycle | `dead:true hp:0` -> server respawn -> `dead:false hp:100 alive:true` |
+| Browser, HUD | `MATCH OVER / 247 s / 40-75` against a match that had just ended |
+| 2 clients, +100 ms | 6-7 mispredictions per ~350 comparisons, 231 B snapshots, 4.8 KB/s up, 5.0 down |
+| Hardening on v2 | ten probes, all closed, server alive |
+| Single-player | no session, `networked:false`, nine local bots, console clean |
+
+### The lesson for M11
+
+**Turning off a client-side system is half a change.** Every `if (!this.isNetworked)` added in
+M10 is a place where something authoritative has to arrive instead, and the compiler cannot
+tell you when it does not — the field still exists, still has a plausible value, and still
+renders. Grep for that guard before adding another one, and for each, name what replicates in
+its place.
+
 ## What Milestone 11 needs to know
 
 - **Read "What is not done" first.** Items 1, 3 and 6 are the ones that will bite.
@@ -4144,6 +4220,13 @@ Stated plainly rather than buried.
   mask are the whole change.
 - **`Rewind` owns the histories, not the entities.** A `Bot` runs in the browser too and has no
   business carrying a 60-tick buffer for a server-only feature.
+- **There is now exactly one authoritative source for local death**: the replicated
+  `EFlag.Alive` on this client's own entity, routed through `ClientMatch.applyReplicatedSelf`.
+  Do not add a second. M11's killstreaks and S&D round resets should go through the same
+  method rather than reaching for `playerDead` directly.
+- **`MatchFlow.applyReplicated` is how any match state reaches a client.** S&D's round state,
+  side swaps and the bomb timer are the same problem M10 hit with the clock, and they will
+  present the same way: a HUD that renders confidently and is completely wrong.
 - **The adaptive jitter buffer is a delta, not a level.** `InputBuffer.takeStarvation` returns
   repeats since the last read; the smoothing lives on the client. A level decayed per read at
   20 Hz was measured to be back at zero before the client ever saw it.
