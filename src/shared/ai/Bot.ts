@@ -2,6 +2,7 @@ import { HitboxRig, HUMANOID_RIG } from '../combat/HitboxRig';
 import type { DamageSystem } from '../combat/DamageSystem';
 import { EV, type GameBus } from '../core/Events';
 import type { MutableInputCommand, InputCommand } from '../core/InputCommand';
+import { shortestAngle } from '../core/MathUtil';
 import { DT } from '../core/Loop';
 import { Rng } from '../core/Rng';
 import { Health, type HealthConfig } from '../player/Health';
@@ -39,7 +40,7 @@ import { weaponProfileFor, type WeaponCombatProfile } from './WeaponProfile';
  * table and the same 8.2 m/s bound, step up the same 0.35 m, make the same footstep
  * sounds through the same positional audio, and take and deal damage through the one door
  * in `DamageSystem` — so time-to-kill is symmetric by construction rather than by two
- * implementations agreeing. It also means the netcode seam in `INetworkTransport` is real:
+ * implementations agreeing. It also means the netcode seam is real (M10: `INetLink`):
  * a bot already *is* a remote command source.
  *
  * The recoil residual is the detail worth calling out. `WeaponSystem` hands back the
@@ -448,9 +449,3 @@ export class Bot implements Combatant, PathClient {
 
 }
 
-function shortestAngle(from: number, to: number): number {
-  let d = (to - from) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d <= -Math.PI) d += Math.PI * 2;
-  return d;
-}

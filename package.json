@@ -8,19 +8,21 @@
     "dev": "vite",
     "build": "npm run check && vite build",
     "preview": "vite preview",
-
     "//server": "Bundled for Node with the bundler already in the stack. See vite.server.config.ts for why it is not run from source.",
     "build:server": "vite build --config vite.server.config.ts",
     "server": "npm run build:server && node dist-server/main.js",
     "harness": "npm run build:server && node --expose-gc dist-server/main.js --matches 5 --asap --json",
+    "//serve": "S6.6. The dedicated server. Everything operational comes from the environment - see src/server/Config.ts.",
+    "serve": "npm run build:server && node dist-server/serve.js",
+
+    "//netharness": "S7. Headless clients running the real NetClient against a real server. Every S8 client-side number comes out of this.",
+    "netharness": "npm run build:server && node dist-server/netHarness.js",
 
     "//hashes": "S6.6. Node writes the per-tick hashes; the browser writes its own from the debug console; the differ reports the first divergent tick.",
     "hashes": "npm run build:server && node dist-server/hashRun.js",
-
     "//check": "The gate. Boundaries first: a partition violation makes the type errors that follow meaningless noise, so it is the thing that speaks.",
     "check": "npm run check:boundaries && npm run typecheck",
     "check:boundaries": "node scripts/check-boundaries.mjs",
-
     "//typecheck": "Three targets, not one. shared/ compiles without the DOM lib, which is what makes a stray `document` a compile error instead of a crash in Node.",
     "typecheck": "npm run typecheck:shared && npm run typecheck:client && npm run typecheck:server",
     "typecheck:shared": "tsc -p tsconfig.shared.json --noEmit",
@@ -28,11 +30,13 @@
     "typecheck:server": "tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "ws": "^8.21.2"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
     "@types/three": "^0.185.1",
+    "@types/ws": "^8.18.1",
     "typescript": "^7.0.2",
     "vite": "^8.1.5"
   }

@@ -49,3 +49,20 @@ export function wrapAngle(a: number): number {
 export function sign(v: number): number {
   return v < 0 ? -1 : v > 0 ? 1 : 0;
 }
+
+/**
+ * Signed shortest angular distance from `from` to `to`, radians.
+ *
+ * Result is in (-pi, pi], so interpolating with it always turns the short way: a body facing
+ * 359 degrees and turning to 1 degree moves two degrees, not three hundred and fifty-eight.
+ *
+ * Lived in `ai/Bot.ts` until M10, where remote-player interpolation needed the identical
+ * function. Two copies of an angle-wrapping helper is exactly the kind of duplication that
+ * ends with one of them fixed and the other not.
+ */
+export function shortestAngle(from: number, to: number): number {
+  let d = (to - from) % TAU;
+  if (d > Math.PI) d -= TAU;
+  if (d <= -Math.PI) d += TAU;
+  return d;
+}

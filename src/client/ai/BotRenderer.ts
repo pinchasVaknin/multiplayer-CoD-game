@@ -1,6 +1,5 @@
 import * as THREE from 'three';
-import type { Bot } from '../../shared/ai/Bot';
-import type { BotDirector } from '../../shared/ai/BotDirector';
+import type { RenderableActor } from '../../shared/ai/BotVisualState';
 import type { BotTeam } from '../../shared/ai/Combatant';
 import { BotMesh, buildBotMaterials, type BotMaterials } from './BotMesh';
 
@@ -14,11 +13,16 @@ import { BotMesh, buildBotMaterials, type BotMaterials } from './BotMesh';
  * Two things it does that are worth stating, because both are the M9 pattern rather than
  * incidental:
  *
- * **The mesh set is reconciled, not subscribed.** Each frame it walks `director.bots` and
- * makes its own map agree — a body it has no mesh for gets one, a mesh whose bot has gone
- * is disposed. There is no add/remove callback to miss and nothing to unsubscribe. At ten
- * bots the walk is free, and at M10 the same loop will be reconciling against a snapshot
- * roster rather than a local one, with no change of shape.
+ * **The mesh set is reconciled, not subscribed.** Each frame it walks the actor list and
+ * makes its own map agree — a body it has no mesh for gets one, a mesh whose actor has gone
+ * is disposed. There is no add/remove callback to miss and nothing to unsubscribe.
+ *
+ * **M10 made good on that.** The prediction in the paragraph above was that the same loop
+ * would one day reconcile against a snapshot roster "with no change of shape", and it does:
+ * the list is now a supplier of `RenderableActor`, which a local `Bot` and a remote player
+ * rebuilt from snapshots both satisfy. S6.5 forbids authoring a second player model and this
+ * is how that is enforced by construction rather than by intention — there is no branch here
+ * that could tell the two apart.
  *
  * **Animations are started from serials, not from calls.** `BotVisualState` carries a
  * counter per event; this keeps the last value it saw and starts a fall or a flinch when
@@ -45,7 +49,15 @@ export class BotRenderer {
   private readonly seen = new Map<number, { death: number; spawn: number; flinch: number }>();
   private readonly present = new Set<number>();
 
-  constructor(private readonly director: BotDirector) {
+  /**
+   * `actors` is a supplier rather than an array so the caller can decide per frame what is
+   * drawable — the bot director's roster in single-player, the snapshot's remote set when
+   * networked — without this class knowing which world it is in.
+   */
+  constructor(
+    private readonly actors: () => Iterable<RenderableActor>,
+    private readonly hostileLook: () => boolean,
+  ) {
     this.materials = buildBotMaterials();
     this.group.name = 'bots';
     this.groupA.name = 'bots:A';
@@ -62,30 +74,30 @@ export class BotRenderer {
   update(alpha: number, dt: number): void {
     this.present.clear();
 
-    for (const bot of this.director.bots) {
-      this.present.add(bot.entityId);
-      const mesh = this.meshFor(bot);
-      this.applyEvents(bot, mesh);
+    for (const actor of this.actors()) {
+      this.present.add(actor.entityId);
+      const mesh = this.meshFor(actor);
+      this.applyEvents(actor, mesh);
       mesh.advance(dt);
       mesh.apply(
-        bot.renderX(alpha),
-        bot.renderY(alpha),
-        bot.renderZ(alpha),
-        bot.renderYaw(alpha),
-        bot.renderScale(alpha),
+        actor.renderX(alpha),
+        actor.renderY(alpha),
+        actor.renderZ(alpha),
+        actor.renderYaw(alpha),
+        actor.renderScale(alpha),
       );
     }
 
     if (this.meshes.size !== this.present.size) this.retireAbsent();
   }
 
-  private meshFor(bot: Bot): BotMesh {
+  private meshFor(bot: RenderableActor): BotMesh {
     const existing = this.meshes.get(bot.entityId);
     if (existing !== undefined) return existing;
 
     // `freeForAll` cannot change during a match — a mode is FFA or it is not — so the
     // hostile look is decided once, here, exactly as it was at construction before M9.
-    const mesh = new BotMesh(bot.team, this.materials, this.director.freeForAll);
+    const mesh = new BotMesh(bot.team, this.materials, this.hostileLook());
     this.meshes.set(bot.entityId, mesh);
     this.groupFor(bot.team).add(mesh.group);
 
@@ -97,7 +109,7 @@ export class BotRenderer {
     return mesh;
   }
 
-  private applyEvents(bot: Bot, mesh: BotMesh): void {
+  private applyEvents(bot: RenderableActor, mesh: BotMesh): void {
     const v = bot.visual;
     const seen = this.seen.get(bot.entityId);
     if (seen === undefined) return;

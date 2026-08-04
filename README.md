@@ -78,6 +78,125 @@ It reports the first divergent tick and the field that differs — and reports a
 disagreement first when there is one, because that causes the state divergence. See
 `src/shared/core/SimMath.ts` for why `Math.sin` and `Math.cos` are banned in `shared/`.
 
+---
+
+## Multiplayer (M10)
+
+The game runs against a **dedicated headless server**. There is no host player and no listen
+server: every player is a client, including whoever started it.
+
+### Playing against a server
+
+```bash
+npm run serve
+```
+
+Then open the client with a `?server=` flag:
+
+```
+http://127.0.0.1:5173/?server=127.0.0.1:8080&name=ALICE
+```
+
+Open it twice, in two windows, with different names — that is a two-player match. Without
+`?server=` the game boots into single-player exactly as it did before, which is deliberate:
+nothing about this milestone changes what happens when you just open the page.
+
+| Flag | Effect |
+|---|---|
+| `?server=host:port` | Connect to that server |
+| `?server=1` | Connect to this page's own origin at `/ws` |
+| `?name=ALICE` | Name on the scoreboard |
+| `?net=100` | Add 100 ms round trip *on top of* the real link |
+| `?net=bad` | The 100 ms ±30 ms jitter, 2% loss preset |
+| `?net=250,40,5` | Latency, jitter, loss — explicitly |
+| `?rewinddebug=1` | Ask the server for the per-shot rewind feed |
+
+**F1** opens the overlay; the **Network**, **Prediction** and **Rewind** sections are the M10
+read-outs. If prediction is working, `Mispredictions` reads `0` at any latency — the number
+counts *wrong* predictions, not corrections owed to the network.
+
+### Testing it without two people
+
+```bash
+npm run netharness -- --url ws://127.0.0.1:8080 --clients 2 --seconds 60 --net 100
+```
+
+Headless clients that run the **real** client netcode — the same `NetClient`, `Prediction`
+and `EntityInterpolator` a browser runs, behind a Node socket instead of a browser one. Every
+client-side number in the milestone report comes out of this.
+
+```bash
+npm run netharness -- --url ws://127.0.0.1:8080 --hittest --seconds 40 --net 150
+npm run netharness -- --url ws://127.0.0.1:8080 --harden
+npm run netharness -- --url ws://127.0.0.1:8080 --disconnect hard --seconds 20
+```
+
+`--hittest` is the controlled hit-registration experiment: one shooter, one strafing target,
+a fixed 10 m range. Run it against a server started with `REWIND_DISABLED=1` to measure what
+lag compensation is actually worth rather than asserting it.
+
+`--harden` fires the S8.12 probes — garbage, truncated frames, oversized frames, a bad
+version, a flood — and reports whether the server is still accepting connections afterwards.
+
+### Deploying it
+
+The server is a single Node process. Build it, copy it, run it under systemd.
+
+```bash
+npm run build:server
+rsync -a dist-server package.json node_modules/ws user@host:/opt/operator/
+```
+
+```bash
+sudo cp deploy/operator.service /etc/systemd/system/
+sudo cp deploy/operator.env /etc/operator.env    # edit this
+sudo systemctl daemon-reload
+sudo systemctl enable --now operator
+```
+
+| | |
+|---|---|
+| **Restart** | `sudo systemctl restart operator` |
+| **Stop** | `sudo systemctl stop operator` — clients get a `Bye` with a reason, not a dead socket |
+| **Logs** | `journalctl -u operator -f` |
+| **Metrics** | `journalctl -u operator -o cat \| jq 'select(.event=="metrics")'` |
+| **Config** | `/etc/operator.env`, then restart |
+
+Everything operational — address, port, snapshot rate, bot count, interpolation delay — comes
+from that env file. Nothing is hardcoded.
+
+#### TLS
+
+A browser **will refuse a plaintext `ws://` socket from an `https://` page.** If the client is
+served over HTTPS the server must be `wss://`, and there is no way around it. Two ways:
+
+**Terminate at a reverse proxy** (recommended — one certificate, one hostname, no CORS):
+
+```
+# Caddy
+play.example.com {
+    root * /opt/operator/dist
+    file_server
+    reverse_proxy /ws localhost:8080
+}
+```
+
+With that layout the client needs no configuration at all: `?server=1` resolves to the page's
+own origin and `/ws` reaches the server. Leave `TLS_CERT` and `TLS_KEY` blank and `HOST` on
+loopback.
+
+**Or terminate in Node** — set `TLS_CERT` and `TLS_KEY` to PEM paths and bind a public
+interface. Simpler to reason about, but the certificate renewal is then yours to arrange.
+
+#### A note on progression
+
+There is no server database (S4.16). XP and unlocks stay in the browser's `localStorage`, so
+progression is **per-device and per-browser** and a player who clears site data loses it.
+That is a deliberate consequence of having no accounts, and it is written down here rather
+than left to be discovered.
+
+---
+
 ### Press F11
 
 Chrome reserves `Ctrl+W` and ignores `preventDefault`, so crouch-plus-forward closes the tab

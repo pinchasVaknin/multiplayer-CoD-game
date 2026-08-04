@@ -4,7 +4,7 @@ import type { PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
 import { EV, type GameBus } from '../shared/core/Events';
 import type { Input } from './input/Input';
 import type { Loop } from './engine/FrameLoop';
-import type { INetworkTransport } from '../shared/net/Transport';
+import type { ICommandQueue } from '../shared/net/Transport';
 import type { CameraRig } from './engine/CameraRig';
 import type { ProceduralAudio } from './engine/ProceduralAudio';
 import type { ProceduralTextures } from './engine/ProceduralTextures';
@@ -26,6 +26,11 @@ import { PlayerController } from '../shared/player/PlayerController';
 import type { ViewmodelLayer } from './player/Viewmodel';
 import type { ViewmodelConfig } from '../shared/weapons/ViewmodelConfig';
 import type { WeaponDef } from '../shared/weapons/WeaponDefs';
+import type { InputCommand } from '../shared/core/InputCommand';
+import type { NetConditions } from '../shared/net/NetSim';
+import { NetSession } from './net/NetSession';
+import { logger } from '../shared/core/Log';
+import type { RenderableActor } from '../shared/ai/BotVisualState';
 import { applyAmbient, loadMap, type LoadedMap } from './world/MapRender';
 import { Particulate } from './world/Particulate';
 
@@ -67,6 +72,8 @@ import { Particulate } from './world/Particulate';
  */
 export const AI_SEED = 0x0fe7_a105;
 
+const netLog = logger('world');
+
 export interface MatchWorldDeps {
   // ---- process-wide handles ------------------------------------------------
   readonly bus: GameBus;
@@ -101,7 +108,7 @@ export interface MatchWorldDeps {
   // ---- what this particular match is --------------------------------------
   readonly mapEntry: MapEntry;
   /** M9 (S7): handed to the debug overlay, which reports the source of simulation. */
-  readonly transport: INetworkTransport;
+  readonly transport: ICommandQueue;
   readonly modeEntry: ModeEntry;
   readonly loadout: ResolvedLoadout;
 
@@ -114,6 +121,24 @@ export interface MatchWorldDeps {
   readonly onMatchEnded: () => void;
   readonly onConfigChanged: () => void;
   readonly onWeaponConfigChanged: () => void;
+
+  /**
+   * Play this match against a dedicated server instead of locally (M10, S6).
+   *
+   * Null is single-player, which is every path M1-M8 built and must keep working unchanged
+   * (HARD RULE 8). When set, the world builds a `NetSession`, the match is told it is
+   * networked, and the bodies on screen come from snapshots rather than from a local roster.
+   */
+  readonly server: NetworkedMatchOptions | null;
+}
+
+export interface NetworkedMatchOptions {
+  /** Already resolved to a `ws://` or `wss://` URL. See `resolveServerUrl`. */
+  readonly url: string;
+  readonly displayName: string;
+  /** Artificial conditions layered on the real link (S7). */
+  readonly conditions: NetConditions;
+  readonly wantRewindDebug: boolean;
 }
 
 export class MatchWorld {
@@ -124,6 +149,9 @@ export class MatchWorld {
   readonly debug: DebugSuite;
   /** M8. Airborne dust or haze, or null on a map that authors none. */
   readonly particulate: Particulate | null;
+
+  /** The connection, or null in single-player (M10). */
+  readonly net: NetSession | null;
 
   /** The AFK bot-match driver, when `?harness=botmatch` asked for one. */
   private harness: BotHarness | null = null;
@@ -154,8 +182,33 @@ export class MatchWorld {
     player.spawn(spawn.position.x, spawn.position.y, spawn.position.z, spawn.facingYaw);
     deps.input.setView(spawn.facingYaw, 0);
 
+    /**
+     * The session is built **before** the match, because the match's renderer needs to be
+     * pointed at the session's actor list at construction — and after the player, because the
+     * session predicts through that controller.
+     */
+    const server = deps.server;
+    this.net =
+      server === null
+        ? null
+        : new NetSession({
+            url: server.url,
+            displayName: server.displayName,
+            bus: deps.bus,
+            controller: player,
+            conditions: server.conditions,
+            wantRewindDebug: server.wantRewindDebug,
+            // Both of these are filled in properly the moment the match exists — see below.
+            // They are indirected through `this.match` rather than captured, because the
+            // match cannot exist before the session it is being handed to.
+            sample: (tick) => this.sampleForNet(tick),
+            applyWeapon: (cmd) => this.applyWeaponForNet(cmd),
+          });
+
     this.match = new Match({
       bus: deps.bus,
+      networked: server !== null,
+      actors: this.net === null ? undefined : () => netSessionActors(this.net),
       scene: deps.scene,
       viewmodel: deps.viewmodel,
       cameraRig: deps.cameraRig,
@@ -184,6 +237,21 @@ export class MatchWorld {
       banksProgress: deps.modeEntry.banksProgress,
     });
 
+    /**
+     * Dial out.
+     *
+     * Deliberately not awaited: the world is built synchronously on entering MATCH and the
+     * map, the player and the HUD must all exist whether or not the socket comes up. A failed
+     * connection leaves a playable, empty map and a visible reason rather than a half-built
+     * world — which is the difference between "the server is down" and "the game is broken".
+     */
+    if (this.net !== null) {
+      void this.net.connect().catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        netLog.error(`could not join ${server?.url ?? 'the server'}: ${reason}`);
+      });
+    }
+
     this.matchEndedSubscription = deps.bus.on(EV.MatchEnded, () => deps.onMatchEnded());
 
     this.debug = new DebugSuite({
@@ -198,6 +266,7 @@ export class MatchWorld {
       map,
       mapEntry: deps.mapEntry,
       transport: deps.transport,
+      netSession: () => this.net,
       match: this.match,
       movementConfig: deps.movementConfig,
       cameraConfig: deps.cameraConfig,
@@ -219,6 +288,33 @@ export class MatchWorld {
 
   get botHarness(): BotHarness | null {
     return this.harness;
+  }
+
+  /**
+   * Sample the local command for a networked tick.
+   *
+   * The same three-way choice `Game.simulate` makes in single-player — neutral outside a
+   * match, spectating while dead or frozen, live otherwise — because it is the same rule.
+   * `NetClient` applies the authoritative half of it again from the replicated flags, and the
+   * two agreeing is what keeps prediction from fighting the server through a countdown.
+   */
+  private sampleForNet(tick: number): InputCommand {
+    const input = this.deps.input;
+    const nowMsValue = performance.now();
+    if (this.match.isPlayerDead || this.match.inputFrozen) {
+      return input.sampleSpectating(tick, nowMsValue);
+    }
+    return input.sample(tick, nowMsValue);
+  }
+
+  /**
+   * Advance everything that consumes a command but must never be replayed.
+   *
+   * The weapon, and only the weapon. See `Prediction` for the full reasoning: replaying it
+   * would fire its rounds again and empty the magazine at the replay rate.
+   */
+  private applyWeaponForNet(cmd: InputCommand): void {
+    this.match.simulate(cmd);
   }
 
   /**
@@ -276,6 +372,7 @@ export class MatchWorld {
    */
   dispose(): void {
     this.matchEndedSubscription();
+    this.net?.disconnect('left the match');
 
     this.debug.dispose();
     this.harness?.stop();
@@ -291,3 +388,10 @@ export class MatchWorld {
     this.deps.scene.background = null;
   }
 }
+
+/** Narrow the nullable field for the renderer's supplier without a cast at the call site. */
+function netSessionActors(net: NetSession | null): Iterable<RenderableActor> {
+  return net === null ? EMPTY_ACTORS : net.renderables();
+}
+
+const EMPTY_ACTORS: readonly RenderableActor[] = [];

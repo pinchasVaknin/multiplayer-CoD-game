@@ -89,3 +89,40 @@ export class Rng {
     this.s3 = (src[3] ?? 0) >>> 0;
   }
 }
+
+/**
+ * A seed derived from the identity of an event rather than from a stream (M10, S4.14).
+ *
+ * ## Why a free-running stream is not enough
+ *
+ * S4.14 is precise about the failure: *"Reconciliation replays commands. Any randomness
+ * consumed during a replayed tick must produce the same value it produced the first time, or
+ * the replay diverges."*
+ *
+ * A shared `Rng` advances once per draw. The client fires on tick 400, drawing three floats.
+ * A correction arrives for tick 396 and the client replays 397-400 — and on the replay the
+ * stream is four draws further along than it was, so the shot on tick 400 goes somewhere
+ * else. The player sees their own bullets move when a packet was late. Worse, it is
+ * *self-perpetuating*: the divergence guarantees the next correction, which guarantees the
+ * next replay.
+ *
+ * Seeding from `(tickIndex, entityId, shotIndex)` removes history from the answer entirely.
+ * The same shot fired on the same tick by the same entity draws the same numbers on the
+ * hundredth replay as on the first, and — the part that matters for authority — the server
+ * computes the identical values without having seen any of the client's earlier draws.
+ *
+ * This is the same mechanism `deathVariantFor` already uses for the fall animation; M9
+ * applied it in that one place and left the gameplay streams for here.
+ *
+ * Mixing is the splitmix32 finaliser over the multiplied inputs, so consecutive ticks and
+ * adjacent entity ids land far apart rather than producing neighbouring seeds.
+ */
+export function eventSeed(salt: number, tickIndex: number, entityId: number, index: number): number {
+  let z = salt >>> 0;
+  z = (z + Math.imul(tickIndex | 0, 0x9e3779b9)) >>> 0;
+  z = (z ^ Math.imul(entityId | 0, 0x85ebca6b)) >>> 0;
+  z = (z + Math.imul(index | 0, 0xc2b2ae35)) >>> 0;
+  z = Math.imul(z ^ (z >>> 16), 0x21f0aaad) >>> 0;
+  z = Math.imul(z ^ (z >>> 15), 0x735a2d97) >>> 0;
+  return (z ^ (z >>> 15)) >>> 0;
+}

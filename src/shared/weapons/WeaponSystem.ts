@@ -3,7 +3,7 @@ import type { HitZone } from '../combat/HitboxRig';
 import { EV, type GameBus } from '../core/Events';
 import { Btn, isDown, justPressed, type InputCommand } from '../core/InputCommand';
 import { clamp01, DEG2RAD, lerp, TAU } from '../core/MathUtil';
-import { Rng } from '../core/Rng';
+import { eventSeed, Rng } from '../core/Rng';
 import type { PlayerSim } from '../player/PlayerState';
 import type { CollisionWorld } from '../world/CollisionWorld';
 import { Ballistics, makeShotTrace, type ShotTrace } from './Ballistics';
@@ -134,7 +134,24 @@ export class WeaponSystem {
   /** Current cone half-angle in degrees, for the crosshair and the debug ring. */
   spreadDeg = 0;
 
+  /**
+   * The spread generator, reseeded per shot rather than run as a stream (M10, S4.14).
+   *
+   * See `eventSeed`. Every draw inside one `fireOne` comes from a state derived only from
+   * `(salt, tickIndex, sourceId, shotIndex)`, so a replayed tick reproduces the shot exactly
+   * and the server reaches the same answer without replaying anything.
+   */
   private readonly rng = new Rng(0x51e5_0b0a);
+
+  /**
+   * Per-instance salt folded into every shot seed.
+   *
+   * This is what `reseed()` now sets. Before M10 it re-keyed a running stream, which is how
+   * each bot got its own spread pattern; the same call still gives each bot its own pattern,
+   * because the salt is one of the four inputs to the seed. What changed is that the pattern
+   * no longer depends on *how many shots have already been fired*.
+   */
+  private shotSalt = 0x51e5_0b0a;
   private readonly input: WeaponInput = makeWeaponInput();
   private readonly idleInput: WeaponInput = makeWeaponInput();
   private readonly aim: AimSample = makeAimSample();
@@ -210,9 +227,15 @@ export class WeaponSystem {
     return def.laserVisible && this.inventory.active.adsFraction > 0.4;
   }
 
-  /** Deterministic replay: the spread cone is seeded, never `Math.random` (S6.2). */
+  /**
+   * Set this weapon's spread salt (S6.2, S4.14).
+   *
+   * Callers use it to give a shooter its own pattern — each bot passes its own seed, and the
+   * arsenal harnesses pass a fixed one so a recorded group is reproducible. Since M10 it sets
+   * the salt rather than re-keying a stream; see `shotSalt`.
+   */
   reseed(seed: number): void {
-    this.rng.reseed(seed);
+    this.shotSalt = seed >>> 0;
   }
 
   /**
@@ -379,6 +402,19 @@ export class WeaponSystem {
     const recoil = this.recoil;
     const ads = this.inventory.active.adsFraction;
 
+    /**
+     * Per-event seeding (S4.14). Everything random about this shot is decided from here.
+     *
+     * `recoil.shotIndex` is read before `recoil.onShot` advances it below, so it is stable
+     * for the whole of this call — which is what lets the aim sample, the pellet rotation
+     * and every pellet's jitter come out of one seed and still be reproducible individually.
+     *
+     * The authored recoil *pattern* is untouched: it was already deterministic in `shotIndex`
+     * (M2) and S4.14 says so explicitly. This governs only the random component on top.
+     */
+    const shotIndex = recoil.shotIndex;
+    this.rng.reseed(eventSeed(this.shotSalt, cmd.tickIndex, this.sourceId, shotIndex));
+
     // The shot uses the aim as it stands *before* this shot's kick: the first round out
     // of a rested weapon is dead on the crosshair, which is the contract every shooter
     // makes with the player. Scope sway is part of where you are aiming, so it is in here
@@ -449,7 +485,6 @@ export class WeaponSystem {
       }
     }
 
-    const shotIndex = recoil.shotIndex;
     recoil.onShot(def, ads);
     this.residualYaw += recoil.residualYaw;
     this.residualPitch += recoil.residualPitch;

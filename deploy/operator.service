@@ -1,0 +1,71 @@
+# OPERATOR dedicated server (M10, S6.6).
+#
+# S6.6 asks for "a single Node process, a documented port, a process manager or systemd unit
+# that restarts it on crash". This is that unit.
+#
+#   sudo cp deploy/operator.service /etc/systemd/system/
+#   sudo cp deploy/operator.env /etc/operator.env      # then edit it
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now operator
+#   systemctl status operator
+#   journalctl -u operator -f
+#
+# The server writes structured JSON to stdout when stdout is not a TTY, which under systemd
+# it never is — so `journalctl -u operator` is already machine-readable and
+# `journalctl -u operator -o cat | jq 'select(.event=="metrics")'` gets the S7 metrics out.
+
+[Unit]
+Description=OPERATOR dedicated game server
+Documentation=https://github.com/your-org/operator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=operator
+Group=operator
+WorkingDirectory=/opt/operator
+
+# Everything operational is configuration (S4.9), never baked into the build.
+EnvironmentFile=/etc/operator.env
+
+ExecStart=/usr/bin/node dist-server/serve.js
+
+# S6.6: restart on crash. `always` rather than `on-failure` because a clean exit is not a
+# thing this process does — it listens until it is stopped, so any exit at all is a fault.
+Restart=always
+RestartSec=2
+
+# Do not let a crash-loop hammer the box. Five restarts in a minute and systemd gives up,
+# which is a signal a human needs to look rather than a state to hide.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Graceful shutdown: `serve.ts` traps SIGTERM, sends every client a Bye with a reason and
+# closes the sockets before exiting. Ten seconds is far more than that needs.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# ---- hardening -------------------------------------------------------------
+# The process is internet-facing (S4.16). It needs a socket, a read-only copy of its own
+# build, and nothing else at all.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+ReadWritePaths=
+
+# One match, ten clients (S4.9). A limit that is generous for that and still a limit.
+LimitNOFILE=4096
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

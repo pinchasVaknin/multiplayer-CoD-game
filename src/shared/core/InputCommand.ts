@@ -5,7 +5,8 @@
  * commands; `PlayerController.step(cmd)` consumes exactly one per tick. Edge
  * detection is computed inside the sim from the bitfield, never in a DOM handler.
  *
- * This is what makes `INetworkTransport` real rather than decorative.
+ * This is what makes the netcode seam real rather than decorative — M10 sends exactly these
+ * fields over the wire, and `PlayerController.step` cannot tell a socket from a keyboard.
  */
 export interface InputCommand {
   readonly seq: number; // monotonic

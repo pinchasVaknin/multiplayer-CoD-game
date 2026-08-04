@@ -44,6 +44,32 @@ export interface BotVisualState {
   flinchDirZ: number;
 }
 
+/**
+ * Anything the bot renderer can draw (M10, S6.5).
+ *
+ * S6.5: *"Remote humans reuse the bot visual representation from M3 — same mesh, same stance
+ * handling, same `HitboxRig`. **Do not author a second player model.**"*
+ *
+ * This interface is how that instruction is obeyed structurally rather than by discipline.
+ * `Bot` satisfies it because it always did; a remote player reconstructed from snapshots
+ * satisfies it too, and `BotRenderer` cannot tell them apart because there is nothing on here
+ * that would let it. The renderer's mesh reconciliation, its serial-driven animation and its
+ * team grouping are shared by both with no branch anywhere.
+ */
+export interface RenderableActor {
+  readonly entityId: number;
+  readonly team: 'A' | 'B';
+  readonly visual: BotVisualState;
+  /** False while dead or not yet in the fight. Drives the initial fall pose. */
+  readonly participating: boolean;
+  renderX(alpha: number): number;
+  renderY(alpha: number): number;
+  renderZ(alpha: number): number;
+  renderYaw(alpha: number): number;
+  /** Stance compression, 1 standing. */
+  renderScale(alpha: number): number;
+}
+
 export function makeBotVisualState(): BotVisualState {
   return {
     deathSerial: 0,

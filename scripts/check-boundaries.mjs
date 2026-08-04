@@ -102,8 +102,22 @@ const BROWSER_GLOBALS = [
   'alert',
   'fetch',
   'XMLHttpRequest',
-  'WebSocket',
 ];
+
+/**
+ * Banned in `shared/` only.
+ *
+ * **Changed at M10.** `WebSocket` was in the list above through M9, when it was a pure
+ * browser global and neither non-client partition had any business naming one. M10 gives the
+ * server a WebSocket *library* (`ws`), so the identifier is now legitimate in `server/` and
+ * forbidden in `shared/` — which is the rule that actually mattered all along. The simulation
+ * must not know a socket exists: it consumes `InputCommand`s and emits events, and a
+ * `shared/` file that reached for a transport would be the end of running the same code in
+ * both runtimes.
+ *
+ * Widened deliberately rather than deleted, per the M9 note about `BAN_THREE_IN_SHARED`.
+ */
+const SHARED_ONLY_GLOBALS = ['WebSocket', 'WebSocketServer'];
 
 const GLOBAL_CHECKED_PARTITIONS = new Set(['shared', 'server']);
 
@@ -272,7 +286,9 @@ for (const abs of files) {
   // ---- 3. browser globals -------------------------------------------------
   if (!GLOBAL_CHECKED_PARTITIONS.has(from)) continue;
 
-  for (const name of BROWSER_GLOBALS) {
+  const banned = from === 'shared' ? [...BROWSER_GLOBALS, ...SHARED_ONLY_GLOBALS] : BROWSER_GLOBALS;
+
+  for (const name of banned) {
     // Bare identifier, not a property access (`this.window`, `foo.document`) and not a
     // declaration of something with the same name.
     const re = new RegExp(`(?<![\\w$.])${name}(?![\\w$])`, 'g');

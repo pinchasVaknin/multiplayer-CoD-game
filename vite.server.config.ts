@@ -19,8 +19,10 @@ import { defineConfig } from 'vite';
  */
 export default defineConfig({
   build: {
-    // Two entries: the server itself, and the determinism run of S6.6. The second is not a
-    // flag on the first because it is not a match — no loop, no bots, no mode.
+    // Three entries. `main` is the M9 headless harness (runs matches, exits with a result),
+    // `serve` is the M10 dedicated server (listens, does not stop), and `hashRun` is the
+    // S6.6 determinism run. None is a flag on another: a batch job, a long-lived service and
+    // a one-shot probe have different lifecycles and different exit semantics.
     ssr: true,
     outDir: 'dist-server',
     emptyOutDir: true,
@@ -30,14 +32,19 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: 'src/server/main.ts',
+        serve: 'src/server/serve.ts',
+        netHarness: 'src/server/netHarness.ts',
         hashRun: 'src/server/hashRun.ts',
       },
       output: { entryFileNames: '[name].js', format: 'esm' },
     },
   },
   ssr: {
-    // Nothing here should reach for a dependency at all. `three` is banned in both `shared/`
-    // and `server/` by the boundary check, and this build would fail loudly if one appeared.
+    // `three` is banned in both `shared/` and `server/` by the boundary check, and this build
+    // would fail loudly if one appeared. `ws` is the one permitted server dependency (S2) and
+    // is left external so it loads from `node_modules` as a normal Node import rather than
+    // being inlined — it has native optional deps that must not be bundled.
     noExternal: true,
+    external: ['ws'],
   },
 });

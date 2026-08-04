@@ -16,7 +16,7 @@ import type { PlayerController } from '../../shared/player/PlayerController';
 import type { ViewmodelConfig } from '../../shared/weapons/ViewmodelConfig';
 import type { WeaponDef } from '../../shared/weapons/WeaponDefs';
 import type { LoadedMap } from '../world/MapRender';
-import type { INetworkTransport } from '../../shared/net/Transport';
+import type { ICommandQueue } from '../../shared/net/Transport';
 import type { EquipmentConfig } from '../../shared/equipment/EquipmentConfig';
 import { AiDebug } from './AiDebug';
 import { AiPanel } from './AiPanel';
@@ -24,6 +24,8 @@ import { ArsenalHarness } from './ArsenalHarness';
 import { ArsenalPanel } from './ArsenalPanel';
 import { CollisionDebug } from './CollisionDebug';
 import { EquipmentPanel } from './EquipmentPanel';
+import { NetPanel } from './NetPanel';
+import type { NetSession } from '../net/NetSession';
 import { DebugOverlay } from './DebugOverlay';
 import type { FrameStats } from './FrameStats';
 import { HitboxDebug } from './HitboxDebug';
@@ -65,8 +67,10 @@ export interface DebugSuiteContext {
   readonly map: LoadedMap;
   readonly mapEntry: MapEntry;
   /** M9 (S7): what the overlay reports as the source of simulation. */
-  readonly transport: INetworkTransport;
+  readonly transport: ICommandQueue;
   readonly match: Match;
+  /** M10: the live connection, or a supplier returning null in single-player. */
+  readonly netSession: () => NetSession | null;
   readonly movementConfig: MovementConfig;
   readonly cameraConfig: CameraConfig;
   readonly weaponDef: WeaponDef;
@@ -98,6 +102,8 @@ export class DebugSuite {
   readonly arsenalPanel: ArsenalPanel;
   readonly arsenalHarness: ArsenalHarness;
   readonly equipmentPanel: EquipmentPanel;
+  /** M10 (S7): network, prediction and rewind read-outs. */
+  readonly netPanel: NetPanel;
   /** M6: progression, perks, challenges, the event tap, the simulator and the inspector. */
   readonly metaPanel: MetaPanel;
   /** M7: streak state, sentry targeting and care-package contest (S7). */
@@ -191,6 +197,10 @@ export class DebugSuite {
     );
 
     this.equipmentPanel = new EquipmentPanel(this.overlay, ctx.match, ctx.equipmentConfig);
+
+    // M10 (S7): network, prediction and rewind. A supplier rather than the session itself,
+    // because the suite is built alongside the world and the connection may still be dialling.
+    this.netPanel = new NetPanel(this.overlay, ctx.netSession);
     ctx.scene.add(this.equipmentPanel.group);
 
     this.metaPanel = new MetaPanel(this.overlay, ctx.match, ctx.profile, ctx.bus);

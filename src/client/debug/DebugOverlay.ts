@@ -18,7 +18,7 @@ import {
   type MovementConfig,
 } from '../../shared/player/MovementConfig';
 import type { PlayerController } from '../../shared/player/PlayerController';
-import type { INetworkTransport } from '../../shared/net/Transport';
+import type { ICommandQueue } from '../../shared/net/Transport';
 import type { MapStats } from '../world/MapRender';
 import type { CollisionDebug } from './CollisionDebug';
 import { FrameStats } from './FrameStats';
@@ -56,7 +56,7 @@ export interface DebugContext {
    * `kind` is `'local'` today and `'remote'` from M10. The overlay reports it verbatim
    * rather than inferring it, so the readout cannot drift from the truth.
    */
-  transport: INetworkTransport;
+  transport: ICommandQueue;
   /**
    * Owned by `Game` from M4, not by the overlay.
    *
@@ -68,7 +68,7 @@ export interface DebugContext {
   onConfigChanged: () => void;
 }
 
-interface Field {
+export interface Field {
   el: HTMLElement;
   last: string;
 }
@@ -575,6 +575,17 @@ export class DebugOverlay {
       this.speedo.reset();
     }
   };
+}
+
+/**
+ * Write a field, skipping the DOM touch when nothing changed.
+ *
+ * Exported from M10 so panels stop each keeping their own copy. At 15 Hz across forty-odd
+ * read-outs the early return is most of why the overlay does not appear in the frame times
+ * it exists to report.
+ */
+export function setField(field: Field, text: string): void {
+  set(field, text);
 }
 
 function set(field: Field, text: string): void {

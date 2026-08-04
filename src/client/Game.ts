@@ -15,7 +15,8 @@ import { MAX_STEPS_PER_FRAME, type FrameSample } from '../shared/core/Loop';
 import { Loop } from './engine/FrameLoop';
 import { ChopperCamera } from './streaks/ChopperCamera';
 import { DEG2RAD } from '../shared/core/MathUtil';
-import { LocalBotTransport, type INetworkTransport } from '../shared/net/Transport';
+import { LocalBotTransport, type ICommandQueue } from '../shared/net/Transport';
+import { parseJoinOptions } from './net/JoinOptions';
 import { CameraRig, type CameraDrive } from './engine/CameraRig';
 import { ProceduralAudio } from './engine/ProceduralAudio';
 import { ProceduralTextures } from './engine/ProceduralTextures';
@@ -145,7 +146,35 @@ export class Game {
   private readonly debugHost: HTMLElement;
   /** M6: the one save object. Owns settings, progression, loadouts and challenges. */
   readonly profile: Profile;
-  private readonly transport: INetworkTransport = new LocalBotTransport(64);
+  private readonly transport: ICommandQueue = new LocalBotTransport(64);
+
+  /**
+   * The server to join, or null for single-player (M10).
+   *
+   * Read once at construction from the query string. Null is the default and is what every
+   * path built in M1-M8 still takes — HARD RULE 8 requires opening the page to behave exactly
+   * as it did, and it does.
+   */
+  private readonly joinOptions = parseJoinOptions(window.location.search);
+
+  /**
+   * Keeps the connection alive while the tab is hidden (M10).
+   *
+   * `requestAnimationFrame` is **completely suspended** in a background tab — not throttled,
+   * suspended — so the frame loop stops, `simulate` stops, and with it every ping and every
+   * command. Measured: a hidden tab sends nothing at all, and the server's 10-second
+   * inactivity timeout (S6.1) drops it. Alt-tabbing for fifteen seconds would disconnect you.
+   *
+   * So when the page goes hidden the network gets its own timer. It pumps the same
+   * `NetSession.update()` the frame loop would have — polling, acking and pinging — and the
+   * commands it samples are empty, because `Input.clearHeld` fires on blur. The player stands
+   * still and stays connected, which is what everyone expects alt-tab to do.
+   *
+   * The *simulation* deliberately does not run on this timer. The client's tick number comes
+   * from the synced server clock (S4.11), so on returning it resynchronises by itself rather
+   * than trying to catch up on a minute of missed ticks.
+   */
+  private hiddenNetTimer: ReturnType<typeof setInterval> | null = null;
   private readonly input: Input;
   private readonly loop: Loop;
   private readonly selection: MenuSelection;
@@ -277,6 +306,11 @@ export class Game {
     this.applySettings({});
     window.addEventListener('resize', this.onResize);
     window.addEventListener('pagehide', this.onPageHide);
+    document.addEventListener('visibilitychange', this.onVisibility);
+    // The page may already be hidden when the game boots — an unfocused tab, or a headless
+    // run. Evaluating once at construction rather than waiting for a change that has already
+    // happened is what makes that case work rather than silently never connecting.
+    this.onVisibility();
   }
 
   get currentState(): GameStateId {
@@ -588,6 +622,7 @@ export class Game {
       input: this.input,
       loop: this.loop,
       transport: this.transport,
+      server: this.joinOptions,
       uiHost: this.uiHost,
       debugHost: this.debugHost,
       stats: this.stats,
@@ -714,6 +749,34 @@ export class Game {
 
   // -- loop ----------------------------------------------------------------
 
+  /**
+   * Start or stop the background-tab network heartbeat. Bound to `visibilitychange`.
+   */
+  private readonly onVisibility = (): void => {
+    this.onVisibilityChanged();
+  };
+
+  private onVisibilityChanged(): void {
+    const hidden = document.hidden;
+    if (hidden && this.hiddenNetTimer === null) {
+      this.hiddenNetTimer = setInterval(() => this.pumpNetworkWhileHidden(), 50);
+      return;
+    }
+    if (!hidden && this.hiddenNetTimer !== null) {
+      clearInterval(this.hiddenNetTimer);
+      this.hiddenNetTimer = null;
+    }
+  }
+
+  private pumpNetworkWhileHidden(): void {
+    const world = this.world;
+    if (world === null) return;
+    const net = world.net;
+    if (net === null) return;
+    world.match.netFrozen = net.frozen;
+    net.update();
+  }
+
   private simulate(tick: number): void {
     const world = this.world;
     if (world === null) return;
@@ -722,7 +785,7 @@ export class Game {
     if (this.state === 'PAUSED') return;
 
     // Input crosses the netcode boundary even in single player: the sim only ever
-    // sees command data, which is what keeps INetworkTransport real (S4.2).
+    // sees command data, which is what keeps the command seam real (S4.2).
     //
     // A dead player submits neutral commands rather than being skipped: the sim still
     // runs for them, the corpse still collides, and the seam stays honest — which is
@@ -744,6 +807,26 @@ export class Game {
      * The camera is untouched by any of this: yaw and pitch are integrated in the mousemove
      * handler and stamped onto whatever command is produced, so looking around still works.
      */
+    /**
+     * Networked (M10): the session owns the tick.
+     *
+     * `NetClient` decides *which* tick to simulate from the synced server clock rather than
+     * from this frame's accumulator — S4.11's rule that a client never increments its own
+     * tick number — so the whole local step loop is skipped rather than adapted. It samples
+     * through `MatchWorld.sampleForNet`, which applies the same three-way choice made below.
+     *
+     * The `inMatch` guard still applies: a paused or menu-bound client stops sending input,
+     * and the server fills the gap by repeating the last command (S6.2), which is exactly
+     * right — a player who alt-tabbed keeps standing where they were.
+     */
+    const net = world.net;
+    if (net !== null) {
+      world.match.netFrozen = net.frozen;
+      if (inMatch) net.update();
+      world.debug.simulate(world.player, this.movementConfig);
+      return;
+    }
+
     const frozen = world.match.inputFrozen;
     const cmd = !inMatch
       ? this.input.sampleNeutral(tick, now)

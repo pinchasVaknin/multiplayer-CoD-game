@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { SchedulerConfig } from '../shared/ai/AiScheduler';
 import { BotDirector } from '../shared/ai/BotDirector';
 import { BotRenderer } from './ai/BotRenderer';
+import type { RenderableActor } from '../shared/ai/BotVisualState';
 import type { BotTeam } from '../shared/ai/Combatant';
 import type { PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
 import { PlayerCombatant } from '../shared/ai/PlayerCombatant';
@@ -135,6 +136,34 @@ export interface MatchDeps {
   readonly profile: Profile;
   /** False in the Shooting Range: a testbed does not write to the save. */
   readonly banksProgress: boolean;
+
+  /**
+   * The match is driven by a server (M10).
+   *
+   * A flag rather than a subclass, and deliberately narrow: it turns off the three things
+   * this file does that a **dedicated server owns instead** (S4.9), and touches nothing else.
+   *
+   * 1. **No local bot roster.** The server has the bots. `BotDirector` is still constructed —
+   *    the navmesh it bakes is what the spawn selector and the debug tools read — it is
+   *    simply never populated and never stepped.
+   * 2. **No local mode clock.** Score, round state and the match result arrive replicated.
+   * 3. **No local respawn.** The server decides when a body comes back and where.
+   *
+   * Everything else runs exactly as it does in single-player: the weapon, the viewmodel, the
+   * camera, the HUD, the audio, the hitmarkers. That is the point of S3's *"a networked event
+   * and a local one must be indistinguishable to the client"* — the presentation layer never
+   * learns which kind of match it is in.
+   */
+  readonly networked?: boolean;
+
+  /**
+   * Where the drawable bodies come from (M10, S6.5).
+   *
+   * Defaults to the local bot roster, which is what single-player has always drawn. A
+   * networked match supplies the remote actors rebuilt from snapshots instead — same mesh,
+   * same animations, same renderer, because both satisfy `RenderableActor`.
+   */
+  readonly actors?: (() => Iterable<RenderableActor>) | undefined;
   /** M7: killstreak tuning. Live-editable from the debug panel. */
   readonly streakConfig?: StreakConfig;
 }
@@ -320,7 +349,10 @@ export class Match {
     });
     // M9: the bodies are the client's, not the director's. `BotRenderer` reconciles its
     // mesh set against the roster each frame and drives the animations off `BotVisualState`.
-    this.botRenderer = new BotRenderer(this.bots);
+    this.botRenderer = new BotRenderer(
+      deps.actors ?? (() => this.bots.bots),
+      () => this.bots.freeForAll,
+    );
     deps.scene.add(this.botRenderer.group);
 
     // ---- the mode ---------------------------------------------------------
@@ -592,7 +624,11 @@ export class Match {
     // the harness wants a different roster and gets to set it before anyone spawns.
     // The range populates nothing: S9's testbed has no enemies by design, and the
     // registry says so rather than this file guessing from the map.
-    if (this.bots.botCount === 0 && this.deps.mode.populatesRoster) this.populateDefault();
+    // A networked match's roster lives on the server (S4.15). Populating one here would put
+    // ten bots in the world that only this client can see, fighting nobody.
+    if (!this.isNetworked && this.bots.botCount === 0 && this.deps.mode.populatesRoster) {
+      this.populateDefault();
+    }
     this.registerRoster();
     if (this.flow.currentPhase === 'WARMUP' && this.flow.round === 1 && this.score.rows.length > 0) {
       this.flow.start();
@@ -650,9 +686,25 @@ export class Match {
    * the scoreboard.
    */
   get inputFrozen(): boolean {
+    // Networked: the server says so, through the snapshot header. Its own `MatchFlow` is the
+    // one running, and this client's is inert.
+    if (this.isNetworked) return this.netFrozen;
     const phase = this.flow.currentPhase;
     return phase === 'WARMUP' || phase === 'ROUND_END';
   }
+
+  /** True when this match is driven by a server. See `MatchDeps.networked`. */
+  get isNetworked(): boolean {
+    return this.deps.networked === true;
+  }
+
+  /**
+   * Replicated freeze state, written by the net session from the snapshot header.
+   *
+   * Held here rather than read from the session because `inputFrozen` is consulted from the
+   * sampler in `Game.simulate`, which has a `Match` and no reason to learn about sockets.
+   */
+  netFrozen = false;
 
   /**
    * Debug spectator state (post-M8, `debug/Spectator.ts`).
@@ -863,7 +915,7 @@ export class Match {
     // sampler in `Game.simulate`; this is the other half, and both sides freezing is the
     // point — a countdown one side can use to take an angle is not a countdown.
     this.bots.inputFrozen = this.inputFrozen;
-    this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
+    if (!this.isNetworked) this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
     // Streaks tick after the bots that may have just shot one down, and before the flow that
     // may declare the match over and end them all.
     this.streaks.simulate(cmd.tickIndex, cmd);
@@ -871,12 +923,15 @@ export class Match {
     if (!this.playerDead && !this.mortarOverlay.isOpen) this.stepStreakInput(cmd);
     if (!this.playerDead) this.stepBombInteraction(cmd);
     this.stepInteractPose();
-    this.stepPlayerRespawn();
+    // The server owns when and where a body comes back (S4.15); the client is told.
+    if (!this.isNetworked) this.stepPlayerRespawn();
     this.stepLowHealthAudio();
 
-    // The mode clock is a gameplay timer and runs on ticks like everything else (S4.1).
+    // The mode clock is a gameplay timer and runs on ticks like everything else (S4.1) —
+    // except when a server is running it, in which case score and round state arrive
+    // replicated and a second clock here would disagree with the first one that matters.
     const t0 = performance.now();
-    this.flow.simulate(cmd.tickIndex);
+    if (!this.isNetworked) this.flow.simulate(cmd.tickIndex);
     this.lastModeMs = performance.now() - t0;
 
     // Held Tab, read from the command rather than from the DOM (S4.2).

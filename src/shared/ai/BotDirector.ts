@@ -44,8 +44,15 @@ const log = logger('BotDirector');
 
 export const BOT_ID_BASE = 100;
 
-/** Seconds between dying and coming back. Comfortably longer than the fall animation. */
-const RESPAWN_SECONDS = 4.5;
+/**
+ * Seconds between dying and coming back. Comfortably longer than the fall animation.
+ *
+ * Exported from M10: a networked human respawns on the server, and it must be the *same*
+ * number a bot uses or the two halves of the roster come back on different clocks. This is
+ * S3's "config is shared and singular" applied to the one timer that used to be private
+ * because only bots could die on a server.
+ */
+export const RESPAWN_SECONDS = 4.5;
 
 /** Navmesh resolution, metres. S6.5 asks for ~0.5. */
 const NAV_CELL = 0.5;
@@ -577,7 +584,12 @@ export class BotDirector {
   private teamOf(entityId: number): BotTeam | 'NONE' {
     const bot = this.byId.get(entityId);
     if (bot !== undefined) return bot.team;
-    if (entityId === this.deps.player.entityId) return this.deps.player.team;
+    // Anyone else on the roster: the local player seat, and from M10 every connected human.
+    // Resolving through the roster rather than naming `deps.player` is what makes a remote
+    // player's footsteps audible to bots on the right side — before this, a human other than
+    // seat zero made noise attributed to 'NONE' and both teams heard it as neutral.
+    const other = this.combatant(entityId);
+    if (other !== undefined) return other.team;
     return 'NONE';
   }
 
