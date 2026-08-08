@@ -1,5 +1,6 @@
 import type { Combatant } from '../ai/Combatant';
-import { Killfeed } from '../combat/Killfeed';
+import { Killfeed, type CombatantDirectory } from '../combat/Killfeed';
+import { LocalIdentity } from '../combat/LocalIdentity';
 import type { ScoreSystem, ScoreTeam } from '../combat/ScoreSystem';
 import { EV, type AnnouncerCue, type GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
@@ -38,6 +39,39 @@ import type { GameMode, KillEvent, MatchResult, RoundResult } from './GameMode';
 
 export type MatchPhase = 'WARMUP' | 'LIVE' | 'ROUND_END' | 'MATCH_END';
 
+/**
+ * One snapshot header's worth of match state, as `MatchFlow` wants it (M10).
+ *
+ * A record rather than seven positional arguments. The three that were added during the M10
+ * playtests — phase, phase seconds, round — arrived one at a time, and each one was another
+ * number in a call whose meaning had to be read off the parameter list at the definition.
+ */
+export interface ReplicatedMatchState {
+  phase: MatchPhase;
+  /** Seconds left on the match clock. */
+  secondsRemaining: number;
+  /** Seconds left of the warm-up or the round-end hold. */
+  phaseSeconds: number;
+  round: number;
+  scoreA: number;
+  scoreB: number;
+  /** The server's tick, so a killfeed line is stamped with game time rather than zero. */
+  serverTick: number;
+}
+
+/** A zeroed record, for a caller that refills and reuses one per snapshot. */
+export function makeReplicatedMatchState(): ReplicatedMatchState {
+  return {
+    phase: 'WARMUP',
+    secondsRemaining: 0,
+    phaseSeconds: 0,
+    round: 1,
+    scoreA: 0,
+    scoreB: 0,
+    serverTick: 0,
+  };
+}
+
 /** Seconds of "get ready" before the first tick of a round counts. */
 const WARMUP_SECONDS = 3;
 
@@ -59,6 +93,25 @@ export interface MatchFlowDeps {
   readonly localTeam: ScoreTeam;
   /** Told when the ends change, so respawns follow the swap. */
   readonly onSidesSwapped: (swapped: boolean) => void;
+  /** Which entity this client is, for the killfeed's "involves me" highlight (M10). */
+  readonly identity?: LocalIdentity;
+  /**
+   * False on a client whose match is run by a dedicated server (M10, playtest round 2).
+   *
+   * This object has two drive modes and it is worth naming them rather than leaving the
+   * difference implicit in which methods a caller happens to invoke:
+   *
+   * - **Authoritative** (`true`, the default): `simulate` runs the clock, the mode scores,
+   *   and the phase machine advances itself. Single-player and the dedicated server.
+   * - **Replicated** (`false`): `simulate` is never called and `applyReplicated` writes the
+   *   phase, round and clock from the wire. The mode must **not** score — the server already
+   *   did, and a client that scored too would count every kill twice and then be overwritten
+   *   by the replicated total, which reads as a scoreboard that flickers.
+   *
+   * The killfeed still runs in both, because a feed line is presentation and S3 requires a
+   * networked event and a local one to be indistinguishable.
+   */
+  readonly authoritative?: boolean;
 }
 
 const evMatchStarted = { modeId: '', modeName: '', mapId: '', mapName: '', roundsToWin: 1 };
@@ -97,8 +150,17 @@ export class MatchFlow {
 
   constructor(deps: MatchFlowDeps) {
     this.deps = deps;
-    this.killfeed = new Killfeed(deps.bus, deps.roster);
+    this.authoritative = deps.authoritative !== false;
+    this.killfeed = new Killfeed(deps.bus, deps.roster, deps.identity ?? new LocalIdentity());
     this.subscribe();
+  }
+
+  /** See `MatchFlowDeps.authoritative`. */
+  private readonly authoritative: boolean;
+
+  /** Point the killfeed at a different name source. See `CombatantDirectory`. */
+  setKillfeedDirectory(directory: CombatantDirectory): void {
+    this.killfeed.setDirectory(directory);
   }
 
   get currentPhase(): MatchPhase {
@@ -144,12 +206,87 @@ export class MatchFlow {
    * `phaseTicks` is back-computed from the remaining phase seconds so `phaseSecondsRemaining`
    * — which the countdown banner reads — returns the replicated number rather than a stale one.
    */
-  applyReplicated(phase: MatchPhase, secondsRemaining: number, phaseSeconds: number, round: number): void {
+  applyReplicated(state: ReplicatedMatchState): void {
+    const { phase, round, scoreA, scoreB } = state;
+    const previousPhase = this.phase;
+    const previousRound = this.roundIndex;
+
     this.phase = phase;
     this.roundIndex = round;
-    this.ticksRemaining = Math.max(0, Math.round(secondsRemaining / DT));
+    this.tick = state.serverTick;
+    this.ticksRemaining = Math.max(0, Math.round(state.secondsRemaining / DT));
     const limit = phase === 'WARMUP' ? WARMUP_SECONDS : this.roundEndSeconds;
-    this.phaseTicks = Math.max(0, Math.round((limit - phaseSeconds) / DT));
+    this.phaseTicks = Math.max(0, Math.round((limit - state.phaseSeconds) / DT));
+    this.replicatedScoreA = scoreA;
+    this.replicatedScoreB = scoreB;
+
+    /**
+     * The transitions, which are the whole reason this is not three assignments (playtest
+     * round 2).
+     *
+     * Adopting the phase was enough to make the HUD *read* correctly and nothing else. Every
+     * consumer downstream of a match ending is wired to an **event**, not to a poll of
+     * `currentPhase`: `Game` sets `pendingSummary` from `EV.MatchEnded`, the announcer plays
+     * from `EV.AnnouncerCue`, the round reset in `ClientMatch` listens for `EV.RoundStarted`.
+     * A client that silently arrived in `MATCH_END` fired none of them, so it never entered
+     * SUMMARY, never tore its world down, and sat on the final banner while the server moved
+     * on to the next match — with the old score, the old killfeed and the old scoreboard still
+     * on screen. That is the reported state leakage, and it is this method's fault.
+     *
+     * So the replicated path emits the same events the simulated one does, at the same
+     * transitions, in the same order. Edge-triggered against the previous phase, because this
+     * runs at the snapshot rate and a level-triggered version would announce the match ending
+     * twenty times a second.
+     */
+    if (round !== previousRound && phase !== 'MATCH_END') {
+      evRoundStarted.round = round;
+      evRoundStarted.roundsToWin = this.deps.mode.roundsToWin;
+      this.deps.bus.emit(EV.RoundStarted, evRoundStarted);
+    }
+
+    if (phase === previousPhase) return;
+
+    if (phase === 'LIVE') this.cue('fight');
+    if (phase === 'MATCH_END') this.adoptReplicatedEnd(scoreA, scoreB);
+  }
+
+  /**
+   * The server says the match is over. Produce the result the client's own end-of-match path
+   * needs, and announce it.
+   *
+   * The winner is derived from the replicated score rather than replicated on its own: the
+   * two cannot disagree, because they are the same number, and a `winner` byte on the wire
+   * would be a second fact to keep in step with the first.
+   */
+  private adoptReplicatedEnd(scoreA: number, scoreB: number): void {
+    if (this.outcome !== null) return;
+    const winner: ScoreTeam | 'DRAW' = scoreA === scoreB ? 'DRAW' : scoreA > scoreB ? 'A' : 'B';
+    this.endMatch({
+      kind: 'match',
+      winner,
+      reason: 'Match over',
+      scoreA,
+      scoreB,
+      roundsA: this.deps.score.team('A').rounds,
+      roundsB: this.deps.score.team('B').rounds,
+    });
+  }
+
+  /**
+   * The replicated team scores, for a client whose own mode is not scoring.
+   *
+   * `mode.teamScore` is the right answer everywhere the mode is actually running and is
+   * always zero on a replicated client, so the summary screen and the end-of-match banner
+   * read this instead. -1 means "nothing replicated", which is what single-player reports.
+   */
+  private replicatedScoreA = -1;
+  private replicatedScoreB = -1;
+
+  /** Team score from whichever source is authoritative for this client. */
+  teamScore(team: ScoreTeam): number {
+    if (this.authoritative) return this.deps.mode.teamScore(team);
+    const replicated = team === 'A' ? this.replicatedScoreA : this.replicatedScoreB;
+    return replicated < 0 ? this.deps.mode.teamScore(team) : replicated;
   }
 
   get isLive(): boolean {
@@ -409,22 +546,56 @@ export class MatchFlow {
         // Kills only count while the round is live. A round that ended two ticks ago is not
         // still scoring, and neither is a match that is over.
         if (this.phase !== 'LIVE') return;
-        const killer = find(roster, p.sourceId);
-        const victim = find(roster, p.targetId);
-        if (victim === undefined) return;
 
-        const ev: KillEvent = {
-          killerId: p.sourceId,
-          victimId: p.targetId,
-          weaponId: p.weaponId,
-          zone: p.zone,
-          killerTeam: killer?.team ?? null,
-          victimTeam: victim.team,
-          headshot: p.zone === 'head',
-          suicide: p.sourceId === p.targetId || killer === undefined,
-          friendly: killer !== undefined && killer.team === victim.team,
-        };
-        mode.onKill(ev);
+        /**
+         * Scoring is the authority's job; the feed line is everybody's (M10).
+         *
+         * On a replicated client the roster is empty — the bodies are `RemoteActor`s rebuilt
+         * from snapshots and never enter `bots.roster` — so the lookup below misses on every
+         * kill and the old code returned before it ever reached the killfeed. The result was
+         * a networked match with no killfeed at all, which is not a rendering bug and was not
+         * going to be found by looking at the renderer.
+         *
+         * The mode must not run here either, and for a stronger reason than tidiness: the
+         * server has already scored this kill and replicated the total. A client that scored
+         * it again would double every number, then have the replicated score overwrite it a
+         * few milliseconds later.
+         */
+        if (this.authoritative) {
+          const killer = find(roster, p.sourceId);
+          const victim = find(roster, p.targetId);
+          // Nobody this match is tracking: not scored, and not drawn.
+          if (victim === undefined) return;
+
+          const ev: KillEvent = {
+            killerId: p.sourceId,
+            victimId: p.targetId,
+            weaponId: p.weaponId,
+            zone: p.zone,
+            killerTeam: killer?.team ?? null,
+            victimTeam: victim.team,
+            headshot: p.zone === 'head',
+            suicide: p.sourceId === p.targetId || killer === undefined,
+            friendly: killer !== undefined && killer.team === victim.team,
+          };
+          mode.onKill(ev);
+        } else {
+          /**
+           * Kills, deaths and streaks on a replicated client (M10, playtest round 2).
+           *
+           * The *team* score is replicated in the snapshot header and is the number the HUD
+           * banner and the win condition use. The per-player columns are not on the wire, and
+           * without this the scoreboard showed the right roster with every K/D at zero —
+           * which looks like the scoreboard is broken and is really nobody counting.
+           *
+           * Zero points, deliberately: what a kill is *worth* is a mode decision, the mode is
+           * not running here, and inventing a number would put a per-player score column on
+           * screen that disagrees with the server's. Kills, deaths, assists and streaks are
+           * facts about the kill itself and are the same in both runtimes.
+           */
+          this.deps.score.recordKill(p.sourceId, p.targetId, p.zone === 'head', 0);
+        }
+
         this.killfeed.push(p.sourceId, p.targetId, p.weaponId, p.zone, this.tick);
       }),
     );

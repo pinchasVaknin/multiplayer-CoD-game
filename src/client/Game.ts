@@ -17,6 +17,10 @@ import { ChopperCamera } from './streaks/ChopperCamera';
 import { DEG2RAD } from '../shared/core/MathUtil';
 import { LocalBotTransport, type ICommandQueue } from '../shared/net/Transport';
 import { parseJoinOptions } from './net/JoinOptions';
+import { handshake, HandshakeError } from './net/Handshake';
+import { logger } from '../shared/core/Log';
+import type { WelcomeInfo } from '../shared/net/Messages';
+import type { NetworkedMatchOptions } from './MatchWorld';
 import { CameraRig, type CameraDrive } from './engine/CameraRig';
 import { ProceduralAudio } from './engine/ProceduralAudio';
 import { ProceduralTextures } from './engine/ProceduralTextures';
@@ -95,6 +99,8 @@ interface StateHandlers {
 
 const stateChangePayload = { from: 'BOOT' as GameStateId, to: 'BOOT' as GameStateId };
 
+const netLog = logger('join');
+
 export class Game {
   readonly bus: GameBus = createGameBus();
   readonly movementConfig: MovementConfig = cloneMovementConfig(DEFAULT_MOVEMENT_CONFIG);
@@ -156,6 +162,36 @@ export class Game {
    * as it did, and it does.
    */
   private readonly joinOptions = parseJoinOptions(window.location.search);
+
+  /**
+   * The connection and the `Welcome`, once the handshake has completed (M10, playtest
+   * round 2).
+   *
+   * `buildWorld` reads the map and the mode **out of this** rather than out of
+   * `this.selection`. That inversion is the fix for the reported map/mode desync: the client
+   * used to load whatever the front end had selected and then dial a server that was running
+   * something else, and every consequence of the two disagreeing — spawning outside the
+   * world, walking through walls, a rubber-band on every step — looked like a netcode fault
+   * and was a loading fault.
+   *
+   * Null in single-player and while nothing is connected.
+   */
+  private server: NetworkedMatchOptions | null = null;
+
+  /** True while the handshake is in flight, so a second click cannot start a second one. */
+  private joining = false;
+
+  /**
+   * Set when the server rotates to a new match while we are in one.
+   *
+   * Acted on from the render pass rather than from inside the network update, for the same
+   * reason `pendingSummary` is: tearing down the world from inside a callback the world is
+   * currently iterating is how you get a null dereference in the middle of an event dispatch.
+   */
+  private pendingRotation: WelcomeInfo | null = null;
+
+  /** True for the duration of `applyRotation`. See `teardownWorld`. */
+  private rotating = false;
 
   /**
    * Keeps the connection alive while the tab is hidden (M10).
@@ -256,7 +292,8 @@ export class Game {
       profile: this.profile,
       audio: this.audio,
       selection: this.selection,
-      onLaunch: () => this.transitionTo('MATCH'),
+      // Connect before building anything, so the server dictates the map. See `launchMatch`.
+      onLaunch: () => void this.launchMatch(),
       onLoadout: () => this.transitionTo('LOADOUT'),
       onSettings: () => this.transitionTo('SETTINGS'),
       onLoadoutBack: () => this.transitionTo('MENU'),
@@ -587,11 +624,29 @@ export class Game {
 
   // -- world ---------------------------------------------------------------
 
+  /**
+   * The map this match is played on.
+   *
+   * **The server's answer wins when there is one** (M10, playtest round 2). S4.9 makes the
+   * server authoritative over the simulation, and the map is not a presentation choice — it
+   * is the collision world every position in every snapshot is expressed against. A client
+   * that loaded a different one was not "showing the wrong level", it was predicting against
+   * different geometry and being corrected by a server that could see through its walls.
+   */
   private mapEntry(): ReturnType<typeof findMap> {
+    const server = this.server;
+    if (server !== null) return findMap(server.welcome.mapId);
     // A mode may pin its map — the Shooting Range only exists on the grey-box testbed,
     // because that is where the target dummies are built.
     const forced = findMode(this.selection.modeId).forcedMapId;
     return findMap(forced ?? this.selection.mapId);
+  }
+
+  /** The mode. The server's when connected, for the same reason as the map. */
+  private modeEntry(): ReturnType<typeof findMode> {
+    const server = this.server;
+    if (server !== null) return findMode(asModeId(server.welcome.modeId));
+    return findMode(this.selection.modeId);
   }
 
   /** Resolve the equipped class into the three long-lived weapon objects. */
@@ -610,7 +665,7 @@ export class Game {
    */
   private buildWorld(): void {
     if (this.world !== null) return;
-    const modeEntry = findMode(this.selection.modeId);
+    const modeEntry = this.modeEntry();
     this.world = new MatchWorld({
       bus: this.bus,
       scene: this.scene,
@@ -622,7 +677,7 @@ export class Game {
       input: this.input,
       loop: this.loop,
       transport: this.transport,
-      server: this.joinOptions,
+      server: this.server,
       uiHost: this.uiHost,
       debugHost: this.debugHost,
       stats: this.stats,
@@ -651,12 +706,116 @@ export class Game {
     });
   }
 
-  /** Drop the world. `MatchWorld.dispose` is the mirror of its own constructor. */
-  private teardownWorld(): void {
+  /**
+   * Drop the world. `MatchWorld.dispose` is the mirror of its own constructor.
+   *
+   * `keepConnection` is the map-rotation case: the server has started a new match on the same
+   * socket, so the world goes and the connection stays. Everything else — leaving to the
+   * menu, quitting from the pause screen, finishing the summary — is a real departure and
+   * closes the link, which is what frees the seat on the server without waiting for a timeout.
+   */
+  private teardownWorld(options: { keepConnection?: boolean } = {}): void {
     this.pendingSummary = false;
-    this.world?.dispose();
+    this.pendingRotation = null;
+    // A rotation keeps the socket no matter which teardown runs. The SUMMARY state tears the
+    // world down on its way out and has no way to know a rotation is why it is leaving.
+    const keep = options.keepConnection === true || this.rotating;
+    this.world?.dispose({ keepConnection: keep });
     this.world = null;
     this.speedo.reset();
+    if (!keep) this.server = null;
+  }
+
+  /**
+   * Start a match: connect first if there is a server, and only then build a world (M10,
+   * playtest round 2).
+   *
+   * The ordering is the entire fix for the map/mode desync. `MatchWorld`'s constructor loads
+   * a map and spawns the player into it, and it used to run *before* anything was dialled —
+   * so the map came from the local menu selection and could not possibly have been the
+   * server's. Now nothing is built until the server has said what it is running.
+   *
+   * A failed join stays in the menu with the reason on screen. It deliberately does **not**
+   * fall back to single-player: a player who asked to join a server and silently got a bot
+   * match instead would have no way to tell, and would report it as "the server is empty".
+   */
+  private async launchMatch(): Promise<void> {
+    const join = this.joinOptions;
+    if (join === null || this.server !== null) {
+      // Single-player, or a connection that is already up (resuming, or a rotation).
+      this.transitionTo('MATCH');
+      return;
+    }
+    if (this.joining) return;
+
+    this.joining = true;
+    this.screens.menus.showBoot(`CONNECTING TO ${hostOf(join.url)}…`);
+    try {
+      const result = await handshake(join);
+      this.server = {
+        link: result.link,
+        welcome: result.welcome,
+        receivedAtMs: result.receivedAtMs,
+        displayName: join.displayName,
+        wantRewindDebug: join.wantRewindDebug,
+        onNewMatch: (welcome) => {
+          this.pendingRotation = welcome;
+        },
+      };
+      this.joining = false;
+      this.transitionTo('MATCH');
+    } catch (err) {
+      this.joining = false;
+      const reason = err instanceof HandshakeError ? err.message : String(err);
+      netLog.error(`could not join ${join.url}: ${reason}`);
+      this.screens.menus.showBoot(`COULD NOT JOIN — ${reason.toUpperCase()}`);
+      // Back to a usable menu rather than leaving the player on a dead screen.
+      window.setTimeout(() => {
+        if (this.state === 'MENU') this.screens.menus.show();
+      }, 4000);
+    }
+  }
+
+  /**
+   * The server rotated to another match on the connection we already hold.
+   *
+   * Called from the render pass, never from inside the network update — see
+   * `pendingRotation`. The world is destroyed and rebuilt because the *map may have changed*,
+   * and a client that merely reset its state would keep the previous map's colliders. That is
+   * the same desync as joining the wrong map, arriving by a different route.
+   *
+   * The link survives the teardown (`keepConnection`), because the server has not disconnected
+   * us — it has reseated us in a new match and told us so with a second `Welcome`.
+   */
+  private applyRotation(welcome: WelcomeInfo): void {
+    const previous = this.server;
+    if (previous === null) return;
+    netLog.info(`server rotated to ${welcome.modeId} on ${welcome.mapId} — rebuilding the world.`);
+
+    /**
+     * `rotating` makes every teardown on this path keep the socket, including the one the
+     * SUMMARY state runs on its way out, which has no idea a rotation is why it is leaving.
+     */
+    this.rotating = true;
+    try {
+      // The new match, adopted *before* anything rebuilds — `buildWorld` reads the map and
+      // mode straight off it, and the MATCH state's own enter handler is one of the callers.
+      this.server = { ...previous, welcome, receivedAtMs: performance.now() };
+      this.teardownWorld({ keepConnection: true });
+
+      if (this.state === 'MATCH') {
+        this.buildWorld();
+        this.world?.match.setActive(true);
+      } else {
+        // From SUMMARY (the usual case — a rotation follows a match ending) or from PAUSED.
+        // Re-entering MATCH builds the world through the state's own enter handler rather
+        // than duplicating it here.
+        this.transitionTo('MATCH');
+      }
+      this.input.clearHeld();
+    } finally {
+      this.rotating = false;
+    }
   }
 
   /**
@@ -775,6 +934,51 @@ export class Game {
     if (net === null) return;
     world.match.netFrozen = net.frozen;
     net.update();
+    /**
+     * Serviced here as well as in the render pass, because the render pass is not running.
+     *
+     * `requestAnimationFrame` is *suspended* in a hidden tab, so `draw` — where these
+     * transitions used to be handled and nowhere else — simply never happens. The network
+     * keeps running on this timer by design, which means a client could be told the server
+     * had rotated to a different map, acknowledge it, and then sit on the previous map's
+     * world indefinitely: alt-tab through the post-match hold and you come back to a client
+     * playing Foundry against a server running Depot. That is the same desync the handshake
+     * fix removed, arriving by a different route.
+     */
+    this.servicePendingTransitions();
+  }
+
+  /**
+   * Apply state changes that were requested from inside a callback, now that the callback
+   * has returned.
+   *
+   * Both of these tear down or replace the world, and both are raised from deep inside
+   * something that is currently iterating it — a bus dispatch for the match ending, a
+   * snapshot decode for the rotation. Doing the work in place is how you get a null
+   * dereference half-way through an event dispatch, so they are flags, and this is where
+   * they are cashed.
+   */
+  private servicePendingTransitions(): void {
+    // The match ended during a sim tick. A paused match cannot end, so the flag simply
+    // survives until the match resumes.
+    if (this.pendingSummary && this.state === 'MATCH') {
+      this.pendingSummary = false;
+      this.transitionTo('SUMMARY');
+    }
+
+    /**
+     * The server started a new match on this connection. Rebuild.
+     *
+     * Deliberately after the summary transition and not before: a rotation follows a match
+     * ending, and the player should get to see the result of the one they just played rather
+     * than have it replaced by the next map loading underneath them. The post-match hold on
+     * the server (`MATCH_END_HOLD_SECONDS`) is what buys the time for that.
+     */
+    const rotation = this.pendingRotation;
+    if (rotation !== null) {
+      this.pendingRotation = null;
+      this.applyRotation(rotation);
+    }
   }
 
   private simulate(tick: number): void {
@@ -824,6 +1028,19 @@ export class Game {
       world.match.netFrozen = net.frozen;
       if (inMatch) net.update();
       world.debug.simulate(world.player, this.movementConfig);
+
+      /**
+       * The connection died. Leave, rather than standing in a world nothing is driving.
+       *
+       * Without this a dropped client keeps its map, its HUD and its last snapshot on screen
+       * forever: the local flow is inert by design, so nothing ticks, nothing changes, and it
+       * is indistinguishable from a frozen game. The player is put back in the menu with the
+       * reason, which is the difference between "the server went away" and "it hung".
+       */
+      if (net.state === 'disconnected' || net.state === 'rejected') {
+        netLog.warn(`connection ended: ${net.client.closeReason}`);
+        this.transitionTo('MENU');
+      }
       return;
     }
 
@@ -948,13 +1165,9 @@ export class Game {
     }
     world.debug.update(dt);
 
-    // The match ended during a sim tick this frame. Transition now, between frames, with
-    // nothing part-way through a dispatch. A paused match cannot end, so PAUSED is not a
-    // case here; the flag survives until the match resumes.
-    if (this.pendingSummary && this.state === 'MATCH') {
-      this.pendingSummary = false;
-      this.transitionTo('SUMMARY');
-    }
+    // Between frames, with nothing part-way through a dispatch. Also serviced from the
+    // hidden-tab heartbeat, because this pass does not run in a background tab at all.
+    this.servicePendingTransitions();
   }
 
   private onFrame(sample: FrameSample): void {
@@ -1103,4 +1316,11 @@ export class Game {
 
 function clampFov(v: number): number {
   return Math.min(FOV_MAX, Math.max(FOV_MIN, v));
+}
+
+/** Just the host, for a "connecting to…" line. A whole `ws://` URL is noise on a title card. */
+function hostOf(url: string): string {
+  const withoutScheme = url.replace(/^wss?:\/\//i, '');
+  const end = withoutScheme.indexOf('/');
+  return (end < 0 ? withoutScheme : withoutScheme.slice(0, end)).toUpperCase();
 }

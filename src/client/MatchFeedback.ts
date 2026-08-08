@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { BotDirector } from '../shared/ai/BotDirector';
-import { PLAYER_ENTITY_ID } from '../shared/combat/DamageSystem';
+import type { LocalIdentity } from '../shared/combat/LocalIdentity';
 import type { HitZone } from '../shared/combat/HitboxRig';
 import { EV, type GameBus } from '../shared/core/Events';
 import type { Input } from './input/Input';
@@ -53,10 +53,45 @@ export interface FeedbackDeps {
   readonly hud: Hud;
   readonly bots: BotDirector;
   readonly latency: LatencyProbe;
+  /**
+   * Which entity is the player at this keyboard (M10, playtest round 2).
+   *
+   * **This is the file the missing hit feedback was in.** Every handler below asks "was that
+   * me?" and every one of them used to ask it by comparing against `PLAYER_ENTITY_ID`, which
+   * is 0. On a dedicated server the local player is entity 1 or above and entity 0 is the
+   * server's unoccupied spectator seat, so the answer was always no: no hitmarker, no
+   * hitmarker sound, no damage numbers, no hit puff, no hurt vignette, no hit-direction
+   * chevron, no camera shake on firing, no own-weapon audio mix, no death handoff.
+   *
+   * None of it failed loudly. The events arrived, the subscriptions fired, and each handler
+   * returned one line in — which is why it presented as "no feedback bridges to the UI" and
+   * was going to be looked for in the bridge.
+   */
+  readonly identity: LocalIdentity;
+
+  /**
+   * Where a given entity's body is right now, or null if nobody here knows (M10).
+   *
+   * `bots.get(id)` was the only lookup, which is correct in single-player and empty on a
+   * dedicated server — the bots are in the server process and the other players are
+   * `RemoteActor`s drawn from snapshots. So the death sound, the hit-direction chevron and
+   * every positional reload and dry-fire fell back to silence or to the origin of the world.
+   * This asks the match, which knows about both kinds of body.
+   */
+  readonly bodyAt: (entityId: number) => Readonly<BodyPose> | null;
+
   /** Called when the local player dies, so `Match` can start its respawn timer. */
   readonly onPlayerKilled: () => void;
   /** Where the audio listener is this frame, for sounds with no located source. */
   readonly listener: () => Readonly<{ x: number; y: number; z: number }>;
+}
+
+/** Enough of a body to put a sound on it or point a chevron at it. */
+export interface BodyPose {
+  x: number;
+  y: number;
+  z: number;
+  eyeHeight: number;
 }
 
 interface PendingNumber {
@@ -108,14 +143,14 @@ export class MatchFeedback {
   // -- wiring ----------------------------------------------------------------
 
   private subscribe(): void {
-    const { bus, cameraRig, input, fx, hud, weaponAudio, weapons, bots, latency } = this.deps;
+    const { bus, cameraRig, input, fx, hud, weaponAudio, weapons, latency } = this.deps;
 
     this.unsubscribe.push(
       bus.on(EV.WeaponFired, (p) => {
         const def = weapons.definition;
         // The muzzle *light* belongs to whoever fired, wherever they are standing; the flash
         // mesh hangs off the local player's own viewmodel and belongs only to them (M3 bug).
-        const local = p.sourceId === PLAYER_ENTITY_ID;
+        const local = this.deps.identity.is(p.sourceId);
         fx.fireMuzzleFlash(p.x, p.y, p.z, def.muzzleFlashScale, local);
         if (p.tracer) fx.spawnTracer(p.x, p.y, p.z, p.endX, p.endY, p.endZ);
         // M8 mix: your own rifle sits below everyone else's so an enemy at thirty metres
@@ -149,19 +184,19 @@ export class MatchFeedback {
     this.unsubscribe.push(
       bus.on(EV.MeleeSwing, (p) => {
         weaponAudio.playMeleeSwing(p.x, p.y, p.z, p.hit);
-        if (p.sourceId === PLAYER_ENTITY_ID) cameraRig.shake.add(p.hit ? 0.16 : 0.06);
+        if (this.deps.identity.is(p.sourceId)) cameraRig.shake.add(p.hit ? 0.16 : 0.06);
       }),
     );
 
     this.unsubscribe.push(
       bus.on(EV.DamageDealt, (p) => {
-        if (p.targetId === PLAYER_ENTITY_ID) {
+        if (this.deps.identity.is(p.targetId)) {
           this.onPlayerHurt(p.sourceId, p.amount);
           return;
         }
         // A round landing on a body is a sound in the room no matter who fired it (S6.8).
         weaponAudio.playFleshImpact(p.x, p.y, p.z, p.zone === 'head');
-        if (p.sourceId !== PLAYER_ENTITY_ID) return;
+        if (!this.deps.identity.is(p.sourceId)) return;
 
         // Timestamped here, at the moment the damage was applied, so the hitmarker latency
         // reported in the overlay is hit-to-visual and not visual-to-visual.
@@ -180,14 +215,14 @@ export class MatchFeedback {
 
     this.unsubscribe.push(
       bus.on(EV.EntityKilled, (p) => {
-        if (p.targetId === PLAYER_ENTITY_ID) {
+        if (this.deps.identity.is(p.targetId)) {
           this.deps.onPlayerKilled();
           return;
         }
-        const victim = bots.get(p.targetId);
-        if (victim === undefined) return;
+        const victim = this.deps.bodyAt(p.targetId);
+        if (victim === null) return;
         // Slightly off the floor: the sound is the body arriving, not the feet.
-        weaponAudio.playDeath(victim.px, victim.py + 0.4, victim.pz);
+        weaponAudio.playDeath(victim.x, victim.y + 0.4, victim.z);
       }),
     );
 
@@ -222,7 +257,7 @@ export class MatchFeedback {
      */
     this.unsubscribe.push(
       bus.on(EV.PlayerLanded, (p) => {
-        const own = p.entityId === PLAYER_ENTITY_ID;
+        const own = this.deps.identity.is(p.entityId);
         if (own) cameraRig.applyLanding(this.deps.cameraConfig, p.impactSpeed);
         this.deps.audio.playLanding(
           p.x,
@@ -239,7 +274,7 @@ export class MatchFeedback {
       bus.on(EV.PlayerFootstep, (p) => {
         // M8 mix: your own steps are constant, carry no information, and are the best mask
         // in the game for the one sound you most need to hear (`engine/AudioMix.ts`).
-        const own = p.entityId === PLAYER_ENTITY_ID;
+        const own = this.deps.identity.is(p.entityId);
         this.deps.audio.playFootstep(
           p.x,
           p.y,
@@ -266,10 +301,10 @@ export class MatchFeedback {
     const severity = Math.min(1, amount / Math.max(max * 0.3, 1));
     this.deps.cameraRig.shake.add(0.08 + severity * 0.16);
 
-    const shooter = this.deps.bots.get(sourceId);
-    if (shooter === undefined) return;
+    const shooter = this.deps.bodyAt(sourceId);
+    if (shooter === null) return;
     const sim = this.deps.player.sim;
-    const worldYaw = Math.atan2(-(shooter.px - sim.x), -(shooter.pz - sim.z));
+    const worldYaw = Math.atan2(-(shooter.x - sim.x), -(shooter.z - sim.z));
     // Screen-relative: 0 is straight ahead, positive to the right. The view yaw grows
     // anticlockwise, so the bearing is the negated delta.
     this.deps.hud.showHitDirection(-angleDelta(sim.yaw, worldYaw));
@@ -281,18 +316,18 @@ export class MatchFeedback {
    * usable piece of information rather than a confusing one.
    */
   private sourcePosition(sourceId: number): Readonly<{ x: number; y: number; z: number }> {
-    if (sourceId === PLAYER_ENTITY_ID) {
+    if (this.deps.identity.is(sourceId)) {
       const sim = this.deps.player.sim;
       sourceAt.x = sim.x;
       sourceAt.y = sim.y + sim.eyeHeight;
       sourceAt.z = sim.z;
       return sourceAt;
     }
-    const bot = this.deps.bots.get(sourceId);
-    if (bot !== undefined) {
-      sourceAt.x = bot.px;
-      sourceAt.y = bot.py + bot.eyeHeight;
-      sourceAt.z = bot.pz;
+    const body = this.deps.bodyAt(sourceId);
+    if (body !== null) {
+      sourceAt.x = body.x;
+      sourceAt.y = body.y + body.eyeHeight;
+      sourceAt.z = body.z;
       return sourceAt;
     }
     // Unregistered source (a range dummy). Put it at the listener so it stays audible rather

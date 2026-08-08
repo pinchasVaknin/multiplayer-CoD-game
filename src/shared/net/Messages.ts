@@ -436,23 +436,34 @@ export function finishEvents(w: ByteWriter, count: number): Uint8Array {
 
 // -- reading -----------------------------------------------------------------
 
+/**
+ * What the server told this client about the match it just joined.
+ *
+ * **The client builds its world from this and never from its own menu selection** (M10,
+ * playtest round 2). Before that rule existed the browser loaded whichever map was last
+ * picked in the front end while the server ran whatever `MAP` said, and the two disagreeing
+ * produced exactly the symptoms you would predict and none of the ones you would look for:
+ * spawning outside the geometry, walking through walls that are not there, and a rubber-band
+ * every time the authoritative position was applied against a collision world that did not
+ * match. It reads as a netcode fault and is a *loading* fault.
+ */
+export interface WelcomeInfo {
+  readonly entityId: number;
+  readonly team: 'A' | 'B';
+  readonly mapId: string;
+  readonly modeId: string;
+  readonly serverTick: number;
+  readonly serverMs: number;
+  readonly snapshotHz: number;
+}
+
 /** Everything a decoded frame can be. Discriminated on `kind`. */
 export type Decoded =
   | { kind: 'hello'; version: number; name: string }
   | { kind: 'commands'; count: number; snapshotAck: number }
   | { kind: 'ping'; id: number; clientMs: number }
   | { kind: 'bye'; reason: string }
-  | {
-      kind: 'welcome';
-      version: number;
-      entityId: number;
-      team: 'A' | 'B';
-      mapId: string;
-      modeId: string;
-      serverTick: number;
-      serverMs: number;
-      snapshotHz: number;
-    }
+  | ({ kind: 'welcome'; version: number } & WelcomeInfo)
   | { kind: 'reject'; code: number }
   | { kind: 'pong'; id: number; clientMs: number; serverMs: number; serverTick: number }
   | { kind: 'snapshot' }

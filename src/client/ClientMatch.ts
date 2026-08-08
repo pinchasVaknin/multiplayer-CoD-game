@@ -8,6 +8,7 @@ import type { PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
 import { PlayerCombatant } from '../shared/ai/PlayerCombatant';
 import { makeSpawnChoice, type SpawnChoice } from '../shared/ai/SpawnSelector';
 import { DamageSystem, makeDamageRequest, PLAYER_ENTITY_ID, type DamageRequest } from '../shared/combat/DamageSystem';
+import { LocalIdentity } from '../shared/combat/LocalIdentity';
 import { ScoreSystem } from '../shared/combat/ScoreSystem';
 import { Rng } from '../shared/core/Rng';
 import { TargetRange } from './combat/TargetRange';
@@ -25,7 +26,7 @@ import { LatencyProbe } from './debug/LatencyProbe';
 import type { EquipmentConfig } from '../shared/equipment/EquipmentConfig';
 import { EquipmentSystem } from '../shared/equipment/EquipmentSystem';
 import { MatchEquipment } from './MatchEquipment';
-import { MatchFeedback } from './MatchFeedback';
+import { MatchFeedback, type BodyPose } from './MatchFeedback';
 import { MatchMeta } from './MatchMeta';
 import { MatchObjectives } from './MatchObjectives';
 import { MortarOverlay } from './ui/MortarOverlay';
@@ -166,10 +167,48 @@ export interface MatchDeps {
   readonly actors?: (() => Iterable<RenderableActor>) | undefined;
   /** M7: killstreak tuning. Live-editable from the debug panel. */
   readonly streakConfig?: StreakConfig;
+
+  /**
+   * Which entity this client is (M10, playtest round 2).
+   *
+   * Absent in single-player, where it is `PLAYER_ENTITY_ID` and always was. On a dedicated
+   * server the seat is assigned in the `Welcome` and is 1 or above, and every "was that me?"
+   * test in this file and in `MatchFeedback` reads it — see `LocalIdentity` for the list of
+   * things that silently did nothing while they were all comparing against 0.
+   */
+  readonly identity?: LocalIdentity;
+
+  /**
+   * The side the server put this client on. Single-player is always `PLAYER_TEAM`.
+   *
+   * It decides whether the announcer calls the result a victory or a defeat, which is the one
+   * place a networked client would otherwise congratulate the player for losing.
+   */
+  readonly localTeam?: BotTeam;
+
+  /**
+   * The name this client is known by. `PLAYER_NAME` in single-player.
+   *
+   * The scoreboard registers the local row before the first snapshot arrives, so without this
+   * the player's own row read `OPERATOR` while every other client — and the killfeed, which
+   * resolves names from the snapshot — called them by the name they joined with.
+   */
+  readonly localName?: string;
 }
 
 /** The player's side. Bots added to 'A' fight alongside them, 'B' against. */
 export const PLAYER_TEAM: BotTeam = 'A';
+
+/**
+ * Standing eye height, for a remote body whose exact stance eye is not on the wire.
+ *
+ * Matches `PlayerSimState`'s standing value. Only ever used to lift a positional sound off
+ * the floor, never for anything the simulation reads.
+ */
+const DEFAULT_EYE_HEIGHT = 1.65;
+
+/** Reused by `bodyAt`; the callers read it during the call and never keep it. */
+const bodyScratch: BodyPose = { x: 0, y: 0, z: 0, eyeHeight: DEFAULT_EYE_HEIGHT };
 
 export const PLAYER_NAME = 'OPERATOR';
 
@@ -224,6 +263,14 @@ export class Match {
 
   // ---- M4: the match, as opposed to the firefight -------------------------
   readonly score: ScoreSystem;
+
+  /**
+   * Which entity this client is. `PLAYER_ENTITY_ID` unless a server said otherwise.
+   *
+   * Read through `localId` at the point of use rather than copied into a field, because the
+   * assignment arrives over a socket and may land after any given object was constructed.
+   */
+  private readonly identity: LocalIdentity;
   readonly mode: GameMode;
   readonly flow: MatchFlow;
   readonly ui: MatchHud;
@@ -291,12 +338,14 @@ export class Match {
 
   constructor(deps: MatchDeps) {
     this.deps = deps;
+    // First, because almost everything below is handed it.
+    this.identity = deps.identity ?? new LocalIdentity();
 
     this.damage = new DamageSystem(deps.bus);
     this.playerHealth = new Health(deps.healthConfig);
     this.playerCombatant = new PlayerCombatant(
       this.playerHealth,
-      PLAYER_TEAM,
+      deps.localTeam ?? PLAYER_TEAM,
       deps.player,
       deps.movementConfig,
     );
@@ -356,7 +405,7 @@ export class Match {
     deps.scene.add(this.botRenderer.group);
 
     // ---- the mode ---------------------------------------------------------
-    this.score = new ScoreSystem(deps.bus);
+    this.score = new ScoreSystem(deps.bus, this.identity);
     this.mode = deps.mode.create({
       bus: deps.bus,
       score: this.score,
@@ -370,7 +419,19 @@ export class Match {
       mode: this.mode,
       mapId: deps.map.id,
       mapName: deps.map.name,
-      localTeam: PLAYER_TEAM,
+      // The server put us on a side; in single-player there is only one to be on.
+      localTeam: deps.localTeam ?? PLAYER_TEAM,
+      identity: this.identity,
+      /**
+       * A networked client's flow is **replicated, not simulated** (M10, playtest round 2).
+       *
+       * `simulate` is already skipped for it, so the mode was never going to score — but the
+       * kill subscription inside `MatchFlow` ran regardless and resolved against an empty
+       * roster, which is why the killfeed was silently blank all milestone. Saying so here
+       * makes the two drive modes a property of the object rather than an accident of which
+       * methods the caller remembers not to invoke.
+       */
+      authoritative: deps.networked !== true,
       onSidesSwapped: (swapped) => this.bots.spawns.setSideSwap(swapped),
     });
     this.bots.respawnPolicy = {
@@ -382,7 +443,7 @@ export class Match {
     this.bots.objectives = isObjectiveProvider(this.mode) ? this.mode : null;
     // Post-M8: the player collects the bomb with the Use key rather than by walking over it.
     // The mode is told *which* entity drives itself; it never learns that one of them is human.
-    if (this.mode instanceof SearchAndDestroy) this.mode.manualPickupId = PLAYER_ENTITY_ID;
+    if (this.mode instanceof SearchAndDestroy) this.mode.manualPickupId = this.localId;
     this.bots.freeForAll = deps.mode.freeForAll === true;
     // There is no such thing as a teammate in FFA, so the friendly-fire gate at the damage
     // door has to come off or half the lobby is unkillable by the other half.
@@ -455,6 +516,8 @@ export class Match {
       hud: this.ui.hud,
       bots: this.bots,
       latency: this.latency,
+      identity: this.identity,
+      bodyAt: (entityId) => this.bodyAt(entityId),
       onPlayerKilled: () => this.onPlayerKilled(),
       listener: () => this.listenerAt,
     });
@@ -462,7 +525,7 @@ export class Match {
     // The mesh follows the inventory. `weapon.swapped` fires at the hand-over, which is the
     // exact tick the old weapon has finished going down and the new one starts coming up.
     this.swapSubscription = deps.bus.on(EV.WeaponSwapped, (p) => {
-      if (p.sourceId !== PLAYER_ENTITY_ID) return;
+      if (!this.identity.is(p.sourceId)) return;
       this.showSlot(this.weapons.inventory.activeSlotIndex);
     });
 
@@ -536,13 +599,13 @@ export class Match {
       bus: deps.bus,
       score: this.score,
       roster: this.bots.roster,
-      localId: PLAYER_ENTITY_ID,
-      targetable: (id) => (id === PLAYER_ENTITY_ID ? this.meta.state.targetedByStreaks : true),
-      visibleToUav: (id) => (id === PLAYER_ENTITY_ID ? this.meta.state.visibleToUav : true),
-      streakDiscount: (id) => (id === PLAYER_ENTITY_ID ? this.meta.state.streakDiscount : 0),
+      localId: this.localId,
+      targetable: (id) => (this.identity.is(id) ? this.meta.state.targetedByStreaks : true),
+      visibleToUav: (id) => (this.identity.is(id) ? this.meta.state.visibleToUav : true),
+      streakDiscount: (id) => (this.identity.is(id) ? this.meta.state.streakDiscount : 0),
       // The player earns only what their class equips; bots have no class, so they keep the
       // full list and behave exactly as they did before.
-      equippedStreaks: (id) => (id === PLAYER_ENTITY_ID ? this.equippedStreakIds : ALL_STREAK_IDS),
+      equippedStreaks: (id) => (this.identity.is(id) ? this.equippedStreakIds : ALL_STREAK_IDS),
       context: {
         bus: deps.bus,
         world: deps.world,
@@ -663,12 +726,61 @@ export class Match {
   registerRoster(): void {
     if (this.rosterRegistered) return;
     this.rosterRegistered = true;
-    this.score.register(PLAYER_ENTITY_ID, PLAYER_NAME, PLAYER_TEAM);
+    this.score.register(this.localId, this.deps.localName ?? PLAYER_NAME, this.deps.localTeam ?? PLAYER_TEAM);
     for (const bot of this.bots.bots) this.score.register(bot.entityId, bot.displayName, bot.team);
   }
 
   get isPlayerDead(): boolean {
     return this.playerDead;
+  }
+
+  /**
+   * The entity id this client's own player occupies.
+   *
+   * `PLAYER_ENTITY_ID` in single-player and the server's assignment in a networked match.
+   * Everything that used to compare against the constant compares against this.
+   */
+  get localId(): number {
+    return this.identity.entityId;
+  }
+
+  /**
+   * Find a body by entity id, whichever kind of match this is (M10, playtest round 2).
+   *
+   * Single-player has one place to look and a networked match has another: the roster holds
+   * `Bot`s here and `RemoteActor`s there, and only one of the two is ever populated. Callers
+   * that want to put a sound on a body or point a chevron at one should not have to know
+   * which — that is exactly the knowledge that leaked into `MatchFeedback` and made every
+   * positional cue silent over the network.
+   *
+   * The remote pose is sampled at `alpha` 1, the newest interpolated position. A sound is a
+   * one-shot placed at the instant it fires; blending it against the previous frame would
+   * buy nothing audible.
+   */
+  private bodyAt(entityId: number): Readonly<BodyPose> | null {
+    const bot = this.bots.get(entityId);
+    if (bot !== undefined) {
+      bodyScratch.x = bot.px;
+      bodyScratch.y = bot.py;
+      bodyScratch.z = bot.pz;
+      bodyScratch.eyeHeight = bot.eyeHeight;
+      return bodyScratch;
+    }
+
+    const actors = this.deps.actors;
+    if (actors !== undefined) {
+      for (const actor of actors()) {
+        if (actor.entityId !== entityId) continue;
+        bodyScratch.x = actor.renderX(1);
+        bodyScratch.y = actor.renderY(1);
+        bodyScratch.z = actor.renderZ(1);
+        // The rig's own eye height is not replicated; the standing default is close enough
+        // for a sound and is what the local case uses for a standing bot.
+        bodyScratch.eyeHeight = DEFAULT_EYE_HEIGHT;
+        return bodyScratch;
+      }
+    }
+    return null;
   }
 
   /**
@@ -898,7 +1010,7 @@ export class Match {
      * `Ballistics` and its own `WeaponDef` — an infinite pool by construction, because it
      * spends no magazine — and now nothing else is spending one on its behalf.
      */
-    const flyingChopper = this.streaks.activeChopperFor(PLAYER_ENTITY_ID) !== null;
+    const flyingChopper = this.streaks.activeChopperFor(this.localId) !== null;
     // A hand on a grenade — or on the knife — is a hand off the rifle. One flag, read by the
     // weapon and by the viewmodel, so the gun cannot be fired while it is visibly lowered.
     //
@@ -1010,7 +1122,7 @@ export class Match {
    * broken rather than as risk.
    */
   private syncChopperBody(): void {
-    const flying = this.streaks.activeChopperFor(PLAYER_ENTITY_ID) !== null;
+    const flying = this.streaks.activeChopperFor(this.localId) !== null;
     // Post-M8: the QA spectator uses the same two levers, so it is folded in here rather
     // than written from a second place. Driven from state every tick means there is still
     // nothing to get stuck — turning god mode off puts the body back on the next tick,
@@ -1034,7 +1146,7 @@ export class Match {
     const holding = isDown(cmd.buttons, Btn.Use);
     if (!holding) {
       // Only cancel what *this* player started; a bot's plant is not the player's to stop.
-      if (mode.interactEntity === PLAYER_ENTITY_ID) mode.cancelInteract();
+      if (mode.interactEntity === this.localId) mode.cancelInteract();
       return;
     }
 
@@ -1051,7 +1163,7 @@ export class Match {
     // Picking the bomb up is now the same key as planting it (post-M8 playtest): walking
     // over it does nothing. Tested before the plant branch because you cannot plant a bomb
     // you are not carrying, and one press should be able to do the first of the two.
-    if (!mode.isCarrier(PLAYER_ENTITY_ID)) {
+    if (!mode.isCarrier(this.localId)) {
       mode.tryPickup(me);
       return;
     }
@@ -1076,7 +1188,7 @@ export class Match {
     if (!(mode instanceof SearchAndDestroy)) return;
     const busy = mode.interactingEntity;
 
-    this.deps.player.forceCrouch = busy === PLAYER_ENTITY_ID;
+    this.deps.player.forceCrouch = busy === this.localId;
     for (const bot of this.bots.bots) bot.controller.forceCrouch = bot.entityId === busy;
   }
 
@@ -1129,7 +1241,7 @@ export class Match {
       const bit = bits[i];
       if (bit === undefined) continue;
       if (!justPressed(cmd.buttons, this.prevButtons, bit)) continue;
-      const held = this.streaks.pendingFor(PLAYER_ENTITY_ID);
+      const held = this.streaks.pendingFor(this.localId);
       const id = held[i];
       if (id === undefined) continue;
 
@@ -1168,7 +1280,7 @@ export class Match {
     if (!this.playerDead) return;
     this.playerRespawnTimer = Math.max(0, this.playerRespawnTimer - DT);
     if (this.playerRespawnTimer > 0) return;
-    if (!this.flow.respawnAllowed(PLAYER_ENTITY_ID)) return;
+    if (!this.flow.respawnAllowed(this.localId)) return;
     this.respawnPlayer();
   }
 
@@ -1219,7 +1331,7 @@ export class Match {
     this.playerCombatant.syncRig();
     this.playerDead = false;
     this.playerRespawnTimer = 0;
-    this.flow.noteRespawn(PLAYER_ENTITY_ID);
+    this.flow.noteRespawn(this.localId);
   }
 
   /**
@@ -1322,7 +1434,7 @@ export class Match {
      * `weapons.suspended` exists: the player is not holding it, and the last thing they need
      * while flying is a magazine count that never moves.
      */
-    const chopper = this.streaks.activeChopperFor(PLAYER_ENTITY_ID);
+    const chopper = this.streaks.activeChopperFor(this.localId);
     if (chopper !== null) {
       state.mag = chopper.mag;
       state.magSize = chopper.magSize;
@@ -1347,7 +1459,7 @@ export class Match {
     state.dead = this.playerDead;
     state.respawnSeconds = this.playerRespawnTimer;
     // One life: there is no timer to show, because nobody is coming back until the round does.
-    state.awaitingRound = this.playerDead && !this.flow.respawnAllowed(PLAYER_ENTITY_ID);
+    state.awaitingRound = this.playerDead && !this.flow.respawnAllowed(this.localId);
     this.fillTacticalState();
     this.fillStreakHud();
     this.fillMinimapStreaks();
@@ -1365,15 +1477,15 @@ export class Match {
    */
   private fillStreakHud(): void {
     const hud = this.ui.streakState;
-    const held = this.streaks.pendingFor(PLAYER_ENTITY_ID);
+    const held = this.streaks.pendingFor(this.localId);
     for (let i = 0; i < hud.slots.length; i++) {
       const slot = hud.slots[i];
       if (slot === undefined) continue;
       const id = held[i];
       slot.name = id === undefined ? '' : streakDef(id).name;
     }
-    hud.streak = this.score.row(PLAYER_ENTITY_ID)?.streak ?? 0;
-    const next = this.streaks.nextFor(PLAYER_ENTITY_ID);
+    hud.streak = this.score.row(this.localId)?.streak ?? 0;
+    const next = this.streaks.nextFor(this.localId);
     hud.nextName = next?.def.name ?? '';
     hud.nextRequirement = next?.requirement ?? 0;
 
@@ -1407,7 +1519,7 @@ export class Match {
         hud.objectiveSeconds = mode.bombSecondsLeft;
         hud.urgent = true;
       }
-      if (mode.interactEntity === PLAYER_ENTITY_ID && mode.interactFraction > 0) {
+      if (mode.interactEntity === this.localId && mode.interactFraction > 0) {
         hud.interactFraction = mode.interactFraction;
         hud.interactLabel = mode.bomb === 'PLANTED' ? 'DEFUSING' : 'PLANTING';
         if (hud.objectiveLabel.length === 0) hud.objectiveLabel = 'OBJECTIVE';
@@ -1423,7 +1535,7 @@ export class Match {
        * somebody is on it, so go and cover them.
        */
       const busyWith = mode.interactingEntity;
-      if (busyWith >= 0 && busyWith !== PLAYER_ENTITY_ID) {
+      if (busyWith >= 0 && busyWith !== this.localId) {
         hud.interactFraction = mode.interactFraction;
         hud.interactLabel = mode.interactIsDefusing ? 'TEAMMATE DEFUSING' : 'PLANT IN PROGRESS';
         if (hud.objectiveLabel.length === 0) hud.objectiveLabel = 'OBJECTIVE';
@@ -1439,7 +1551,7 @@ export class Match {
       }
       if (mode.bomb !== 'CARRIED') return;
       if (this.playerCombatant.team !== mode.attackers) return;
-      if (!mode.isCarrier(PLAYER_ENTITY_ID)) {
+      if (!mode.isCarrier(this.localId)) {
         // Tell them where the bomb is, because without it the round cannot be won.
         if (mode.carrierId < 0) {
           hud.objectiveLabel = 'RECOVER THE BOMB';

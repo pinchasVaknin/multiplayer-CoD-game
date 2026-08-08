@@ -1,7 +1,9 @@
 import type { Bot } from '../shared/ai/Bot';
 import { nowMs } from '../shared/core/Clock';
 import { Btn, isDown } from '../shared/core/InputCommand';
+import { DT } from '../shared/core/Loop';
 import { logger } from '../shared/core/Log';
+import { findMap, findMode } from '../shared/modes/ModeRegistry';
 import { metric } from './log';
 import { makeSnapshotHeader, phaseIndex, SFlag, type SnapshotHeader } from '../shared/net/Messages';
 import { EFlag, makeEntitySnapshot, weaponIndexOf, type EntitySnapshot } from '../shared/net/Snapshot';
@@ -43,13 +45,24 @@ const log = logger('server');
  */
 
 export class GameServer {
-  private readonly match: ServerMatch;
+  private match: ServerMatch;
   private readonly loop: ServerLoop;
   private readonly wss: WsServer;
 
   private readonly sessions: Session[] = [];
   private readonly encoders = new Map<number, SnapshotEncoder>();
   private readonly header: SnapshotHeader = makeSnapshotHeader();
+
+  /**
+   * Where in the rotation we are, and how long the finished match has been on screen.
+   *
+   * See `maybeRotate`. `matchIndex` also seeds each match, so a rotation does not replay the
+   * same firefight on every lap: the seed is deterministic given the index, which keeps a
+   * soak run reproducible while still varying the matches inside it.
+   */
+  private matchIndex = 0;
+  private endHoldTicks = 0;
+  private rotating = false;
 
   /** Reused snapshot records, one per entity slot. Nothing allocates per tick (S4.7). */
   private readonly entities: EntitySnapshot[] = [];
@@ -60,27 +73,23 @@ export class GameServer {
   private stopping = false;
 
   constructor(private readonly cfg: ServerConfig) {
-    this.match = new ServerMatch({
-      mapId: cfg.mapId,
-      modeId: cfg.modeId,
-      bots: cfg.bots,
-      tier: 'MIX',
-      seed: cfg.seed,
-    });
+    /**
+     * Resolve the whole rotation now, at boot, rather than at the first rotation.
+     *
+     * `findMap` throws on an id that is not in the registry. A rotation entry with a typo in
+     * it would otherwise take down a running server twenty minutes into its first match, at
+     * whatever hour the match happened to end — and take every connected player with it. Ten
+     * milliseconds of validation at boot turns that into a process that refuses to start and
+     * says which entry is wrong.
+     */
+    for (const mapId of cfg.mapRotation) findMap(mapId);
+    for (const modeId of cfg.modeRotation) findMode(asModeId(modeId));
 
-    // The match asks how stale each shooter's view is; the session knows, because it owns
-    // the RTT estimate. This is the only wire between the simulation and the network layer,
-    // and it points the right way — the sim asks a question, it is not told an answer.
-    this.match.rewindDisabled = cfg.rewindDisabled;
+    this.match = this.createMatch();
+
     if (cfg.rewindDisabled) {
       log.warn('REWIND_DISABLED=1 — lag compensation is OFF. Diagnostic only (S8.6).');
     }
-
-    this.match.viewLagMsFor = (entityId) => {
-      const session = this.sessionFor(entityId);
-      if (session === null) return 0;
-      return session.rttMs * 0.5 + cfg.interpolationDelayMs;
-    };
 
     // 60 / 20 = every third tick. Integer by construction so the send cadence is even
     // rather than beating against the tick rate.
@@ -101,6 +110,50 @@ export class GameServer {
       conditions: cfg.conditions,
       onConnection: (link) => this.accept(link),
     });
+  }
+
+  /** The map this match is on. Walks the rotation, wrapping. */
+  private get currentMapId(): string {
+    const rotation = this.cfg.mapRotation;
+    return rotation[this.matchIndex % rotation.length] ?? this.cfg.mapId;
+  }
+
+  private get currentModeId(): string {
+    const rotation = this.cfg.modeRotation;
+    return rotation[this.matchIndex % rotation.length] ?? this.cfg.modeId;
+  }
+
+  /**
+   * Build a match for the current rotation slot, wired to this server.
+   *
+   * Factored out of the constructor because a rotation has to do exactly the same wiring, and
+   * a second copy of it would be a place for the two to drift — `viewLagMsFor` going missing
+   * on the rotated match would silently switch lag compensation off after the first map, and
+   * nothing would report it beyond players saying shots stopped registering.
+   */
+  private createMatch(): ServerMatch {
+    const match = new ServerMatch({
+      mapId: this.currentMapId,
+      modeId: this.currentModeId,
+      bots: this.cfg.bots,
+      tier: 'MIX',
+      // Varied per match but derived from the configured seed, so a soak run is still
+      // reproducible end to end rather than only within its first match.
+      seed: (this.cfg.seed + this.matchIndex * 0x9e37) & 0x7fff_ffff,
+    });
+
+    match.rewindDisabled = this.cfg.rewindDisabled;
+
+    // The match asks how stale each shooter's view is; the session knows, because it owns
+    // the RTT estimate. This is the only wire between the simulation and the network layer,
+    // and it points the right way — the sim asks a question, it is not told an answer.
+    match.viewLagMsFor = (entityId) => {
+      const session = this.sessionFor(entityId);
+      if (session === null) return 0;
+      return session.rttMs * 0.5 + this.cfg.interpolationDelayMs;
+    };
+
+    return match;
   }
 
   async start(): Promise<void> {
@@ -135,7 +188,7 @@ export class GameServer {
           this.encoders.set(player.entityId, new SnapshotEncoder());
           // The welcome carries the entity assignment and the server clock; the first
           // snapshot after it is a full one, because the new encoder has no baseline.
-          queueMicrotask(() => s.welcome(this.cfg.mapId, this.cfg.modeId, this.cfg.snapshotHz));
+          queueMicrotask(() => s.welcome(this.currentMapId, this.currentModeId, this.cfg.snapshotHz));
           return player;
         },
         onLeave: (s, reason) => this.onLeave(s, reason),
@@ -189,7 +242,105 @@ export class GameServer {
     for (const s of this.sessions) s.checkTimeout();
     this.reap();
 
+    // 7. The match may be over. Hold the final scoreboard, then start the next one.
+    this.maybeRotate();
+
     this.maybeLogMetrics();
+  }
+
+  /**
+   * End of match: hold, then rotate and start again (M10, playtest round 2).
+   *
+   * **Nothing here existed before.** `GameServer` never asked `match.isOver`, so a match that
+   * reached its score limit or ran out of clock simply stopped mattering: the flow sat in
+   * `MATCH_END`, every snapshot carried `SFlag.MatchOver`, and the server stayed in that state
+   * until the process was restarted by hand. Every connected client showed "MATCH OVER"
+   * indefinitely, which is exactly what was reported.
+   *
+   * The hold is not cosmetic. It is the window in which clients show their end-of-match
+   * summary, and starting the next match immediately would replace the result of the one just
+   * played with a loading screen before anybody read it.
+   */
+  private maybeRotate(): void {
+    if (this.stopping || this.rotating) return;
+    if (!this.match.isOver) {
+      this.endHoldTicks = 0;
+      return;
+    }
+
+    if (this.endHoldTicks === 0) {
+      const outcome = this.match.outcome();
+      log.info(
+        `match over — ${outcome?.winner ?? 'DRAW'} ${outcome?.scoreA ?? 0}-${outcome?.scoreB ?? 0} ` +
+          `on ${this.match.mapEntry.name}. Next match in ${this.cfg.matchEndHoldSeconds}s.`,
+      );
+    }
+
+    this.endHoldTicks++;
+    if (this.endHoldTicks * DT < this.cfg.matchEndHoldSeconds) return;
+
+    this.rotate();
+  }
+
+  /**
+   * Tear the finished match down and start the next one, keeping every connection.
+   *
+   * A rotation is emphatically **not** a disconnect. The sockets stay up, the sessions stay
+   * seated, and each client is told what changed with a second `Welcome` — which is the same
+   * message it joined with, so there is no separate "new match" path on either side to keep in
+   * step with the join path. The client rebuilds its world from it exactly as it built the
+   * first one, which is what makes a mid-rotation map change work at all.
+   *
+   * `rotating` guards the whole thing because `removePlayer` and `addPlayer` run inside it and
+   * both touch the roster the tick loop is iterating elsewhere.
+   */
+  private rotate(): void {
+    this.rotating = true;
+    try {
+      const seated = this.sessions.filter((s) => s.player !== null && !s.closed);
+
+      // Let go of every seat in the old match before disposing it, so nothing is left holding
+      // a `NetPlayer` registered with a `DamageSystem` that is about to go away.
+      for (const session of seated) {
+        const player = session.player;
+        if (player === null) continue;
+        this.match.removePlayer(player.entityId);
+        this.encoders.delete(player.entityId);
+        session.player = null;
+      }
+      this.match.dispose();
+
+      this.matchIndex++;
+      this.endHoldTicks = 0;
+      this.match = this.createMatch();
+      log.info(
+        `starting match ${this.matchIndex + 1}: ${this.currentModeId} on ${this.currentMapId} ` +
+          `with ${seated.length} connected.`,
+      );
+
+      /**
+       * Reseat everybody, then re-welcome them.
+       *
+       * Entity ids are assigned fresh by the new match and will generally differ, which is
+       * precisely why the welcome has to go out: the client keys its own identity, its
+       * prediction and every "was that me?" test off that number. A client that kept the old
+       * one would predict a body that is not its own.
+       */
+      for (const session of seated) {
+        const player = this.match.addPlayer(session.displayName);
+        if (player === null) {
+          session.close('server full after rotation');
+          continue;
+        }
+        session.player = player;
+        session.ackedSnapshot = 0;
+        session.lastSnapshotId = 0;
+        this.encoders.set(player.entityId, new SnapshotEncoder());
+        session.welcome(this.currentMapId, this.currentModeId, this.cfg.snapshotHz);
+      }
+    } finally {
+      this.rotating = false;
+    }
   }
 
   /**
@@ -425,4 +576,8 @@ function round(v: number): number {
 /** `pumpOutbound` is a `WsLink` concern, not part of the `INetLink` contract. */
 function isWsLink(link: unknown): link is WsLink {
   return typeof (link as { pumpOutbound?: unknown }).pumpOutbound === 'function';
+}
+
+function asModeId(id: string): Parameters<typeof findMode>[0] {
+  return id as Parameters<typeof findMode>[0];
 }

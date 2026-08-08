@@ -1,5 +1,5 @@
 import { EV, type GameBus } from '../core/Events';
-import { PLAYER_ENTITY_ID } from './DamageSystem';
+import { LocalIdentity } from './LocalIdentity';
 
 /**
  * Who is winning, and what everybody in the match has done (brief S6.5).
@@ -32,8 +32,13 @@ export interface PlayerScore {
   readonly entityId: number;
   readonly displayName: string;
   readonly team: ScoreTeam;
-  /** True for the human. The scoreboard highlights their row. */
-  readonly isLocal: boolean;
+  /**
+   * True for the human at this keyboard. The scoreboard highlights their row.
+   *
+   * Written by `ScoreSystem` alone — it is re-stamped when a server assigns this client its
+   * entity id, which on a dedicated server happens after the row may already exist.
+   */
+  isLocal: boolean;
   kills: number;
   deaths: number;
   /**
@@ -110,10 +115,28 @@ export class ScoreSystem {
   /** Scratch for `recordKill`; reused so the assist scan allocates nothing. */
   private readonly assistScratch: number[] = [];
 
-  constructor(bus: GameBus) {
+  private readonly identity: LocalIdentity;
+
+  /**
+   * `identity` is optional so every M1-M8 call site keeps working: absent, it is the
+   * single-player seat and `isLocal` means exactly what it has always meant.
+   */
+  constructor(bus: GameBus, identity: LocalIdentity = new LocalIdentity()) {
+    this.identity = identity;
     for (let i = 0; i < DAMAGE_LEDGER_SIZE; i++) {
       this.ledger.push({ sourceId: -1, targetId: -1, tick: -1 });
     }
+
+    /**
+     * `isLocal` is stamped onto a row at registration, so a row registered before the server's
+     * `Welcome` arrived would be wrong forever. Re-stamp the whole table when the assignment
+     * changes — it happens at most once per session and the table is a dozen rows.
+     */
+    this.unsubscribe.push(
+      this.identity.onChange(() => {
+        for (const row of this.all) row.isLocal = this.identity.is(row.entityId);
+      }),
+    );
 
     this.unsubscribe.push(
       bus.on(EV.WeaponFired, (p) => {
@@ -151,7 +174,7 @@ export class ScoreSystem {
       entityId,
       displayName,
       team,
-      isLocal: entityId === PLAYER_ENTITY_ID,
+      isLocal: this.identity.is(entityId),
       kills: 0,
       deaths: 0,
       assists: 0,

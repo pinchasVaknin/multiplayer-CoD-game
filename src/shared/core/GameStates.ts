@@ -48,7 +48,21 @@ const LEGAL_TRANSITIONS: Readonly<Record<GameStateId, readonly GameStateId[]>> =
   SETTINGS: ['MENU', 'MATCH', 'PAUSED'],
   MATCH: ['SUMMARY', 'MENU', 'PAUSED'],
   PAUSED: ['MATCH', 'MENU', 'LOADOUT', 'SETTINGS'],
-  SUMMARY: ['MENU', 'LOADOUT'],
+  /**
+   * **SUMMARY -> MATCH is new in M10** (playtest round 2) and belongs to the dedicated server.
+   *
+   * In single-player the summary is terminal: the player reads it and chooses what to do next,
+   * and there is nothing that could start another match without them. On a dedicated server
+   * there is — the server rotates to the next map on its own clock, and it does not wait for
+   * anybody's summary screen. The client is told with a second `Welcome` and has to rebuild
+   * its world onto the new map from wherever it happens to be standing.
+   *
+   * Without this edge `Game.applyRotation` threw `Illegal game transition SUMMARY -> MATCH`
+   * from inside a timer callback, the pending rotation had already been cleared, and the
+   * client sat on the previous map for the whole of the next match. Which is the state leak
+   * this milestone is closing, produced by the fix for it.
+   */
+  SUMMARY: ['MENU', 'LOADOUT', 'MATCH'],
 };
 
 export function isLegalGameTransition(from: GameStateId, to: GameStateId): boolean {

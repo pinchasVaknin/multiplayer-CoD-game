@@ -1,6 +1,6 @@
 import type { Combatant } from '../ai/Combatant';
 import { EV, type GameBus } from '../core/Events';
-import { PLAYER_ENTITY_ID } from './DamageSystem';
+import { LocalIdentity } from './LocalIdentity';
 import type { HitZone } from './HitboxRig';
 
 /**
@@ -18,6 +18,40 @@ import type { HitZone } from './HitboxRig';
  */
 
 const FEED_HISTORY = 32;
+
+/**
+ * Names and teams for entity ids (M10, playtest round 2).
+ *
+ * The feed used to hold a `readonly Combatant[]` directly, which was right while the only
+ * roster was the local one. On a dedicated server the client's roster is **empty** — the bots
+ * live in the server process and the other humans are `RemoteActor`s rebuilt from snapshots —
+ * so every lookup missed and every line read `WORLD killed UNKNOWN`. It did not crash and it
+ * did not warn; it just quietly stopped naming anybody.
+ *
+ * Narrowing the dependency to the two questions actually asked is what lets a snapshot-backed
+ * directory satisfy it without a `RemoteActor` having to become a `Combatant` — which would
+ * mean giving a body drawn from interpolated poses a health pool and a damage handler it has
+ * no business owning.
+ */
+export interface CombatantDirectory {
+  /** Display name, or null when this id is not known here. */
+  nameOf(entityId: number): string | null;
+  teamOf(entityId: number): 'A' | 'B' | null;
+}
+
+/** The local roster as a directory. The single-player and server-side path, unchanged. */
+export function rosterDirectory(roster: readonly Combatant[]): CombatantDirectory {
+  return {
+    nameOf(entityId) {
+      for (const c of roster) if (c.entityId === entityId) return c.displayName;
+      return null;
+    },
+    teamOf(entityId) {
+      for (const c of roster) if (c.entityId === entityId) return c.team;
+      return null;
+    },
+  };
+}
 
 export interface KillfeedLine {
   killerId: number;
@@ -69,11 +103,22 @@ export class Killfeed {
   private writeAt = 0;
   private written = 0;
 
+  private directory: CombatantDirectory;
+
   constructor(
     private readonly bus: GameBus,
-    private readonly roster: readonly Combatant[],
+    roster: readonly Combatant[] | CombatantDirectory,
+    private readonly identity: LocalIdentity = new LocalIdentity(),
   ) {
+    this.directory = Array.isArray(roster) ? rosterDirectory(roster) : (roster as CombatantDirectory);
     for (let i = 0; i < FEED_HISTORY; i++) this.ring.push(makeLine());
+  }
+
+  /**
+   * Swap the name source. Used when a match becomes networked and the bodies stop being local.
+   */
+  setDirectory(directory: CombatantDirectory): void {
+    this.directory = directory;
   }
 
   get count(): number {
@@ -103,20 +148,20 @@ export class Killfeed {
   ): void {
     const slot = this.ring[this.writeAt];
     if (slot === undefined) return;
-    const killer = this.find(killerId);
-    const victim = this.find(victimId);
+    const killerName = this.directory.nameOf(killerId);
+    const victimName = this.directory.nameOf(victimId);
 
     slot.killerId = killerId;
     slot.victimId = victimId;
-    slot.killerName = killer?.displayName ?? 'WORLD';
-    slot.victimName = victim?.displayName ?? 'UNKNOWN';
-    slot.killerTeam = killer?.team ?? 'NONE';
-    slot.victimTeam = victim?.team ?? 'NONE';
+    slot.killerName = killerName ?? 'WORLD';
+    slot.victimName = victimName ?? 'UNKNOWN';
+    slot.killerTeam = this.directory.teamOf(killerId) ?? 'NONE';
+    slot.victimTeam = this.directory.teamOf(victimId) ?? 'NONE';
     slot.weaponId = weaponId;
     slot.zone = zone;
     slot.headshot = zone === 'head';
-    slot.suicide = killerId === victimId || killer === undefined;
-    slot.involvesLocal = killerId === PLAYER_ENTITY_ID || victimId === PLAYER_ENTITY_ID;
+    slot.suicide = killerId === victimId || killerName === null;
+    slot.involvesLocal = this.identity.is(killerId) || this.identity.is(victimId);
     slot.tick = tick;
 
     this.writeAt = (this.writeAt + 1) % FEED_HISTORY;
@@ -138,10 +183,4 @@ export class Killfeed {
     this.written = 0;
   }
 
-  private find(entityId: number): Combatant | undefined {
-    for (const c of this.roster) {
-      if (c.entityId === entityId) return c;
-    }
-    return undefined;
-  }
 }

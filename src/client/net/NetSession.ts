@@ -1,17 +1,21 @@
 import type { RenderableActor } from '../../shared/ai/BotVisualState';
+import type { CombatantDirectory } from '../../shared/combat/Killfeed';
 import type { HitZone } from '../../shared/combat/HitboxRig';
+import type { LocalIdentity } from '../../shared/combat/LocalIdentity';
 import { EV, type GameBus } from '../../shared/core/Events';
 import type { InputCommand } from '../../shared/core/InputCommand';
 import { logger } from '../../shared/core/Log';
 import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
-import type { NetConditions } from '../../shared/net/NetSim';
 import { NetClient, type NetClientState } from '../../shared/net/NetClient';
-import { phaseAt, SFlag } from '../../shared/net/Messages';
+import { phaseAt, SFlag, type WelcomeInfo } from '../../shared/net/Messages';
 import { EFlag, weaponIdAt } from '../../shared/net/Snapshot';
 import type { PlayerController } from '../../shared/player/PlayerController';
-import type { MatchPhase } from '../../shared/modes/MatchFlow';
+import {
+  makeReplicatedMatchState,
+  type ReplicatedMatchState,
+} from '../../shared/modes/MatchFlow';
 import { WEAPON_DEFS } from '../../shared/weapons/WeaponDefs';
-import { BrowserLink } from './BrowserLink';
+import type { BrowserLink } from './BrowserLink';
 import { RemoteActor } from './RemoteActor';
 
 const log = logger('net');
@@ -40,16 +44,33 @@ const log = logger('net');
  */
 
 export interface NetSessionDeps {
-  readonly url: string;
+  /**
+   * The link, already open and already past the handshake.
+   *
+   * Handed in rather than opened here (M10, playtest round 2): the map this session's world
+   * is built on comes out of the `Welcome`, so the connection has to exist before the world
+   * does. See `client/net/Handshake.ts`.
+   */
+  readonly link: BrowserLink;
+  readonly welcome: WelcomeInfo;
+  /** When the `Welcome` landed. Seeds the clock. See `NetClient.adopt`. */
+  readonly receivedAtMs: number;
   readonly displayName: string;
   readonly bus: GameBus;
   readonly controller: PlayerController;
   readonly sample: (tickIndex: number) => InputCommand;
   /** The local weapon, stepped once per tick and never replayed. See `Prediction`. */
   readonly applyWeapon: (cmd: InputCommand) => void;
-  readonly conditions: NetConditions;
+  /**
+   * This client's identity, adopted from the `Welcome`.
+   *
+   * Every "is this event mine?" test in the presentation layer reads it. See `LocalIdentity`.
+   */
+  readonly identity: LocalIdentity;
   readonly interpolationDelayMs?: number;
   readonly wantRewindDebug?: boolean;
+  /** The server rotated to a new match. The world must be rebuilt. */
+  readonly onNewMatch?: (welcome: WelcomeInfo) => void;
 }
 
 export class NetSession {
@@ -73,8 +94,7 @@ export class NetSession {
    * because the session is constructed *before* the match — the match's renderer needs the
    * session's actor list at construction — so the dependency can only point this way.
    */
-  onMatchState: ((phase: MatchPhase, secondsRemaining: number, phaseSeconds: number, round: number) => void) | null =
-    null;
+  onMatchState: ((state: ReplicatedMatchState) => void) | null = null;
 
   /**
    * Where the local player's replicated health and liveness are applied.
@@ -99,7 +119,17 @@ export class NetSession {
   constructor(deps: NetSessionDeps) {
     this.deps = deps;
     this.interpolationDelayMs = deps.interpolationDelayMs ?? DEFAULT_INTERPOLATION_DELAY_MS;
-    this.link = new BrowserLink(deps.url, deps.conditions);
+    this.link = deps.link;
+
+    /**
+     * Adopt the server's entity assignment before anything can ask about it.
+     *
+     * This one line is what makes the hitmarker appear. Every local-player test in the
+     * presentation layer compares against `PLAYER_ENTITY_ID`, which is 0 and is the server's
+     * empty spectator seat; a connected human is entity 1 or above, so before this every one
+     * of those comparisons was false and every piece of feedback silently did nothing.
+     */
+    deps.identity.adopt(deps.welcome.entityId);
 
     this.client = new NetClient({
       link: this.link,
@@ -108,6 +138,12 @@ export class NetSession {
       applyNonReplayed: deps.applyWeapon,
       displayName: deps.displayName,
       wantRewindDebug: deps.wantRewindDebug,
+      onNewMatch: (welcome) => {
+        // A rotation reassigns entity ids, so the identity has to move with it or every
+        // filter downstream starts testing against the seat we held in the previous match.
+        deps.identity.adopt(welcome.entityId);
+        deps.onNewMatch?.(welcome);
+      },
       events: {
         // ---- the bridge (S3) ------------------------------------------------
         onFired: (e) => {
@@ -232,19 +268,53 @@ export class NetSession {
     return this.client.state;
   }
 
+  /** What the server said it was running when this session joined. */
+  get welcome(): WelcomeInfo {
+    return this.deps.welcome;
+  }
+
+  /**
+   * Called for every body the snapshot knows about, so the caller can put them on the
+   * scoreboard. Expected to be idempotent — see `registerRoster`.
+   */
+  onRosterEntry: ((entityId: number, name: string, team: 'A' | 'B') => void) | null = null;
+
   get connected(): boolean {
     return this.client.state === 'joined';
   }
 
-  /** Open the socket and start the handshake. */
-  async connect(): Promise<void> {
-    await this.link.open();
-    this.client.connect();
-    log.info(`connecting to ${this.deps.url} as ${this.deps.displayName}`);
+  /**
+   * Take up the connection the handshake already made.
+   *
+   * Synchronous, and deliberately so: by the time this runs the socket is open and the
+   * `Welcome` has been decoded, so there is nothing left to wait for. The asynchrony all
+   * happened before the world was built, which is the whole point of the reordering.
+   */
+  start(): void {
+    this.client.adopt(this.deps.welcome, this.deps.receivedAtMs);
+    log.info(`joined ${this.link.remoteAddress} as ${this.deps.displayName}`);
   }
 
   disconnect(reason = 'left'): void {
     this.client.disconnect(reason);
+  }
+
+  /**
+   * Let go of the connection without closing it (M10, playtest round 2).
+   *
+   * Used when the server rotates to a new match: this session's world is being torn down and
+   * a new one built, but the *socket* is fine and the seat on the server is still ours. The
+   * caller hands the same link to the next session.
+   *
+   * Everything that could keep drawing is cut — the callbacks that push state into a match
+   * about to be disposed, and the actor table whose entity ids are about to be reassigned.
+   */
+  detach(): void {
+    this.onMatchState = null;
+    this.onLocalState = null;
+    this.onRosterEntry = null;
+    this.actors.clear();
+    this.renderable.length = 0;
   }
 
   /**
@@ -271,7 +341,14 @@ export class NetSession {
      * clock on 10:00 for the whole game.
      */
     if (this.client.state === 'joined') {
-      this.onMatchState?.(phaseAt(h.phase), Math.max(0, h.timeLeft), h.phaseSeconds, h.round);
+      replicatedState.phase = phaseAt(h.phase);
+      replicatedState.secondsRemaining = Math.max(0, h.timeLeft);
+      replicatedState.phaseSeconds = h.phaseSeconds;
+      replicatedState.round = h.round;
+      replicatedState.scoreA = h.scoreA;
+      replicatedState.scoreB = h.scoreB;
+      replicatedState.serverTick = h.serverTick;
+      this.onMatchState?.(replicatedState);
     }
 
     /**
@@ -302,6 +379,9 @@ export class NetSession {
     }
 
     this.syncActors();
+    // After the actors, so a body that first appeared in this snapshot is on the scoreboard
+    // on the same frame it becomes visible.
+    if (this.onRosterEntry !== null) this.registerRoster(this.onRosterEntry);
     return steps;
   }
 
@@ -341,7 +421,58 @@ export class NetSession {
     for (const actor of this.actors.values()) this.renderable.push(actor);
     return this.renderable;
   }
+
+  /**
+   * Names and teams for everybody in the match, from the snapshot (M10, playtest round 2).
+   *
+   * The killfeed and the scoreboard both resolve entity ids to names, and both did it against
+   * `bots.roster` — which on a networked client is **empty**, because the bots are in the
+   * server process and the other humans are `RemoteActor`s. Every lookup missed, so the feed
+   * read `WORLD killed UNKNOWN` and the scoreboard had one row on it.
+   *
+   * `EntitySnapshot` has carried `displayName` and the team bit since the protocol was
+   * written; this is the first thing to read them for anything other than drawing a label.
+   * The local player is included explicitly — they have no `RemoteActor`, by design, because
+   * they are predicted and drawn from the first person.
+   */
+  directory(): CombatantDirectory {
+    return {
+      nameOf: (entityId) => {
+        if (this.deps.identity.is(entityId)) return this.deps.displayName;
+        return this.actors.get(entityId)?.displayName ?? null;
+      },
+      teamOf: (entityId) => {
+        if (this.deps.identity.is(entityId)) return this.deps.welcome.team;
+        const actor = this.actors.get(entityId);
+        return actor === undefined ? null : actor.team;
+      },
+    };
+  }
+
+  /**
+   * Push every known body onto the scoreboard.
+   *
+   * Called once per frame; `ScoreSystem.register` is idempotent, so this is a cheap way to
+   * pick up bodies as they first appear in a snapshot without a join/leave message type the
+   * protocol does not have. Kills and deaths accumulate from the replicated events, which
+   * reach `ScoreSystem` through the same bus subscriptions a local match uses (S3).
+   */
+  registerRoster(register: (entityId: number, name: string, team: 'A' | 'B') => void): void {
+    register(this.deps.identity.entityId, this.deps.displayName, this.deps.welcome.team);
+    for (const actor of this.actors.values()) {
+      if (actor.displayName === '') continue;
+      register(actor.entityId, actor.displayName, actor.team);
+    }
+  }
 }
+
+/**
+ * Refilled per snapshot and handed straight to `MatchFlow`.
+ *
+ * The same "payloads are transient" contract the bus has used since M1: the callee reads it
+ * during the call and never retains it.
+ */
+const replicatedState: ReplicatedMatchState = makeReplicatedMatchState();
 
 // Event payload singletons. The bus contract since M1 is that payloads are transient and
 // never retained, which is what makes reusing one record per event type safe.

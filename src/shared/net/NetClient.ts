@@ -21,6 +21,7 @@ import {
   SFlag,
   type EventSink,
   type SnapshotHeader,
+  type WelcomeInfo,
 } from './Messages';
 import { Prediction } from './Prediction';
 import { COMMAND_REDUNDANCY, quantiseCommandInPlace, rejectText } from './Protocol';
@@ -84,6 +85,15 @@ export interface NetClientDeps {
   readonly displayName: string;
   /** Ask the server for the S7 rewind panel feed. */
   readonly wantRewindDebug?: boolean | undefined;
+  /**
+   * The server started a *different* match on this same connection (M10, playtest round 2).
+   *
+   * A dedicated server does not stop when a match ends — it rotates and starts another, and
+   * it says so by sending a second `Welcome`. The map may have changed, so the client cannot
+   * merely reset: it has to tear the world down and build the new one. That is a decision
+   * above this class, so this reports it rather than acting on it.
+   */
+  readonly onNewMatch?: ((welcome: WelcomeInfo) => void) | undefined;
 }
 
 /** Everything the S7 network and prediction panels display. */
@@ -224,6 +234,40 @@ export class NetClient {
     this.rateWindowMs = nowMs();
   }
 
+  /**
+   * Adopt a handshake somebody else already completed (M10, playtest round 2).
+   *
+   * The client cannot build its world until it knows which map the server is running, and it
+   * cannot construct a `NetClient` until the world exists — prediction runs through the
+   * `PlayerController`, which needs the map's collision. That circle is cut by doing the
+   * handshake *first*, on a bare link, and handing the answer here.
+   *
+   * The link is already open and the `Hello` has already been sent and answered, so this must
+   * not send a second one: a duplicate `Hello` is `Reject.OutOfOrder` and the server drops the
+   * connection. See `client/net/Handshake.ts`.
+   *
+   * `receivedAtMs` is when the `Welcome` actually landed, not now. Between the two the client
+   * loaded a map, which takes long enough to matter: seeding the clock with the current time
+   * against a server timestamp from before the load would put the initial tick estimate that
+   * far into the past. It is corrected by the first pong regardless, but starting right means
+   * the first commands sent are for ticks the server has not already simulated.
+   */
+  adopt(welcome: WelcomeInfo, receivedAtMs: number): void {
+    this.state = 'connecting';
+    this.closeReason = '';
+    this.lastPingMs = 0;
+    this.rateWindowMs = nowMs();
+    this.onWelcome(
+      welcome.entityId,
+      welcome.team,
+      welcome.mapId,
+      welcome.modeId,
+      welcome.serverTick,
+      welcome.serverMs,
+      receivedAtMs,
+    );
+  }
+
   /** Leave cleanly, so the server frees the seat without waiting for a timeout (S6.1). */
   disconnect(reason = 'left'): void {
     if (this.state === 'joined' || this.state === 'connecting') {
@@ -333,20 +377,56 @@ export class NetClient {
     modeId: string,
     serverTick: number,
     serverMs: number,
+    receivedAtMs = nowMs(),
   ): void {
+    const rejoin = this.state === 'joined';
     this.entityId = entityId;
     this.team = team;
     this.mapId = mapId;
     this.modeId = modeId;
     this.state = 'joined';
 
+    /**
+     * A second `Welcome` means the server started a new match (M10, playtest round 2).
+     *
+     * Everything keyed to the old match has to go, and the entity table is the one that
+     * matters: ids are reassigned per match, so a stale interpolator would put a body from
+     * the previous map at coordinates that mean something different on this one. The owner
+     * state and the prediction history go with it — they describe a player who no longer
+     * exists.
+     */
+    if (rejoin) {
+      this.remotes.clear();
+      this.lastSnapshotId = 0;
+      this.ackSnapshot = 0;
+      this.localAlive = true;
+      this.respawned = false;
+      this.ownSpawnSerial = -1;
+      for (const cmd of this.pending) blankInto(cmd);
+    }
+
     // Seed the clock from the welcome so the first tick number is roughly right before any
     // ping has completed. The estimate is refined within 250 ms.
-    const now = nowMs();
-    this.clock.sample(now, now, serverMs, serverTick);
+    this.clock.sample(receivedAtMs, receivedAtMs, serverMs, serverTick);
     this.currentTick = this.clock.targetTick();
     this.prediction.reset();
-    log.info(`joined as entity ${entityId} on team ${team}, ${modeId} on ${mapId}.`);
+    log.info(
+      `${rejoin ? 'rejoined' : 'joined'} as entity ${entityId} on team ${team}, ${modeId} on ${mapId}.`,
+    );
+    if (rejoin) this.deps.onNewMatch?.(this.matchInfo());
+  }
+
+  /** The `Welcome`'s payload, for a caller that needs to build a world from it. */
+  matchInfo(): WelcomeInfo {
+    return {
+      entityId: this.entityId,
+      team: this.team,
+      mapId: this.mapId,
+      modeId: this.modeId,
+      serverTick: this.stats.serverTick,
+      serverMs: 0,
+      snapshotHz: 0,
+    };
   }
 
   private onPong(id: number, clientMs: number, serverMs: number, serverTick: number): void {
@@ -626,4 +706,16 @@ export class NetClient {
 
 function blank(): MutableInputCommand {
   return { seq: 0, tickIndex: 0, moveX: 0, moveZ: 0, yaw: 0, pitch: 0, buttons: 0, sampledAtMs: 0 };
+}
+
+/** Wipe a command in place. The redundancy buffer is preallocated and never reallocated. */
+function blankInto(cmd: MutableInputCommand): void {
+  cmd.seq = 0;
+  cmd.tickIndex = 0;
+  cmd.moveX = 0;
+  cmd.moveZ = 0;
+  cmd.yaw = 0;
+  cmd.pitch = 0;
+  cmd.buttons = 0;
+  cmd.sampledAtMs = 0;
 }

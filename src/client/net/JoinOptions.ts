@@ -1,7 +1,7 @@
 import { logger } from '../../shared/core/Log';
 import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } from '../../shared/net/NetSim';
-import type { NetworkedMatchOptions } from '../MatchWorld';
 import { resolveServerUrl } from './BrowserLink';
+import type { HandshakeOptions } from './Handshake';
 
 const log = logger('join');
 
@@ -34,7 +34,7 @@ const log = logger('join');
 /** Injected at build time by Vite. Absent in a plain `npm run dev`. */
 declare const __SERVER_URL__: string | undefined;
 
-export function parseJoinOptions(search: string): NetworkedMatchOptions | null {
+export function parseJoinOptions(search: string): HandshakeOptions | null {
   const params = new URLSearchParams(search);
 
   const serverParam = params.get('server');
@@ -51,7 +51,7 @@ export function parseJoinOptions(search: string): NetworkedMatchOptions | null {
 
   const conditions = parseNetFlag(params.get('net'));
 
-  const options: NetworkedMatchOptions = {
+  const options: HandshakeOptions = {
     url,
     displayName: sanitiseName(params.get('name')),
     conditions,

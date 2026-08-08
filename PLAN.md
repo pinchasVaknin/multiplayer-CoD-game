@@ -4203,6 +4203,229 @@ tell you when it does not — the field still exists, still has a plausible valu
 renders. Grep for that guard before adding another one, and for each, name what replicates in
 its place.
 
+## Playtest round 2 — the integration audit
+
+Reported after a full real-browser playtest: spawning outside the map and clipping through
+walls, state from a previous match surviving into the next one, a dedicated server stuck on
+"MATCH OVER" forever, no hit markers or audio feedback for anything the player shot, and a HUD
+that ignored the server. Five symptoms.
+
+**They were four structural gaps, and every one of them is the same shape as the two found in
+round 1: a fact the client used to own, that the server now owns, still being read from where
+it used to live.** Round 1 found that for the match clock and for death. This round found the
+remaining four.
+
+### 1. The client chose the world; the server merely mentioned it
+
+`Welcome` has carried `mapId` and `modeId` since the protocol was written. `NetClient` decoded
+both into two public fields, and **nothing in the client ever read either one.** The map came
+from `Game.selection` — the *local menu choice, saved in the player's own profile* — and
+`MatchWorld`'s constructor loaded it, spawned the player into it and built the match **before
+anything was dialled**, because the connection was opened at the end of that same constructor.
+
+So the two halves disagreed silently, and every consequence pointed somewhere else:
+
+- The server picked a spawn against its map; on the client's map that is somewhere outside the
+  geometry.
+- Movement predicted against the client's colliders and was corrected against the server's, so
+  every step produced a misprediction and a rubber-band.
+- Walls the client could see were not in the server's world, so the player walked through them.
+
+All three read as netcode faults. None of them is. **The netcode was doing exactly what it was
+told, with two different worlds.**
+
+The dependency ran in a circle: prediction needs a `PlayerController`, which needs the map's
+`CollisionWorld`, which needs to know which map — which only the server can say, over a
+connection `NetClient` owns. `client/net/Handshake.ts` cuts it by doing the exchange on a bare
+link with nothing built yet, and handing the open link plus the decoded `Welcome` to a
+`NetClient` afterwards through `NetClient.adopt`. **The protocol is unchanged**: one `Hello`
+out, one `Welcome` back, thirty lines earlier. `Game.mapEntry()` and `Game.modeEntry()` now
+return the server's answer whenever there is one.
+
+### 2. The client's identity was hardcoded to zero
+
+`PLAYER_ENTITY_ID` is 0 and has been since M2. A connected human is entity **1..99**; entity 0
+is the server's empty spectator seat and never appears on the wire.
+
+Round 1 found this in the death path and fixed *that one site*. It was in eleven others, all in
+the presentation layer, and the result was the reported "no feedback bridges to the UI": no
+hitmarker, no hitmarker sound, no damage numbers, no hit puff, no hurt vignette, no
+hit-direction chevron, no camera shake on firing, no own-weapon audio mix, no own-footstep
+mix, no kill sound, `ScoreSystem.isLocal`, `Killfeed.involvesLocal`.
+
+**None of it failed loudly.** The events arrived over the wire, the bridge re-emitted them
+faithfully onto the bus, the subscriptions fired, and each handler returned one line in. The
+bridge was never the problem and was where it was going to be looked for.
+
+`shared/combat/LocalIdentity.ts` is now the single answer, injected rather than imported: the
+id is not known when the objects that need it are constructed, so a shared mutable holder is
+handed out at construction and `adopt`ed from the `Welcome`. Single-player never calls `adopt`
+and reads 0 throughout, so every M1-M8 path is bit-identical (HARD RULE 8).
+
+### 3. `applyReplicated` adopted state but announced nothing
+
+Round 1 made the client adopt the replicated phase, which fixed the HUD *reading* correctly
+and nothing else. Every consumer downstream of a match ending is wired to an **event**:
+`Game.pendingSummary` comes from `EV.MatchEnded`, the announcer from `EV.AnnouncerCue`, the
+S&D round reset from `EV.RoundStarted`. A client that silently arrived in `MATCH_END` fired
+none of them — so it never entered SUMMARY, never tore its world down, and sat on the final
+banner while the server moved on, **with the old score, the old killfeed and the old
+scoreboard still on screen.** That is the reported state leakage, and it was this method's
+fault rather than a teardown that ran and missed something.
+
+`MatchFlow` now names its two drive modes instead of leaving the difference implicit in which
+methods a caller remembers not to invoke: `authoritative: true` simulates, `false` replicates.
+`applyReplicated` is edge-triggered against the previous phase and emits the same events the
+simulated path does, at the same transitions.
+
+The same flag fixed the killfeed, which had been **blank all milestone**: the kill subscription
+inside `MatchFlow` resolved killer and victim against `bots.roster`, which on a networked
+client is empty, and returned before ever reaching the feed. `Killfeed` now takes a
+`CombatantDirectory` — two questions, `nameOf` and `teamOf` — which `NetSession` satisfies from
+the snapshot's replicated display names. Per-player kills, deaths and assists are counted from
+the replicated events; **team score stays replicated** and the mode never scores twice.
+
+### 4. The dedicated server had no lifecycle at all
+
+`GameServer` never asked `match.isOver`. The flow reached `MATCH_END`, every snapshot carried
+`SFlag.MatchOver`, and the process stayed there until somebody restarted it by hand.
+
+There is now a post-match hold (`MATCH_END_HOLD_SECONDS`, default 12) and then a rotation:
+`MAP_ROTATION` and `MODE_ROTATION`, walked in step, defaulting to `MAP`/`MODE` so the
+out-of-the-box behaviour is "restart the same map" rather than a map the operator did not ask
+for. The whole rotation is resolved through `findMap`/`findMode` **at boot**, because a typo in
+it would otherwise take down a running server twenty minutes into its first match and take
+every connected player with it.
+
+A rotation is **not a disconnect**. Sockets stay up, sessions stay seated, and each client is
+told what changed with a second `Welcome` — the same message it joined with, so there is no
+separate "new match" path on either side to keep in step with the join path. The client
+rebuilds its world from it exactly as it built the first one, which is what makes a mid-match
+map change work at all. `MatchWorld.dispose({keepConnection:true})` and `NetSession.detach()`
+are how the world goes and the link stays.
+
+### Two bugs the audit itself introduced, both found by measuring
+
+Worth recording because both were in the *fix for the state leak* and both reproduced the leak.
+
+**1. The rotation was serviced from a pass that does not always run.** It sat in `draw()`, next
+to `pendingSummary`. **`requestAnimationFrame` is suspended in a hidden tab** — which M10
+already knew, it is why the network has its own `setInterval` heartbeat — so a client told the
+server had rotated would acknowledge it and then sit on the previous map's world indefinitely.
+Alt-tab through the post-match hold and you come back playing Foundry against a server running
+Depot: gap 1 again, by a different route. Caught because the verification browser pane was not
+compositing, which made the hidden-tab path the *default* rather than an edge case somebody has
+to remember to test. Both transitions now go through `Game.servicePendingTransitions()`, called
+from the render pass **and** from the heartbeat.
+
+**2. `SUMMARY -> MATCH` was not a legal transition, and the throw was invisible.** A rotation
+almost always arrives while the client is on the summary screen — that is what the post-match
+hold is *for*. `applyRotation` called `transitionTo('MATCH')`, `isLegalGameTransition` said no,
+and the `Error` was raised inside a `setInterval` callback where nothing was catching it. The
+pending rotation had already been cleared, so it was gone: the client kept the old map for the
+whole of the next match while its *identity* had already been updated by the same welcome —
+strictly worse than either half alone.
+
+Measured before the fix: `mapsSeen: ["mp_depot"]` with the server on `mp_foundry`, `rebuilds: 0`,
+`localId` updated 2 -> 1 anyway. The state machine now declares the edge, because on a
+dedicated server it is real: the server rotates on its own clock and does not wait for
+anybody's summary screen.
+
+The general point: **a state machine that throws on an illegal transition needs its illegal
+transitions to be unreachable, not merely wrong.** This one was reachable from a timer, where
+a throw is a silent no-op.
+
+### Verification
+
+Against a real dedicated server (14 bots, `MAP_ROTATION=mp_foundry,mp_depot`, 6 s hold) driven
+from a real browser client. The client's saved profile was **deliberately set to S&D on Depot**
+while the server ran TDM on Foundry, which is the reported desync exactly.
+
+| | |
+|---|---|
+| Handshake wins | client saved `mp_depot`/`SND`, **loaded `mp_foundry`/`TDM`** |
+| Identity adopted | `localId` **1**, and **2** on a later join — not 0 |
+| Spawn | grounded at y=0 inside the map, 0% loss, lead 5 ticks, RTT 51 ms |
+| Hit feedback | hitmarkers **7**, of which **2 lethal**, against `damageOut` 7 |
+| Incoming | `damageIn` 3 = hurt vignette 3 = hit-direction chevron 3 |
+| Killfeed | 94 lines with real names and teams, `involvesLocal` correct |
+| Scoreboard | all **15** rows, per-player K/D/A, local row named `AUDIT` and flagged |
+| Match end | `EV.MatchEnded` fired on the client: `A 75-48 localWon=true` |
+| Server rotation | `match over — A 75-48 on FOUNDRY` → 6 s → `starting match 2: TDM on mp_depot with 1 connected` |
+| Join mid-rotation | client joined match 2 and loaded **`mp_depot`**, the server's current map |
+
+**Rotation with a client connected through it**, which is the case both self-inflicted bugs
+above were hiding in:
+
+| | |
+|---|---|
+| Client followed the server | `mapsSeen: ["mp_foundry", "mp_depot"]`, `rebuilds: 1` |
+| Identity reassigned | `localIds: [2, 1]` — adopted, not stale |
+| Previous result announced | `EV.MatchEnded` `B 64-75`, client reached SUMMARY |
+| Uncaught errors | **0** |
+| Spawned into the *new* map | grounded, y=0, 14 remote actors |
+| **No state survived** | killfeed 10 lines, scoreboard 10 kills, both from the new match only |
+| Score agreed exactly | replicated `4-6` against a board summing to A 4 / B 6 |
+| Post-rotation wiring | with `localId` now 1: hitmarker, hurt vignette and chevron all fire; feed reads `AUDIT[A] -> KESTREL[B] involvesLocal=true` |
+
+**Single-player, same build** (HARD RULE 8): `networked:false`, no session, `localId` **0**, the
+client's *own* `mp_depot`/`SND` selection honoured, 9 local bots, 10 scoreboard rows, local row
+`OPERATOR` flagged, **console clean**.
+
+**The existing gates, unchanged.** `npm run check` passes: boundaries ok (263 files), all three
+typecheck targets clean.
+
+`npm run harness` is **bit-identical to the M10 record** — match 1 `A wins 75-46` in 13705
+ticks, per-tier hit rates `RECRUIT 0.079 / REGULAR 0.109 / HARDENED 0.191 / VETERAN 0.254`,
+5/5 matches completed, heap 6.6 → 9.8 MB. The `LocalIdentity` and `authoritative` changes
+touch no simulation state, and this is the measurement that says so.
+
+`npm run netharness`, 2 clients, 30 s, no added conditions, against an 8-bot server:
+
+| | HEADLESS1 | HEADLESS2 | M10 record |
+|---|---|---|---|
+| Mispredictions | 11 / 576 | **3 / 599** | 1-8 / ~600 |
+| p50 | 5.4 cm | 4.5 cm | 7.7 cm |
+| p99 | 10.8 cm | 7.7 cm | 15 cm |
+| Max replay | 3 | 1 | 3 |
+| Snapshot bytes | 229 | 229 | 231 |
+| Snapshots lost | 0 | 0 | 0 |
+| `metresSinceRespawn` | 90.2 | 128.8 | (the round-1 freeze detector) |
+
+Same band as the record, slightly better on both percentiles.
+
+**A note on how to read that harness, because it misled this session first.** Run against the
+*rotating* verification server — 14 bots, a browser client connected and firing, 17 replicated
+entities — the same harness reported **166/597 and 175/509, p50 27-42 cm**, which looks
+exactly like a prediction regression and is not one. It is contention: more entities, more
+simulation per tick, and a second real client. Always re-run against a clean server at the
+recorded configuration before believing a netcode number has moved.
+
+**Caveat on the hit-feedback numbers.** The engagement above was driven by a scripted aimbot
+wired into the command sampler, because the verification browser pane does not composite and
+the real input path needs pointer lock. Every damage, kill, killfeed and score figure came off
+the wire from the real server through the real client. The final post-rotation row is the one
+exception and is marked as such: those three payloads were re-emitted onto the bus by hand,
+replaying exactly what `NetSession` synthesises, to assert the *reassigned* identity reaches
+the presentation layer without waiting on marksmanship at 48 m.
+
+### The lesson, which is round 1's lesson with the scope corrected
+
+Round 1 said: *turning off a client-side system is half a change.* That was right and too
+narrow. The general form is:
+
+**When the server takes ownership of a fact, every reader of that fact is a call site, and the
+compiler cannot find them for you.** The map, the entity id, the phase, the roster and the
+match lifecycle were each one fact that moved, and each one had between one and twelve readers
+still reading the local copy — which still existed, still held a plausible value, and still
+rendered. Four of the five reported symptoms were *silent early returns*, not errors.
+
+So: when something becomes authoritative, grep for every reader of the local version before
+writing the replication, and make the local version impossible to read by accident — a
+`LocalIdentity` that must be injected, a `CombatantDirectory` that must be supplied, an
+`authoritative` flag that must be set. A constant anyone can import is a call site you will not
+find until a playtest.
+
 ## What Milestone 11 needs to know
 
 - **Read "What is not done" first.** Items 1, 3 and 6 are the ones that will bite.

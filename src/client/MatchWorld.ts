@@ -27,7 +27,9 @@ import type { ViewmodelLayer } from './player/Viewmodel';
 import type { ViewmodelConfig } from '../shared/weapons/ViewmodelConfig';
 import type { WeaponDef } from '../shared/weapons/WeaponDefs';
 import type { InputCommand } from '../shared/core/InputCommand';
-import type { NetConditions } from '../shared/net/NetSim';
+import type { WelcomeInfo } from '../shared/net/Messages';
+import { LocalIdentity } from '../shared/combat/LocalIdentity';
+import type { BrowserLink } from './net/BrowserLink';
 import { NetSession } from './net/NetSession';
 import { logger } from '../shared/core/Log';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
@@ -132,13 +134,25 @@ export interface MatchWorldDeps {
   readonly server: NetworkedMatchOptions | null;
 }
 
+/**
+ * A connection that is already up, and the match the server said it is running (M10,
+ * playtest round 2).
+ *
+ * This used to be the *address to dial*, and the world was built before anything was dialled
+ * — which is how the client came to load one map while the server ran another. The world is
+ * now built **from** the handshake rather than before it, so what arrives here is a live link
+ * and a decoded `Welcome`, and `deps.mapEntry` above is resolved from `welcome.mapId`.
+ */
 export interface NetworkedMatchOptions {
-  /** Already resolved to a `ws://` or `wss://` URL. See `resolveServerUrl`. */
-  readonly url: string;
+  /** Open, handshaken, and carrying the S7 condition simulators it was created with. */
+  readonly link: BrowserLink;
+  readonly welcome: WelcomeInfo;
+  /** When the `Welcome` landed, for seeding the clock. See `NetClient.adopt`. */
+  readonly receivedAtMs: number;
   readonly displayName: string;
-  /** Artificial conditions layered on the real link (S7). */
-  readonly conditions: NetConditions;
   readonly wantRewindDebug: boolean;
+  /** The server rotated to another match. The world has to be rebuilt from the new welcome. */
+  readonly onNewMatch: (welcome: WelcomeInfo) => void;
 }
 
 export class MatchWorld {
@@ -152,6 +166,16 @@ export class MatchWorld {
 
   /** The connection, or null in single-player (M10). */
   readonly net: NetSession | null;
+
+  /**
+   * Which entity this client is, for everything that filters events by "was that me?".
+   *
+   * Created here rather than in `Game` because it belongs to a *match*: the id is assigned
+   * per match by the server and reassigned on a rotation, so an identity that outlived the
+   * world would answer for the seat we held in the previous one. Single-player never touches
+   * it and it reads `PLAYER_ENTITY_ID` throughout.
+   */
+  private readonly identity = new LocalIdentity();
 
   /** The AFK bot-match driver, when `?harness=botmatch` asked for one. */
   private harness: BotHarness | null = null;
@@ -192,12 +216,15 @@ export class MatchWorld {
       server === null
         ? null
         : new NetSession({
-            url: server.url,
+            link: server.link,
+            welcome: server.welcome,
+            receivedAtMs: server.receivedAtMs,
             displayName: server.displayName,
             bus: deps.bus,
             controller: player,
-            conditions: server.conditions,
+            identity: this.identity,
             wantRewindDebug: server.wantRewindDebug,
+            onNewMatch: server.onNewMatch,
             // Both of these are filled in properly the moment the match exists — see below.
             // They are indirected through `this.match` rather than captured, because the
             // match cannot exist before the session it is being handed to.
@@ -208,6 +235,9 @@ export class MatchWorld {
     this.match = new Match({
       bus: deps.bus,
       networked: server !== null,
+      identity: this.identity,
+      localTeam: server?.welcome.team,
+      localName: server?.displayName,
       actors: this.net === null ? undefined : () => netSessionActors(this.net),
       scene: deps.scene,
       viewmodel: deps.viewmodel,
@@ -244,28 +274,34 @@ export class MatchWorld {
      * passed into the session's constructor because the session is built first — the match's
      * renderer needs its actor list — so the reference can only be handed over afterwards.
      */
-    if (this.net !== null) {
-      this.net.onMatchState = (phase, secondsRemaining, phaseSeconds, round) => {
-        this.match.flow.applyReplicated(phase, secondsRemaining, phaseSeconds, round);
+    const net = this.net;
+    if (net !== null) {
+      net.onMatchState = (state) => {
+        this.match.flow.applyReplicated(state);
       };
-      this.net.onLocalState = (health, alive) => {
+      net.onLocalState = (health, alive) => {
         this.match.applyReplicatedSelf(health, alive);
       };
-    }
 
-    /**
-     * Dial out.
-     *
-     * Deliberately not awaited: the world is built synchronously on entering MATCH and the
-     * map, the player and the HUD must all exist whether or not the socket comes up. A failed
-     * connection leaves a playable, empty map and a visible reason rather than a half-built
-     * world — which is the difference between "the server is down" and "the game is broken".
-     */
-    if (this.net !== null) {
-      void this.net.connect().catch((err: unknown) => {
-        const reason = err instanceof Error ? err.message : String(err);
-        netLog.error(`could not join ${server?.url ?? 'the server'}: ${reason}`);
-      });
+      /**
+       * The killfeed and the scoreboard resolve ids to names, and on a networked client the
+       * only place those names exist is the snapshot. See `NetSession.directory`.
+       */
+      this.match.flow.setKillfeedDirectory(net.directory());
+      net.onRosterEntry = (entityId, name, team) => {
+        this.match.score.register(entityId, name, team);
+      };
+
+      /**
+       * Take up the connection the handshake already made.
+       *
+       * Nothing is awaited here any more, and that is the point: the socket was opened and
+       * the `Welcome` decoded *before* this constructor ran, which is what let `deps.mapEntry`
+       * be the server's map instead of the client's guess. A connection failure never reaches
+       * this far — `Game` catches it and stays in the menu with a reason on screen.
+       */
+      net.start();
+      netLog.info(`world built for ${net.welcome.modeId} on ${net.welcome.mapId} (server's choice).`);
     }
 
     this.matchEndedSubscription = deps.bus.on(EV.MatchEnded, () => deps.onMatchEnded());
@@ -386,9 +422,19 @@ export class MatchWorld {
    * `dispose` gets it — including the map's geometries and materials, which are the largest
    * thing a match allocates.
    */
-  dispose(): void {
+  /**
+   * Take the world apart.
+   *
+   * `keepConnection` is for a **map rotation** (M10, playtest round 2). The server ending one
+   * match and starting another is not a disconnect: the socket stays up, the seat stays
+   * assigned, and only the world has to be rebuilt. Closing the link here and reopening it
+   * would drop the player out of a match they never left, and on a busy server they might not
+   * get back in.
+   */
+  dispose(options: { keepConnection?: boolean } = {}): void {
     this.matchEndedSubscription();
-    this.net?.disconnect('left the match');
+    if (options.keepConnection === true) this.net?.detach();
+    else this.net?.disconnect('left the match');
 
     this.debug.dispose();
     this.harness?.stop();
