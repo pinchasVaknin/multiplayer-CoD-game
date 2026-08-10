@@ -1,6 +1,5 @@
 import type { ScoreTeam } from '../combat/ScoreSystem';
 import { accuracy, killDeath } from '../combat/ScoreSystem';
-import { DT } from '../core/Loop';
 import {
   GameMode,
   leaderOf,
@@ -153,7 +152,7 @@ export class Tdm extends GameMode {
   }
 
   override onRoundStart(_round: number): void {
-    this.ticksLeft = Math.round(this.config.timeLimitSeconds / DT);
+    this.ticksLeft = this.roundTicks(this.config.timeLimitSeconds);
   }
 
   override onRoundEnd(_result: RoundResult): void {

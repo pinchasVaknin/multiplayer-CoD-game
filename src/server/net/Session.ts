@@ -133,7 +133,28 @@ export class Session {
    * player mid-match deserves the full timeout before their body is taken away.
    */
   checkTimeout(): void {
-    if (this.closed) return;
+    if (this.state === 'closed') return;
+
+    /**
+     * The link died without this session closing it — the pulled cable.
+     *
+     * This guard used to be `if (this.closed) return`, and `closed` is true when *either* this
+     * session or its link has gone. So an abrupt drop returned here immediately and `close()`
+     * was never reached, which meant `onLeave` was never called and every consequence of a
+     * disconnect was skipped: the reconnect grace never held a seat for the one kind of
+     * disconnect it exists to cover, the match kept addressing snapshots to a dead session, and
+     * a player who dropped while waiting stayed counted as present.
+     *
+     * The clean disconnect never had the problem, because a `Bye` goes through `close()` on the
+     * way in. That is why it survived M10 and Gate A: both tested the path that works.
+     */
+    if (this.link.state === 'closed') {
+      // A fixed reason rather than the link's own: `INetLink` does not carry one, and widening
+      // the shared transport interface to improve one log line is not the trade.
+      this.close('connection lost');
+      return;
+    }
+
     const now = nowMs();
     if (this.state === 'handshaking' && now - this.openedMs > HANDSHAKE_TIMEOUT_MS) {
       this.close('handshake timeout');

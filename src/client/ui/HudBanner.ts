@@ -23,6 +23,19 @@ export interface BannerState {
   /** Warm-up or round-end countdown; 0 while the round is live. */
   phaseSeconds: number;
   phaseLabel: string;
+  /**
+   * Free-for-All: there are no teams to put on either side of the clock.
+   *
+   * FFA keeps the two-team substrate internally and the banner read it literally, so eight
+   * individuals were presented as a team score that means nothing to anybody in the match. The
+   * numbers an FFA player tracks are *who is winning* and *where am I*.
+   */
+  ffa: boolean;
+  /** Leader's name and score, FFA only. */
+  leaderName: string;
+  leaderScore: number;
+  /** This client's own score, FFA only. */
+  selfScore: number;
 }
 
 export function makeBannerState(): BannerState {
@@ -35,6 +48,10 @@ export function makeBannerState(): BannerState {
     roundsToWin: 1,
     phaseSeconds: 0,
     phaseLabel: '',
+    ffa: false,
+    leaderName: '',
+    leaderScore: 0,
+    selfScore: 0,
   };
 }
 
@@ -58,6 +75,12 @@ export class HudBanner {
   private lastPhase = '';
   private phaseShown = false;
 
+  /** FFA captions above each score. Empty and hidden in team modes. */
+  private readonly labelA: HTMLElement;
+  private readonly labelB: HTMLElement;
+  private lastFfa = false;
+  private lastLeadLabel = '';
+
   constructor() {
     this.element = document.createElement('div');
     this.element.className = 'hud-banner';
@@ -70,7 +93,12 @@ export class HudBanner {
     trackA.className = 'hud-banner__track';
     this.barA = document.createElement('i');
     trackA.appendChild(this.barA);
-    teamA.append(this.scoreA, trackA);
+    // The same two slots, relabelled, rather than a second banner: the layout, the bars, the
+    // change-guards and the tabular numerals are all still exactly what is wanted.
+    this.labelA = document.createElement('span');
+    this.labelA.className = 'hud-banner__who op-label';
+    this.labelA.hidden = true;
+    teamA.append(this.labelA, this.scoreA, trackA);
 
     const centre = document.createElement('div');
     centre.className = 'hud-banner__centre';
@@ -88,7 +116,10 @@ export class HudBanner {
     trackB.className = 'hud-banner__track';
     this.barB = document.createElement('i');
     trackB.appendChild(this.barB);
-    teamB.append(this.scoreB, trackB);
+    this.labelB = document.createElement('span');
+    this.labelB.className = 'hud-banner__who op-label';
+    this.labelB.hidden = true;
+    teamB.append(this.labelB, this.scoreB, trackB);
 
     this.element.append(teamA, centre, teamB);
 
@@ -105,18 +136,40 @@ export class HudBanner {
   }
 
   update(state: BannerState): void {
-    if (state.scoreA !== this.lastA) {
-      this.lastA = state.scoreA;
-      this.scoreA.textContent = String(state.scoreA);
+    /**
+     * In Free-for-All the two sides are **leader** and **you**, not team A and team B.
+     *
+     * The left slot is whoever is winning and the right is this client, so "am I close" is the
+     * same glance it is in a team mode.
+     */
+    const left = state.ffa ? state.leaderScore : state.scoreA;
+    const right = state.ffa ? state.selfScore : state.scoreB;
+
+    if (state.ffa !== this.lastFfa) {
+      this.lastFfa = state.ffa;
+      this.element.classList.toggle('hud-banner--ffa', state.ffa);
     }
-    if (state.scoreB !== this.lastB) {
-      this.lastB = state.scoreB;
-      this.scoreB.textContent = String(state.scoreB);
+    const leadLabel = state.ffa ? state.leaderName || 'LEADER' : '';
+    if (leadLabel !== this.lastLeadLabel) {
+      this.lastLeadLabel = leadLabel;
+      this.labelA.textContent = leadLabel;
+      this.labelA.hidden = leadLabel === '';
+      this.labelB.textContent = state.ffa ? 'YOU' : '';
+      this.labelB.hidden = !state.ffa;
+    }
+
+    if (left !== this.lastA) {
+      this.lastA = left;
+      this.scoreA.textContent = String(left);
+    }
+    if (right !== this.lastB) {
+      this.lastB = right;
+      this.scoreB.textContent = String(right);
     }
 
     const limit = state.limit > 0 ? state.limit : 1;
-    const fillA = Math.round(Math.min(1, state.scoreA / limit) * 100) / 100;
-    const fillB = Math.round(Math.min(1, state.scoreB / limit) * 100) / 100;
+    const fillA = Math.round(Math.min(1, left / limit) * 100) / 100;
+    const fillB = Math.round(Math.min(1, right / limit) * 100) / 100;
     if (fillA !== this.lastFillA) {
       this.lastFillA = fillA;
       this.barA.style.transform = `scaleX(${fillA.toFixed(2)})`;

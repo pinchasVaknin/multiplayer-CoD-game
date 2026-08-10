@@ -149,6 +149,8 @@ export interface NetworkedMatchOptions {
   readonly welcome: WelcomeInfo;
   /** When the `Welcome` landed, for seeding the clock. See `NetClient.adopt`. */
   readonly receivedAtMs: number;
+  /** Frames the handshake drained behind the `Welcome`. See `HandshakeResult.pending`. */
+  readonly pending?: readonly Uint8Array[];
   readonly displayName: string;
   readonly wantRewindDebug: boolean;
   /** The server rotated to another match. The world has to be rebuilt from the new welcome. */
@@ -219,6 +221,7 @@ export class MatchWorld {
             link: server.link,
             welcome: server.welcome,
             receivedAtMs: server.receivedAtMs,
+            pending: server.pending,
             displayName: server.displayName,
             bus: deps.bus,
             controller: player,

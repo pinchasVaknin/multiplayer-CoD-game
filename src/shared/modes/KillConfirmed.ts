@@ -213,7 +213,7 @@ export class KillConfirmed extends GameMode implements ObjectiveProvider {
   }
 
   override onRoundStart(_round: number): void {
-    this.ticksLeft = Math.round(this.config.timeLimitSeconds / DT);
+    this.ticksLeft = this.roundTicks(this.config.timeLimitSeconds);
     this.tags.length = 0;
   }
 

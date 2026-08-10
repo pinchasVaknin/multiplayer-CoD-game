@@ -206,7 +206,7 @@ export class Domination extends GameMode implements ObjectiveProvider {
   }
 
   override onRoundStart(_round: number): void {
-    this.ticksLeft = Math.round(this.config.timeLimitSeconds / DT);
+    this.ticksLeft = this.roundTicks(this.config.timeLimitSeconds);
     this.scoreTimer = 0;
     this.assignment.clear();
     // Each side starts holding the flag nearest its own spawn; the middle starts neutral.

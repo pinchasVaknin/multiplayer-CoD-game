@@ -10,6 +10,7 @@ import { HitboxRig, HUMANOID_RIG } from '../shared/combat/HitboxRig';
 import type { GameBus } from '../shared/core/Events';
 import type { InputCommand } from '../shared/core/InputCommand';
 import { DT } from '../shared/core/Loop';
+import type { PerkState } from '../shared/perks/PerkState';
 import { Health, type HealthConfig } from '../shared/player/Health';
 import type { MovementConfig } from '../shared/player/MovementConfig';
 import { PlayerController } from '../shared/player/PlayerController';
@@ -52,6 +53,8 @@ export interface NetPlayerDeps {
   readonly viewmodelConfig: ViewmodelConfig;
   readonly weaponDef: WeaponDef;
   readonly secondaryDef: WeaponDef;
+  /** The resolved perks this player is carrying. `NO_PERKS` for anything without a loadout. */
+  readonly perks: PerkState;
 }
 
 export class NetPlayer implements Combatant {
@@ -127,6 +130,21 @@ export class NetPlayer implements Combatant {
     // Per-entity salt so two players firing the same weapon on the same tick do not draw
     // identical spread. Since M10 this is a salt, not a stream position — see `WeaponSystem`.
     this.weapons.reseed(0x5bf0_3d17 ^ (entityId * 0x9e37_79b9));
+
+    /**
+     * Lightweight, on the authoritative side.
+     *
+     * The same assignment `MatchMeta.applyPerkHooks` makes on the client, and it has to be the
+     * same or `PlayerController.step` stops being a pure function of (state, command) across the
+     * two runtimes — which is the property reconciliation depends on. A perk the server has not
+     * been told about is not a perk; it is a permanent misprediction.
+     */
+    this.controller.speedScale = deps.perks.moveSpeedMult;
+  }
+
+  /** The perks this player is carrying. Read by bot perception and the streak system. */
+  get perks(): PerkState {
+    return this.deps.perks;
   }
 
   // -- Combatant -------------------------------------------------------------

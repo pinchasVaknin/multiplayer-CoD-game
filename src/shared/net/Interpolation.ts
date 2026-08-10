@@ -179,6 +179,28 @@ export class EntityInterpolator {
     out.stance = b.stance;
   }
 
+  /**
+   * Throw the history away and restart from the newest state, stamped at `serverMs`.
+   *
+   * **A respawn is a teleport, and a teleport is the one thing an interpolator must not
+   * smooth.** The samples either side of it describe two places the same entity genuinely was,
+   * so the bracketing blend does exactly what it is built to do and drags the body from where
+   * it fell to where it came back — across the map, in a straight line, at whatever speed the
+   * interpolation delay implies. It also gives the spawn away.
+   *
+   * `reset()` alone is not enough: `sample` returns early with an empty buffer and leaves the
+   * pose untouched, so the body would sit at the corpse for a snapshot and then jump. Pushing
+   * the post-spawn state back in at the render time means the very next sample is that state,
+   * which is a clean cut rather than a slide or a stall.
+   *
+   * `latest` deliberately survives `reset`, which is what makes this two lines.
+   */
+  snapTo(serverMs: number): void {
+    const latest = this.latest;
+    this.reset();
+    this.push(latest, serverMs);
+  }
+
   /** Drop everything. Used when an entity is removed and its id later reused. */
   reset(): void {
     for (const s of this.samples) s.used = false;

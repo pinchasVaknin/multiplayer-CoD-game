@@ -147,6 +147,20 @@ export class NetClient {
   /** Latest authoritative header: score, time, tick. */
   readonly header: SnapshotHeader = makeSnapshotHeader();
 
+  /**
+   * Whether a snapshot has ever carried `SFlag.MatchOver`.
+   *
+   * Makes *"this client finished a match"* distinguishable from *"this client was **told** the
+   * match finished"*. Without it a headless client acks the summary and requeues, sailing
+   * happily through a match whose `MATCH_END` phase never arrived — precisely the state that
+   * left a browser walking around a finished match with no summary screen.
+   *
+   * A latch, set during decode, because the header is a *live* record and the moment a match
+   * ends is the moment the server stops sending — so by the time anything downstream looks, the
+   * last snapshot may be several frames old.
+   */
+  sawMatchOver = false;
+
   readonly stats: NetClientStats = {
     rttMs: 0,
     jitterMs: 0,
@@ -331,43 +345,56 @@ export class NetClient {
 
   // -- receive ----------------------------------------------------------------
 
-  private receive(): void {
-    this.deps.link.poll((bytes) => {
-      this.rateBytesIn += bytes.length;
-      this.reader.reuse(bytes);
-      const msg = decodeHeader(this.reader);
+  /**
+   * Apply frames the handshake drained before this client existed.
+   *
+   * `BrowserLink.poll` hands over the whole queue and then clears it, so anything sharing a
+   * batch with the `Welcome` never reaches `receive`. See `HandshakeResult.pending`: ordinarily
+   * empty, and on a reconnect it is the seat assignment that says we are already back in.
+   */
+  replay(frames: readonly Uint8Array[]): void {
+    for (const bytes of frames) this.handleFrame(bytes);
+  }
 
-      switch (msg.kind) {
-        case 'welcome':
-          this.onWelcome(msg.entityId, msg.team, msg.mapId, msg.modeId, msg.serverTick, msg.serverMs);
-          return;
-        case 'reject':
-          this.state = 'rejected';
-          this.closeReason = rejectText(msg.code);
-          log.error(`server refused the connection: ${this.closeReason}`);
-          this.deps.link.close('rejected');
-          return;
-        case 'pong':
-          this.onPong(msg.id, msg.clientMs, msg.serverMs, msg.serverTick);
-          return;
-        case 'snapshot':
-          this.onSnapshot(bytes.length);
-          return;
-        case 'events':
-          if (this.deps.events !== undefined) readEvents(this.reader, msg.count, this.deps.events);
-          return;
-        case 'bye':
-          this.state = 'disconnected';
-          this.closeReason = msg.reason;
-          log.info(`server closed the connection: ${msg.reason}`);
-          this.deps.link.close('server bye');
-          return;
-        default:
-          // A frame this client cannot parse. The server is the trusted end here, so this is
-          // a version skew the handshake should have caught — say so rather than ignoring it.
-          log.warn('undecodable frame from server; ignoring.');
-      }
-    });
+  private receive(): void {
+    this.deps.link.poll((bytes) => this.handleFrame(bytes));
+  }
+
+  private handleFrame(bytes: Uint8Array): void {
+    this.rateBytesIn += bytes.length;
+    this.reader.reuse(bytes);
+    const msg = decodeHeader(this.reader);
+
+    switch (msg.kind) {
+      case 'welcome':
+        this.onWelcome(msg.entityId, msg.team, msg.mapId, msg.modeId, msg.serverTick, msg.serverMs);
+        return;
+      case 'reject':
+        this.state = 'rejected';
+        this.closeReason = rejectText(msg.code);
+        log.error(`server refused the connection: ${this.closeReason}`);
+        this.deps.link.close('rejected');
+        return;
+      case 'pong':
+        this.onPong(msg.id, msg.clientMs, msg.serverMs, msg.serverTick);
+        return;
+      case 'snapshot':
+        this.onSnapshot(bytes.length);
+        return;
+      case 'events':
+        if (this.deps.events !== undefined) readEvents(this.reader, msg.count, this.deps.events);
+        return;
+      case 'bye':
+        this.state = 'disconnected';
+        this.closeReason = msg.reason;
+        log.info(`server closed the connection: ${msg.reason}`);
+        this.deps.link.close('server bye');
+        return;
+      default:
+        // A frame this client cannot parse. The server is the trusted end here, so this is
+        // a version skew the handshake should have caught — say so rather than ignoring it.
+        log.warn('undecodable frame from server; ignoring.');
+    }
   }
 
   private onWelcome(
@@ -437,6 +464,8 @@ export class NetClient {
 
   private onSnapshot(byteLength: number): void {
     readSnapshotHeader(this.reader, this.header);
+    // Latched here rather than polled by a caller. See `sawMatchOver`.
+    if ((this.header.flags & SFlag.MatchOver) !== 0) this.sawMatchOver = true;
     if (this.reader.overran) return;
 
     // Ids are 16-bit and wrap. A gap means snapshots were lost in flight, which is the

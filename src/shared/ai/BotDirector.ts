@@ -45,6 +45,17 @@ const log = logger('BotDirector');
 export const BOT_ID_BASE = 100;
 
 /**
+ * How many bots one match may ever create, including mid-match replacements.
+ *
+ * Entity ids go on the wire as a byte and 255 is the `NO_ENTITY` sentinel, so ids must stay
+ * under it. `BOT_ID_BASE + 150` is 250, which leaves the sentinel alone and is an order of
+ * magnitude past what a real match reaches. `addOne` refuses past it rather than wrapping,
+ * because a wrapped id is a body that inherits another's rig history and, on every client,
+ * its mesh.
+ */
+const MAX_BOT_INDEX = 150;
+
+/**
  * Seconds between dying and coming back. Comfortably longer than the fall animation.
  *
  * Exported from M10: a networked human respawns on the server, and it must be the *same*
@@ -237,6 +248,16 @@ export class BotDirector {
   private readonly unsubscribe: Array<() => void> = [];
   private tick = 0;
 
+  /**
+   * The next bot index to mint. Monotonic within a match; reset only by `populate`.
+   *
+   * Deliberately **not** derived from `bots.length`, which falls when `removeOne` takes a bot off
+   * for a joining human — deriving from it would hand the next bot an id somebody is still using,
+   * inheriting another body's rig history, its cover reservation, and on every client its mesh
+   * and its interpolation buffer.
+   */
+  private nextIndex = 0;
+
   constructor(deps: BotDirectorDeps) {
     this.deps = deps;
     this.rng = new Rng(deps.seed);
@@ -326,41 +347,87 @@ export class BotDirector {
    */
   populate(teamA: number, teamB: number, tierMix: readonly BotTier[]): void {
     this.clear();
-    let index = 0;
+    this.nextIndex = 0;
     const add = (team: BotTeam, count: number): void => {
       for (let i = 0; i < count; i++) {
-        const tier = tierMix[index % Math.max(tierMix.length, 1)] ?? 'REGULAR';
-        const bot = new Bot(
-          {
-            entityId: BOT_ID_BASE + index,
-            displayName: NAMES[index % NAMES.length] ?? `BOT ${index}`,
-            team,
-            tier,
-            seed: (this.deps.seed ^ (0x9e37_79b9 * (index + 1))) | 0,
-          },
-          {
-            world: this.deps.world,
-            bus: this.deps.bus,
-            damage: this.deps.damage,
-            movement: this.deps.movement,
-            healthConfig: this.deps.healthConfig,
-            weaponDef: drawBotWeapon(tier, this.rng),
-            viewmodelConfig: this.deps.viewmodelConfig,
-            tiers: this.deps.tiers,
-            perceptionConfig: this.deps.perceptionConfig,
-            brain: this.brainDeps,
-          },
-        );
-        this.bots.push(bot);
-        this.roster.push(bot);
-        this.byId.set(bot.entityId, bot);
-        this.deps.damage.register(bot);
-        this.spawnBot(bot);
-        index++;
+        const tier = tierMix[this.nextIndex % Math.max(tierMix.length, 1)] ?? 'REGULAR';
+        this.createBot(team, tier);
       }
     };
     add('A', teamA);
     add('B', teamB);
+  }
+
+  /**
+   * Mint one more bot mid-match — the inverse of `removeOne`, for a player leaving.
+   *
+   * Null past `MAX_BOT_INDEX` rather than wrapping. A caller that gets null has a side one body
+   * down, which is a visible imbalance; a wrapped id is two bodies on one entity, which is not.
+   */
+  addOne(team: BotTeam, tier: BotTier): Bot | null {
+    if (this.nextIndex >= MAX_BOT_INDEX) return null;
+    return this.createBot(team, tier);
+  }
+
+  /**
+   * Take one bot off `team` to make room for a human, newest first. Null if that side has none.
+   *
+   * Releases everything a bot holds **in `shared/`** — roster slot, id map, `DamageSystem`
+   * registration, cover reservation. It cannot release the one thing the bot holds in `server/`,
+   * its `Rewind` history, because this package is forbidden to import a server-only structure —
+   * so route removal through `ServerMatch.removeBotForSeat`, never this directly.
+   */
+  removeOne(team: BotTeam): Bot | null {
+    for (let i = this.bots.length - 1; i >= 0; i--) {
+      const bot = this.bots[i];
+      if (bot === undefined || bot.team !== team) continue;
+      this.bots.splice(i, 1);
+      const at = this.roster.indexOf(bot);
+      if (at >= 0) this.roster.splice(at, 1);
+      this.byId.delete(bot.entityId);
+      this.deps.damage.unregister(bot.entityId);
+      this.cover.release(bot.entityId);
+      return bot;
+    }
+    return null;
+  }
+
+  /**
+   * One bot, built and seated. The body of the old inline `populate` loop, extracted.
+   *
+   * The id comes from `nextIndex` and nothing else, and incrementing it here is what makes that
+   * true on every path — `populate` and `addOne` mint through the same three lines.
+   */
+  private createBot(team: BotTeam, tier: BotTier): Bot {
+    const index = this.nextIndex;
+    const bot = new Bot(
+      {
+        entityId: BOT_ID_BASE + index,
+        displayName: NAMES[index % NAMES.length] ?? `BOT ${index}`,
+        team,
+        tier,
+        seed: (this.deps.seed ^ (0x9e37_79b9 * (index + 1))) | 0,
+      },
+      {
+        world: this.deps.world,
+        bus: this.deps.bus,
+        damage: this.deps.damage,
+        movement: this.deps.movement,
+        healthConfig: this.deps.healthConfig,
+        weaponDef: drawBotWeapon(tier, this.rng),
+        viewmodelConfig: this.deps.viewmodelConfig,
+        tiers: this.deps.tiers,
+        perceptionConfig: this.deps.perceptionConfig,
+        brain: this.brainDeps,
+      },
+    );
+    this.bots.push(bot);
+    this.roster.push(bot);
+    this.byId.set(bot.entityId, bot);
+    this.deps.damage.register(bot);
+    this.spawnBot(bot);
+    this.nextIndex++;
+    return bot;
   }
 
   clear(): void {

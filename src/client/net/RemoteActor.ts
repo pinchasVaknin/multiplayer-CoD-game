@@ -56,6 +56,16 @@ export class RemoteActor implements RenderableActor {
   private prevScale = 1;
   private seeded = false;
 
+  /**
+   * The spawn serial the *interpolator* has been snapped for.
+   *
+   * Separate from `visual.spawnSerial`, which `applyLatest` maintains for the renderer's
+   * animation triggers, because the two are consumed at different points in the frame — this one
+   * has to be acted on **before** the buffer is sampled and that one after. -1 so the first
+   * sighting counts as a spawn.
+   */
+  private spawnSnapped = -1;
+
   constructor(readonly entityId: number) {}
 
   get participating(): boolean {
@@ -107,6 +117,26 @@ export class RemoteActor implements RenderableActor {
    * before the renderer reads any of the accessors below.
    */
   update(interp: EntityInterpolator, renderMs: number): void {
+    /**
+     * A respawn is a cut, not a move.
+     *
+     * Detected **before** sampling, which is the whole point: `applyLatest` below already
+     * notices the spawn serial, but it runs *after* `interp.sample` has drawn this frame's pose
+     * out of a buffer still holding samples from where the body died. Collapsing the render
+     * blend there hides the last few milliseconds of the slide and none of the rest of it —
+     * reported as "their model is rapidly pulled across the map from their death position to
+     * their new spawn location".
+     *
+     * The first sighting counts as a spawn too, so a body that has just joined appears where it
+     * is rather than travelling there from the origin.
+     */
+    const spawnSerial = interp.latest.spawnSerial;
+    if (spawnSerial !== this.spawnSnapped) {
+      this.spawnSnapped = spawnSerial;
+      interp.snapTo(renderMs);
+      this.seeded = false;
+    }
+
     // The previous pose is kept so the renderer's own `alpha` blend has two states to work
     // between. It is a second, much shorter interpolation on top of the buffer's — the buffer
     // places the body on the server's timeline, this smooths across the display's refresh.

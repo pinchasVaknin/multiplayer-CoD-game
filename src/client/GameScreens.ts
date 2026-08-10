@@ -1,7 +1,6 @@
 import type { ProceduralAudio } from './engine/ProceduralAudio';
 import { profileLine } from './GameLoadout';
 import type { Match } from './ClientMatch';
-import { PLAYER_TEAM } from './ClientMatch';
 import type { Profile } from './meta/Profile';
 import type { XpReport } from '../shared/meta/XpRules';
 import type { MatchResult } from '../shared/modes/GameMode';
@@ -130,7 +129,9 @@ export class GameScreens {
     this.summary.setColumns(match.mode.getScoreboardColumns(), match.mode.name, mapName);
     this.summary.show(
       result.winner,
-      PLAYER_TEAM,
+      // The side the server put this client on, so a team-B player is not congratulated for
+      // losing — the same constant-standing-in-for-an-assignment bug as the alive counter.
+      match.localTeam,
       result.reason,
       result.scoreA,
       result.scoreB,

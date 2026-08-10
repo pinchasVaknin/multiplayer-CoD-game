@@ -35,7 +35,6 @@ import { MatchHarness } from './debug/MatchHarness';
 import { Speedometer } from './debug/Speedometer';
 import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStates';
 import type { Match } from './ClientMatch';
-import { PLAYER_TEAM } from './ClientMatch';
 import { PLAYER_ENTITY_ID } from '../shared/combat/DamageSystem';
 import { MatchWorld } from './MatchWorld';
 import { GameScreens } from './GameScreens';
@@ -600,7 +599,8 @@ export class Game {
         // going to change, and the profile is written exactly once (S6.6). `bankProgression`
         // is idempotent, so a harness that re-enters SUMMARY cannot double-count.
         const banks = findMode(this.selection.modeId).banksProgress;
-        const report = match.bankProgression(result.winner === PLAYER_TEAM);
+        // "Did I win" is the server's team assignment, not the single-player constant.
+        const report = match.bankProgression(result.winner === match.localTeam);
         this.screens.showSummary(
           match,
           result,
@@ -756,6 +756,7 @@ export class Game {
         link: result.link,
         welcome: result.welcome,
         receivedAtMs: result.receivedAtMs,
+        pending: result.pending,
         displayName: join.displayName,
         wantRewindDebug: join.wantRewindDebug,
         onNewMatch: (welcome) => {
@@ -800,7 +801,11 @@ export class Game {
     try {
       // The new match, adopted *before* anything rebuilds — `buildWorld` reads the map and
       // mode straight off it, and the MATCH state's own enter handler is one of the callers.
-      this.server = { ...previous, welcome, receivedAtMs: performance.now() };
+      // `pending` is cleared rather than carried: it belongs to the drain that produced the
+      // *first* welcome, and replaying those frames into a new match would apply state from
+      // the previous one. A rotation's own welcome arrives through `NetClient.receive`, which
+      // never drops what follows it.
+      this.server = { ...previous, welcome, receivedAtMs: performance.now(), pending: undefined };
       this.teardownWorld({ keepConnection: true });
 
       if (this.state === 'MATCH') {
@@ -1153,12 +1158,17 @@ export class Game {
        * the match and `engine/` has no business knowing what a team is — it is given a cold
        * group and a hot one.
        */
-      const enemyTeam = PLAYER_TEAM === 'A' ? 'B' : 'A';
+      // From the side the *server* assigned, not the single-player constant: a networked gunner
+      // on team B had the thermal pass draw their own side hot and the enemy cold — the optic
+      // reading exactly backwards, in the one streak whose entire value is telling friend from
+      // foe.
+      const friendly = match.localTeam;
+      const enemyTeam = friendly === 'A' ? 'B' : 'A';
       this.renderer.renderGunship(
         this.scene,
         takeover,
         match.botRenderer.groupFor(enemyTeam),
-        match.botRenderer.groupFor(PLAYER_TEAM),
+        match.botRenderer.groupFor(friendly),
       );
     } else {
       this.renderer.render(this.scene, cam, this.viewmodel);

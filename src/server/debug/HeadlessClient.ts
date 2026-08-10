@@ -165,6 +165,16 @@ export class HeadlessClient {
     this.net.connect();
   }
 
+  /**
+   * Whether the server ever told this client its match was over.
+   *
+   * Assert on it **per match, not latched once** — a churn run plays several, and one silent
+   * ending among four is still the bug.
+   */
+  get sawMatchEnd(): boolean {
+    return this.net.sawMatchOver;
+  }
+
   /** One update. Call at roughly frame rate. */
   update(): void {
     const steps = this.net.update();

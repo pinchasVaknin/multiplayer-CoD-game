@@ -364,6 +364,19 @@ export class Match {
       deps.bus,
       deps.viewmodelConfig,
       deps.movementConfig.walkSpeed,
+      /**
+       * The **eighth** argument, and it is the whole fix.
+       *
+       * `WeaponSystem` defaults `sourceId` to `PLAYER_ENTITY_ID`, which is 0 — right in
+       * single-player, wrong the moment a server assigns an entity id. `Inventory` stamps that
+       * id onto `EV.WeaponSwapped` and the subscription filters on `identity.is(sourceId)`, so
+       * over the network the swap event announced entity 0, the filter rejected it, and
+       * `showSlot` never ran: the mechanics changed weapon and the model in your hands did not.
+       *
+       * Captured at construction rather than read per event, which is safe because a
+       * reassignment tears the world down and builds a fresh `Match` around the new identity.
+       */
+      this.identity.entityId,
     );
 
     this.melee = new Melee({
@@ -495,7 +508,7 @@ export class Match {
       columns: this.mode.getScoreboardColumns(),
       score: this.score,
       audio: deps.audio,
-      localTeam: PLAYER_TEAM,
+      localTeam: this.localTeam,
       roster: this.bots.roster,
       teamSize: deps.map.teamSize,
       freeForAll: deps.mode.freeForAll === true,
@@ -558,7 +571,7 @@ export class Match {
       hud: this.ui.hud,
       cfg: deps.equipmentConfig,
       tiers: deps.tiers,
-      localTeam: PLAYER_TEAM,
+      localTeam: this.localTeam,
       seed: deps.seed,
     });
 
@@ -582,7 +595,7 @@ export class Match {
       bots: this.bots,
       equipment: this.equipment.system,
       equipmentInventory: this.equipment.inventory,
-      localTeam: PLAYER_TEAM,
+      localTeam: this.localTeam,
       banksProgress: deps.banksProgress,
     });
 
@@ -637,7 +650,7 @@ export class Match {
       bus: deps.bus,
       scene: deps.scene,
       mode: this.mode,
-      localTeam: PLAYER_TEAM,
+      localTeam: this.localTeam,
     });
     this.mortarOverlay = new MortarOverlay({
       host: deps.uiHost,
@@ -732,6 +745,45 @@ export class Match {
 
   get isPlayerDead(): boolean {
     return this.playerDead;
+  }
+
+  /**
+   * The side the server put this client on; `PLAYER_TEAM` in single-player.
+   *
+   * A getter rather than the `deps.localTeam ?? PLAYER_TEAM` expression repeated at each use,
+   * because "which team am I" being answered by a constant is precisely how the alive counter
+   * came to label a team-B player's own side as the enemy.
+   */
+  get localTeam(): BotTeam {
+    return this.deps.localTeam ?? PLAYER_TEAM;
+  }
+
+  /**
+   * How many of a side are still standing, from whichever body source this match has.
+   *
+   * Single-player holds `Bot`s on a roster; a networked match holds `RemoteActor`s rebuilt from
+   * snapshots. A caller that wants a number should not have to know which — and
+   * `SearchAndDestroy.aliveCount` walks `ModeDeps.roster`, which on a networked client is
+   * **empty**, so it returned 0 for both sides for the whole match. The local player is counted
+   * separately because they are in neither list.
+   */
+  countAlive(team: BotTeam): number {
+    let n = 0;
+    if (this.isNetworked) {
+      const actors = this.deps.actors;
+      if (actors !== undefined) {
+        for (const actor of actors()) {
+          if (actor.team === team && actor.participating) n++;
+        }
+      }
+      // A client's own entity is not among its remote actors, so it is never double-counted.
+      if (this.localTeam === team && !this.playerDead) n++;
+      return n;
+    }
+    for (const c of this.bots.roster) {
+      if (c.team === team && c.participating) n++;
+    }
+    return n;
   }
 
   /**
@@ -1086,8 +1138,12 @@ export class Match {
     if (!this.playerDead && !this.mortarOverlay.isOpen) this.stepStreakInput(cmd);
     if (!this.playerDead) this.stepBombInteraction(cmd);
     this.stepInteractPose();
-    // The server owns when and where a body comes back (S4.15); the client is told.
+    // The server owns when and where a body comes back (S4.15); the client is told. But
+    // `stepPlayerRespawn` also *decrements the display timer*, and skipping the whole method
+    // left the death screen frozen on the number `onPlayerKilled` set — see
+    // `stepRespawnDisplay`.
     if (!this.isNetworked) this.stepPlayerRespawn();
+    else this.stepRespawnDisplay();
     this.stepLowHealthAudio();
 
     // The mode clock is a gameplay timer and runs on ticks like everything else (S4.1) —
@@ -1282,6 +1338,26 @@ export class Match {
     if (this.playerRespawnTimer > 0) return;
     if (!this.flow.respawnAllowed(this.localId)) return;
     this.respawnPlayer();
+  }
+
+  /**
+   * Count the death-screen timer down, and **only** that.
+   *
+   * `stepPlayerRespawn` does two things — it decrements the timer *and* it brings the body back
+   * — and over the network the second belongs to the server, so the whole method was skipped.
+   * The timer was therefore set once by `onPlayerKilled` and never moved: the death screen
+   * showed a frozen 4.5 for the entire wait and then the player simply reappeared. The wait was
+   * always correct; the only thing broken was the number describing it.
+   *
+   * Purely presentational, and clamped at zero rather than allowed to run negative: the
+   * authoritative "you are alive again" is the replicated `EFlag.Alive` arriving through
+   * `applyReplicatedSelf`, and this must never be mistaken for a second opinion about it. If the
+   * server is slower than the local estimate the display sits at zero and waits, which reads as
+   * "any moment now" — the honest thing for a client that does not decide.
+   */
+  private stepRespawnDisplay(): void {
+    if (!this.playerDead || this.playerRespawnTimer <= 0) return;
+    this.playerRespawnTimer = Math.max(0, this.playerRespawnTimer - DT);
   }
 
   /**
@@ -1490,6 +1566,32 @@ export class Match {
     hud.nextRequirement = next?.requirement ?? 0;
 
     this.fillObjectiveBanner(hud);
+    this.fillFreeForAllBanner();
+  }
+
+  /**
+   * Free-for-All shows the leader and you, not team A and team B.
+   *
+   * Driven from `ScoreSystem.rows`, which is populated on a networked client the same way the
+   * scoreboard is. Recomputed per frame rather than cached on a score event — it is a scan of
+   * ten rows on a screen that is already walking them for the scoreboard.
+   */
+  private fillFreeForAllBanner(): void {
+    const banner = this.ui.state.banner;
+    banner.ffa = this.deps.mode.freeForAll === true;
+    if (!banner.ffa) return;
+
+    let leader: { name: string; score: number } | null = null;
+    let self = 0;
+    for (const row of this.score.rows) {
+      if (row.entityId === this.localId) self = row.score;
+      if (leader === null || row.score > leader.score) {
+        leader = { name: row.displayName, score: row.score };
+      }
+    }
+    banner.leaderName = leader?.name ?? '';
+    banner.leaderScore = leader?.score ?? 0;
+    banner.selfScore = self;
   }
 
   /**
@@ -1509,9 +1611,11 @@ export class Match {
 
     const mode = this.mode;
     if (mode instanceof SearchAndDestroy) {
-      // Alive counts, top of screen, every round (M7 playtest).
-      hud.aliveFriendly = mode.aliveCount(PLAYER_TEAM);
-      hud.aliveEnemy = mode.aliveCount(PLAYER_TEAM === 'A' ? 'B' : 'A');
+      // Alive counts, top of screen, every round (M7 playtest). Counted here rather than by
+      // the mode, and against the side the server actually assigned rather than the constant.
+      const friendly = this.localTeam;
+      hud.aliveFriendly = this.countAlive(friendly);
+      hud.aliveEnemy = this.countAlive(friendly === 'A' ? 'B' : 'A');
       hud.showAlive = true;
 
       if (mode.bomb === 'PLANTED') {
@@ -1582,7 +1686,7 @@ export class Match {
         hud.interactFraction = zone.progress;
         hud.interactLabel = zone.contested
           ? 'CONTESTED'
-          : zone.owner === PLAYER_TEAM
+          : zone.owner === this.localTeam
             ? 'HELD'
             : 'CAPTURING';
         return;
@@ -1610,9 +1714,11 @@ export class Match {
    */
   private fillMinimapStreaks(): void {
     const map = this.ui.hud.minimap;
-    const uav = this.streaks.uavFor(PLAYER_TEAM);
+    // Whose UAV this is, and whose minimap is being scrambled, is "which side am I on".
+    const friendly = this.localTeam;
+    const uav = this.streaks.uavFor(friendly);
     map.sweepAngle = uav === null ? null : uav.sweepAngle;
-    map.scrambled = this.streaks.minimapScrambledFor(PLAYER_TEAM);
+    map.scrambled = this.streaks.minimapScrambledFor(friendly);
 
     for (const slot of map.contacts) slot.active = false;
     if (uav !== null) {
@@ -1642,7 +1748,11 @@ export class Match {
       const zone = this.mode.zones[i];
       const state = states[i];
       if (zone === undefined || state === undefined) continue;
-      state.owner = zone.owner === 'NONE' ? 'NONE' : zone.owner === PLAYER_TEAM ? 'FRIENDLY' : 'ENEMY';
+      // The constant is team A, so a networked player the server put on team B had every flag
+      // on their minimap coloured backwards: their own held zones read as enemy and the
+      // enemy's as theirs.
+      const friendly = this.localTeam;
+      state.owner = zone.owner === 'NONE' ? 'NONE' : zone.owner === friendly ? 'FRIENDLY' : 'ENEMY';
       state.progress = zone.progress;
       state.contested = zone.contested;
     }

@@ -55,6 +55,12 @@ export interface NetSessionDeps {
   readonly welcome: WelcomeInfo;
   /** When the `Welcome` landed. Seeds the clock. See `NetClient.adopt`. */
   readonly receivedAtMs: number;
+  /**
+   * Frames the handshake drained behind the `Welcome`, replayed by `start`.
+   *
+   * Ordinarily empty. See `HandshakeResult.pending` for the reconnect case that is not.
+   */
+  readonly pending?: readonly Uint8Array[];
   readonly displayName: string;
   readonly bus: GameBus;
   readonly controller: PlayerController;
@@ -292,6 +298,13 @@ export class NetSession {
    */
   start(): void {
     this.client.adopt(this.deps.welcome, this.deps.receivedAtMs);
+    // Anything that shared a batch with the `Welcome` was dequeued before this client existed.
+    // Replayed after `adopt`, so it lands on a joined client rather than a connecting one.
+    const pending = this.deps.pending;
+    if (pending !== undefined && pending.length > 0) {
+      log.info(`replaying ${pending.length} frame(s) that arrived behind the welcome.`);
+      this.client.replay(pending);
+    }
     log.info(`joined ${this.link.remoteAddress} as ${this.deps.displayName}`);
   }
 

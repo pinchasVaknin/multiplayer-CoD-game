@@ -49,6 +49,14 @@ export interface WsServerOptions {
   readonly tlsKeyPath?: string | undefined;
   /** Applied to every new connection. The debug endpoint can change it per link later. */
   readonly conditions?: NetConditions | undefined;
+  /**
+   * Simultaneous connections from one address. Defaults to `MAX_CONNECTIONS_PER_IP`.
+   *
+   * Harnesses run every headless client from loopback, and against the shipped cap a
+   * multi-client run spends its time proving that the cap works rather than that the flow does.
+   * It stays a cap in every case — only *which* cap is configurable.
+   */
+  readonly maxConnectionsPerIp?: number | undefined;
   readonly onConnection: (link: WsLink) => void;
 }
 
@@ -244,7 +252,7 @@ export class WsServer {
     this.wss.on('connection', (socket, req) => {
       const ip = normaliseIp(req.socket.remoteAddress ?? 'unknown');
       const open = this.perIp.get(ip) ?? 0;
-      if (open >= MAX_CONNECTIONS_PER_IP) {
+      if (open >= (this.opts.maxConnectionsPerIp ?? MAX_CONNECTIONS_PER_IP)) {
         log.warn(`refusing ${ip}: ${open} connections already open`);
         try {
           socket.close(1013, 'too many connections');

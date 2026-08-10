@@ -4453,3 +4453,106 @@ find until a playtest.
 - **The adaptive jitter buffer is a delta, not a level.** `InputBuffer.takeStarvation` returns
   repeats since the last read; the smoothing lives on the client. A level decayed per read at
   20 Hz was measured to be back at zero before the client ever saw it.
+
+---
+
+# M10.5 — Tier 1 fixes carried back from M11
+
+`M10-fixes-handover.md` carried 21 fixes out of the discarded M11 matchmaking work. All 21 are
+applied on top of `m10-complete` (`afe7399`). Tier 2 and Tier 3 are deliberately untouched.
+
+## The harness baseline moved, and this records it deliberately
+
+Fix #2 (bots ignore the pre-match freeze) alters the server sim from tick 180 onward. This is a
+**deliberate** baseline change bringing the server into parity with the client, which has
+assigned `bots.inputFrozen` since M7. It was isolated before being recorded: the other six
+server-sim fixes were applied first and measured **bit-identical** to `m10-complete` across all
+five matches, so everything below is attributable to #2 alone.
+
+`npm run harness` — 5 matches, TDM on mp_foundry, 10 bots, tier MIX, seeds 1-5:
+
+| | match 1 | RECRUIT hit rate | completed |
+|---|---|---|---|
+| `m10-complete` | A wins 75-46, 13705 ticks | 0.079 | 5/5 |
+| fixes 1,3,11,12,13,20 | A wins 75-46, 13705 ticks | 0.079 | 5/5 |
+| **+ fix #2 (M10.5)** | **A wins 75-53, 16144 ticks** | **0.066** | **5/5** |
+
+The M10.5 row is *identical* to M11's post-fix record, which the handover expected to differ.
+It does not: the sim is deterministic and the rollback is clean, so the same change on the same
+seeds produces the same match. That is a stronger result than the handover predicted and is
+worth keeping as a determinism check — if a future M10-lineage change makes seed 1 stop landing
+on `75-53 / 16144 / 0.066`, something in the shared simulation moved.
+
+Groups 3-5 (server net, shared, client) were measured after application and are also
+bit-identical to the M10.5 row: none of them touch the bot-only sim.
+
+## Verified, not asserted
+
+- **#9, the pulled cable.** `netHarness --disconnect hard` against a live `serve.js`. With the
+  fix the server logs `connection from 127.0.0.1 closed: connection lost` — `close()` ran, so
+  `onLeave` ran. With `Session.ts` reverted to `m10-complete` and everything else in place, that
+  line is **absent**: the entity still disappears, but via `GameServer.reap()`, which salvages
+  the seat without ever calling `onLeave`. That is why M10 and Gate A passed — the *entity*
+  consequence was covered by a second path, and every other consequence of a disconnect was not.
+  The probe was watched going red before being believed.
+- **#11, `smallerTeam`.** Two headless clients now seat as entity 1 on **A** and entity 2 on
+  **B**. Before the fix both went to A.
+- **#20's log line** is live: `HEADLESS1 seated as entity 1 on team A — ar_carbine/pistol_talon,
+  perks none (no loadout sent; server defaults)`.
+- `npm run check` is clean: boundaries ok (263 files), all three typecheck targets.
+
+## Known gaps, carried forward deliberately
+
+1. **#20 has no transport at M10 and the divergence is therefore still open.** The server-side
+   half is in — `NetPlayerDeps.perks`, `controller.speedScale`, the `loadouts` map, `perksOf`,
+   `loadoutOf`, and the Dead Silence hook — and `addPlayer(name, loadout?)` accepts a class.
+   **Nothing sends one.** M11 carried it over `MsgC.Loadout`, a master-scoped message that died
+   with the rollback. Until the Skirmish flow gives the client's class a path to the server
+   before `addPlayer`, a browser client running the shipped ASSAULT class still predicts 7%
+   faster than the server simulates. The three rules in the handover (send ids not resolved
+   numbers, validate at the boundary and never throw, defer mid-match class changes) apply to
+   whatever transport replaces it.
+2. **#12, #13 and `replacePlayerWithBot` have no callers.** They are forward-looking by design —
+   the handover says so — but `BotDirector.removeOne` did not exist at `m10-complete` and had to
+   be written for `removeBotForSeat` to compile. It releases the roster slot, the id map, the
+   `DamageSystem` registration and the cover reservation; `ServerMatch.removeBotForSeat` adds
+   the `Rewind` unregister that `shared/` cannot do. **Route all bot removal through
+   `removeBotForSeat`, never `bots.removeOne`.**
+3. **`Range.ts` was left on the old two-clock seed.** The handover names five modes for #19 and
+   the range is not one of them, but `Range.checkWinCondition` decides on its own `ticksLeft`
+   exactly as the other five do — so a `roundSecondsOverride` would shorten `MatchFlow`'s clock
+   and not the range's. One line, and the same fix, if a harness ever runs the range.
+4. **`MatchEquipment` still throws with `PLAYER_ENTITY_ID`.** Line 148 passes the constant as
+   the thrower's source id. That is the *identity* bug (M10's `LocalIdentity`), not the *team*
+   bug this pass audited, and it is out of scope here — but a networked player's grenades are
+   attributed to entity 0.
+
+## The `PLAYER_TEAM` audit found eight more
+
+The handover's red callout — "fixes 5, 15 and 16 are one bug in three places" — asks for a grep
+of `PLAYER_TEAM` across `src/client/` afterwards, with every remaining hit justified. Eight
+could not be justified, all of them the same constant standing in for a server assignment:
+
+| Site | What was backwards for a team-B player |
+|---|---|
+| `ClientMatch` → `MatchHud.localTeam` | the friendlies list and hit attribution |
+| `ClientMatch` → `MatchEquipment.localTeam` | whose grenades are friendly |
+| `ClientMatch` → `MatchMeta.localTeam` | streak ownership |
+| `ClientMatch` → `MatchObjectives.localTeam` | capture-ring and dog-tag colours |
+| `ClientMatch.fillObjectiveBanner` | the Domination HELD / CAPTURING prompt |
+| `ClientMatch.fillMinimapStreaks` | whose UAV sweeps, whose minimap is scrambled |
+| `Game.bankProgression` | whether the match counted as a win, for XP |
+| `GameScreens.showSummary` | victory or defeat on the summary screen |
+
+All eight now go through `Match.localTeam`, which is a no-op in single-player. The remaining
+hits are the constant's own declaration, the `deps.localTeam ?? PLAYER_TEAM` fallbacks that
+define it, and `respawnPlayer`'s `selectSpawn` — a single-player-only path, since the server
+owns respawn over the network.
+
+## Still needs a human
+
+Nothing headless can see the rest. The handover's playtest checklist stands unchanged: the
+respawn timer counting down, respawned bodies not stuck flat, respawns cutting rather than
+sliding, the weapon-swap model, the FFA banner, the S&D alive counter, Domination colours and
+the thermal pass **as a team-B player**, and a real single-click test on any periodically
+rebuilt UI.

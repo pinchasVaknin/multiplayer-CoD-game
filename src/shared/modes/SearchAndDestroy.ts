@@ -281,7 +281,7 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
 
   override onRoundStart(round: number): void {
     this.roundIndex = round;
-    this.ticksLeft = Math.round(this.config.roundSeconds / DT);
+    this.ticksLeft = this.roundTicks(this.config.roundSeconds);
     this.bomb = 'CARRIED';
     this.plantedSite = null;
     this.bombTimer = 0;

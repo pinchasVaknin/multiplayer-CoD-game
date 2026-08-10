@@ -85,6 +85,41 @@ export class EventBus<M extends EventMap> {
     return n;
   }
 
+  /**
+   * Live listeners across every type. The leading indicator for teardown leaks.
+   *
+   * A process that creates and destroys matches continuously turns any per-match leak into
+   * unbounded growth, and a bus that only grows is invisible until hour six. Heap moves for a
+   * dozen reasons that have nothing to do with a leak — GC timing, a pool not yet exercised,
+   * the allocator's high-water mark — so a flat heap is weak evidence. A subscription count
+   * that returns to the same integer after every match cycle is strong evidence, because it can
+   * only be wrong one way.
+   *
+   * Tombstones are skipped, so this counts what would actually be *dispatched to* rather than
+   * what is still occupying a slot. A compacted-away listener costs nothing and does not fire.
+   */
+  get subscriptionCount(): number {
+    let n = 0;
+    for (const list of this.slots.values()) {
+      for (let i = 0; i < list.length; i++) if (list[i] !== null) n++;
+    }
+    return n;
+  }
+
+  /** Types with at least one live listener. Paired with `subscriptionCount` when it climbs. */
+  get subscribedTypes(): number {
+    let n = 0;
+    for (const [, list] of this.slots) {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] !== null) {
+          n++;
+          break;
+        }
+      }
+    }
+    return n;
+  }
+
   /** Drop every subscription. Used when tearing a match down. */
   clear(): void {
     if (this.depth !== 0) {

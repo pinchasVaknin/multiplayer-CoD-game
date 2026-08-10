@@ -46,11 +46,26 @@ const log = logger('handshake');
  */
 
 export interface HandshakeResult {
-  /** Open, joined, and carrying no unread frames the caller needs. */
   readonly link: BrowserLink;
   readonly welcome: WelcomeInfo;
   /** When the `Welcome` landed, for seeding the clock honestly. See `NetClient.adopt`. */
   readonly receivedAtMs: number;
+  /**
+   * Frames that arrived **after** the `Welcome` but in the same drain.
+   *
+   * `BrowserLink.poll` hands the whole queue to its callback and then clears it, so anything
+   * behind the `Welcome` in the same batch has already been dequeued by the time the handshake
+   * resolves — and this used to drop them on the floor.
+   *
+   * Harmless for a fresh connect: nothing follows a `Welcome` for a client that has not asked
+   * for anything yet. **A reconnect breaks that assumption**, because the server reseats a
+   * returning player and sends the seat assignment immediately after, so the two land
+   * microseconds apart and reliably share a batch.
+   *
+   * Carried out rather than discarded, and replayed into the session the moment it exists.
+   * Ordinarily empty.
+   */
+  readonly pending: readonly Uint8Array[];
 }
 
 export interface HandshakeOptions {
@@ -99,12 +114,12 @@ export async function handshake(options: HandshakeOptions): Promise<HandshakeRes
   link.send(writeHello(new ByteWriter(256), name));
 
   try {
-    const { welcome, receivedAtMs } = await awaitWelcome(link);
+    const { welcome, receivedAtMs, pending } = await awaitWelcome(link);
     log.info(
       `server is running ${welcome.modeId} on ${welcome.mapId}; ` +
         `we are entity ${welcome.entityId} on team ${welcome.team}.`,
     );
-    return { link, welcome, receivedAtMs };
+    return { link, welcome, receivedAtMs, pending };
   } catch (err) {
     link.close('handshake failed');
     throw err;
@@ -118,11 +133,16 @@ export async function handshake(options: HandshakeOptions): Promise<HandshakeRes
  * this happens between leaving the menu and building the world. 16 ms is a frame's worth,
  * which keeps the join feeling immediate without spinning.
  */
-function awaitWelcome(link: BrowserLink): Promise<{ welcome: WelcomeInfo; receivedAtMs: number }> {
+function awaitWelcome(
+  link: BrowserLink,
+): Promise<{ welcome: WelcomeInfo; receivedAtMs: number; pending: Uint8Array[] }> {
   return new Promise((resolve, reject) => {
     const reader = new ByteReader(new Uint8Array(0));
     const startedAt = performance.now();
     let settled = false;
+
+    /** Frames behind the `Welcome` in the same drain. See `HandshakeResult.pending`. */
+    const pending: Uint8Array[] = [];
 
     const finish = (fn: () => void): void => {
       if (settled) return;
@@ -142,7 +162,16 @@ function awaitWelcome(link: BrowserLink): Promise<{ welcome: WelcomeInfo; receiv
       }
 
       link.poll((bytes) => {
-        if (settled) return;
+        /**
+         * Already have the welcome: keep the rest of this batch rather than discarding it.
+         *
+         * Copied because `poll` clears its queue immediately after this callback returns and
+         * the underlying buffers are the link's to reuse.
+         */
+        if (settled) {
+          pending.push(bytes.slice());
+          return;
+        }
         reader.reuse(bytes);
         const msg = decodeHeader(reader);
 
@@ -175,7 +204,13 @@ function awaitWelcome(link: BrowserLink): Promise<{ welcome: WelcomeInfo; receiv
               serverMs: msg.serverMs,
               snapshotHz: msg.snapshotHz,
             };
-            finish(() => resolve({ welcome, receivedAtMs: performance.now() }));
+            /**
+             * `settled` is set by `finish` *before* the resolve runs, so any frame still to be
+             * delivered in this same `poll` batch takes the `pending` branch above rather than
+             * the switch. That ordering is the whole mechanism.
+             */
+            const receivedAtMs = performance.now();
+            finish(() => resolve({ welcome, receivedAtMs, pending }));
             return;
           }
           case 'reject':

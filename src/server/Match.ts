@@ -21,7 +21,13 @@ import { DT } from '../shared/core/Loop';
 import { logger } from '../shared/core/Log';
 import type { GameMode, MatchResult } from '../shared/modes/GameMode';
 import { MatchFlow } from '../shared/modes/MatchFlow';
+import {
+  resolveLoadout,
+  type LoadoutSlot,
+  type ResolvedLoadout,
+} from '../shared/meta/Loadouts';
 import { findMap, findMode, type MapEntry, type ModeEntry } from '../shared/modes/ModeRegistry';
+import { describePerkState, NO_PERKS, type PerkState } from '../shared/perks/PerkState';
 import { MAX_PLAYERS } from '../shared/net/Protocol';
 import { DEFAULT_HEALTH_CONFIG, type HealthConfig } from '../shared/player/Health';
 import {
@@ -79,6 +85,14 @@ export interface ServerMatchOptions {
   readonly tier: BotTier | 'MIX';
   /** Deterministic seed. The same seed replays the same match. */
   readonly seed: number;
+  /**
+   * The master's absolute tick at construction. Defaults to 0 for the harnesses.
+   *
+   * The match does not use it as a clock. It exists so everything indexed by absolute tick is
+   * stamped correctly **before the first `step`** — players seated during LOADING spawn then, so
+   * their rig history is written before `step` has had a chance to say what tick it is.
+   */
+  readonly startTick?: number;
 }
 
 export interface ServerMatchResult {
@@ -131,14 +145,33 @@ export class ServerMatch {
   /** Events produced this tick, for replication to every client (S4.15). */
   readonly outgoing = new EventCollector();
 
+  /**
+   * Each seated human's resolved class, by entity id.
+   *
+   * Kept alongside the player rather than on it because the consumers take a *predicate over an
+   * entity id* — and those are asked about bots too, which have no loadout.
+   */
+  private readonly loadouts = new Map<number, ResolvedLoadout | null>();
+
   private readonly spectator: Spectator;
   private readonly unsubscribe: Array<() => void> = [];
   private result: MatchResult | null = null;
   private ticks = 0;
+
+  /**
+   * The **absolute** tick this match was last stepped on.
+   *
+   * Distinct from `ticks`, which counts steps this match has taken. At M10 the one match is
+   * created at tick 0 and stepped every tick thereafter, so the two are equal forever and
+   * nothing can tell them apart. A flow that creates a match part-way through process uptime
+   * makes them disagree permanently, and `Rewind` is indexed by the absolute one.
+   */
+  private currentTick = 0;
   private readonly spawnChoice: SpawnChoice = makeSpawnChoice();
   private nextPlayerId = HUMAN_ID_BASE;
 
   constructor(private readonly options: ServerMatchOptions) {
+    this.currentTick = options.startTick ?? 0;
     this.mapEntry = findMap(options.mapId);
     this.modeEntry = findMode(asModeId(options.modeId));
 
@@ -170,7 +203,17 @@ export class ServerMatch {
       player: this.spectator,
       seed: options.seed,
     });
-    this.bots.freeForAll = this.modeEntry.id === 'FFA';
+    /**
+     * Free-for-All, read off the registry rather than compared against the id.
+     *
+     * That is what `ClientMatch` does, and it is the difference between one fact and two.
+     * `friendlyFire` went with it since M7 on the client and was never set here: FFA keeps the
+     * two-team substrate internally, so half the roster was hostile, hunted by the AI, and
+     * **immune** — `DamageSystem.apply` returned 0 for every shot at them and `Ballistics`
+     * skipped their rigs entirely, so rounds passed straight through.
+     */
+    this.bots.freeForAll = this.modeEntry.freeForAll === true;
+    if (this.modeEntry.freeForAll === true) this.damage.friendlyFire = true;
 
     // ---- the match ---------------------------------------------------------
     this.score = new ScoreSystem(this.bus);
@@ -196,6 +239,10 @@ export class ServerMatch {
       allowed: (id) => this.flow.respawnAllowed(id),
       noted: (id) => this.flow.noteRespawn(id),
     };
+
+    // Dead Silence, server-side. The client half has existed since M6 and decided nothing over
+    // the network, because the bots that hear the footsteps live here and this hook was never set.
+    this.bots.silentFootsteps = (entityId) => !this.perksOf(entityId).audibleFootsteps;
 
     this.unsubscribe.push(
       this.bus.on(EV.MatchEnded, () => {
@@ -272,6 +319,7 @@ export class ServerMatch {
    * at M10 — the symmetry S4.15 is built on.
    */
   step(tickIndex: number): void {
+    this.currentTick = tickIndex;
     this.outgoing.begin();
 
     // Humans first, then bots. The order matters for exactly one reason and it is worth
@@ -280,6 +328,21 @@ export class ServerMatch {
     // every human one tick of free reaction time over every bot, forever.
     for (const player of this.players) this.stepPlayer(player, tickIndex);
 
+    /**
+     * The bots get the same freeze the humans have had since M10.
+     *
+     * `stepPlayer` has passed `inputFrozen` since M10 and the bots never received it, so during
+     * WARMUP and ROUND_END the humans stood still and the bots played on — sprinting off their
+     * spawns and, in Search & Destroy, starting the round before the round started.
+     *
+     * The mechanism already existed and the server simply never set it: `ClientMatch` has
+     * assigned `bots.inputFrozen` since M7, and `Bot.advance` neuters the movement axes and the
+     * trigger before the command reaches the controller — while still letting the bot
+     * **perceive**, so that when the round goes live it acts on a world it has been watching
+     * rather than waking up blind. Skipping `simulate()` outright would skip the perception too,
+     * which is why this is the parity port and not the cheaper one.
+     */
+    this.bots.inputFrozen = this.inputFrozen;
     // `sampledAtMs` is instrumentation only and no simulation reads it; ticks are the clock.
     this.bots.simulate(tickIndex, tickIndex * DT * 1000);
     this.flow.simulate(tickIndex);
@@ -356,7 +419,7 @@ export class ServerMatch {
    * match that started 5v5 and gains two people does not end up 7v5. S9 puts team selection
    * in M11's lobby; until then, balance is the only sensible policy and it is one line.
    */
-  addPlayer(displayName: string): NetPlayer | null {
+  addPlayer(displayName: string, loadout?: LoadoutSlot | null): NetPlayer | null {
     if (this.players.length >= MAX_PLAYERS) return null;
 
     const team = this.smallerTeam();
@@ -369,6 +432,16 @@ export class ServerMatch {
       return null;
     }
 
+    /**
+     * The *same* shared `resolveLoadout` the loadout editor calls per keystroke, so the weapon
+     * this player holds on the server is built from the identical base def, attachment chain and
+     * perk modifiers as the one they are looking down.
+     *
+     * Absent — any client that has not sent one yet — it falls back to the M10 pair, so nothing
+     * that worked before changes.
+     */
+    const resolved = loadout == null ? null : resolveLoadout(loadout, 0);
+
     const player = new NetPlayer(entityId, displayName, team, {
       world: this.world,
       bus: this.bus,
@@ -376,11 +449,11 @@ export class ServerMatch {
       movement: this.movementConfig,
       healthConfig: this.healthConfig,
       viewmodelConfig: this.viewmodelConfig,
-      // The default loadout. S9 puts Create-a-Class over the network in M11; this milestone
-      // is "two people shooting at each other correctly", and that needs one rifle each.
-      weaponDef: AR_DEFAULT,
-      secondaryDef: PISTOL_DEFAULT,
+      weaponDef: resolved?.primary ?? AR_DEFAULT,
+      secondaryDef: resolved?.secondary ?? PISTOL_DEFAULT,
+      perks: resolved?.perkState ?? NO_PERKS,
     });
+    this.loadouts.set(entityId, resolved);
 
     this.players.push(player);
     this.damage.register(player);
@@ -389,8 +462,30 @@ export class ServerMatch {
     this.score.register(entityId, displayName, team);
 
     this.spawnPlayer(player);
-    log.info(`${displayName} seated as entity ${entityId} on team ${team}.`);
+    // The class is now a thing that can be wrong, and "what did the server think this player
+    // brought" is the first question when a duel looks wrong.
+    const perks = describePerkState(this.perksOf(entityId));
+    log.info(
+      `${displayName} seated as entity ${entityId} on team ${team} — ` +
+        `${player.weapons.definition.id}/${resolved?.secondary.id ?? PISTOL_DEFAULT.id}, perks ${perks}` +
+        (resolved === null ? ' (no loadout sent; server defaults)' : ''),
+    );
     return player;
+  }
+
+  /**
+   * The perks an entity is carrying. `NO_PERKS` for bots and for anyone without a loadout.
+   *
+   * Bots deliberately get the neutral state rather than a special case: "a bot has no loadout"
+   * is already what `NO_PERKS` means.
+   */
+  perksOf(entityId: number): PerkState {
+    return this.loadouts.get(entityId)?.perkState ?? NO_PERKS;
+  }
+
+  /** The resolved class an entity brought, or null. */
+  loadoutOf(entityId: number): ResolvedLoadout | null {
+    return this.loadouts.get(entityId) ?? null;
   }
 
   /**
@@ -410,6 +505,7 @@ export class ServerMatch {
     this.players.splice(at, 1);
     this.damage.unregister(entityId);
     this.rewind.unregister(entityId);
+    this.loadouts.delete(entityId);
     const rosterAt = this.bots.roster.indexOf(player);
     if (rosterAt >= 0) this.bots.roster.splice(rosterAt, 1);
 
@@ -425,6 +521,58 @@ export class ServerMatch {
   }
 
   /**
+   * Take a bot off the roster to make room for a human.
+   *
+   * Not just `bots.removeOne`: the director cannot unregister from `Rewind` (server-only), so
+   * `populate()` registered the bot here and nothing ever unregistered it. **Route all bot
+   * removal through this**, never `bots.removeOne` directly.
+   *
+   * This is not a hit-registration bug and the distinction matters — `DamageSystem` no longer
+   * holds the bot, so no ray can resolve against it. What survives is a phantom in the
+   * lag-compensation path: `Rewind.record` writes its frozen pose every tick forever, and every
+   * subsequent `begin` saves, rewinds and restores a rig nobody can shoot, inflating `moved` and
+   * `missed`. It corrupts the instrument rather than the game.
+   */
+  removeBotForSeat(team: BotTeam): boolean {
+    const bot = this.bots.removeOne(team);
+    if (bot === null) return false;
+    this.rewind.unregister(bot.entityId);
+    return true;
+  }
+
+  /**
+   * Hand a leaver's seat to a fresh bot, so their side is not left a body down.
+   *
+   * In Search & Destroy, where `anyAlive` decides the round and one life means nobody comes
+   * back, the last human on a team disconnecting **ends the round for everybody** — scored as an
+   * elimination nobody achieved.
+   *
+   * The replacement spawns fresh rather than inheriting the body: a bot taking over a corpse
+   * mid-round would be a body that died and is now alive with no spawn serial, which every
+   * client renders as a corpse standing up.
+   */
+  replacePlayerWithBot(entityId: number): boolean {
+    const player = this.getPlayer(entityId);
+    if (player === undefined) return false;
+    const team = player.team;
+    this.removePlayer(entityId);
+
+    const mix: readonly BotTier[] = this.mapEntry.tierMix;
+    const tier = mix[this.bots.bots.length % Math.max(mix.length, 1)] ?? 'REGULAR';
+    const bot = this.bots.addOne(team, tier);
+    if (bot === null) {
+      log.warn(`no bot could replace entity ${entityId} on team ${team} — the side is a body down.`);
+      return false;
+    }
+    this.score.register(bot.entityId, bot.displayName, bot.team);
+    // Bots are rewound too — a hole here is a shot that silently resolves against the present.
+    this.rewind.register(bot);
+    this.rewind.resetAt(bot.entityId, this.currentTick);
+    log.info(`entity ${entityId} left; ${bot.displayName} took over on team ${team}.`);
+    return true;
+  }
+
+  /**
    * Anybody on the roster by id — bot, human or the spectator seat.
    *
    * Used to find where a killing round came from, so a death or a flinch leans the right
@@ -436,8 +584,24 @@ export class ServerMatch {
     return undefined;
   }
 
-  /** Side with fewer participants, counting bots. Ties go to A. */
+  /**
+   * Which side a joining human goes on: **fewer humans first**, then fewer bodies.
+   *
+   * Bots are interchangeable; humans are the thing a player notices being on the wrong side of.
+   * Counting the whole roster and breaking ties toward A is correct arithmetic and the wrong
+   * question — a seat is granted and then a bot is removed *from the same side*, restoring the
+   * body count to what it was, so the next joiner finds the identical tie and is sent to A as
+   * well. Measured on a four-human TDM backfill: entities 1, 2, 3 and 4 all on team A.
+   */
   private smallerTeam(): BotTeam {
+    let humansA = 0;
+    let humansB = 0;
+    for (const p of this.players) {
+      if (p.team === 'A') humansA++;
+      else humansB++;
+    }
+    if (humansA !== humansB) return humansA < humansB ? 'A' : 'B';
+
     let a = 0;
     let b = 0;
     for (const c of this.bots.roster) {
@@ -474,8 +638,12 @@ export class ServerMatch {
     const c = this.spawnChoice;
     player.spawn(c.x, c.y, c.z, c.yaw);
     // Backfill the whole history with the spawn pose, so a shot rewound into the window
-    // before this player existed cannot resolve against a stale or origin rig.
-    this.rewind.resetAt(player.entityId, this.ticks);
+    // before this player existed cannot resolve against a stale or origin rig. Stamped with
+    // the **absolute** tick: `Rewind.record` is called from `step` with that one, and
+    // `RigHistory` validates a slot by the tick that wrote it — so a history stamped with a
+    // match-relative index is a history whose every slot fails its own validity check, and
+    // lag compensation quietly declines to apply.
+    this.rewind.resetAt(player.entityId, this.currentTick);
   }
 
   /** Bring a dead player back once their timer and the mode's gate both allow it. */

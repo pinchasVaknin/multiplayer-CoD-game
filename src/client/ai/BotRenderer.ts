@@ -127,6 +127,31 @@ export class BotRenderer {
       seen.flinch = v.flinchSerial;
       mesh.flinch(v.flinchDirX, v.flinchDirZ);
     }
+
+    /**
+     * The authoritative bit has the last word.
+     *
+     * Both branches above are edge-triggered, and over the network **both edges routinely
+     * arrive in the same frame**: snapshots are delta-compressed at 20 Hz against a 60 Hz sim,
+     * so a body that died and respawned between two snapshots presents a changed death serial
+     * *and* a changed spawn serial at once. With the death check second the mesh ends up
+     * face-down on a player who is alive, running around and shooting.
+     *
+     * Reordering cannot fix it — spawn-then-die inside one frame is equally possible and would
+     * leave a corpse standing up. The serials carry no ordering relative to *each other*, so no
+     * order is right. `participating` — `EFlag.Alive` off the newest snapshot — does.
+     *
+     * The animations stay edge-triggered for their *effects* (fall direction, variant) and the
+     * final state is reconciled against the fact. Single-player reaches this with the same
+     * `Combatant.participating` it always had, so the two paths agree by construction rather
+     * than by coincidence.
+     */
+    if (bot.participating && mesh.isDying) {
+      mesh.endDeath();
+      mesh.setVisible(true);
+    } else if (!bot.participating && !mesh.isDying) {
+      mesh.beginDeath(v.deathDirX, v.deathDirZ, v.deathVariant);
+    }
   }
 
   /** Only walked when the counts disagree, which is a roster change and not a frame event. */

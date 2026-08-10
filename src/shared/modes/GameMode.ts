@@ -2,6 +2,7 @@ import type { Combatant } from '../ai/Combatant';
 import type { HitZone } from '../combat/HitboxRig';
 import type { PlayerScore, ScoreSystem, ScoreTeam } from '../combat/ScoreSystem';
 import type { GameBus } from '../core/Events';
+import { DT } from '../core/Loop';
 import type { MapDef } from '../world/maps/types';
 
 /**
@@ -86,6 +87,22 @@ export interface ModeDeps {
    * itself — objective placement is map data, like everything else about a map.
    */
   readonly mapDef: MapDef;
+  /**
+   * Shorten this mode's round, seconds. Harness only.
+   *
+   * There are **two** match clocks and this is the seam between them. `MatchFlow` counts
+   * `ticksRemaining` down — that is what the HUD shows and what the snapshot header replicates
+   * — but every mode also keeps its own `ticksLeft`, seeded from its own config, and it is the
+   * mode's clock that `checkWinCondition` reads to decide a match on time. They agree today
+   * only because both are seeded from the same authored number. A harness that shortened only
+   * `MatchFlow`'s clock got a HUD that hit zero and a match that carried on for another nine
+   * minutes.
+   *
+   * Both are overridden from this one value, so they cannot be shortened apart. Left as two
+   * clocks deliberately: collapsing them means changing how all five modes decide a time limit,
+   * and the shared simulation is verified and should be extended, not rewritten.
+   */
+  readonly roundSecondsOverride?: number | undefined;
 }
 
 export abstract class GameMode {
@@ -123,6 +140,16 @@ export abstract class GameMode {
 
   constructor(deps: ModeDeps) {
     this.deps = deps;
+  }
+
+  /**
+   * How long this mode's round runs, in ticks. The authored length unless a harness said
+   * otherwise. See `ModeDeps.roundSecondsOverride` for why both clocks read this.
+   */
+  protected roundTicks(authoredSeconds: number): number {
+    const override = this.deps.roundSecondsOverride;
+    const seconds = override !== undefined && override > 0 ? override : authoredSeconds;
+    return Math.round(seconds / DT);
   }
 
   abstract onSpawn(entity: Entity): void;

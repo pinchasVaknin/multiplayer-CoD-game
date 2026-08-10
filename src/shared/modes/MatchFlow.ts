@@ -112,6 +112,8 @@ export interface MatchFlowDeps {
    * networked event and a local one to be indistinguishable.
    */
   readonly authoritative?: boolean;
+  /** Shorten a round, for harnesses only. Unset everywhere a player is involved. */
+  readonly roundSecondsOverride?: number | undefined;
 }
 
 const evMatchStarted = { modeId: '', modeName: '', mapId: '', mapName: '', roundsToWin: 1 };
@@ -305,13 +307,26 @@ export class MatchFlow {
     return this.swapped;
   }
 
+  /**
+   * How long a round is. The mode's answer, unless a harness said otherwise.
+   *
+   * **One accessor rather than two call sites reading the same field**, so the override cannot
+   * apply to the first round and not to subsequent ones — which is exactly the bug two
+   * independent reads would produce in Search & Destroy, presenting as "the soak hangs after
+   * round one".
+   */
+  private roundSeconds(): number {
+    const override = this.deps.roundSecondsOverride;
+    return override !== undefined && override > 0 ? override : this.deps.mode.roundSeconds;
+  }
+
   /** Begin the match. Announces itself, then counts the warm-up down. */
   start(): void {
     const mode = this.deps.mode;
     this.phase = 'WARMUP';
     this.roundIndex = 1;
     this.phaseTicks = 0;
-    this.ticksRemaining = Math.round(mode.roundSeconds / DT);
+    this.ticksRemaining = Math.round(this.roundSeconds() / DT);
     this.cuesFired = 0;
     this.outcome = null;
     this.livesUsed.clear();
@@ -472,7 +487,7 @@ export class MatchFlow {
     this.roundIndex++;
     if (this.deps.mode.swapSidesAfterRound === this.roundIndex - 1) this.swapSides();
 
-    this.ticksRemaining = Math.round(this.deps.mode.roundSeconds / DT);
+    this.ticksRemaining = Math.round(this.roundSeconds() / DT);
     this.cuesFired = 0;
     this.livesUsed.clear();
     this.deps.score.resetRound();
