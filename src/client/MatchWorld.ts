@@ -423,6 +423,17 @@ export class MatchWorld {
         this.match.applyReplicatedStreaks(view);
       };
 
+      /**
+       * Grenades and smoke (Gate B, §8.24).
+       *
+       * Broadcast rather than per recipient — a grenade has no secrets — and the split between
+       * "mine, predicted" and "theirs, replicated" happens inside the match, which is the only
+       * place that knows which entity id is this client's.
+       */
+      net.onProjectiles = (projectiles, smoke) => {
+        this.match.applyReplicatedProjectiles(projectiles, smoke);
+      };
+
       net.onAuthoritativeState = (header) => {
         this.divergence.check(
           header,

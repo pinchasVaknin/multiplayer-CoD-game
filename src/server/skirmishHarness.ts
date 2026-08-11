@@ -84,6 +84,8 @@ interface HarnessOptions {
    * so the gunship kept flying with an owner that no longer existed.
    */
   readonly dropGunner: boolean;
+  /** Have every client throw a lethal every N ticks, or 0 never (§8.24). */
+  readonly throwEveryTicks: number;
 }
 
 /**
@@ -129,7 +131,15 @@ const LIGHTWEIGHT_CLASS: NetLoadout = {
   primary: { weaponId: 'ar_carbine', attachments: [], camo: null },
   secondary: { weaponId: 'pistol_talon', attachments: [], camo: null },
   lethal: 'frag',
-  tactical: 'flashbang',
+  /**
+   * Smoke rather than a flashbang, deliberately (§8.24, §6.8).
+   *
+   * A flashbang spawns no cloud, so a harness fielding one leaves `applyReplicatedSmoke` and the
+   * smoke half of `MsgS.Projectiles` unmeasured — and smoke is the piece §6.8 singles out,
+   * because it occludes bot line of sight on the server. The perk under test here is
+   * Lightweight, and the tactical slot has nothing to do with it.
+   */
+  tactical: 'smoke',
   fieldUpgrade: 'munitions',
   perks: ['lightweight', null, null],
   streaks: ['uav', null, null],
@@ -216,6 +226,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       // `--no-perks` fields the same class with the perk slots empty. The control run for
       // §8.9: if a residual misprediction survives it, the cause is not the loadout.
       loadout: streakHarnessClass(opts, i),
+      throwEveryTicks: opts.throwEveryTicks,
       /**
        * A deliberate tie on the first two clients, then a spread.
        *
@@ -599,6 +610,7 @@ function reportFlow(input: FlowReportInput): number {
         `objectives ${r.objectiveUpdates} upd/${r.objectivesOwned} owned, ` +
         modeStateLine(r) +
         streakLine(r) +
+        projectileLine(r) +
         `post-migration windows [${r.postMigrationWindows.join(",")}] at ticks [${r.migrationMispredictionTicks.join(",")}], ` +
         `${r.buildsCompleted} build(s) worst ${r.worstBuildMs}ms, ` +
         `${r.votesCast} vote(s), ${r.summaries} summary(s), ` +
@@ -912,6 +924,22 @@ function checkDroppedGunner(
   return bad === 0;
 }
 
+/**
+ * The grenade channel (§8.24), reported only when it carried something.
+ *
+ * `remote` counts **distinct grenades thrown by somebody else**, because that is the thing that
+ * did not exist before: a client has always drawn its own. A frame counter would go green on a
+ * server sending empty lists, and an "any projectile" counter would go green on the client's own
+ * predicted throw.
+ */
+function projectileLine(r: HeadlessClientReport): string {
+  if (r.projectileFrames === 0) return '';
+  return (
+    `grenades ${r.projectileFrames} frm/${r.remoteProjectiles} remote/` +
+    `${r.ownProjectileSeen} own-echo/${r.peakProjectiles} peak/${r.smokeFrames} smoke, `
+  );
+}
+
 function streakLine(r: HeadlessClientReport): string {
   if (r.streakFrames === 0) return '';
   return (
@@ -954,6 +982,7 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     grantStreak: get('--grant-streak'),
     ghost: argv.includes('--ghost'),
     dropGunner: argv.includes('--drop-gunner'),
+    throwEveryTicks: Math.max(0, num('--throw', 0)),
   };
 }
 

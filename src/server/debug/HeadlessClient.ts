@@ -126,6 +126,14 @@ export interface HeadlessClientOptions {
    */
   readonly editClass?: NetLoadout;
   readonly editAfterTicks?: number;
+  /**
+   * Throw a lethal every N ticks, or 0 never (§8.24).
+   *
+   * The only way the *human* half of the grenade path gets exercised headlessly: bots throw on
+   * their own, but a grenade thrown from a replicated command is a different code path — the
+   * server's `ThrowController` reading the same command the client predicted from.
+   */
+  readonly throwEveryTicks?: number;
 }
 
 export interface HeadlessClientReport {
@@ -192,6 +200,12 @@ export interface HeadlessClientReport {
   readonly peakStreakEntities: number;
   /** Frames carrying a friendly UAV sweep, and how many activations were asked for. */
   readonly sweepFrames: number;
+  /** Projectile frames, distinct grenades thrown by others, and echoes of this client's own. */
+  readonly projectileFrames: number;
+  readonly remoteProjectiles: number;
+  readonly ownProjectileSeen: number;
+  readonly peakProjectiles: number;
+  readonly smokeFrames: number;
   /** Frames carrying a live Chopper Gunner, and when the last one arrived (§8.23). */
   readonly chopperFrames: number;
   readonly lastChopperMs: number;
@@ -316,6 +330,11 @@ export class HeadlessClient {
   private readonly streakInstanceIds = new Set<number>();
   private peakStreakEntities = 0;
   private sweepFrames = 0;
+  private projectileFrames = 0;
+  private readonly remoteSerials = new Set<number>();
+  private ownProjectileSeen = 0;
+  private peakProjectiles = 0;
+  private smokeFrames = 0;
   private chopperFrames = 0;
   private lastChopperMs = 0;
   /** When a chopper owned by each entity id was last seen. Keyed by owner, see `onStreaks`. */
@@ -424,6 +443,25 @@ export class HeadlessClient {
          * spendable, ask for it. That closes the loop — earn, replicate, request, grant,
          * replicate the entity — through the real messages rather than a test hook.
          */
+        /**
+         * Grenades and smoke (Gate B, §8.24).
+         *
+         * `remoteSerials` counts **distinct grenades thrown by somebody else**, which is the
+         * number the feature is actually about: a client that only ever saw its own would score
+         * zero here while a frame counter went green. `ownSeen` is the other half — the
+         * authoritative echo of this client's own throw, which is what reconciliation has to
+         * match against and which the double-render check depends on being excluded from the
+         * render list.
+         */
+        onProjectiles: (projectiles, smoke) => {
+          this.projectileFrames++;
+          for (const p of projectiles) {
+            if (p.ownerId === this.net.entityId) this.ownProjectileSeen++;
+            else this.remoteSerials.add(p.serial);
+          }
+          if (projectiles.length > this.peakProjectiles) this.peakProjectiles = projectiles.length;
+          if (smoke.length > 0) this.smokeFrames++;
+        },
         onStreaks: (view) => {
           this.streakFrames++;
           for (const e of view.entities) this.streakInstanceIds.add(e.instanceId);
@@ -791,6 +829,11 @@ export class HeadlessClient {
       streakEntitiesSeen: this.streakInstanceIds.size,
       peakStreakEntities: this.peakStreakEntities,
       sweepFrames: this.sweepFrames,
+      projectileFrames: this.projectileFrames,
+      remoteProjectiles: this.remoteSerials.size,
+      ownProjectileSeen: this.ownProjectileSeen,
+      peakProjectiles: this.peakProjectiles,
+      smokeFrames: this.smokeFrames,
       chopperFrames: this.chopperFrames,
       lastChopperMs: this.lastChopperMs,
       lastChopperMsByOwner: new Map(this.lastChopperMsByOwner),
@@ -925,6 +968,24 @@ export class HeadlessClient {
     this.pitch += (this.rng.spread() * 0.002);
     if (this.pitch > 1.4) this.pitch = 1.4;
     if (this.pitch < -1.4) this.pitch = -1.4;
+
+    /**
+     * Throw a grenade on a fixed cadence (§8.24).
+     *
+     * A **press and release**, not a held bit: `ThrowController` begins a cook on the press and
+     * lets go on the release, so a permanently-held Lethal would cook one grenade for ever and
+     * throw nothing. Two ticks of hold is the shortest thing that is unambiguously both.
+     */
+    const period = this.opts.throwEveryTicks ?? 0;
+    if (period > 0) {
+      // Alternating slots, so both a lethal and a **tactical** are exercised. Smoke is the
+      // tactical, and §6.8 gives it a requirement of its own — occluding bot line of sight —
+      // so a run that only ever threw frags would leave the smoke channel unmeasured.
+      if (tick % period < 2) buttons |= Btn.Lethal;
+      else if (tick % period >= period >> 1 && tick % period < (period >> 1) + 2) {
+        buttons |= Btn.Tactical;
+      }
+    }
 
     cmd.moveX = moveX;
     cmd.moveZ = moveZ;

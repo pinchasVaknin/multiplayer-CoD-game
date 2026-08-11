@@ -70,6 +70,23 @@ export interface EquipmentDeps {
   readonly damage: DamageSystem;
   readonly roster: readonly Combatant[];
   readonly cfg: EquipmentConfig;
+  /**
+   * Whether a detonation here decides anything (M11 Gate B, §4.15).
+   *
+   * True everywhere it has ever been until now — single-player, and the dedicated server. False
+   * on a **networked client**, which still runs this system so that the player's own throw is
+   * predicted and drawn, but must not resolve its blast: damage, death and the flash a bot
+   * suffers are all the server's (§4.15), and `BotDirector` puts the local player on the roster,
+   * so an unguarded client-side blast applied damage to its own player through its own
+   * `DamageSystem`. Health is overwritten by the next snapshot, so the symptom is not a wrong
+   * health bar for long — it is a flicker, a false low-health vignette, and a heartbeat for a
+   * wound nobody inflicted.
+   *
+   * The same shape as `MatchFlow`'s `authoritative` flag and for the same reason: it makes the
+   * two drive modes a property of the object rather than an accident of which methods the caller
+   * remembers not to invoke.
+   */
+  readonly authoritative?: boolean;
 }
 
 export class EquipmentSystem {
@@ -91,6 +108,8 @@ export class EquipmentSystem {
   private readonly cfg: EquipmentConfig;
   private readonly request: DamageRequest;
   private readonly ray: RayHit = makeRayHit();
+  /** See `EquipmentDeps.authoritative`. */
+  private readonly authoritative: boolean;
 
   constructor(deps: EquipmentDeps) {
     this.bus = deps.bus;
@@ -98,6 +117,7 @@ export class EquipmentSystem {
     this.damage = deps.damage;
     this.roster = deps.roster;
     this.cfg = deps.cfg;
+    this.authoritative = deps.authoritative !== false;
     this.projectiles = new ProjectilePool(PROJECTILE_CAPACITY, equipmentDef('frag'));
     this.smoke = new SmokeField(SMOKE_CAPACITY, deps.cfg);
     this.flash = new FlashField(deps.bus, deps.cfg);
@@ -197,6 +217,15 @@ export class EquipmentSystem {
 
     for (const p of this.projectiles.items) {
       if (!p.active) continue;
+      /**
+       * Somebody else's grenade, replicated: display only (M11 Gate B, §8.24).
+       *
+       * No flight, no fuse, no trigger and no detonation. The server owns all four, and a
+       * client integrating them as well would be re-deriving a decided trajectory — the two
+       * would part company the first time one of them clipped a corner the other missed, and
+       * the visible result is a grenade that goes off in the wrong place.
+       */
+      if (p.replicated) continue;
 
       const result = this.projectiles.step(p, this.world, this.cfg);
       if (result.bounced || result.stuck || result.planted) {
@@ -306,7 +335,15 @@ export class EquipmentSystem {
     const profile = def.damageProfile;
     const radius = Math.max(def.effectRadius, def.flashSeconds > 0 ? def.effectRadius : 0);
 
-    if (profile !== null || def.flashSeconds > 0) {
+    /**
+     * The blast resolves in exactly one process (§4.15).
+     *
+     * A networked client skips this entire loop. The smoke above it still spawns — a cloud is
+     * something to *look* at and the client needs it to draw one — and the `EquipmentExploded`
+     * event below still fires, because that is what drives the bang, the shake and the scorch.
+     * What does not happen here is damage, death and blinding, which arrive replicated.
+     */
+    if (this.authoritative && (profile !== null || def.flashSeconds > 0)) {
       for (const c of this.roster) {
         if (!c.participating) continue;
         const tx = c.px;

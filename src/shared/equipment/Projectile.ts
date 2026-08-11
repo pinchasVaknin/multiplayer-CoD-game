@@ -65,6 +65,23 @@ export interface Projectile {
   stuckTo: number;
   /** Material index of the last surface hit, for the bounce sound. */
   material: number;
+
+  /**
+   * This is somebody else's grenade, replicated (M11 Gate B, §8.24).
+   *
+   * A **display-only** projectile. The server owns its flight, its fuse and its blast, so
+   * `EquipmentSystem.simulate` steps none of those — integrating it here as well would be the
+   * client re-deriving a trajectory that has already been decided, and the two would part
+   * company the first time one of them bounced off a corner the other missed.
+   *
+   * False for everything the local process threw, which on a server is everything and on a
+   * client is the local player's own predicted throw. See `MatchEquipment.applyReplicated`.
+   */
+  replicated: boolean;
+  /** Where replication last said it was. The drawn position eases toward this. */
+  tx: number;
+  ty: number;
+  tz: number;
 }
 
 function makeProjectile(def: EquipmentDef): Projectile {
@@ -91,6 +108,10 @@ function makeProjectile(def: EquipmentDef): Projectile {
     resting: false,
     stuckTo: -1,
     material: 0,
+    replicated: false,
+    tx: 0,
+    ty: 0,
+    tz: 0,
   };
 }
 
@@ -165,6 +186,11 @@ export class ProjectilePool {
       p.resting = false;
       p.stuckTo = -1;
       p.material = 0;
+      // A pooled slot must never come back wearing the last tenant's replication state.
+      p.replicated = false;
+      p.tx = p.x;
+      p.ty = p.y;
+      p.tz = p.z;
       return p;
     }
     return null;

@@ -23,6 +23,11 @@
  * the whole match.
  */
 /**
+ * v7 (M11 Gate B): grenades cross the wire — `MsgS.Projectiles`.
+ *
+ * The server has thrown and detonated equipment since the previous commit and no client could
+ * see any of it: a grenade from a bot or another player damaged people while being invisible.
+ *
  * v6 (M11 Gate B): killstreaks cross the wire — `MsgC.Streak` and `MsgS.Streaks`.
  *
  * The server has run `StreakSystem` since the previous commit and no client could see or spend
@@ -42,7 +47,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
@@ -151,6 +156,16 @@ export const MsgS = {
    * entire value inside the untrusted half of the system (§4.16).
    */
   Streaks: 142,
+  /**
+   * Grenades in flight and smoke on the ground (M11 Gate B, §6.8, §8.24).
+   *
+   * Broadcast rather than per recipient — a grenade is a physical object with no secrets, and
+   * unlike a UAV's contacts there is nothing about it one team may know and the other may not.
+   * The *consumption* differs per client, though, and that is the client's own business: your
+   * own grenade in this list is a correction to something you predicted, and everybody else's
+   * is the only copy you have.
+   */
+  Projectiles: 143,
 } as const;
 
 export type MsgCId = (typeof MsgC)[keyof typeof MsgC];

@@ -5,16 +5,22 @@ import { logger } from '../../shared/core/Log';
 import { makeSnapshotHeader, phaseIndex, SFlag, type SnapshotHeader } from '../../shared/net/Messages';
 import {
   InstanceState,
+  MAX_PROJECTILES,
+  MAX_SMOKE,
   MAX_STREAK_ENTITIES,
   MAX_UAV_CONTACTS,
+  PEFlag,
   ownerCode,
   SEFlag,
   type InstanceStateId,
   type MatchId,
   type ObjectiveState,
+  type ProjectileState,
+  type SmokeState,
   type StreakEntityState,
   type UavContactState,
 } from '../../shared/net/Skirmish';
+import { ALL_EQUIPMENT, type EquipmentId } from '../../shared/equipment/EquipmentDefs';
 import { CarePackage } from '../../shared/streaks/CarePackage';
 import { ChopperGunner } from '../../shared/streaks/ChopperGunner';
 import type { Killstreak } from '../../shared/streaks/KillstreakBase';
@@ -102,6 +108,10 @@ export abstract class MatchInstance {
   private readonly streakScratch: StreakEntityState[] = [];
   private readonly contactScratch: UavContactState[] = [];
   private readonly pendingScratch: number[] = [];
+  private readonly projectileScratch: ProjectileState[] = [];
+  private readonly smokeScratch: SmokeState[] = [];
+  /** Whether the last projectile frame was empty. See `sendProjectiles`. */
+  private projectilesWereEmpty = false;
   private entityCount = 0;
 
   /** Milliseconds the last step took. Per-instance half of the §7 instance panel. */
@@ -265,6 +275,7 @@ export abstract class MatchInstance {
       this.sendTags();
       this.sendBomb();
       this.sendStreaks();
+      this.sendProjectiles();
     }
     this.sendEvents();
 
@@ -482,6 +493,73 @@ export abstract class MatchInstance {
         contacts: this.contactScratch,
         entities: this.streakScratch,
       });
+    }
+  }
+
+  /**
+   * Grenades in flight and smoke on the ground (M11 Gate B, §6.8, §8.24).
+   *
+   * Broadcast, unlike the streak view: a grenade is a physical object with no secrets, so there
+   * is one payload and everybody gets it. What differs per client is how it is *used* — your own
+   * grenade is a correction to something you predicted, everybody else's is the only copy you
+   * have — and that is a decision the client makes with the entity id it already knows is its
+   * own.
+   *
+   * Skipped entirely when nothing is in the air and no smoke is burning, which is most ticks of
+   * most matches. The alternative is a two-byte frame at 20 Hz per client forever, for a message
+   * whose whole content is "still nothing".
+   */
+  private sendProjectiles(): void {
+    const pool = this.match.equipment.projectiles;
+    const field = this.match.equipment.smoke;
+
+    this.projectileScratch.length = 0;
+    for (const p of pool.items) {
+      if (!p.active) continue;
+      if (this.projectileScratch.length >= MAX_PROJECTILES) break;
+      this.projectileScratch.push({
+        serial: p.serial,
+        kind: equipmentKindIndex(p.def.id),
+        ownerId: p.ownerId,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        yaw: p.yaw,
+        flags:
+          (p.resting ? PEFlag.Resting : 0) |
+          (p.phase === 'ARMED' ? PEFlag.Armed : 0) |
+          (p.stuckTo >= 0 ? PEFlag.Stuck : 0),
+      });
+    }
+
+    this.smokeScratch.length = 0;
+    for (const v of field.volumes) {
+      if (!v.active) continue;
+      if (this.smokeScratch.length >= MAX_SMOKE) break;
+      this.smokeScratch.push({
+        x: v.x,
+        y: v.y,
+        z: v.z,
+        radius: v.radius,
+        remainingDs: Math.round(v.remaining * 10),
+      });
+    }
+
+    /**
+     * The empty case is a real state and is sent **once**, not never.
+     *
+     * A client told only about non-empty frames would keep drawing the last grenade of every
+     * firefight for ever — the same trap the dog tags set, and avoided the same way. So the
+     * frame is skipped only while the previous one was *also* empty.
+     */
+    const empty = this.projectileScratch.length === 0 && this.smokeScratch.length === 0;
+    if (empty && this.projectilesWereEmpty) return;
+    this.projectilesWereEmpty = empty;
+
+    for (const seat of this.seats.values()) {
+      if (!seat.session.closed) {
+        seat.session.sendProjectiles(this.projectileScratch, this.smokeScratch);
+      }
     }
   }
 
@@ -718,6 +796,12 @@ function describeStreak(streak: Killstreak): StreakEntityState {
  * runtimes build their table from the same module in the same order, so the index *is* the
  * identity and costs one byte where `'chopper_gunner'` costs fifteen.
  */
+/** An equipment id as its index in `ALL_EQUIPMENT`. Index is identity, as everywhere else. */
+function equipmentKindIndex(id: EquipmentId): number {
+  const at = ALL_EQUIPMENT.findIndex((d) => d.id === id);
+  return at < 0 ? 0 : at;
+}
+
 function streakKindIndex(id: StreakId): number {
   const at = STREAK_DEFS.findIndex((d) => d.id === id);
   return at < 0 ? 0 : at;

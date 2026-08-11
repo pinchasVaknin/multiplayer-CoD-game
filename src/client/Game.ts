@@ -1106,6 +1106,7 @@ export class Game {
          * there to prevent.
          */
         this.world?.match.clearReplicatedStreaks();
+        this.world?.match.clearReplicatedProjectiles();
         this.pendingMigration = welcome;
         this.openMigrationWindow(welcome.matchId);
       },

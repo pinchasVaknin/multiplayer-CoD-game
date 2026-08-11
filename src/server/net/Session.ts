@@ -12,6 +12,7 @@ import {
   writePong,
   writeTags,
   writeStreaks,
+  writeProjectiles,
   writePrepare,
   writeReject,
   writeSummary,
@@ -27,6 +28,8 @@ import {
   type NetLoadout,
   type ObjectiveState,
   type StreakView,
+  type ProjectileState,
+  type SmokeState,
 } from '../../shared/net/Skirmish';
 import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
 import {
@@ -568,6 +571,10 @@ export class Session {
 
   sendStreaks(view: StreakView): void {
     this.send(writeStreaks(this.out, view));
+  }
+
+  sendProjectiles(projectiles: readonly ProjectileState[], smoke: readonly SmokeState[]): void {
+    this.send(writeProjectiles(this.out, projectiles, smoke));
   }
 
   /**

@@ -365,6 +365,72 @@ export const MAX_UAV_CONTACTS = 24;
 /** Streaks a player can hold at once — three keys, three slots (M7 playtest). */
 export const MAX_PENDING_STREAKS = 3;
 
+// -- equipment in flight (M11 Gate B, §6.8, §8.24) ----------------------------
+
+/**
+ * One grenade in the air, or lying armed on the floor.
+ *
+ * §6.8: *"Grenades predicted by the thrower, authoritative on the instance, reconciled without
+ * visible teleporting."* Both halves of that sentence are load-bearing, and they mean this list
+ * is consumed differently depending on **who threw it**:
+ *
+ * - **Somebody else's** grenade is replicated state, drawn from these records exactly as a
+ *   remote player's body is drawn from the snapshot. The client never simulated it and has
+ *   nothing to reconcile.
+ * - **Your own** is predicted. The client threw it on the tick it sent the command and has been
+ *   integrating it locally ever since, so the authoritative record is a *correction*, not a
+ *   source — and it is applied by blending rather than snapping, because a grenade that jumps is
+ *   precisely the visible teleport the criterion forbids.
+ *
+ * `serial` is the pool's own, already unique per throw and already stable for a projectile's
+ * whole life, so nothing had to be invented to key this by.
+ */
+export interface ProjectileState {
+  readonly serial: number;
+  /** Index into `EQUIPMENT_DEFS`. */
+  readonly kind: number;
+  readonly ownerId: number;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  /** Spin, for the mesh. */
+  readonly yaw: number;
+  /** `PEFlag` bits. */
+  readonly flags: number;
+}
+
+/** Bits in `ProjectileState.flags`. */
+export const PEFlag = {
+  /** Come to rest, rather than still bouncing. */
+  Resting: 1 << 0,
+  /** Armed — past its arming fuse, live. */
+  Armed: 1 << 1,
+  /** Stuck to a surface or a body (semtex). */
+  Stuck: 1 << 2,
+} as const;
+
+/**
+ * One smoke cloud.
+ *
+ * Replicated rather than left to the client's own `SmokeField`, for the reason §6.8 gives it a
+ * sentence of its own: smoke **occludes bot line of sight on the server**, so where the cloud is
+ * decides who can see whom. A client drawing a cloud in a slightly different place from the one
+ * the server is testing against would be showing cover that does not exist.
+ */
+export interface SmokeState {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly radius: number;
+  /** Seconds left, in tenths. Drives the fade and the bloom. */
+  readonly remainingDs: number;
+}
+
+/** The projectile pool is 32; a frame carrying more than that is malformed. */
+export const MAX_PROJECTILES = 32;
+/** The smoke field is 8. */
+export const MAX_SMOKE = 8;
+
 // -- loadout on the wire (Tier 1 #20) ----------------------------------------
 
 /**

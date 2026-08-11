@@ -8,7 +8,7 @@ import { logger } from '../../shared/core/Log';
 import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
 import type { NetLoadout, ObjectiveState } from '../../shared/net/Skirmish';
 import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
-import type { StreakView } from '../../shared/net/Skirmish';
+import type { ProjectileState, SmokeState, StreakView } from '../../shared/net/Skirmish';
 import { NetClient, type SkirmishSink, type NetClientState } from '../../shared/net/NetClient';
 import {
   phaseAt,
@@ -155,6 +155,9 @@ export class NetSession {
   onTags: ((tags: readonly TagInfo[]) => void) | null = null;
   onBomb: ((info: BombInfo) => void) | null = null;
   onStreaks: ((view: StreakView) => void) | null = null;
+  onProjectiles:
+    | ((projectiles: readonly ProjectileState[], smoke: readonly SmokeState[]) => void)
+    | null = null;
 
   /**
    * The most recent vote broadcast, kept for the §7 panel.
@@ -224,6 +227,10 @@ export class NetSession {
         onStreaks: (view) => {
           this.onStreaks?.(view);
           deps.skirmish?.onStreaks?.(view);
+        },
+        onProjectiles: (projectiles, smoke) => {
+          this.onProjectiles?.(projectiles, smoke);
+          deps.skirmish?.onProjectiles?.(projectiles, smoke);
         },
         onMigrated: (welcome) => {
           // Same reason as `onNewMatch` above, and it has to happen here as well: a migration
@@ -413,6 +420,7 @@ export class NetSession {
     this.onTags = null;
     this.onBomb = null;
     this.onStreaks = null;
+    this.onProjectiles = null;
     this.onLocalState = null;
     this.onRosterEntry = null;
     this.actors.clear();

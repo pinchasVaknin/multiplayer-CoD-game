@@ -30,7 +30,13 @@ import {
   type WelcomeInfo,
 } from './Messages';
 import { Prediction } from './Prediction';
-import type { NetLoadout, ObjectiveState, StreakView } from './Skirmish';
+import type {
+  NetLoadout,
+  ObjectiveState,
+  ProjectileState,
+  SmokeState,
+  StreakView,
+} from './Skirmish';
 import type { BombInfo, TagInfo } from '../modes/GameMode';
 import { COMMAND_REDUNDANCY, quantiseCommandInPlace, rejectText } from './Protocol';
 import { copyEntitySnapshot, EFlag, makeEntitySnapshot, type EntitySnapshot } from './Snapshot';
@@ -150,6 +156,10 @@ export interface SkirmishSink {
    * narrow, and narrowing in the client is what a UAV must never depend on.
    */
   readonly onStreaks?: ((view: StreakView) => void) | undefined;
+  /** Grenades in flight and smoke on the ground (M11 Gate B, §8.24). Broadcast, not filtered. */
+  readonly onProjectiles?:
+    | ((projectiles: readonly ProjectileState[], smoke: readonly SmokeState[]) => void)
+    | undefined;
   /**
    * This client has been moved to another instance, effective on `welcome.effectiveTick`.
    *
@@ -554,6 +564,9 @@ export class NetClient {
         return;
       case 'streaks':
         this.deps.skirmish?.onStreaks?.(msg.view);
+        return;
+      case 'projectiles':
+        this.deps.skirmish?.onProjectiles?.(msg.projectiles, msg.smoke);
         return;
       case 'reject':
         this.state = 'rejected';

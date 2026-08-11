@@ -26,6 +26,10 @@ import {
 } from './Snapshot';
 import {
   MAX_PENDING_STREAKS,
+  MAX_PROJECTILES,
+  MAX_SMOKE,
+  type ProjectileState,
+  type SmokeState,
   MAX_STREAK_ENTITIES,
   MAX_UAV_CONTACTS,
   type StreakEntityState,
@@ -619,6 +623,51 @@ export function writeStreaks(w: ByteWriter, view: StreakView): Uint8Array {
   return w.bytes();
 }
 
+/**
+ * Grenades in flight and smoke on the ground (M11 Gate B, §6.8, §8.24).
+ *
+ * Positions to the centimetre like everything else in this file. A grenade is small and fast,
+ * and 1 cm is well inside the radius of the mesh drawn at it — the visible error in a replicated
+ * arc comes from the snapshot rate, not from the quantisation, and interpolating between two
+ * 1 cm samples is exactly as smooth as interpolating between two exact ones.
+ */
+export function writeProjectiles(
+  w: ByteWriter,
+  projectiles: readonly ProjectileState[],
+  smoke: readonly SmokeState[],
+): Uint8Array {
+  head(w, MsgS.Projectiles);
+  const n = Math.min(projectiles.length, MAX_PROJECTILES);
+  w.u8v(n);
+  for (let i = 0; i < n; i++) {
+    const p = projectiles[i];
+    if (p === undefined) continue;
+    w.u16(p.serial & 0xffff);
+    w.u8v(p.kind & 0xff);
+    w.i16(p.ownerId);
+    w.i16(quantPos(p.x));
+    w.i16(quantPos(p.y));
+    w.i16(quantPos(p.z));
+    w.u16(quantAngle(p.yaw));
+    w.u8v(p.flags & 0xff);
+  }
+
+  const m = Math.min(smoke.length, MAX_SMOKE);
+  w.u8v(m);
+  for (let i = 0; i < m; i++) {
+    const s = smoke[i];
+    if (s === undefined) continue;
+    w.i16(quantPos(s.x));
+    w.i16(quantPos(s.y));
+    w.i16(quantPos(s.z));
+    // Radius in decimetres: a cloud is metres across and a centimetre of radius is not a thing
+    // anybody can see, where a byte per cloud is a thing the bandwidth budget can.
+    w.u8v(Math.max(0, Math.min(255, Math.round(s.radius * 10))));
+    w.u16(Math.max(0, Math.min(0xffff, s.remainingDs)));
+  }
+  return w.bytes();
+}
+
 export function writeNotice(w: ByteWriter, text: string): Uint8Array {
   head(w, MsgS.Notice);
   w.str(text);
@@ -936,6 +985,11 @@ export type Decoded =
   | { kind: 'objectives'; states: readonly ObjectiveState[] }
   | { kind: 'tags'; tags: readonly TagInfo[] }
   | { kind: 'streaks'; view: StreakView }
+  | {
+      kind: 'projectiles';
+      projectiles: readonly ProjectileState[];
+      smoke: readonly SmokeState[];
+    }
   | { kind: 'streakRequest'; streakKind: number; x: number; z: number }
   | { kind: 'bomb'; bomb: BombInfo }
   | { kind: 'bad' };
@@ -1243,6 +1297,35 @@ export function decodeHeader(r: ByteReader): Decoded {
               entities,
             },
           };
+    }
+    case MsgS.Projectiles: {
+      const n = r.u8v();
+      if (r.overran || n > MAX_PROJECTILES) return BAD;
+      const projectiles: ProjectileState[] = [];
+      for (let i = 0; i < n; i++) {
+        const serial = r.u16();
+        const kind = r.u8v();
+        const ownerId = r.i16();
+        const x = dequantPos(r.i16());
+        const y = dequantPos(r.i16());
+        const z = dequantPos(r.i16());
+        const yaw = dequantAngle(r.u16());
+        const flags = r.u8v();
+        projectiles.push({ serial, kind, ownerId, x, y, z, yaw, flags });
+      }
+
+      const m = r.u8v();
+      if (r.overran || m > MAX_SMOKE) return BAD;
+      const smoke: SmokeState[] = [];
+      for (let i = 0; i < m; i++) {
+        const x = dequantPos(r.i16());
+        const y = dequantPos(r.i16());
+        const z = dequantPos(r.i16());
+        const radius = r.u8v() / 10;
+        const remainingDs = r.u16();
+        smoke.push({ x, y, z, radius, remainingDs });
+      }
+      return r.overran ? BAD : { kind: 'projectiles', projectiles, smoke };
     }
     case MsgS.Reject: {
       const code = r.u8v();

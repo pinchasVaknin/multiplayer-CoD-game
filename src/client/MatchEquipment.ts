@@ -12,6 +12,18 @@ import { Rng } from '../shared/core/Rng';
 import type { CameraRig } from './engine/CameraRig';
 import type { ProceduralAudio } from './engine/ProceduralAudio';
 import { BotThrower, type MutableThrowIntent } from '../shared/equipment/BotThrower';
+import { ALL_EQUIPMENT } from '../shared/equipment/EquipmentDefs';
+import { PEFlag, type ProjectileState, type SmokeState } from '../shared/net/Skirmish';
+import type { Projectile } from '../shared/equipment/Projectile';
+
+/**
+ * How fast a replicated grenade closes on the position replication last reported, per second.
+ *
+ * Sized against the snapshot interval rather than picked: at 20 Hz a frame arrives every 50 ms,
+ * and this closes about 78% of the gap in that time — fast enough that the drawn grenade is
+ * never visibly behind, slow enough that each new sample is a nudge rather than a jump.
+ */
+const REPLICATED_EASE_RATE = 30;
 import type { EquipmentConfig } from '../shared/equipment/EquipmentConfig';
 import { EquipmentAudio } from './equipment/EquipmentAudio';
 import { EquipmentFx } from './equipment/EquipmentFx';
@@ -53,6 +65,8 @@ export interface MatchEquipmentDeps {
   readonly tiers: TierTable;
   readonly localTeam: BotTeam;
   readonly seed: number;
+  /** False on a networked client: predict and draw, resolve nothing. See `EquipmentDeps`. */
+  readonly authoritative?: boolean;
 }
 
 /** How long the concussion takes to clear. Short, per S6.4. */
@@ -81,6 +95,8 @@ export class MatchEquipment {
   private readonly deps: MatchEquipmentDeps;
   private readonly unsubscribe: Array<() => void> = [];
   private readonly rng: Rng;
+  /** Serials seen in the current replicated frame. Reused; nothing here allocates per frame. */
+  private readonly seenSerials = new Set<number>();
   private readonly intent: MutableThrowIntent = {
     targetX: 0,
     targetY: 0,
@@ -115,6 +131,14 @@ export class MatchEquipment {
       damage: deps.damage,
       roster: deps.bots.roster,
       cfg: deps.cfg,
+      /**
+       * A networked client predicts its own grenade and resolves nothing (M11 Gate B, §4.15).
+       *
+       * See `EquipmentDeps.authoritative`. Without this the client's own blast applied damage
+       * to its own player — `BotDirector` puts the local player on the roster — while the
+       * server was applying the authoritative copy of the same damage.
+       */
+      authoritative: deps.authoritative !== false,
     });
     this.thrower = new ThrowController(this.system, deps.cfg);
     this.botThrower = new BotThrower(this.system, deps.world, deps.cfg);
@@ -155,7 +179,130 @@ export class MatchEquipment {
     this.lastMs = performance.now() - t0;
   }
 
+  /**
+   * Adopt the server's grenades into the pool the renderer already walks (§8.24).
+   *
+   * The same move the objectives, the tags and the bomb make: replicate **into** the objects
+   * that already draw, rather than teaching the renderer a second source. `EquipmentFx` is
+   * untouched by this whole feature.
+   *
+   * The local player's own are skipped — they are predicted, already in this pool, and already
+   * on screen. Drawing the authoritative copy beside them is the double-render.
+   */
+  applyReplicated(
+    projectiles: readonly ProjectileState[],
+    smoke: readonly SmokeState[],
+    localId: number,
+  ): void {
+    const pool = this.system.projectiles;
+
+    this.seenSerials.clear();
+    for (const state of projectiles) {
+      if (state.ownerId === localId) continue;
+      this.seenSerials.add(state.serial);
+
+      let slot = this.findReplicated(state.serial);
+      if (slot === null) {
+        slot = this.adoptSlot(state);
+        if (slot === null) continue;
+      }
+      // The target, not the drawn position: `easeReplicated` closes the gap over the frames
+      // until the next snapshot, so a grenade crosses the room rather than stepping across it
+      // twenty times a second.
+      slot.tx = state.x;
+      slot.ty = state.y;
+      slot.tz = state.z;
+      slot.yaw = state.yaw;
+      slot.resting = (state.flags & PEFlag.Resting) !== 0;
+      slot.phase = (state.flags & PEFlag.Armed) !== 0 ? 'ARMED' : 'LIVE';
+    }
+
+    // Anything replicated that stopped being sent has detonated or expired. The bang itself
+    // arrives as `EV.EquipmentExploded`, so this only has to stop drawing the body.
+    for (const p of pool.items) {
+      if (!p.active || !p.replicated) continue;
+      if (!this.seenSerials.has(p.serial)) pool.release(p);
+    }
+
+    this.applyReplicatedSmoke(smoke);
+  }
+
+  /**
+   * Ease every replicated grenade toward where the server last said it was.
+   *
+   * §8.24 asks for reconciliation *"without visible teleporting"*, and this is the half of that
+   * which applies to grenades the client never predicted. Snapping to each 20 Hz sample would
+   * make a thrown object move in visible steps — the one place stepping is obvious, because a
+   * grenade is small, fast and the eye is following it.
+   *
+   * Exponential rather than a fixed lerp: the rate is chosen to close most of the gap within one
+   * snapshot interval, so a grenade that has just been adopted catches up quickly and one that
+   * is being updated steadily sits a few centimetres behind the truth — which is exactly the
+   * trade §4.12 makes for remote bodies.
+   */
+  private easeReplicated(dt: number): void {
+    const k = 1 - Math.exp(-REPLICATED_EASE_RATE * dt);
+    for (const p of this.system.projectiles.items) {
+      if (!p.active || !p.replicated) continue;
+      p.px = p.x;
+      p.py = p.y;
+      p.pz = p.z;
+      p.x += (p.tx - p.x) * k;
+      p.y += (p.ty - p.y) * k;
+      p.z += (p.tz - p.z) * k;
+    }
+  }
+
+  private findReplicated(serial: number): Projectile | null {
+    for (const p of this.system.projectiles.items) {
+      if (p.active && p.replicated && p.serial === serial) return p;
+    }
+    return null;
+  }
+
+  /**
+   * Take a pool slot for a replicated grenade.
+   *
+   * Spawned with zero velocity and then marked `replicated`, which stops `EquipmentSystem`
+   * integrating it — the velocity is never used and is deliberately not on the wire, because
+   * the server is sending the answer rather than the inputs to it.
+   */
+  private adoptSlot(state: ProjectileState): Projectile | null {
+    const def = ALL_EQUIPMENT[state.kind];
+    if (def === undefined) return null;
+    const p = this.system.projectiles.spawn(
+      def, state.ownerId, 'NONE', state.x, state.y, state.z, 0, 0, 0, def.fuseSeconds,
+    );
+    if (p === null) return null;
+    p.serial = state.serial;
+    p.replicated = true;
+    p.tx = state.x;
+    p.ty = state.y;
+    p.tz = state.z;
+    return p;
+  }
+
+  /**
+   * The server's smoke, written into the field the renderer draws (§6.8).
+   *
+   * Replicated rather than left to the client's own field because **smoke occludes bot line of
+   * sight on the server**, so where the cloud is decides who can see whom. A client drawing one
+   * a metre from where the server is testing against would be showing cover that does not exist.
+   *
+   * Rebuilt wholesale each frame rather than reconciled by id: a cloud has no identity on the
+   * wire, there are at most eight, and they neither move nor need to be told apart.
+   */
+  private applyReplicatedSmoke(smoke: readonly SmokeState[]): void {
+    const field = this.system.smoke;
+    field.clear();
+    for (const s of smoke) {
+      if (s.remainingDs <= 0) continue;
+      field.spawn(s.x, s.y, s.z, s.radius, s.remainingDs / 10, 1);
+    }
+  }
+
   render(alpha: number, dt: number, camera: THREE.Camera): void {
+    this.easeReplicated(dt);
     this.fx.update(this.system.projectiles, this.system.smoke, alpha, dt, camera, this.elapsed);
   }
 

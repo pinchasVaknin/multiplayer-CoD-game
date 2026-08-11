@@ -37,7 +37,11 @@ import { ClientStreakPresentation } from './streaks/ClientStreakPresentation';
 import { StreakRenderer } from './streaks/StreakRenderer';
 import { StreakSystem } from '../shared/streaks/StreakSystem';
 import { ReplicatedStreaks } from './streaks/ReplicatedStreaks';
-import type { StreakView } from '../shared/net/Skirmish';
+import type { ProjectileState, SmokeState, StreakView } from '../shared/net/Skirmish';
+
+/** Shared empties, so clearing replicated equipment allocates nothing. */
+const EMPTY_PROJECTILES: readonly ProjectileState[] = [];
+const EMPTY_SMOKE: readonly SmokeState[] = [];
 import {
   ALL_STREAK_IDS,
   DEFAULT_STREAK_CONFIG,
@@ -604,6 +608,9 @@ export class Match {
       tiers: deps.tiers,
       localTeam: this.localTeam,
       seed: deps.seed,
+      // The server resolves every blast in a networked match (S4.15). This system stays for
+      // the prediction and the drawing of the player's own throw.
+      authoritative: deps.networked !== true,
     });
 
     // The loadout's grenades, not the M5 defaults. Set before the first refill so a
@@ -1410,6 +1417,19 @@ export class Match {
 
   private nextStreak(): { def: StreakDef; requirement: number } | null {
     return this.isNetworked ? this.replicatedStreaks.next : this.streaks.nextFor(this.localId);
+  }
+
+  /** Adopt one `Projectiles` frame (§8.24). Own grenades are skipped — they are predicted. */
+  applyReplicatedProjectiles(
+    projectiles: readonly ProjectileState[],
+    smoke: readonly SmokeState[],
+  ): void {
+    this.equipment.applyReplicated(projectiles, smoke, this.localId);
+  }
+
+  /** Drop every replicated grenade. Called on migration, per §4.18's obligation list. */
+  clearReplicatedProjectiles(): void {
+    this.equipment.applyReplicated(EMPTY_PROJECTILES, EMPTY_SMOKE, this.localId);
   }
 
   /** Adopt one `Streaks` frame (§8.22). Called by `MatchWorld` from the net session. */
