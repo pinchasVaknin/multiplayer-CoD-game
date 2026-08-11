@@ -4831,3 +4831,158 @@ shipped timings ran clean. So (b) is a structural hole that produces precisely t
 symptom and makes it permanent, not a confirmed root cause. If it recurs, the new logging names
 it: `the skirmish flow threw`, `session N threw while receiving`, or `a vote resolved while a
 match was already present (state X)`.
+
+---
+
+# M11 Gate B — in progress
+
+**Gate A is sealed. Gate B is part-done.** Three commits on
+`gate-b/objective-replication` beyond the objective-replication groundwork:
+`2064b32`, `0b8a4b7`, `1740c6c`. Everything below is measured, not asserted; where
+something is unverified it says so.
+
+## The one root cause behind most of it
+
+`MatchFlow.simulate` is skipped on a networked client (`ClientMatch` guards it with
+`!isNetworked`), and **every piece of mode state is advanced from it** — `mode.onTick`,
+`mode.onKill`, the plant timer, the fuse, the capture recount. The v4 objective channel fixed
+the symptom for Domination's flags and left the identical hole open everywhere else.
+
+The three modes failed differently, and the difference is the useful part:
+
+| Mode | What a networked client actually had |
+|---|---|
+| Domination | Flags **stale** — replicated at v4 |
+| Kill Confirmed | Tag list permanently **empty**; nothing dropped, collected or expired |
+| Search & Destroy | Fuse **stopped**, holding its constructed value all round |
+
+A stale value looks like a bug. An empty list and a frozen number look like a feature nobody
+has got to yet, which is why neither was ever reported.
+
+## What was built
+
+**Protocol v5** — `MsgS.Tags` and `MsgS.Bomb`, alongside v4's `Objectives`.
+
+**The seam is on `GameMode`**, beside `objectiveZones`, so the server asks any mode for its
+state without importing the concrete classes:
+
+- `dogTags: readonly TagInfo[] | null` — **`null` and `[]` differ deliberately.** `null` is
+  "this mode has no such thing" and sends nothing; `[]` is "none right now" and must still be
+  sent, or a client never learns the last tag was collected. Zones may skip on empty because a
+  zone list is fixed at construction; a tag list is not.
+- `bombInfo: BombInfo | null` — returns **one object the mode mutates**, never a literal. It is
+  read on the snapshot cadence from inside the tick and §4.7 allows no allocation there.
+
+## Three pieces of wiring that never crossed to the server at M9
+
+This is the milestone's real finding, and all three have one shape: the fact moved to the
+server, the code around it stayed in `ClientMatch`, where it kept working for single-player and
+proved nothing about the half that had moved. It is the standing authority-migration failure,
+three times over.
+
+1. **`ServerMatch` never set `bots.objectives`.** `ClientMatch` has since M7. So
+   `BotDirector.objectives` was null in every networked match and `ObjectiveIntent` had nothing
+   to ask: server-side bots pursued no flag, chased no dog tag and never walked onto the bomb.
+   Since a bot's whole interaction vocabulary is `onArrived`, **no S&D round played over the
+   network could be decided by a plant.** Rounds still ended, on elimination and the clock, so
+   nothing crashed and nothing logged.
+2. **The Use key had no server-side reader.** Pick up, plant, defuse and cancel lived only in
+   `ClientMatch.stepBombInteraction`. Between this and (1), *nobody* in a networked S&D could
+   touch the bomb. `ServerMatch.stepBombInteractions` is the authoritative port, run before the
+   flow so a plant that starts and completes on one tick resolves identically on both runtimes;
+   the client's copy is now behind `!isNetworked` so it is not a second authority.
+3. **No round reset for humans.** `ClientMatch` respawns everybody on `EV.RoundStarted`;
+   `ServerMatch` did not, and there is no other route home because `maybeRespawn` gates on
+   `respawnAllowed`, which in a one-life mode is false by construction (`0 < 0`). **A human who
+   died in round one of a networked S&D was dead for the rest of the match** — able to look
+   around, unable to move. Bots were unaffected, which is why nothing logged.
+
+## Two single-player assumptions that do not survive N players
+
+- `SearchAndDestroy.manualPickupId` (one id) became `manualPickup(id)` (a predicate). One id is
+  exactly right for a browser and silently wrong on a server, where every human past the first
+  would have collected the bomb by walking over it.
+- `StreakSystem.localId` became `reportProgressTo(id)`, and `simulate(tick, cmd)` became a
+  per-streak `commandFor(id)`. The old signature flew whichever chopper matched `localId` off
+  the single command it was handed — on a server, two gunners would have shared one stick.
+
+Both are the same shape and worth looking for elsewhere.
+
+## Bot replacement (§6.7, §8.27)
+
+`removeBotForSeat` and `replacePlayerWithBot` existed with **no call sites** — the handover's
+own "implemented but not verified usually means unreachable" trap. A live match spawns the
+mode's full authored roster before anybody migrates in, so every seat granted afterwards has to
+take a bot with it; it did not, and three humans in a ten-bot TDM made it thirteen bodies.
+
+`unseat` gained a **cause**, because only the caller can tell a departure from a migration:
+
+- `'disconnected'` from a RUNNING match leaves a bot behind (in S&D the last human on a side
+  dropping out ends the round for everybody, scored as an elimination nobody achieved).
+- `'migrated'` does not — same player, one instance over, same synchronous call. Treating it as
+  a departure would add a bot every cycle and turn §8.13's flat hundred into a staircase.
+
+Mid-round joins are blocked while the flow is `LIVE` and deliberately **not** during `WARMUP`,
+which is the 3-2-1 every migrating player arrives during; blocking there would hold the whole
+lobby out of round one.
+
+## Measured
+
+Loopback, shortened timings where noted. Every probe was watched red first, and in three cases
+the red state was the real shipped bug rather than a synthetic one.
+
+| Probe | Before | After |
+|---|---|---|
+| KC tags | channel did not exist | **1260 upd / 29 distinct / 10 on the floor at peak**, match to completion |
+| S&D bomb | `867 upd / fuse ticked 0 / 0 interact` — replicated and constant | **1590 upd / fuse ticked 899 / 100 interact / planted+exploded** |
+| TDM roster | 3H+10B=13 | **3H+7B=10**, the mode's authored count |
+| FFA roster | — | **3H+5B=8**, tracks the mode rather than a constant |
+| S&D deaths per client | at most 1 for the whole match | **2** — impossible in a one-life mode without the reset |
+| Leak, 12 cycles | — | subscriptions **26 to 26 (+0)**, heap +0.26 MiB |
+| Regression, 5 matches | — | 5/5 complete, **scores identical on the same seeds** |
+| Mispredictions into live | 0 | **0**, every run |
+
+The subscription baseline moved 21 to 26 because the permanent arena now holds a `StreakSystem`
+too. The number that matters is the **delta across cycles**, which is 0.
+
+## Killstreaks: groundwork only
+
+`StreakSystem` runs per match on the server, earns and loses on the authoritative score,
+resolves all three perk hooks against the migrated class, and disposes flat. **It is not
+reachable over the wire**: a networked client cannot ask to spend one (`activate` has only ever
+been called from client-side input), and streak entity state is not replicated, so a sentry that
+exists on the server is invisible to every client. Both gaps are named in `ServerMatch`'s class
+header. This is groundwork for §8.22, not §8.22.
+
+## What Gate B still needs
+
+In rough dependency order. The first item unblocks the most.
+
+1. **Streak replication and activation.** A client-to-server activate request (carrying the
+   mortar's marked coordinates), and a channel for streak entity state — sentry pose and health,
+   care package position and claim, chopper body, UAV sweep contacts. `EventCollector`
+   replicates seven events today and none of them are streak events.
+2. **Ghost as an intel filter**, in `MatchInstance.buildEntities`/`sendSnapshots`, per recipient.
+   Heed the handover's warning: removing a Ghost player from the snapshot outright makes their
+   *body* invisible, which is not what Ghost does. `visibleToUav` already stops them being
+   recorded as a contact server-side; the filter is about what enemy clients are told.
+3. **Chopper Gunner's four cases** — gunner disconnects, gunner killed, match ends mid-streak,
+   instance destroyed mid-streak.
+4. **Grenades.** `ServerMatch` still has no equipment thrower for humans. Predicted by the
+   thrower, authoritative on the instance, and smoke must occlude bot LOS server-side.
+5. **Networked S&D spectator** for one-life rounds; M7's was local. Note that with (3) above
+   fixed, a dead player now has a real wait to fill.
+6. **Divergence checker headless.** It exists client-only (`client/debug/DivergenceChecker.ts`);
+   `HeadlessClient` needs it before §8.21's "zero mismatches across all five modes" can be
+   claimed at all.
+7. **Cosmetic audit** (§8.25) and **per-listener audio on Depot** (§8.26).
+8. **The verification battery**: every mode on every map to completion, a full S&D best-of-5
+   with the round-3 swap, the 100-cycle leak, hardening probes against `Tags` and `Bomb`, the
+   12-hour soak, and every §7-conditions claim against a **deployed** server rather than
+   loopback.
+
+## Still open from Gate A, unchanged
+
+Client background build time per map (needs a real browser — the preview pane never fires
+`requestAnimationFrame`), and the arena-return residual of 1-3 sub-25 cm mispredictions. Neither
+was touched by this work.
