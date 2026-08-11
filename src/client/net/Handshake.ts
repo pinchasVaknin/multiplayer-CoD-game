@@ -203,6 +203,14 @@ function awaitWelcome(
               serverTick: msg.serverTick,
               serverMs: msg.serverMs,
               snapshotHz: msg.snapshotHz,
+              // M11: which instance this seat is in, and from which tick. On a handshake the
+              // answer is always the warmup arena at the current tick (§6.7 makes warmup the
+              // only entry point), but it is read off the message rather than assumed — the
+              // day that stops being true, an assumption here would be a client applying an
+              // arena's world to a live match.
+              matchId: msg.matchId,
+              effectiveTick: msg.effectiveTick,
+              migrated: msg.migrated,
             };
             /**
              * `settled` is set by `finish` *before* the resolve runs, so any frame still to be

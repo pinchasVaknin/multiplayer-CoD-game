@@ -8,7 +8,13 @@ import type { MovementConfig } from '../player/MovementConfig';
 import type { ViewmodelConfig } from '../weapons/ViewmodelConfig';
 import type { WeaponDef } from '../weapons/WeaponDefs';
 import type { CollisionWorld } from '../world/CollisionWorld';
-import { bakeNavmesh, NAV_DEFAULT_LAYERS, samplePatrolCells, type NavGrid } from '../world/Navmesh';
+import {
+  bakeNavmesh,
+  NAV_DEFAULT_LAYERS,
+  samplePatrolCells,
+  type NavBakeOptions,
+  type NavGrid,
+} from '../world/Navmesh';
 import type { MapDef } from '../world/maps/types';
 import { AiScheduler, type SchedulerConfig } from './AiScheduler';
 import { Bot } from './Bot';
@@ -80,6 +86,33 @@ const PATROL_SPACING = 7;
  */
 const NAV_DROP_HEIGHT = 2.8;
 
+/**
+ * The bake options a map is navmeshed with (M11, S4.19).
+ *
+ * Lifted out of `BotDirector`'s constructor so that the boot-time bake and any local bake
+ * produce the **same graph**. A second copy of this option list is the kind of drift that
+ * would present as bots pathing correctly in warmup and walking into walls in a live match,
+ * with nothing in either code path looking wrong.
+ */
+export function navBakeOptionsFor(mapDef: MapDef, movement: MovementConfig): NavBakeOptions {
+  return {
+    cellSize: NAV_CELL,
+    capsuleRadius: movement.capsuleRadius,
+    standHeight: movement.standHeight,
+    stepHeight: movement.stepHeight,
+    // Ground snap is what a bot can walk down without it reading as a fall.
+    maxDrop: movement.groundSnapDist,
+    // M8. Opt-in per map, and the two halves arrive together: the same ledge window `Mantle`
+    // uses for climbing up, and a bounded step-off for coming back down. A map that does not
+    // ask for them bakes exactly the graph M3 baked.
+    mantleHeight: mapDef.navClimb === true ? movement.mantleMaxHeight : 0,
+    dropHeight: mapDef.navClimb === true ? NAV_DROP_HEIGHT : 0,
+    minGroundY: simCos(movement.maxSlopeDeg * (Math.PI / 180)),
+    seeds: mapDef.spawns.map((s) => s.position),
+    layers: mapDef.navLayers ?? NAV_DEFAULT_LAYERS,
+  };
+}
+
 const NAMES = [
   'VULTURE',
   'RIPTIDE',
@@ -132,6 +165,23 @@ export interface BotDirectorDeps {
   /** The local player, so perception and spawn safety see it like anything else. */
   readonly player: Combatant;
   readonly seed: number;
+  /**
+   * A navmesh baked elsewhere, or undefined to bake one here (M11, S4.19).
+   *
+   * The bake is the expensive half of building a match — it is a flood fill over every cell of
+   * the map — and S4.19 requires it to happen once at server boot rather than on the path a
+   * player experiences as a seamless transition.
+   *
+   * A `NavGrid` is safe to share: every array on it is `readonly` and filled during the bake,
+   * and the two things that search it — `Pathfinder` and `SpawnSelector` — allocate their own
+   * per-instance scratch rather than writing back into the grid. The mutable half of the AI's
+   * spatial state is the **cover reservations**, and `CoverIndex` is constructed per director
+   * below, so two instances never contend for the same piece of cover.
+   *
+   * Undefined keeps M3's behaviour exactly, which is what the browser and the single-player
+   * path still want: one match, one bake, nothing to cache it in.
+   */
+  readonly nav?: NavGrid;
 }
 
 export interface NavStats {
@@ -262,22 +312,9 @@ export class BotDirector {
     this.deps = deps;
     this.rng = new Rng(deps.seed);
 
-    this.nav = bakeNavmesh(deps.world, deps.mapDef.navBounds, {
-      cellSize: NAV_CELL,
-      capsuleRadius: deps.movement.capsuleRadius,
-      standHeight: deps.movement.standHeight,
-      stepHeight: deps.movement.stepHeight,
-      // Ground snap is what a bot can walk down without it reading as a fall.
-      maxDrop: deps.movement.groundSnapDist,
-      // M8. Opt-in per map, and the two halves arrive together: the same ledge window
-      // `Mantle` uses for climbing up, and a bounded step-off for coming back down. A map
-      // that does not ask for them bakes exactly the graph M3 baked.
-      mantleHeight: deps.mapDef.navClimb === true ? deps.movement.mantleMaxHeight : 0,
-      dropHeight: deps.mapDef.navClimb === true ? NAV_DROP_HEIGHT : 0,
-      minGroundY: simCos(deps.movement.maxSlopeDeg * (Math.PI / 180)),
-      seeds: deps.mapDef.spawns.map((s) => s.position),
-      layers: deps.mapDef.navLayers ?? NAV_DEFAULT_LAYERS,
-    });
+    this.nav =
+      deps.nav ??
+      bakeNavmesh(deps.world, deps.mapDef.navBounds, navBakeOptionsFor(deps.mapDef, deps.movement));
 
     const patrolCells = samplePatrolCells(this.nav, PATROL_SPACING);
     this.perception = new Perception(deps.world);

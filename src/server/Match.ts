@@ -19,7 +19,7 @@ import { ScoreSystem } from '../shared/combat/ScoreSystem';
 import { createGameBus, EV, type GameBus } from '../shared/core/Events';
 import { DT } from '../shared/core/Loop';
 import { logger } from '../shared/core/Log';
-import type { GameMode, MatchResult } from '../shared/modes/GameMode';
+import type { GameMode, MatchResult, MatchVariant } from '../shared/modes/GameMode';
 import { MatchFlow } from '../shared/modes/MatchFlow';
 import {
   resolveLoadout,
@@ -41,7 +41,8 @@ import {
   type ViewmodelConfig,
 } from '../shared/weapons/ViewmodelConfig';
 import type { CollisionWorld } from '../shared/world/CollisionWorld';
-import { loadMapCollision } from '../shared/world/MapLoader';
+import { loadMapCollision, type LoadedCollision } from '../shared/world/MapLoader';
+import type { NavGrid } from '../shared/world/Navmesh';
 import { Spectator } from './Spectator';
 
 const log = logger('Match');
@@ -93,6 +94,34 @@ export interface ServerMatchOptions {
    * their rig history is written before `step` has had a chance to say what tick it is.
    */
   readonly startTick?: number;
+  /**
+   * Collision and navmesh baked at process boot (M11, S4.19), or undefined to bake here.
+   *
+   * When present, construction does no flood fills at all — it wraps geometry that already
+   * exists. That is what makes `LOADING` *"instantiation, not baking"* per S4.18, and it is
+   * measured: see the boot report against the allocation time in PLAN.md.
+   *
+   * Undefined keeps the M9/M10 behaviour, which the batch harnesses still use: they build one
+   * match, run it and exit, so a process-level cache would only be a cache with one reader.
+   */
+  readonly baked?: { readonly collision: LoadedCollision; readonly nav: NavGrid };
+  /**
+   * Shorten both match clocks, seconds. Harness only — see `ModeDeps.roundSecondsOverride`
+   * for why there are two and why they must be shortened together.
+   */
+  readonly roundSecondsOverride?: number;
+  /**
+   * Which authored ruleset to run (M11, §6.4). `'SKIRMISH'` puts S&D on its best-of-5.
+   * Undefined is `'STANDARD'`, which is what every earlier milestone's harness expects.
+   */
+  readonly variant?: MatchVariant;
+  /**
+   * Total combatants, overriding the mode's authored roster size. See `populate`.
+   *
+   * Distinct from `bots`, which is the *requested* count a mode with no authored size falls
+   * back to. This one wins over both.
+   */
+  readonly rosterOverride?: number;
 }
 
 export interface ServerMatchResult {
@@ -178,11 +207,15 @@ export class ServerMatch {
     // ---- the world ---------------------------------------------------------
     // Collision and nav only. `client/world/MapRender.ts` holds the half that would have
     // needed a GPU, and this process never imports it.
-    const loaded = loadMapCollision(this.mapEntry.def);
+    //
+    // M11: pre-baked when the server passes one (S4.19), so `LOADING` is instantiation rather
+    // than two flood fills on the path a player is meant to experience as seamless.
+    const loaded = options.baked?.collision ?? loadMapCollision(this.mapEntry.def);
     this.world = loaded.collision;
     log.info(
       `${this.mapEntry.name}: ${loaded.stats.colliders} colliders, ` +
-        `${loaded.stats.hashEntries} hash entries across ${loaded.stats.hashCells} cells.`,
+        `${loaded.stats.hashEntries} hash entries across ${loaded.stats.hashCells} cells` +
+        (options.baked === undefined ? ' (baked here).' : ' (pre-baked at boot).'),
     );
 
     // ---- the firefight -----------------------------------------------------
@@ -202,6 +235,7 @@ export class ServerMatch {
       scheduler: this.schedulerConfig,
       player: this.spectator,
       seed: options.seed,
+      nav: options.baked?.nav,
     });
     /**
      * Free-for-All, read off the registry rather than compared against the id.
@@ -222,6 +256,8 @@ export class ServerMatch {
       score: this.score,
       roster: this.bots.roster,
       mapDef: this.mapEntry.def,
+      roundSecondsOverride: options.roundSecondsOverride,
+      variant: options.variant,
     });
     this.flow = new MatchFlow({
       bus: this.bus,
@@ -234,6 +270,8 @@ export class ServerMatch {
       // announcer calls a win a victory, and nothing headless listens to the announcer.
       localTeam: PLAYER_TEAM,
       onSidesSwapped: (swapped) => this.bots.spawns.setSideSwap(swapped),
+      // Both clocks or neither. See `ModeDeps.roundSecondsOverride`.
+      roundSecondsOverride: options.roundSecondsOverride,
     });
     this.bots.respawnPolicy = {
       allowed: (id) => this.flow.respawnAllowed(id),
@@ -694,7 +732,15 @@ export class ServerMatch {
   // -- internals ------------------------------------------------------------
 
   private populate(): void {
-    const total = this.modeEntry.rosterSize ?? this.options.bots;
+    /**
+     * `rosterOverride` beats the mode's authored size, which beats the requested bot count.
+     *
+     * The override exists for the warmup arena (§6.3: *"2-3 bots"*), which runs FFA rules on a
+     * mode entry that fixes the roster at eight. Without it the arena would fill the greybox
+     * room with eight bots — a room authored as a two-lane weapon range — and the *"stand on a
+     * range while you wait"* feel §6.3 asks for would be a brawl instead.
+     */
+    const total = this.options.rosterOverride ?? this.modeEntry.rosterSize ?? this.options.bots;
     const teamB = Math.ceil(total / 2);
     const teamA = total - teamB;
     const mix: readonly BotTier[] =

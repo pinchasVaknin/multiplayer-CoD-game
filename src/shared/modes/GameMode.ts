@@ -103,7 +103,30 @@ export interface ModeDeps {
    * and the shared simulation is verified and should be extended, not rewritten.
    */
   readonly roundSecondsOverride?: number | undefined;
+  /**
+   * Which authored ruleset this match runs (M11, §6.4).
+   *
+   * `'STANDARD'` is what the menu and every earlier milestone build. `'SKIRMISH'` is the
+   * drop-in flow's variant, and today exactly one mode reads it: Search & Destroy runs a
+   * shorter series on the ballot, because a full one is a twenty-minute commitment in a flow
+   * whose whole premise is that you did not commit to anything.
+   *
+   * A named variant rather than a bag of per-mode overrides on this interface. The numbers
+   * still live in one config object per variant next to the mode that owns them (S3), and a
+   * mode that has no variant simply never reads the field.
+   */
+  readonly variant?: MatchVariant | undefined;
 }
+
+/**
+ * See `ModeDeps.variant`.
+ *
+ * `'WARMUP'` is the permanent arena (§6.3): free-for-all rules with damage live and instant
+ * respawn, and **no score, no win condition and no match timer**. It is a variant rather than
+ * a sixth mode because it is Free-for-All with two limits switched off, and §9 puts new modes
+ * out of scope for good reason.
+ */
+export type MatchVariant = 'STANDARD' | 'SKIRMISH' | 'WARMUP';
 
 export abstract class GameMode {
   abstract readonly id: GameModeId;

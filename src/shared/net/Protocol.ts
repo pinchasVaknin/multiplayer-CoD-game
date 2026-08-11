@@ -22,7 +22,12 @@
  * ticks — so without them the banner and the clock showed their construction-time values for
  * the whole match.
  */
-export const PROTOCOL_VERSION = 2;
+/**
+ * v3 (M11): the skirmish flow. Five new messages in each direction's id space, and `Welcome`
+ * grew an instance id and a migration tick — a client that cannot tell which instance a
+ * snapshot describes will apply a live match's world to its warmup arena.
+ */
+export const PROTOCOL_VERSION = 3;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
@@ -37,6 +42,19 @@ export const MsgC = {
   Ping: 3,
   /** Voluntary disconnect. Lets the server free the seat without waiting for a timeout. */
   Bye: 4,
+  /**
+   * The player's class, as ids (M11, Tier 1 #20).
+   *
+   * The transport the handover said this fix needed and did not have. Sent once after the
+   * handshake and again whenever the loadout editor is closed; the server resolves it with the
+   * same shared `resolveLoadout` the client used, and applies it on the **next spawn** rather
+   * than to the standing body (handover #20, rule 3).
+   */
+  Loadout: 5,
+  /** A vote for the option at an index in the current phase's ballot (§4.20). */
+  Vote: 6,
+  /** "My background build for match N is finished" (§6.5). Answers `READY_WAIT`. */
+  Ready: 7,
 } as const;
 
 /** Server -> client message ids. */
@@ -53,6 +71,24 @@ export const MsgS = {
   Events: 132,
   /** The server is closing this connection, with a reason. */
   Bye: 133,
+  /**
+   * You are now in a different instance, from a named tick (M11, §4.18).
+   *
+   * Carries everything `Welcome` does — the entity id is reassigned by the new instance and
+   * the map may be different — plus the instance id and the tick the move takes effect on. The
+   * client's obligations on receipt are not optional: flush unacked commands, discard the
+   * prediction ring, resync the clock offset and clear the interpolation buffer. Carrying any
+   * of that across produces corrections that look exactly like netcode bugs.
+   */
+  Migrate: 134,
+  /** The vote cycle's state, broadcast at a low rate. The client never counts votes (§4.20). */
+  Vote: 135,
+  /** "Start building this map now" — the background build's starting gun (§6.5). */
+  Prepare: 136,
+  /** End-of-match stats and the XP breakdown, delivered **before** teardown (§6.9). */
+  Summary: 137,
+  /** A short line for the player: allocation failed, migration failed, the arena was rebuilt. */
+  Notice: 138,
 } as const;
 
 export type MsgCId = (typeof MsgC)[keyof typeof MsgC];

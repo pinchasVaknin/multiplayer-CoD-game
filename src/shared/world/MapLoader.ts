@@ -40,6 +40,23 @@ export interface CollisionStats {
  * Allocation happens once, at load. The returned `CollisionWorld` is the single structure
  * that serves both the collision broadphase and every gameplay raycast (S4.3).
  */
+/**
+ * A second view over collision that has already been loaded (M11, S4.19).
+ *
+ * The collider set and the spatial hash are the expensive, immutable half and are shared; the
+ * `CollisionWorld` around them is per-instance because it carries query scratch. See
+ * `CollisionWorld.sharing` for why that line is drawn where it is.
+ *
+ * Everything else in the record is already immutable data off the `MapDef`, so it is passed
+ * straight through rather than copied.
+ */
+export function shareMapCollision(baked: LoadedCollision): LoadedCollision {
+  return {
+    ...baked,
+    collision: CollisionWorld.sharing(baked.collision.colliders, baked.collision.hash),
+  };
+}
+
 export function loadMapCollision(def: MapDef): LoadedCollision {
   const solidBrushes = def.brushes.filter((b) => b.solid !== false).length;
   let solidPropParts = 0;

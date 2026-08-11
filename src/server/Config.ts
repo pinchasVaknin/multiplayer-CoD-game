@@ -1,4 +1,5 @@
 import { NET_PERFECT, parseConditions, type NetConditions } from '../shared/net/NetSim';
+import { VOTE_CYCLE_CONFIG, type VoteCycleConfig } from '../shared/net/Skirmish';
 
 /**
  * Server configuration, from the environment (M10, S4.9 and S6.6).
@@ -71,6 +72,60 @@ export interface ServerConfig {
    * a diagnostic switch, not a gameplay option, and the server logs loudly when it is on.
    */
   readonly rewindDisabled: boolean;
+
+  // -- M11: the skirmish flow -------------------------------------------------
+
+  /**
+   * Bots in the permanent warmup arena (§6.3: 2-3).
+   *
+   * Three by default. Two is the brief's floor and leaves a lone player duelling a pair; four
+   * starts to crowd the greybox room, which is a weapon range rather than an arena.
+   */
+  readonly warmupBots: number;
+  /**
+   * How long `READY_WAIT` waits on a client's background build before starting without it
+   * (§4.18, §6.5), ms.
+   *
+   * §4.18: *"A server that waits indefinitely on one slow client is a server that is stuck."*
+   * Eight seconds is sized from the measured build: the slowest map builds in about 1.6 s on
+   * the reference machine, so this is roughly five times the expected worst case — long enough
+   * that it never fires for a machine that is merely slow, short enough that a client which
+   * has genuinely stalled costs one player a loading screen rather than costing everybody the
+   * match.
+   */
+  readonly readyTimeoutMs: number;
+  /** Seconds the end-of-match summary is held before everybody returns (§6.9: 12-15 s). */
+  readonly summaryHoldSeconds: number;
+  /**
+   * Wrap the allocator in `FaultyMatchAllocator` (§4.17, §8.14).
+   *
+   * Diagnostic only, and the server says so loudly at boot. With it off, the shipping
+   * allocator runs with nothing in front of it.
+   */
+  readonly faultInjection: boolean;
+  /**
+   * Vote phase durations (§4.20), overridable for the harness.
+   *
+   * ## Shortening these is a documented hazard, not a free speed-up
+   *
+   * Handover Tier 2 §C, on a bug found by a browser and missed by a harness: *"A harness that
+   * shortens a timer to go faster can shorten past the bug it exists to find. Run at least one
+   * pass at real timings."* The M11 case is exactly that shape — a 6 s countdown reached a
+   * match inside a 10 s session timeout every time, and the 30 s lobby that broke it never
+   * ran.
+   *
+   * So they are configurable, because a 100-cycle leak run at 60 s a cycle is 100 minutes and
+   * the thing it measures has nothing to do with the clock — and every run that uses a short
+   * cycle **says so in its report**, and at least one pass is always run at the shipped values.
+   */
+  readonly voteCycle: VoteCycleConfig;
+  /**
+   * Shorten every live match's round, seconds. Zero uses each mode's authored length.
+   *
+   * Harness only, and it shortens **both** match clocks together — see
+   * `ModeDeps.roundSecondsOverride` for why there are two and what happens when only one moves.
+   */
+  readonly matchRoundSeconds: number;
 }
 
 export function loadConfig(env: Record<string, string | undefined>): ServerConfig {
@@ -102,7 +157,27 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     conditions: parsed ?? NET_PERFECT,
     metricsSeconds: intOr(env['METRICS_SECONDS'], 30, 0, 3600),
     rewindDisabled: (env['REWIND_DISABLED'] ?? '') === '1',
+    warmupBots: intOr(env['WARMUP_BOTS'], 3, 0, 8),
+    readyTimeoutMs: intOr(env['READY_TIMEOUT_MS'], 8000, 500, 60_000),
+    summaryHoldSeconds: intOr(env['SUMMARY_HOLD_SECONDS'], 14, 1, 60),
+    faultInjection: (env['FAULT_INJECTION'] ?? '') === '1',
+    voteCycle: {
+      playSeconds: intOr(env['PLAY_SECONDS'], VOTE_CYCLE_CONFIG.playSeconds, 1, 600),
+      modeVoteSeconds: intOr(env['MODE_VOTE_SECONDS'], VOTE_CYCLE_CONFIG.modeVoteSeconds, 1, 120),
+      mapVoteSeconds: intOr(env['MAP_VOTE_SECONDS'], VOTE_CYCLE_CONFIG.mapVoteSeconds, 1, 120),
+    },
+    matchRoundSeconds: intOr(env['MATCH_ROUND_SECONDS'], 0, 0, 3600),
   };
+}
+
+/** Whether any timing knob has been turned down. Reported by every harness run. */
+export function usesShortenedTimings(cfg: ServerConfig): boolean {
+  return (
+    cfg.voteCycle.playSeconds !== VOTE_CYCLE_CONFIG.playSeconds ||
+    cfg.voteCycle.modeVoteSeconds !== VOTE_CYCLE_CONFIG.modeVoteSeconds ||
+    cfg.voteCycle.mapVoteSeconds !== VOTE_CYCLE_CONFIG.mapVoteSeconds ||
+    cfg.matchRoundSeconds > 0
+  );
 }
 
 /** One line describing the whole configuration, for the boot log. */
@@ -113,10 +188,14 @@ export function describeConfig(cfg: ServerConfig): string {
       ? `, rotation ${cfg.modeRotation.join('/')} on ${cfg.mapRotation.join('/')}`
       : '';
   return (
-    `${cfg.host}:${cfg.port} ${tls}, ${cfg.modeId} on ${cfg.mapId}, ` +
-    `${cfg.bots} bots, seed ${cfg.seed}, ${cfg.snapshotHz} Hz snapshots, ` +
-    `${cfg.interpolationDelayMs}ms interpolation${rotation}, ` +
-    `${cfg.matchEndHoldSeconds}s post-match hold`
+    `${cfg.host}:${cfg.port} ${tls}, skirmish flow, ` +
+    `arena with ${cfg.warmupBots} bots, seed ${cfg.seed}, ${cfg.snapshotHz} Hz snapshots, ` +
+    `${cfg.interpolationDelayMs}ms interpolation, ` +
+    `${cfg.readyTimeoutMs}ms ready timeout, ${cfg.summaryHoldSeconds}s summary hold` +
+    (cfg.faultInjection ? ', FAULT INJECTION ON' : '') +
+    // The batch harnesses still drive a single match from `MAP`/`MODE`, so the rotation is
+    // still described when it is set — it just no longer governs the dedicated server.
+    (rotation === '' ? '' : ` (harness rotation${rotation})`)
   );
 }
 

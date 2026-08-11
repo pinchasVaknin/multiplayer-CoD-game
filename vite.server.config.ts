@@ -35,6 +35,9 @@ export default defineConfig({
         serve: 'src/server/serve.ts',
         netHarness: 'src/server/netHarness.ts',
         hashRun: 'src/server/hashRun.ts',
+        // M11. Drives the whole skirmish flow — connect, warmup, vote, migrate, play,
+        // return — plus the teardown leak run. Every Gate A number comes out of this.
+        skirmishHarness: 'src/server/skirmishHarness.ts',
       },
       output: { entryFileNames: '[name].js', format: 'esm' },
     },

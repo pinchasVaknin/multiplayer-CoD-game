@@ -24,6 +24,7 @@ import {
   writeOwnerState,
   type EntitySnapshot,
 } from './Snapshot';
+import type { NetLoadout, NetWeaponLoadout } from './Skirmish';
 import { ByteReader, ByteWriter } from './Wire';
 
 /**
@@ -153,10 +154,31 @@ function head(w: ByteWriter, id: number): void {
   w.u8v(id);
 }
 
-export function writeHello(w: ByteWriter, name: string): Uint8Array {
+/**
+ * The first frame on a connection — and it carries the player's class (M11, Tier 1 #20).
+ *
+ * ## Why the loadout is here and not in a message that follows
+ *
+ * The seat is created **inside the handshake**: `onJoin` calls `addPlayer`, which builds the
+ * `NetPlayer` whose constructor sets `controller.speedScale` from the resolved perks. A class
+ * that arrives in a later frame therefore arrives after the entity it was meant to configure,
+ * and for every tick in between the client predicts with Lightweight's +7% while the server
+ * simulates without it.
+ *
+ * That window is not theoretical and it is not small. Measured with the class sent one frame
+ * later: **178 mispredictions in 1277 comparisons** across a warmup period, against 0 once it
+ * moved into the handshake. It is Tier 1 #20 in miniature — the same arithmetic, the same
+ * cause, just bounded by how long the player stays in the arena rather than forever.
+ *
+ * A trailing optional field, so a client that has no class yet (the first ever run, before the
+ * M6 save exists) simply omits it and gets the server defaults.
+ */
+export function writeHello(w: ByteWriter, name: string, loadout?: NetLoadout | null): Uint8Array {
   head(w, MsgC.Hello);
   w.u16(PROTOCOL_VERSION);
   w.str(name);
+  w.u8v(loadout == null ? 0 : 1);
+  if (loadout != null) writeLoadoutBody(w, loadout);
   return w.bytes();
 }
 
@@ -208,25 +230,218 @@ export function writeCommands(
   return w.bytes();
 }
 
-export function writeWelcome(
+/**
+ * `Welcome` and `Migrate` share a body, deliberately.
+ *
+ * They say the same thing — *"this is your seat, in this instance, on this map, from this
+ * tick"* — and differ only in whether the client had one before. One encoder means the
+ * migration path cannot grow a field the join path lacks, which is the failure mode that
+ * produces a client correctly seated in a live match and still rendering warmup's world.
+ */
+export function writeWelcome(w: ByteWriter, info: WelcomeInfo): Uint8Array {
+  head(w, info.migrated ? MsgS.Migrate : MsgS.Welcome);
+  writeSeatBody(w, info);
+  return w.bytes();
+}
+
+function writeSeatBody(w: ByteWriter, info: WelcomeInfo): void {
+  w.u16(PROTOCOL_VERSION);
+  w.u8v(info.entityId);
+  w.u8v(info.team === 'B' ? 1 : 0);
+  w.str(info.mapId);
+  w.str(info.modeId);
+  w.i32(info.serverTick);
+  w.f64(info.serverMs);
+  w.u8v(info.snapshotHz);
+  w.u16(info.matchId);
+  w.i32(info.effectiveTick);
+}
+
+function readSeatBody(r: ByteReader, migrated: boolean): (WelcomeInfo & { version: number }) | null {
+  const version = r.u16();
+  const entityId = r.u8v();
+  const team = r.u8v() === 1 ? 'B' : 'A';
+  const mapId = r.str();
+  const modeId = r.str();
+  const serverTick = r.i32();
+  const serverMs = r.f64();
+  const snapshotHz = r.u8v();
+  const matchId = r.u16();
+  const effectiveTick = r.i32();
+  if (r.overran) return null;
+  return {
+    version,
+    entityId,
+    team,
+    mapId,
+    modeId,
+    serverTick,
+    serverMs,
+    snapshotHz,
+    matchId,
+    effectiveTick,
+    migrated,
+  };
+}
+
+// -- M11: the skirmish messages ----------------------------------------------
+
+/**
+ * The player's class, as ids (Tier 1 #20, rule 1).
+ *
+ * Nothing resolved crosses this wire: no damage number, no recoil value, no speed multiplier.
+ * The server looks every id up in the same registry the client did and runs the same
+ * `resolveLoadout`, so the two sides cannot disagree about what a class *does* while agreeing
+ * about what it contains.
+ */
+export function writeLoadout(w: ByteWriter, loadout: NetLoadout): Uint8Array {
+  head(w, MsgC.Loadout);
+  writeLoadoutBody(w, loadout);
+  return w.bytes();
+}
+
+/** The class's body, shared by `Hello` and `Loadout` so the two cannot encode it differently. */
+function writeLoadoutBody(w: ByteWriter, loadout: NetLoadout): void {
+  w.str(loadout.name);
+  writeWeaponLoadout(w, loadout.primary);
+  writeWeaponLoadout(w, loadout.secondary);
+  w.str(loadout.lethal);
+  w.str(loadout.tactical);
+  w.str(loadout.fieldUpgrade);
+  writeIdList(w, loadout.perks);
+  writeIdList(w, loadout.streaks);
+}
+
+function readLoadoutBody(r: ByteReader): NetLoadout {
+  const name = r.str();
+  const primary = readWeaponLoadout(r);
+  const secondary = readWeaponLoadout(r);
+  const lethal = r.str();
+  const tactical = r.str();
+  const fieldUpgrade = r.str();
+  const perks = readIdList(r);
+  const streaks = readIdList(r);
+  return { name, primary, secondary, lethal, tactical, fieldUpgrade, perks, streaks };
+}
+
+function writeWeaponLoadout(w: ByteWriter, weapon: NetWeaponLoadout): void {
+  w.str(weapon.weaponId);
+  w.str(weapon.camo ?? '');
+  writeIdList(w, weapon.attachments);
+}
+
+function writeIdList(w: ByteWriter, ids: readonly (string | null)[]): void {
+  const capped = Math.min(ids.length, MAX_ID_LIST);
+  w.u8v(capped);
+  for (let i = 0; i < capped; i++) w.str(ids[i] ?? '');
+}
+
+function readIdList(r: ByteReader): Array<string | null> {
+  const count = r.u8v();
+  const out: Array<string | null> = [];
+  // Capped before the loop, so a claimed length of 200 cannot make the server allocate 200
+  // strings before the reader notices it has run out of bytes (S4.16).
+  if (count > MAX_ID_LIST) return out;
+  for (let i = 0; i < count; i++) {
+    const id = r.str();
+    out.push(id === '' ? null : id);
+  }
+  return out;
+}
+
+function readWeaponLoadout(r: ByteReader): NetWeaponLoadout {
+  const weaponId = r.str();
+  const camo = r.str();
+  const attachments = readIdList(r).filter((a): a is string => a !== null);
+  return { weaponId, camo: camo === '' ? null : camo, attachments };
+}
+
+/** Longest id list any message may carry. Covers five attachments with room to spare. */
+const MAX_ID_LIST = 8;
+
+export function writeVote(w: ByteWriter, phase: number, option: number): Uint8Array {
+  head(w, MsgC.Vote);
+  w.u8v(phase);
+  w.u8v(option);
+  return w.bytes();
+}
+
+export function writeReady(w: ByteWriter, matchId: number): Uint8Array {
+  head(w, MsgC.Ready);
+  w.u16(matchId);
+  return w.bytes();
+}
+
+export function writeVoteState(w: ByteWriter, info: VoteInfo): Uint8Array {
+  head(w, MsgS.Vote);
+  w.u8v(info.phase);
+  w.i32(info.phaseEndsTick);
+  w.u8v(Math.min(info.tally.length, MAX_BALLOT_OPTIONS));
+  for (let i = 0; i < Math.min(info.tally.length, MAX_BALLOT_OPTIONS); i++) {
+    w.u8v(Math.max(0, Math.min(255, info.tally[i] ?? 0)));
+  }
+  // Signed, because -1 is "no vote" and "not decided" and both are real states.
+  w.i8(info.selfVote);
+  w.i8(info.decidedMode);
+  w.i8(info.decidedMap);
+  w.u8v(Math.min(255, info.humans));
+  return w.bytes();
+}
+
+/** Ballots are five modes and three maps; eight is headroom, not a limit anybody meets. */
+const MAX_BALLOT_OPTIONS = 8;
+
+export function writePrepare(
   w: ByteWriter,
-  entityId: number,
-  team: 'A' | 'B',
+  matchId: number,
   mapId: string,
   modeId: string,
-  serverTick: number,
-  serverMs: number,
-  snapshotHz: number,
 ): Uint8Array {
-  head(w, MsgS.Welcome);
-  w.u16(PROTOCOL_VERSION);
-  w.u8v(entityId);
-  w.u8v(team === 'B' ? 1 : 0);
+  head(w, MsgS.Prepare);
+  w.u16(matchId);
   w.str(mapId);
   w.str(modeId);
-  w.i32(serverTick);
-  w.f64(serverMs);
-  w.u8v(snapshotHz);
+  return w.bytes();
+}
+
+export function writeSummary(w: ByteWriter, info: SummaryInfo): Uint8Array {
+  head(w, MsgS.Summary);
+  w.u16(info.matchId);
+  w.str(info.mapId);
+  w.str(info.modeId);
+  w.str(info.winner);
+  w.str(info.reason);
+  w.u16(info.scoreA);
+  w.u16(info.scoreB);
+  w.u8v(info.holdSeconds);
+  w.u8v(Math.min(info.rows.length, MAX_SUMMARY_ROWS));
+  for (let i = 0; i < Math.min(info.rows.length, MAX_SUMMARY_ROWS); i++) {
+    const row = info.rows[i];
+    if (row === undefined) continue;
+    w.u8v(row.entityId);
+    w.str(row.displayName);
+    w.u8v((row.team === 'B' ? 1 : 0) | (row.isBot ? 2 : 0));
+    w.u16(row.kills);
+    w.u16(row.deaths);
+    w.u16(row.assists);
+    w.i32(row.score);
+  }
+  w.u8v(Math.min(info.xp.length, MAX_XP_LINES));
+  for (let i = 0; i < Math.min(info.xp.length, MAX_XP_LINES); i++) {
+    const line = info.xp[i];
+    if (line === undefined) continue;
+    w.str(line.label);
+    w.i32(line.amount);
+  }
+  return w.bytes();
+}
+
+const MAX_SUMMARY_ROWS = 24;
+const MAX_XP_LINES = 12;
+
+export function writeNotice(w: ByteWriter, text: string): Uint8Array {
+  head(w, MsgS.Notice);
+  w.str(text);
   return w.bytes();
 }
 
@@ -455,11 +670,73 @@ export interface WelcomeInfo {
   readonly serverTick: number;
   readonly serverMs: number;
   readonly snapshotHz: number;
+  /**
+   * Which instance this seat is in (M11). `WARMUP_MATCH_ID` is the arena.
+   *
+   * Carried on `Welcome` as well as `Migrate` so there is exactly one field the client reads
+   * to answer *"whose world is this snapshot describing"*, on both the join path and the
+   * migration path. A client that inferred it from the map id would be right until somebody
+   * voted for a live match on the greybox room.
+   */
+  readonly matchId: number;
+  /**
+   * The tick this seat becomes live, from the server's clock (§4.18).
+   *
+   * On a join this is simply the current tick. On a migration it is the **named tick** the
+   * contract turns on: the router sends this player's messages to the old instance up to it
+   * and the new one from it, and the client applies nothing from the new instance before it.
+   */
+  readonly effectiveTick: number;
+  /** True when this is a migration rather than a fresh join. Drives the client's flush. */
+  readonly migrated: boolean;
+}
+
+/** One row of the end-of-match summary (§6.9). */
+export interface SummaryRow {
+  readonly entityId: number;
+  readonly displayName: string;
+  readonly team: 'A' | 'B';
+  readonly kills: number;
+  readonly deaths: number;
+  readonly assists: number;
+  readonly score: number;
+  readonly isBot: boolean;
+}
+
+/** The XP breakdown the M6 bar animates. Awarded by the instance, persisted by the client. */
+export interface SummaryXpLine {
+  readonly label: string;
+  readonly amount: number;
+}
+
+export interface SummaryInfo {
+  readonly matchId: number;
+  readonly mapId: string;
+  readonly modeId: string;
+  readonly winner: string;
+  readonly reason: string;
+  readonly scoreA: number;
+  readonly scoreB: number;
+  readonly rows: readonly SummaryRow[];
+  readonly xp: readonly SummaryXpLine[];
+  /** Seconds the summary is held before everybody is migrated back (§6.9: 12-15 s). */
+  readonly holdSeconds: number;
+}
+
+/** The vote cycle as the server sees it. The client renders this and computes nothing. */
+export interface VoteInfo {
+  readonly phase: number;
+  readonly phaseEndsTick: number;
+  readonly tally: readonly number[];
+  readonly selfVote: number;
+  readonly decidedMode: number;
+  readonly decidedMap: number;
+  readonly humans: number;
 }
 
 /** Everything a decoded frame can be. Discriminated on `kind`. */
 export type Decoded =
-  | { kind: 'hello'; version: number; name: string }
+  | { kind: 'hello'; version: number; name: string; loadout: NetLoadout | null }
   | { kind: 'commands'; count: number; snapshotAck: number }
   | { kind: 'ping'; id: number; clientMs: number }
   | { kind: 'bye'; reason: string }
@@ -468,6 +745,14 @@ export type Decoded =
   | { kind: 'pong'; id: number; clientMs: number; serverMs: number; serverTick: number }
   | { kind: 'snapshot' }
   | { kind: 'events'; count: number }
+  | { kind: 'loadout'; loadout: NetLoadout }
+  | { kind: 'vote'; phase: number; option: number }
+  | { kind: 'ready'; matchId: number }
+  | ({ kind: 'migrate'; version: number } & WelcomeInfo)
+  | ({ kind: 'voteState' } & VoteInfo)
+  | { kind: 'prepare'; matchId: number; mapId: string; modeId: string }
+  | ({ kind: 'summary' } & SummaryInfo)
+  | { kind: 'notice'; text: string }
   | { kind: 'bad' };
 
 const BAD: Decoded = { kind: 'bad' };
@@ -493,7 +778,12 @@ export function decodeHeader(r: ByteReader): Decoded {
     case MsgC.Hello: {
       const version = r.u16();
       const name = r.str();
-      return r.overran ? BAD : { kind: 'hello', version, name };
+      // The version is checked by the caller before any of this is trusted, but the trailing
+      // loadout must still decode without throwing on a frame from a build that did not send
+      // one — hence the explicit presence byte rather than "read if bytes remain".
+      const hasLoadout = r.u8v() === 1;
+      const loadout = hasLoadout ? readLoadoutBody(r) : null;
+      return r.overran ? BAD : { kind: 'hello', version, name, loadout };
     }
     case MsgC.Commands: {
       const snapshotAck = r.u16();
@@ -512,16 +802,123 @@ export function decodeHeader(r: ByteReader): Decoded {
       return r.overran ? BAD : { kind: 'bye', reason };
     }
     case MsgS.Welcome: {
-      const version = r.u16();
-      const entityId = r.u8v();
-      const team = r.u8v() === 1 ? 'B' : 'A';
+      const seat = readSeatBody(r, false);
+      return seat === null ? BAD : { kind: 'welcome', ...seat };
+    }
+    case MsgS.Migrate: {
+      const seat = readSeatBody(r, true);
+      return seat === null ? BAD : { kind: 'migrate', ...seat };
+    }
+    case MsgC.Loadout: {
+      const name = r.str();
+      const primary = readWeaponLoadout(r);
+      const secondary = readWeaponLoadout(r);
+      const lethal = r.str();
+      const tactical = r.str();
+      const fieldUpgrade = r.str();
+      const perks = readIdList(r);
+      const streaks = readIdList(r);
+      if (r.overran) return BAD;
+      // Structurally decoded only. `sanitiseNetLoadout` is what decides whether any of these
+      // ids are *real*, and it is deliberately a separate step: decoding is about bytes and
+      // validation is about meaning, and folding them together is how a decoder ends up
+      // throwing on a name it does not recognise (S4.16).
+      return {
+        kind: 'loadout',
+        loadout: { name, primary, secondary, lethal, tactical, fieldUpgrade, perks, streaks },
+      };
+    }
+    case MsgC.Vote: {
+      const phase = r.u8v();
+      const option = r.u8v();
+      return r.overran ? BAD : { kind: 'vote', phase, option };
+    }
+    case MsgC.Ready: {
+      const matchId = r.u16();
+      return r.overran ? BAD : { kind: 'ready', matchId };
+    }
+    case MsgS.Vote: {
+      const phase = r.u8v();
+      const phaseEndsTick = r.i32();
+      const count = r.u8v();
+      if (r.overran || count > MAX_BALLOT_OPTIONS) return BAD;
+      const tally: number[] = [];
+      for (let i = 0; i < count; i++) tally.push(r.u8v());
+      const selfVote = r.i8();
+      const decidedMode = r.i8();
+      const decidedMap = r.i8();
+      const humans = r.u8v();
+      if (r.overran) return BAD;
+      return {
+        kind: 'voteState',
+        phase,
+        phaseEndsTick,
+        tally,
+        selfVote,
+        decidedMode,
+        decidedMap,
+        humans,
+      };
+    }
+    case MsgS.Prepare: {
+      const matchId = r.u16();
       const mapId = r.str();
       const modeId = r.str();
-      const serverTick = r.i32();
-      const serverMs = r.f64();
-      const snapshotHz = r.u8v();
+      return r.overran ? BAD : { kind: 'prepare', matchId, mapId, modeId };
+    }
+    case MsgS.Summary: {
+      const matchId = r.u16();
+      const mapId = r.str();
+      const modeId = r.str();
+      const winner = r.str();
+      const reason = r.str();
+      const scoreA = r.u16();
+      const scoreB = r.u16();
+      const holdSeconds = r.u8v();
+      const rowCount = r.u8v();
+      if (r.overran || rowCount > MAX_SUMMARY_ROWS) return BAD;
+      const rows: SummaryRow[] = [];
+      for (let i = 0; i < rowCount; i++) {
+        const entityId = r.u8v();
+        const displayName = r.str();
+        const bits = r.u8v();
+        const kills = r.u16();
+        const deaths = r.u16();
+        const assists = r.u16();
+        const score = r.i32();
+        rows.push({
+          entityId,
+          displayName,
+          team: (bits & 1) !== 0 ? 'B' : 'A',
+          isBot: (bits & 2) !== 0,
+          kills,
+          deaths,
+          assists,
+          score,
+        });
+      }
+      const xpCount = r.u8v();
+      if (r.overran || xpCount > MAX_XP_LINES) return BAD;
+      const xp: SummaryXpLine[] = [];
+      for (let i = 0; i < xpCount; i++) xp.push({ label: r.str(), amount: r.i32() });
       if (r.overran) return BAD;
-      return { kind: 'welcome', version, entityId, team, mapId, modeId, serverTick, serverMs, snapshotHz };
+      return {
+        kind: 'summary',
+        matchId,
+        mapId,
+        modeId,
+        winner,
+        reason,
+        scoreA,
+        scoreB,
+        holdSeconds,
+        rows,
+        xp,
+      };
+    }
+    case MsgS.Notice: {
+      const text = r.str();
+      return r.overran ? BAD : { kind: 'notice', text };
     }
     case MsgS.Reject: {
       const code = r.u8v();

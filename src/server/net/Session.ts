@@ -6,10 +6,14 @@ import {
   decodeHeader,
   readCommand,
   writeBye,
+  writeNotice,
   writePong,
   writeReject,
   writeWelcome,
+  type WelcomeInfo,
 } from '../../shared/net/Messages';
+import type { LoadoutSlot } from '../../shared/meta/Loadouts';
+import { sanitiseNetLoadout, type NetLoadout } from '../../shared/net/Skirmish';
 import {
   CLIENT_TIMEOUT_MS,
   HANDSHAKE_TIMEOUT_MS,
@@ -54,16 +58,79 @@ const PING_INTERVAL_MS = 250;
  * the one it already needs to know.
  */
 
-export type SessionState = 'handshaking' | 'playing' | 'closed';
+/**
+ * `'live'` rather than `'playing'` (M11, handover Tier 2 §C).
+ *
+ * *"M10's `SessionState` is `'handshaking' | 'playing' | 'closed'`, and the timeout logic
+ * assumes `NetClient`'s ping keeps a session alive — true only while the client is in a
+ * match. A Skirmish/Warmup flow has exactly this shape: a connected client that is not yet
+ * simulating."*
+ *
+ * The word is the fix. `'playing'` invited the reading that a session in this state is inside
+ * a match, and the skirmish flow has a state — seated in the arena, voting, waiting on a
+ * background build — where the connection is fully live and the player may not be shooting at
+ * all. `'live'` means the connection is up and the seat is real, and says nothing about what
+ * the player is doing with it.
+ *
+ * The timeout half of §C is not a problem here and it is worth saying why rather than
+ * assuming it: this flow has no state without a `NetClient`. A player is seated in the warmup
+ * arena from the moment the handshake completes, so the ping that keeps the session alive is
+ * running from the first tick. That is exactly the shape M11's lobby did *not* have.
+ */
+export type SessionState = 'handshaking' | 'live' | 'closed';
+
+/**
+ * What `onJoin` returns (M11, handover Tier 2 §D).
+ *
+ * The `afterIdentity` half is the ordering contract. See `SessionEvents.onJoin`.
+ */
+export interface JoinResult {
+  readonly player: NetPlayer;
+  /**
+   * Work that must not happen until `Identity` has left the building.
+   *
+   * A reconnect reseats the session, and reseating sends a seat assignment. Done inside
+   * `onHello`, that frame goes out *before* the `Welcome` whose reply it is, and the client's
+   * very first frame after a `Hello` is an assignment it has no context for yet — so the
+   * handshake drops it.
+   *
+   * The ordering becomes a property of this contract rather than of the order two functions
+   * happen to be called in. `Session` calls it **last**, after the welcome frame has been sent
+   * and the log line written.
+   */
+  readonly afterIdentity?: () => void;
+}
 
 export interface SessionEvents {
-  /** A validated `Hello`. Return the player seat, or null to refuse with `ServerFull`. */
-  readonly onJoin: (session: Session, name: string) => NetPlayer | null;
+  /**
+   * A validated `Hello`. Return the seat, or null to refuse with `ServerFull`.
+   *
+   * Anything this handler wants to *send* as a consequence belongs in `afterIdentity`, not in
+   * the handler body — see `JoinResult.afterIdentity`.
+   */
+  readonly onJoin: (session: Session, name: string) => JoinResult | null;
   readonly onLeave: (session: Session, reason: string) => void;
+  /** The player's class, structurally decoded and not yet validated (Tier 1 #20). */
+  readonly onLoadout: (session: Session, loadout: NetLoadout) => void;
+  /** A vote for `option` in `phase`. Accepted, ignored or rejected entirely by the cycle. */
+  readonly onVote: (session: Session, phase: number, option: number) => void;
+  /** "My background build for `matchId` is done" (§6.5). */
+  readonly onReady: (session: Session, matchId: number) => void;
 }
 
 /** Snapshot ids kept per client so a late ack can still be used as a delta baseline. */
 export const BASELINE_HISTORY = 32;
+
+/**
+ * A connection's identity, stable across migrations (M11).
+ *
+ * A plain incrementing number rather than a random token: it is never sent to a client, never
+ * used for authentication, and only has to be unique within one process lifetime. It is
+ * deliberately **not** an entity id — see `Session.playerId`.
+ */
+export type PlayerId = number;
+
+let nextPlayerId: PlayerId = 1;
 
 export class Session {
   readonly link: INetLink;
@@ -71,10 +138,48 @@ export class Session {
 
   state: SessionState = 'handshaking';
 
-  /** The seat this connection owns, once it has joined. */
+  /**
+   * The seat this connection owns **in its current instance**, once it has joined.
+   *
+   * Reassigned on every migration, because entity ids belong to a `ServerMatch` and two
+   * instances hand them out independently. Nothing outside the router and `Migration` should
+   * write this field: it is half of the *"exactly one instance on every tick"* invariant, and
+   * the other half is `Router.instanceOf`.
+   */
   player: NetPlayer | null = null;
 
+  /**
+   * A stable id for this connection, unchanged across migrations (M11).
+   *
+   * `entityId` cannot serve: it is per-instance and is reassigned by every move, so a log
+   * line, a vote, a readiness report and a misprediction count would all be keyed to something
+   * that means a different player five seconds later. This is the id the router, the vote
+   * cycle and the migration log use.
+   */
+  readonly playerId: PlayerId;
+
   displayName = '';
+
+  /**
+   * The class this client last sent, already validated (Tier 1 #20).
+   *
+   * Held on the session rather than in the instance, because it must survive migration — it is
+   * captured into the `MatchRequest` at migration time and applied *before* the player entity
+   * exists in the live instance (§4.18, §6.6). A loadout that lived in the warmup instance
+   * would have to be copied across the very boundary it exists to cross correctly.
+   */
+  loadout: LoadoutSlot | null = null;
+
+  /**
+   * The match id this client has reported its background build complete for, or -1.
+   *
+   * Answers `READY_WAIT` (§6.5). Kept per session rather than per instance because the report
+   * arrives while the player is still in warmup, about an instance they are not yet in.
+   */
+  readyForMatch = -1;
+
+  /** When the `Prepare` went out, so the readiness time per client can be measured (§7). */
+  prepareSentAtMs = 0;
 
   /** Round-trip estimate, ms. Smoothed; drives the rewind amount and the client's lead. */
   rttMs = 0;
@@ -107,6 +212,7 @@ export class Session {
   ) {
     this.link = link;
     this.openedMs = nowMs();
+    this.playerId = nextPlayerId++;
   }
 
   get closed(): boolean {
@@ -189,7 +295,7 @@ export class Session {
 
     switch (msg.kind) {
       case 'hello':
-        this.handleHello(msg.version, msg.name);
+        this.handleHello(msg.version, msg.name, msg.loadout);
         return;
       case 'commands':
         this.handleCommands(msg.count, msg.snapshotAck);
@@ -199,6 +305,30 @@ export class Session {
         return;
       case 'bye':
         this.close('client left');
+        return;
+      case 'loadout':
+        // Seated clients only. A class arriving before a seat has nowhere to be applied, and
+        // accepting it would mean holding attacker-controlled state for an unauthenticated
+        // connection — small, but it is state, and the handshake timeout is five seconds.
+        if (this.state !== 'live') {
+          this.refuse(Reject.OutOfOrder, 'loadout before hello');
+          return;
+        }
+        this.events.onLoadout(this, msg.loadout);
+        return;
+      case 'vote':
+        if (this.state !== 'live') {
+          this.refuse(Reject.OutOfOrder, 'vote before hello');
+          return;
+        }
+        this.events.onVote(this, msg.phase, msg.option);
+        return;
+      case 'ready':
+        if (this.state !== 'live') {
+          this.refuse(Reject.OutOfOrder, 'ready before hello');
+          return;
+        }
+        this.events.onReady(this, msg.matchId);
         return;
       case 'bad':
         this.refuse(Reject.Malformed, 'malformed frame');
@@ -210,7 +340,7 @@ export class Session {
     }
   }
 
-  private handleHello(version: number, name: string): void {
+  private handleHello(version: number, name: string, loadout: NetLoadout | null): void {
     if (this.state !== 'handshaking') {
       this.refuse(Reject.OutOfOrder, 'duplicate hello');
       return;
@@ -235,8 +365,20 @@ export class Session {
     this.displayName = this.wantsRewindDebug ? clean.slice(0, -3) : clean;
     if (this.displayName === '') this.displayName = 'OPERATOR';
 
-    const player = this.events.onJoin(this, this.displayName);
-    if (player === null) {
+    /**
+     * The class, validated **before** the seat is asked for (Tier 1 #20).
+     *
+     * `onJoin` builds the entity, and the entity's constructor is what applies the perks. So
+     * this has to be on the session by the time that call is made, or the seat is built without
+     * it and every tick until the next spawn is a divergence.
+     *
+     * Never throws and never refuses the connection: an unreadable class from a client one
+     * build out of step falls back to the server defaults, which is a working game.
+     */
+    this.loadout = sanitiseNetLoadout(loadout);
+
+    const joined = this.events.onJoin(this, this.displayName);
+    if (joined === null) {
       this.link.send(writeReject(this.out, RejectCode.ServerFull));
       this.state = 'closed';
       this.link.close('server full');
@@ -244,15 +386,27 @@ export class Session {
       return;
     }
 
-    this.player = player;
-    this.state = 'playing';
+    this.player = joined.player;
+    this.state = 'live';
     log.info(
-      `${this.displayName} (${this.link.remoteAddress}) joined as entity ${player.entityId} on team ${player.team}.`,
+      `${this.displayName} (${this.link.remoteAddress}) joined as entity ${joined.player.entityId} ` +
+        `on team ${joined.player.team}.`,
     );
+
+    /**
+     * Last, and the ordering is the contract (handover Tier 2 §D).
+     *
+     * By this line the seat assignment has been sent — `onJoin` sends it, because only the
+     * caller knows which instance the player landed in — and the log line is written. Anything
+     * that produces a *further* frame runs now, so it cannot overtake the assignment it is a
+     * consequence of. This makes *"the seat assignment is the first frame after a `Hello`"* a
+     * guarantee the server makes on every path rather than an assumption the client hopes for.
+     */
+    joined.afterIdentity?.();
   }
 
   private handleCommands(count: number, snapshotAck: number): void {
-    if (this.state !== 'playing') {
+    if (this.state !== 'live') {
       this.refuse(Reject.OutOfOrder, 'commands before hello');
       return;
     }
@@ -325,22 +479,20 @@ export class Session {
     this.close(text);
   }
 
-  /** The welcome frame. Sent once, immediately after a successful join. */
-  welcome(mapId: string, modeId: string, snapshotHz: number): void {
-    const player = this.player;
-    if (player === null) return;
-    this.send(
-      writeWelcome(
-        this.out,
-        player.entityId,
-        player.team,
-        mapId,
-        modeId,
-        this.serverTick(),
-        nowMs(),
-        snapshotHz,
-      ),
-    );
+  /**
+   * The seat assignment: a `Welcome` on a join, a `Migrate` on a move (M11, §4.18).
+   *
+   * One method for both, because a client that is told about its seat differently depending on
+   * how it got there is a client with two code paths where one of them is exercised rarely.
+   * The `migrated` flag on the payload picks the message id.
+   */
+  sendSeat(info: WelcomeInfo): void {
+    this.send(writeWelcome(this.out, info));
+  }
+
+  /** A short line for the player. Allocation failed, migration failed, the arena was rebuilt. */
+  notice(text: string): void {
+    this.send(writeNotice(this.out, text));
   }
 
   /**

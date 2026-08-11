@@ -7,10 +7,10 @@ import { FOUNDRY_MAP } from '../world/maps/foundry';
 import { GREYBOX_MAP } from '../world/maps/greybox';
 import type { GameMode, GameModeId, ModeDeps } from './GameMode';
 import { Domination } from './Domination';
-import { FreeForAll } from './FreeForAll';
+import { FFA_CONFIG, FFA_WARMUP_CONFIG, FreeForAll } from './FreeForAll';
 import { KillConfirmed } from './KillConfirmed';
 import { Range } from './Range';
-import { SearchAndDestroy, SND_CONFIG } from './SearchAndDestroy';
+import { SearchAndDestroy, SND_CONFIG, SND_SKIRMISH_CONFIG } from './SearchAndDestroy';
 import { Tdm } from './Tdm';
 
 const log = logger('ModeRegistry');
@@ -126,7 +126,8 @@ export const MODES: readonly ModeEntry[] = [
     id: 'FFA',
     name: 'FREE-FOR-ALL',
     blurb: 'Eight operators · no teams · first to 30',
-    create: (deps) => new FreeForAll(deps),
+    // The permanent arena is FFA with both limits switched off (§6.3). See `FFA_WARMUP_CONFIG`.
+    create: (deps) => new FreeForAll(deps, deps.variant === 'WARMUP' ? FFA_WARMUP_CONFIG : FFA_CONFIG),
     populatesRoster: true,
     unrestricted: false,
     banksProgress: true,
@@ -138,7 +139,10 @@ export const MODES: readonly ModeEntry[] = [
     id: 'SND',
     name: 'SEARCH & DESTROY',
     blurb: 'One life · plant or defuse · best of nine, sides swap at five',
-    create: (deps) => new SearchAndDestroy(deps),
+    // The only mode that reads `ModeDeps.variant`: the skirmish ballot runs a best of five
+    // (§6.4), the menu runs M7's best of three. See `SND_SKIRMISH_CONFIG`.
+    create: (deps) =>
+      new SearchAndDestroy(deps, deps.variant === 'SKIRMISH' ? SND_SKIRMISH_CONFIG : SND_CONFIG),
     populatesRoster: true,
     pushAggressionScale: SND_CONFIG.cautionScale,
     unrestricted: false,

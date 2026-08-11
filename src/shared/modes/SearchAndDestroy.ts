@@ -98,6 +98,32 @@ export const SND_CONFIG: SearchDestroyConfig = {
   cautionScale: 0.35,
 };
 
+/**
+ * Search & Destroy as it appears on the skirmish ballot (M11, §6.4).
+ *
+ * §6.4 asks for *"a shortened best-of-5, not best-of-9"*, with §8.20 requiring *"the side swap
+ * at round 3"*. Best of five is `roundsToWin: 3`, and a swap after round two makes round three
+ * the first one played from the other side — so both halves of the series are three rounds
+ * long at most and each side attacks first exactly once.
+ *
+ * ## The brief's premise is out of date, and this is longer rather than shorter
+ *
+ * There has been no best-of-nine S&D since M7's playtest, which cut `SND_CONFIG` to a best of
+ * three. So this variant *lengthens* the mode by one round per side rather than shortening it.
+ * It is built to the brief because the brief and §8.20 both name best-of-five explicitly and
+ * the round count is a tuning number rather than a structural one — but the reasoning quoted
+ * for it ("a twenty-minute match is wrong in a drop-in flow") already applied to a match that
+ * did not exist. At 150 s a round, a five-round series is up to 12.5 minutes of round time.
+ *
+ * Everything except the series shape is `SND_CONFIG` verbatim: the bomb timer, the plant and
+ * defuse windows and the scoring are gunplay feel, and HARD RULE 8 keeps them unchanged.
+ */
+export const SND_SKIRMISH_CONFIG: SearchDestroyConfig = {
+  ...SND_CONFIG,
+  roundsToWin: 3,
+  swapAfterRound: 2,
+};
+
 export type BombState = 'CARRIED' | 'PLANTED' | 'DEFUSED' | 'EXPLODED';
 
 export class SearchAndDestroy extends GameMode implements ObjectiveProvider {

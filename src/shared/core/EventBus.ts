@@ -21,6 +21,26 @@ export class EventBus<M extends EventMap> {
   private readonly dirty = new Set<keyof M>();
   private depth = 0;
 
+  /**
+   * Live subscriptions across **every bus in the process** (M11, §4.18, §8.13).
+   *
+   * §4.18 names `EventBus` subscriptions as the teardown leak surface — *"the most likely
+   * offender by a wide margin, and a bus that only grows is invisible until hour six"* — and
+   * §8.13 asks for the count at each of a hundred allocate/destroy cycles.
+   *
+   * ## Why this is process-wide and static, when `subscriptionCount` is per-bus
+   *
+   * Every instance owns its own bus, so a `LiveMatch` that never unsubscribed would still have
+   * its bus collected along with the instance, and a per-bus count would read zero and call the
+   * leak clean. This counter is decremented by `off` and `clear` and by nothing else, so it
+   * measures the thing that actually matters: whether `dispose()` mirrors its constructor. A
+   * subscription that is dropped on the floor rather than removed shows up here immediately,
+   * whatever the collector later does with the memory.
+   *
+   * It can only be wrong in one direction, which is what makes it a better gate than heap.
+   */
+  static liveSubscriptions = 0;
+
   /** Subscribe. Returns an unsubscribe function. */
   on<K extends keyof M>(type: K, listener: Listener<M[K]>): () => void {
     let list = this.slots.get(type);
@@ -29,6 +49,7 @@ export class EventBus<M extends EventMap> {
       this.slots.set(type, list);
     }
     list.push(listener as Listener<never>);
+    EventBus.liveSubscriptions++;
     let removed = false;
     return () => {
       if (removed) return;
@@ -54,6 +75,7 @@ export class EventBus<M extends EventMap> {
     for (let i = 0; i < list.length; i++) {
       if (list[i] === target) {
         list[i] = null;
+        EventBus.liveSubscriptions--;
         this.dirty.add(type);
         break;
       }
@@ -125,6 +147,10 @@ export class EventBus<M extends EventMap> {
     if (this.depth !== 0) {
       throw new Error('EventBus.clear() called from inside a dispatch');
     }
+    // Counted out, not merely dropped. `liveSubscriptions` is the leak gate (§8.13) and a
+    // `clear()` that forgot to decrement it would make every teardown look like a leak — a
+    // false red is as bad as a false green, and would train its reader to ignore the number.
+    EventBus.liveSubscriptions -= this.subscriptionCount;
     this.slots.clear();
     this.dirty.clear();
   }

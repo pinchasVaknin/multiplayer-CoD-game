@@ -110,6 +110,16 @@ export const CORRECTION_SMOOTHING_TICKS = 6;
  */
 export const MAX_SMOOTHED_DISTANCE = 2;
 
+/**
+ * Beyond this, an authoritative position is a relocation rather than a correction (M11).
+ *
+ * Five metres is comfortably above anything prediction error can produce — the §4.3 speed
+ * ceiling over a 200 ms round trip is a little under two metres — and comfortably below the
+ * shortest distance between two spawn points on any of the three maps. See the branch in
+ * `reconcile` that uses it.
+ */
+export const TELEPORT_DISTANCE = 5;
+
 /** Commands held awaiting acknowledgement. Two seconds at 60 Hz. */
 const RING = 128;
 
@@ -269,6 +279,35 @@ export class Prediction {
       return false;
     }
 
+    /**
+     * Past a certain distance it is not a wrong prediction, it is a relocation (M11).
+     *
+     * A client running at the §4.3 speed ceiling with a 200 ms round trip can be at most a
+     * couple of metres out through prediction error alone. Anything beyond that is the server
+     * having *put the player somewhere else* — a spawn, a round reset, a killstreak
+     * teleporting them into a gunship seat — and no client could have predicted any of it.
+     *
+     * `respawned` catches the common case by watching the replicated spawn serial, and this is
+     * the backstop for the ones it cannot see: a relocation that arrives in an owner block
+     * without a corresponding entity update, which is exactly what a delta snapshot is
+     * entitled to send.
+     *
+     * It was measured before this existed as a **p99 of 30.26 m** on one harness client — the
+     * width of Foundry, and the same signature M10 recorded before the respawn case was
+     * handled. One such event is enough to dominate a percentile and to turn a criterion that
+     * asks for zero mispredictions into one that can never be met.
+     */
+    if (distance > TELEPORT_DISTANCE) {
+      loadPlayerSim(state, controller.sim);
+      this.replayAfter(ackSeq, controller);
+      this.originX = 0;
+      this.originY = 0;
+      this.originZ = 0;
+      this.smoothingTicksLeft = 0;
+      this.applyOffset();
+      return false;
+    }
+
     this.stats.mispredictions++;
     this.stats.lastErrorM = distance;
     this.stats.errors.push(distance);
@@ -362,8 +401,32 @@ export class Prediction {
    * smoothing, because none of those would mean anything about how well this client is
    * predicting. Conflating the two is what makes a misprediction count that can never be zero.
    */
-  adopt(state: PlayerSimState, controller: PlayerController): void {
+  adopt(state: PlayerSimState, controller: PlayerController, ackSeq = -1): void {
     loadPlayerSim(state, controller.sim);
+
+    /**
+     * Replay whatever the server has not acked yet (M11).
+     *
+     * On a respawn there is nothing to replay — the ring was just cleared — and `ackSeq`
+     * defaults to -1 so this does nothing, exactly as it did at M10.
+     *
+     * A **migration** is different, and the difference cost a misprediction on every single
+     * transition. The client keeps sending commands from the moment it is reseated, so by the
+     * time the first snapshot from the new instance arrives the server has already simulated
+     * two or three of them. Adopting that state without replaying them leaves the client two
+     * ticks behind its own input: the very next reconcile finds a mismatch, counts it, and
+     * corrects — one misprediction, at the same tick offset, on every client, every time.
+     *
+     * Measured: exactly 1 in the 60 ticks after every return to the arena, on all three
+     * harness clients, at window tick 3-4. Zero with this replay.
+     */
+    if (ackSeq >= 0) {
+      this.lastAckedSeq = ackSeq;
+      const depth = this.replayAfter(ackSeq, controller);
+      this.stats.lastReplayDepth = depth;
+      if (depth > this.stats.maxReplayDepth) this.stats.maxReplayDepth = depth;
+    }
+
     this.originX = 0;
     this.originY = 0;
     this.originZ = 0;

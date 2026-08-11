@@ -3,7 +3,7 @@ import { logger } from '../shared/core/Log';
 import { describeConditions } from '../shared/net/NetSim';
 import { PROTOCOL_VERSION } from '../shared/net/Protocol';
 import { loadConfig } from './Config';
-import { GameServer } from './GameServer';
+import { Server } from './Server';
 import { installServerLogging, metric } from './log';
 import { nodeClock } from './NodeClock';
 
@@ -43,17 +43,22 @@ async function main(): Promise<number> {
     protocol: PROTOCOL_VERSION,
     host: cfg.host,
     port: cfg.port,
-    map: cfg.mapId,
-    mode: cfg.modeId,
-    bots: cfg.bots,
+    warmupBots: cfg.warmupBots,
     seed: cfg.seed,
     snapshotHz: cfg.snapshotHz,
     interpMs: cfg.interpolationDelayMs,
+    readyTimeoutMs: cfg.readyTimeoutMs,
+    summaryHoldSeconds: cfg.summaryHoldSeconds,
+    faultInjection: cfg.faultInjection,
     tls: cfg.tlsCertPath !== undefined,
     netSim: describeConditions(cfg.conditions),
   });
 
-  const server = new GameServer(cfg);
+  /**
+   * Construction bakes every map (§4.19), so this line is where the boot bake time is spent —
+   * before the listener opens and therefore before any client can be affected by it.
+   */
+  const server = new Server(cfg);
 
   try {
     await server.start();

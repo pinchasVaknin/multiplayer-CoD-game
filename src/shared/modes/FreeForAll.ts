@@ -57,6 +57,33 @@ export const FFA_CONFIG: FreeForAllConfig = {
   pointsHeadshotBonus: 50,
 };
 
+/**
+ * The permanent warmup arena's rules (M11, §6.3).
+ *
+ * §6.3: *"Free-for-all rules with damage live and instant respawn. **No score, no win
+ * condition, no match timer.** Killing and being killed carries no consequence beyond the
+ * respawn."*
+ *
+ * Both limits are zero, and zero means *absent* rather than *immediate* — see
+ * `checkWinCondition`, which is where that convention is enforced. `Range` has used the same
+ * convention for `scoreLimit` since M6 (*"No limit: the bar at the top of the HUD has nothing
+ * to count toward"*), so this is an existing idea applied to a second mode rather than a new
+ * one.
+ *
+ * The alternative — a very large limit — was rejected on the grounds that it is a lie that
+ * eventually comes true. An arena running for twelve hours under the soak harness would reach
+ * any finite kill count, and it would end the one world in the process that has no path to
+ * `DESTROYED` and nowhere to migrate its players to.
+ */
+export const FFA_WARMUP_CONFIG: FreeForAllConfig = {
+  ...FFA_CONFIG,
+  scoreLimit: 0,
+  timeLimitSeconds: 0,
+  // Small: §6.3 asks for 2-3 bots so a lone player has something to shoot, and the arena is
+  // the M1 greybox room rather than a map balanced for eight.
+  playerCount: 4,
+};
+
 export class FreeForAll extends GameMode {
   override readonly id: GameModeId = 'FFA';
   override readonly name = 'FREE-FOR-ALL';
@@ -124,10 +151,19 @@ export class FreeForAll extends GameMode {
     }
     if (leader === null) return null;
 
-    if (leader.kills >= this.config.scoreLimit) {
+    /**
+     * A non-positive limit is **no limit** (M11, §6.3).
+     *
+     * Guarded on the *config* rather than on the running counter, and the distinction is the
+     * whole point: `ticksLeft` is seeded from `timeLimitSeconds`, so a zero time limit would
+     * otherwise make `ticksLeft <= 0` true on the first tick and end the match instantly —
+     * turning "no clock" into "no match". The same trap sits under `scoreLimit`, where
+     * `leader.kills >= 0` is true before anybody has fired.
+     */
+    if (this.config.scoreLimit > 0 && leader.kills >= this.config.scoreLimit) {
       return this.result(leader.team, 'Kill limit', leader.kills, runnerUp);
     }
-    if (this.ticksLeft <= 0) {
+    if (this.config.timeLimitSeconds > 0 && this.ticksLeft <= 0) {
       // A tie at the top is a draw, exactly as a tied team score is.
       const drawn = leader.kills === runnerUp;
       return this.result(drawn ? 'DRAW' : leader.team, drawn ? 'Time — draw' : 'Time limit', leader.kills, runnerUp);

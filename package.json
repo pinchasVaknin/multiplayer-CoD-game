@@ -18,6 +18,11 @@
     "//netharness": "S7. Headless clients running the real NetClient against a real server. Every S8 client-side number comes out of this.",
     "netharness": "npm run build:server && node dist-server/netHarness.js",
 
+    "//skirmish": "M11 S7. The full flow: N headless clients connect, play warmup, vote, migrate, play a match and return. Every Gate A number comes out of this.",
+    "skirmish": "npm run build:server && node --expose-gc dist-server/skirmishHarness.js",
+    "//leak": "M11 S8.13. 100 allocate/destroy cycles, logging heap and live EventBus subscriptions at each. Both must be flat.",
+    "leak": "npm run build:server && node --expose-gc dist-server/skirmishHarness.js --leak 100",
+
     "//hashes": "S6.6. Node writes the per-tick hashes; the browser writes its own from the debug console; the differ reports the first divergent tick.",
     "hashes": "npm run build:server && node dist-server/hashRun.js",
     "//check": "The gate. Boundaries first: a partition violation makes the type errors that follow meaningless noise, so it is the thing that speaks.",

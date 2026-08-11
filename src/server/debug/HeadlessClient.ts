@@ -1,10 +1,21 @@
+import { nowMs } from '../../shared/core/Clock';
 import { createGameBus, type GameBus } from '../../shared/core/Events';
 import { Btn, CommandRing, type InputCommand } from '../../shared/core/InputCommand';
 import { DT } from '../../shared/core/Loop';
 import { Rng } from '../../shared/core/Rng';
 import { simSin } from '../../shared/core/SimMath';
+import type { VoteInfo, WelcomeInfo } from '../../shared/net/Messages';
 import { NetClient, type NetClientStats } from '../../shared/net/NetClient';
 import type { NetConditions } from '../../shared/net/NetSim';
+import {
+  MAP_BALLOT,
+  MODE_BALLOT,
+  sanitiseNetLoadout,
+  VotePhase,
+  WARMUP_MATCH_ID,
+  type NetLoadout,
+} from '../../shared/net/Skirmish';
+import { resolveLoadout } from '../../shared/meta/Loadouts';
 import { DEFAULT_INTERPOLATION_DELAY_MS, makeInterpolatedPose } from '../../shared/net/Interpolation';
 import { EFlag } from '../../shared/net/Snapshot';
 import {
@@ -46,6 +57,16 @@ import { NodeLink } from './NodeLink';
 
 export type ClientBehaviour = 'strafe' | 'idle' | 'runner' | 'shooter' | 'seeker';
 
+/**
+ * How long after a migration mispredictions are attributed to it (§7, §8.9).
+ *
+ * *"Misprediction count in the first 60 ticks after migration, which is the direct regression
+ * test for Tier 1 #20."* One second at 60 Hz — long enough for the first reconciliation to
+ * have happened several times over, short enough that ordinary in-match corrections from a
+ * lossy link are not swept into the number.
+ */
+const POST_MIGRATION_WINDOW_TICKS = 60;
+
 export interface HeadlessClientOptions {
   readonly url: string;
   readonly name: string;
@@ -55,6 +76,33 @@ export interface HeadlessClientOptions {
   readonly seed: number;
   /** Ask the server for the rewind debug feed. */
   readonly wantRewindDebug?: boolean;
+
+  // -- M11: the skirmish flow -------------------------------------------------
+
+  /**
+   * The class to send after joining (Tier 1 #20), or undefined to send none.
+   *
+   * §8.10 asks for a demonstration *"with Lightweight equipped"* that client and server agree
+   * about speed from the first tick of the live match. That is only meaningful if the harness
+   * can actually field a movement perk, so this is how it does it.
+   */
+  readonly loadout?: NetLoadout;
+  /**
+   * Which ballot option to vote for, or -1 to abstain.
+   *
+   * Abstaining is not a gap in the harness — §4.20 requires an empty ballot to resolve
+   * randomly and §8.4 requires that to be demonstrated, so a client that votes for nothing is
+   * a test case rather than a client that forgot.
+   */
+  readonly voteFor?: number;
+  /**
+   * Milliseconds to spend "building" a map before reporting ready (§6.5).
+   *
+   * Stands in for the browser's mesh and texture build, which this process has no GPU for. Set
+   * high to make one client miss the readiness timeout on purpose — that is §8.8's deliberately
+   * slow client.
+   */
+  readonly buildMs?: number;
 }
 
 export interface HeadlessClientReport {
@@ -88,6 +136,45 @@ export interface HeadlessClientReport {
    * there, which is exactly the M10 playtest bug.
    */
   readonly metresSinceRespawn: number;
+
+  // -- M11 ---------------------------------------------------------------------
+
+  /** Which instance this client is in. `WARMUP_MATCH_ID` is the arena. */
+  readonly matchId: number;
+  readonly migrations: number;
+  /**
+   * Mispredictions in the first 60 ticks after each migration (§7, §8.9).
+   *
+   * **The direct regression test for Tier 1 #20.** Expected zero. A non-zero value means the
+   * loadout was not locked before the entity existed, and the arithmetic is unforgiving: the
+   * shipped ASSAULT class carries Lightweight at +7%, so a client predicting with it against a
+   * server simulating without it diverges on every single tick.
+   *
+   * Counted per migration and reported as the worst window rather than the total, because one
+   * bad transition among twenty is still the bug and a sum would hide it behind nineteen
+   * clean ones.
+   */
+  readonly worstPostMigrationMispredictions: number;
+  readonly postMigrationWindows: readonly number[];
+  /**
+   * Windows for migrations **into a live match** — §8.9's actual subject.
+   *
+   * This is where the loadout is locked and where Tier 1 #20's divergence would appear. Zero
+   * is the requirement and zero is what it measures.
+   */
+  readonly intoLiveWindows: readonly number[];
+  /** Windows for migrations back to the arena. Reported separately; see PLAN.md. */
+  readonly toArenaWindows: readonly number[];
+  /** Where inside a 60-tick window each misprediction landed. Empty when the window is clean. */
+  readonly migrationMispredictionTicks: readonly number[];
+  /** Background builds completed, and the longest one, ms. */
+  readonly buildsCompleted: number;
+  readonly worstBuildMs: number;
+  /** Summaries received. One per match played (§6.9). */
+  readonly summaries: number;
+  readonly notices: readonly string[];
+  /** Vote phases this client cast a vote in. */
+  readonly votesCast: number;
 }
 
 export class HeadlessClient {
@@ -121,6 +208,47 @@ export class HeadlessClient {
   private lastX = Number.NaN;
   private lastZ = Number.NaN;
 
+  // -- M11 state ---------------------------------------------------------------
+
+  private votedInPhase = -1;
+  private votesCast = 0;
+  private votePhase = 0;
+  private votePhaseEndsTick = 0;
+  private voteTally: readonly number[] = [];
+  private decidedMode = -1;
+  private summaries = 0;
+  private readonly notices: string[] = [];
+  private currentMapId = '';
+  private controllerInUse: PlayerController;
+
+  /** A background build in flight, or null. See `onPrepare`. */
+  private preparing: {
+    matchId: number;
+    mapId: string;
+    controller: PlayerController;
+    startedMs: number;
+    readyAtMs: number;
+    reported?: boolean;
+  } | null = null;
+
+  private buildsCompleted = 0;
+  private worstBuildMs = 0;
+  /** Migrations where no prepared build was waiting. Should be arena returns only. */
+  private lateBuilds = 0;
+
+  private migrationWindow: {
+    untilTick: number;
+    baseline: number;
+    seen: number;
+    atTicks: number[];
+    intoLive: boolean;
+  } | null = null;
+  private readonly intoLiveWindows: number[] = [];
+  private readonly toArenaWindows: number[] = [];
+  private readonly postMigrationWindows: number[] = [];
+  /** Tick offsets inside a window where a misprediction appeared. See `pumpMigrationWindow`. */
+  private readonly migrationMispredictionTicks: number[] = [];
+
   constructor(opts: HeadlessClientOptions) {
     this.opts = opts;
     this.rng = new Rng(opts.seed);
@@ -128,11 +256,9 @@ export class HeadlessClient {
     // The same collision world the server loaded, from the same shared loader. Prediction
     // needs it: `PlayerController.step` sweeps a capsule against it, and a client predicting
     // against different geometry would mispredict on every wall.
-    const map = findMap(opts.mapId);
-    const world = loadMapCollision(map.def).collision;
-
-    const movement = cloneMovementConfig(DEFAULT_MOVEMENT_CONFIG);
-    this.controller = new PlayerController(movement, world, this.bus, 0);
+    this.controller = this.buildController(opts.mapId);
+    this.controllerInUse = this.controller;
+    this.currentMapId = opts.mapId;
 
     this.link = new NodeLink(opts.url, opts.conditions, opts.seed);
     this.net = new NetClient({
@@ -152,7 +278,19 @@ export class HeadlessClient {
         },
       },
       displayName: opts.name,
+      loadout: opts.loadout ?? null,
       wantRewindDebug: opts.wantRewindDebug,
+      skirmish: {
+        onVoteState: (info) => this.onVoteState(info),
+        onPrepare: (matchId, mapId) => this.onPrepare(matchId, mapId),
+        onMigrated: (welcome) => this.onMigrated(welcome),
+        onSummary: () => {
+          this.summaries++;
+        },
+        onNotice: (text) => {
+          this.notices.push(text);
+        },
+      },
     });
 
     // No `DamageSystem` here, deliberately. This client resolves no damage — the server does,
@@ -163,6 +301,180 @@ export class HeadlessClient {
   async connect(): Promise<void> {
     await this.link.open();
     this.net.connect();
+  }
+
+  // -- M11: the skirmish flow ---------------------------------------------------
+
+  /**
+   * A `PlayerController` over one map's collision.
+   *
+   * Rebuilt on every migration to a different map — see `onMigrated`. The world comes from the
+   * same shared `loadMapCollision` the server used, which is what makes prediction agree about
+   * geometry; a client sweeping its capsule against different walls mispredicts on every one
+   * of them.
+   */
+  private buildController(mapId: string): PlayerController {
+    const map = findMap(mapId);
+    const world = loadMapCollision(map.def).collision;
+    const movement = cloneMovementConfig(DEFAULT_MOVEMENT_CONFIG);
+    const controller = new PlayerController(movement, world, this.bus, 0);
+
+    /**
+     * Apply the class's movement perks locally (Tier 1 #20, §8.10).
+     *
+     * **This is what makes the misprediction probe able to fail.** The browser does exactly
+     * this in `MatchMeta.applyPerkHooks`, and the handover's bug was that the *server* did not:
+     * the shipped class carries Lightweight at +7%, so the client predicted 7% faster than the
+     * server simulated on every tick forever — 407/559 mispredictions, measured.
+     *
+     * A harness that skipped this line would set `speedScale` on neither side, agree perfectly,
+     * and report zero mispredictions whether or not the loadout ever reached the server.
+     * Standing lesson 4: *"Tests must be able to fail. Always stub the mechanism and watch the
+     * probe go red before believing it green."* Comment out `Server.onLoadout`'s assignment and
+     * this run goes red, which is the property that makes the green mean something.
+     */
+    const loadout = this.opts.loadout;
+    if (loadout !== undefined) {
+      const slot = sanitiseNetLoadout(loadout);
+      if (slot !== null) controller.speedScale = resolveLoadout(slot, 0).perkState.moveSpeedMult;
+    }
+    return controller;
+  }
+
+  /**
+   * Vote, once per phase, for the configured option (§4.20).
+   *
+   * The guard is `votedInPhase` rather than a timer: §4.20 allows a vote to be changed inside
+   * its window, so re-sending on every 4 Hz broadcast would be legal but would put sixty
+   * pointless frames on the wire per ballot. One vote per phase per client is what a human
+   * does and is what the tally is meant to reflect.
+   */
+  private onVoteState(info: VoteInfo): void {
+    this.votePhase = info.phase;
+    this.votePhaseEndsTick = info.phaseEndsTick;
+    this.voteTally = info.tally;
+    this.decidedMode = info.decidedMode;
+
+    const choice = this.opts.voteFor ?? -1;
+    if (choice < 0) return;
+    const isBallot = info.phase === VotePhase.MODE_VOTE || info.phase === VotePhase.MAP_VOTE;
+    if (!isBallot || this.votedInPhase === info.phase) return;
+
+    // Clamped rather than dropped: a configured choice of 4 is legal on the five-mode ballot
+    // and out of range on the three-map one, and a harness that silently abstained on the map
+    // vote would look like it was testing something it was not.
+    const size = info.phase === VotePhase.MODE_VOTE ? MODE_BALLOT.length : MAP_BALLOT.length;
+    this.votedInPhase = info.phase;
+    this.votesCast++;
+    this.net.sendVote(info.phase, choice % size);
+  }
+
+  /**
+   * Start a background build (§6.5).
+   *
+   * The browser builds meshes and `CanvasTexture`s here; this process has neither, so it
+   * builds the one thing it genuinely needs for the new map — the collision world prediction
+   * will sweep against — and then waits out `buildMs` to stand in for the GPU work it cannot
+   * do. That wait is what makes §8.8's deliberately slow client possible.
+   */
+  private onPrepare(matchId: number, mapId: string): void {
+    if (this.preparing !== null && this.preparing.matchId === matchId) return;
+    const startedMs = nowMs();
+    // Built now, held until the migration lands. Doing it here rather than on arrival is the
+    // whole point of the design: the cost is paid while the player is still shooting in the
+    // arena rather than on the transition they are meant to experience as seamless.
+    const controller = this.buildController(mapId);
+    this.preparing = { matchId, mapId, controller, startedMs, readyAtMs: startedMs + (this.opts.buildMs ?? 0) };
+  }
+
+  /**
+   * The build has had its time. Report ready.
+   *
+   * Driven from `update` rather than a timer, because §4.18 counts timers as part of the
+   * teardown surface and a harness that leaked them would be a poor instrument for measuring
+   * leaks.
+   */
+  private pumpBuild(): void {
+    const build = this.preparing;
+    if (build === null || build.reported) return;
+    if (nowMs() < build.readyAtMs) return;
+    build.reported = true;
+    const elapsed = nowMs() - build.startedMs;
+    this.buildsCompleted++;
+    if (elapsed > this.worstBuildMs) this.worstBuildMs = elapsed;
+    this.net.sendReady(build.matchId);
+  }
+
+  /**
+   * Moved to another instance (§4.18).
+   *
+   * Two things happen, in this order. The controller is swapped for the one built during
+   * `onPrepare`, so prediction sweeps against the new map's geometry from the very first tick;
+   * and the post-migration misprediction window opens, which is §8.9's regression test for
+   * Tier 1 #20.
+   *
+   * If no build is waiting — a migration back to the arena, or a `Prepare` that never arrived
+   * — the controller is built here instead. Synchronously and on the spot, which is exactly
+   * the stall the background build exists to avoid, and is the correct fallback: being late is
+   * better than predicting against the wrong walls.
+   */
+  private onMigrated(welcome: WelcomeInfo): void {
+    const prepared = this.preparing;
+    if (prepared !== null && prepared.mapId === welcome.mapId) {
+      this.net.swapController(prepared.controller);
+      this.controllerInUse = prepared.controller;
+      this.preparing = null;
+    } else if (welcome.mapId !== this.currentMapId) {
+      this.lateBuilds++;
+      const controller = this.buildController(welcome.mapId);
+      this.net.swapController(controller);
+      this.controllerInUse = controller;
+      this.preparing = null;
+    }
+    this.currentMapId = welcome.mapId;
+
+    // Open the window. `mispredictionsAtMigration` is the baseline the count is taken against
+    // 60 ticks later, so the number reported is what happened *in* the window rather than the
+    // running total.
+    this.migrationWindow = {
+      untilTick: this.ticks + POST_MIGRATION_WINDOW_TICKS,
+      baseline: this.net.prediction.stats.mispredictions,
+      seen: 0,
+      atTicks: [],
+      // Which direction this migration went. The two are different claims: entering a live
+      // match is what Tier 1 #20 and §8.9 are about, because that is where the loadout is
+      // locked and where a movement perk could diverge. Returning to the arena is the same
+      // machinery run backwards into a world that was already running.
+      intoLive: welcome.matchId !== WARMUP_MATCH_ID,
+    };
+    this.votedInPhase = -1;
+  }
+
+  /**
+   * Close the post-migration window once it has run its 60 ticks.
+   *
+   * Sampled every update rather than only at the end, so a non-zero result carries *when*
+   * inside the window it happened. That distinction is the whole diagnosis: a divergence on
+   * tick 1 is the client predicting before the first authoritative owner block has landed,
+   * while one spread across all sixty is a genuine per-tick disagreement of the Tier 1 #20
+   * kind. A bare count cannot tell them apart, and the two have nothing in common.
+   */
+  private pumpMigrationWindow(): void {
+    const window = this.migrationWindow;
+    if (window === null) return;
+
+    const soFar = this.net.prediction.stats.mispredictions - window.baseline;
+    if (soFar > window.seen) {
+      window.seen = soFar;
+      window.atTicks.push(this.ticks - (window.untilTick - POST_MIGRATION_WINDOW_TICKS));
+    }
+
+    if (this.ticks < window.untilTick) return;
+    this.postMigrationWindows.push(soFar);
+    if (window.intoLive) this.intoLiveWindows.push(soFar);
+    else this.toArenaWindows.push(soFar);
+    if (soFar > 0) this.migrationMispredictionTicks.push(...window.atTicks);
+    this.migrationWindow = null;
   }
 
   /**
@@ -180,6 +492,8 @@ export class HeadlessClient {
     const steps = this.net.update();
     this.ticks += steps;
     this.readOwnEntity();
+    this.pumpBuild();
+    this.pumpMigrationWindow();
   }
 
   disconnect(clean: boolean): void {
@@ -208,7 +522,40 @@ export class HeadlessClient {
       remotes: this.net.remotes.size,
       deathCycles: this.deathCycles,
       metresSinceRespawn: Math.round(this.metresSinceRespawn * 10) / 10,
+      matchId: this.net.matchId,
+      migrations: this.net.migrations,
+      worstPostMigrationMispredictions:
+        this.postMigrationWindows.length === 0 ? 0 : Math.max(...this.postMigrationWindows),
+      postMigrationWindows: [...this.postMigrationWindows],
+      intoLiveWindows: [...this.intoLiveWindows],
+      toArenaWindows: [...this.toArenaWindows],
+      migrationMispredictionTicks: [...this.migrationMispredictionTicks],
+      buildsCompleted: this.buildsCompleted,
+      worstBuildMs: Math.round(this.worstBuildMs),
+      summaries: this.summaries,
+      notices: [...this.notices],
+      votesCast: this.votesCast,
     };
+  }
+
+  /** The vote cycle as this client last saw it. Read by the harness's phase-boundary check. */
+  get voteView(): { phase: number; endsTick: number; tally: readonly number[]; decidedMode: number } {
+    return {
+      phase: this.votePhase,
+      endsTick: this.votePhaseEndsTick,
+      tally: this.voteTally,
+      decidedMode: this.decidedMode,
+    };
+  }
+
+  /** Migrations that had to build their map on arrival. Arena returns are expected here. */
+  get lateBuildCount(): number {
+    return this.lateBuilds;
+  }
+
+  /** The controller prediction is currently running through. Swapped on a map change. */
+  get activeController(): PlayerController {
+    return this.controllerInUse;
   }
 
   // -- the input script -------------------------------------------------------

@@ -1,0 +1,436 @@
+import type { Bot } from '../../shared/ai/Bot';
+import { nowMs } from '../../shared/core/Clock';
+import { Btn, isDown } from '../../shared/core/InputCommand';
+import { logger } from '../../shared/core/Log';
+import { makeSnapshotHeader, phaseIndex, SFlag, type SnapshotHeader } from '../../shared/net/Messages';
+import { InstanceState, type InstanceStateId, type MatchId } from '../../shared/net/Skirmish';
+import { EFlag, makeEntitySnapshot, weaponIndexOf, type EntitySnapshot } from '../../shared/net/Snapshot';
+import type { LoadoutSlot } from '../../shared/meta/Loadouts';
+import type { ServerMatch } from '../Match';
+import type { NetPlayer } from '../NetPlayer';
+import type { Session } from '../net/Session';
+import { SnapshotEncoder } from '../net/SnapshotEncoder';
+import { InstanceClock } from './InstanceClock';
+
+const log = logger('instance');
+
+/**
+ * One running world, and everything the process needs to talk to it (M11, §4.18).
+ *
+ * M10's `GameServer` was a match, a loop, a socket listener and a rotation policy in one
+ * class. This is the match half, lifted out so that two of them can exist: the permanent
+ * warmup arena and, when a vote resolves, one live match.
+ *
+ * ## What an instance owns, and what it does not
+ *
+ * **Owns**: a `ServerMatch` (the authoritative simulation), a per-client `SnapshotEncoder`, a
+ * clock, its own lifecycle state, and the set of sessions seated in it. All of this is
+ * per-instance and none of it is shared — §4.19: *"A single shared mutable object between two
+ * matches is a correctness failure that will present as an unreproducible desync."*
+ *
+ * **Does not own**: the loop, the sockets, the routing decision, or the map bake. It is
+ * stepped by the master loop, it is handed sessions by `Migration`, and its world geometry is
+ * baked once at boot and shared read-only.
+ *
+ * ## The step is wrapped by the caller, not here
+ *
+ * §4.18: *"An exception inside one instance must not take down the process."* The wrapping
+ * lives in `Server.tick` rather than in `step()`, because the two subclasses need different
+ * recoveries — a `LiveMatch` migrates its players out and is destroyed, a `WarmupMatch` must
+ * be rebuilt in place because there is nowhere to migrate anyone *to*. A base class that
+ * swallowed its own exceptions would have to guess which.
+ */
+
+export interface MatchInstanceDeps {
+  readonly id: MatchId;
+  /** Position in the snapshot stagger (§4.19). The arena is 0; a live match is 1. */
+  readonly instanceIndex: number;
+  readonly match: ServerMatch;
+  readonly snapshotHz: number;
+  readonly interpolationDelayMs: number;
+  readonly startTick: number;
+}
+
+/** What the router needs to know about a seat without reaching into the simulation. */
+export interface Seat {
+  readonly session: Session;
+  readonly player: NetPlayer;
+}
+
+export abstract class MatchInstance {
+  readonly id: MatchId;
+  readonly match: ServerMatch;
+  readonly clock: InstanceClock;
+
+  protected state_: InstanceStateId = InstanceState.BOOTING;
+
+  /** Sessions seated in this instance, keyed by the stable connection id. */
+  protected readonly seats = new Map<number, Seat>();
+  private readonly encoders = new Map<number, SnapshotEncoder>();
+
+  private readonly header: SnapshotHeader = makeSnapshotHeader();
+  private readonly entities: EntitySnapshot[] = [];
+  private entityCount = 0;
+
+  /** Milliseconds the last step took. Per-instance half of the §7 instance panel. */
+  lastStepMs = 0;
+  meanStepMs = 0;
+  private stepSamples = 0;
+
+  protected readonly deps: MatchInstanceDeps;
+
+  constructor(deps: MatchInstanceDeps) {
+    this.deps = deps;
+    this.id = deps.id;
+    this.match = deps.match;
+    this.clock = new InstanceClock(deps.startTick, deps.snapshotHz, deps.instanceIndex);
+
+    // Pooled per instance, per S4.7's "pool everything recurring". Sized for the largest
+    // roster any mode fields plus headroom for backfill.
+    for (let i = 0; i < 64; i++) this.entities.push(makeEntitySnapshot());
+
+    // The match asks how stale each shooter's view is; the session knows, because it owns the
+    // RTT estimate. The only wire between the simulation and the network layer, and it points
+    // the right way — the sim asks a question, it is not told an answer.
+    this.match.viewLagMsFor = (entityId) => {
+      const seat = this.seatByEntity(entityId);
+      if (seat === null) return 0;
+      return seat.session.rttMs * 0.5 + deps.interpolationDelayMs;
+    };
+  }
+
+  get state(): InstanceStateId {
+    return this.state_;
+  }
+
+  /** Whether the master loop should step this instance on this tick. */
+  get running(): boolean {
+    return this.state_ === InstanceState.RUNNING;
+  }
+
+  get playerCount(): number {
+    return this.seats.size;
+  }
+
+  get botCount(): number {
+    return this.match.bots.bots.length;
+  }
+
+  /** Every seated session. Iterated by the vote cycle and by broadcast paths. */
+  get sessions(): Iterable<Seat> {
+    return this.seats.values();
+  }
+
+  hasPlayer(playerId: number): boolean {
+    return this.seats.has(playerId);
+  }
+
+  seatOf(playerId: number): Seat | null {
+    return this.seats.get(playerId) ?? null;
+  }
+
+  private seatByEntity(entityId: number): Seat | null {
+    for (const seat of this.seats.values()) {
+      if (seat.player.entityId === entityId) return seat;
+    }
+    return null;
+  }
+
+  // -- seating ---------------------------------------------------------------
+
+  /**
+   * Put a connection in this world.
+   *
+   * The loadout is resolved **here**, as the entity is created, which is what makes §6.6's
+   * *"locked at the moment of migration, not at spawn time"* true rather than aspirational:
+   * `ServerMatch.addPlayer` hands it straight to `NetPlayer`, whose constructor sets
+   * `controller.speedScale` from the resolved perks. There is no window in which the player
+   * exists and the perks have not been applied — which is precisely the window Tier 1 #20
+   * lived in.
+   */
+  seat(session: Session, loadout: LoadoutSlot | null): NetPlayer | null {
+    const player = this.match.addPlayer(session.displayName, loadout);
+    if (player === null) return null;
+    this.seats.set(session.playerId, { session, player });
+    this.encoders.set(player.entityId, new SnapshotEncoder());
+    // A new encoder has no baseline, so the next snapshot to this client is a full one. Reset
+    // the acks with it, or the encoder would be asked to delta against a snapshot id that
+    // belonged to the instance this player just left.
+    session.ackedSnapshot = 0;
+    session.lastSnapshotId = 0;
+    return player;
+  }
+
+  /** Take a connection out of this world, leaving nothing of it behind. */
+  unseat(playerId: number): void {
+    const seat = this.seats.get(playerId);
+    if (seat === undefined) return;
+    this.match.removePlayer(seat.player.entityId);
+    this.encoders.delete(seat.player.entityId);
+    this.seats.delete(playerId);
+  }
+
+  // -- the tick --------------------------------------------------------------
+
+  /**
+   * One authoritative step, plus this instance's share of the outbound traffic.
+   *
+   * Ordering matches M10's `GameServer.tick` and for the same reasons: simulate, then
+   * snapshot (a snapshot describes the world *after* the tick), then events.
+   */
+  step(absoluteTick: number): void {
+    const t0 = nowMs();
+    this.clock.advance(absoluteTick);
+
+    this.match.step(absoluteTick);
+
+    /**
+     * Force a snapshot on any tick that ends the stepping (handover Tier 2 §A).
+     *
+     * *"The sim runs at 60 Hz and snapshots go out at 20, so `shouldSnapshot` is true on one
+     * tick in three. If the deciding tick is not a snapshot tick, the header carrying
+     * `phase = MATCH_END` is never sent, and the client's `MatchFlow.applyReplicated` never
+     * sees the transition that fires `EV.MatchEnded`."*
+     *
+     * Everything downstream of a match ending hangs off that event — the summary screen, the
+     * announcer, the world teardown, `Game.pendingSummary` — and none of them fire. The
+     * symptom reads as three separate bugs: the bots stop, the player keeps walking, no
+     * summary appears, and the menu is unreachable because the client never left `MATCH`.
+     * Measured at M11: 9 of 15 matches never replicated `MATCH_END`, against the 2-in-3 the
+     * theory predicts; with the guard, 15 of 15.
+     *
+     * This did not bite at M10 because `GameServer.tick` kept ticking after `match.isOver`
+     * (endHold, then rotate), so the phase always reached a snapshot tick within ~50 ms. It
+     * bites here because this is exactly the flow the handover warned about: a match that ends
+     * and stops stepping on the same tick.
+     */
+    const ending = this.state_ === InstanceState.RUNNING && this.match.isOver;
+    if (this.clock.shouldSnapshot() || ending) {
+      this.buildEntities();
+      this.sendSnapshots(absoluteTick);
+    }
+    this.sendEvents();
+
+    this.lastStepMs = nowMs() - t0;
+    this.stepSamples++;
+    // Exponential mean rather than a running average: the number that matters is what the
+    // instance costs *now*, and an average over an hour of uptime cannot show a regression.
+    this.meanStepMs =
+      this.stepSamples === 1 ? this.lastStepMs : this.meanStepMs * 0.98 + this.lastStepMs * 0.02;
+  }
+
+  /**
+   * Flatten the roster into replicable records.
+   *
+   * Built once per snapshot tick and shared by every client in this instance. The content is
+   * the same for everyone; only the delta baseline differs. Per-recipient filtering — Ghost —
+   * is applied in `sendSnapshots` against this list rather than by building it N times, so an
+   * instance where nobody runs Ghost pays nothing for the feature.
+   */
+  private buildEntities(): void {
+    let n = 0;
+    for (const player of this.match.players) {
+      const e = this.entities[n];
+      if (e === undefined) break;
+      writePlayer(e, player);
+      n++;
+    }
+    for (const bot of this.match.bots.bots) {
+      const e = this.entities[n];
+      if (e === undefined) break;
+      writeBot(e, bot);
+      n++;
+    }
+    this.entityCount = n;
+  }
+
+  private sendSnapshots(tickIndex: number): void {
+    const flow = this.match.flow;
+    const mode = this.match.mode;
+
+    for (const seat of this.seats.values()) {
+      const { session, player } = seat;
+      if (session.closed) continue;
+      const encoder = this.encoders.get(player.entityId);
+      if (encoder === undefined) continue;
+
+      const h = this.header;
+      h.serverTick = tickIndex;
+      h.ackSeq = player.ackSeq;
+      h.ackTick = player.ackTick;
+      h.scoreA = mode.teamScore('A');
+      h.scoreB = mode.teamScore('B');
+      h.timeLeft = Math.round(flow.secondsRemaining);
+      h.flags =
+        (this.match.inputFrozen ? SFlag.InputFrozen : 0) | (flow.isOver ? SFlag.MatchOver : 0);
+      h.starvation = player.input.takeStarvation();
+      h.phase = phaseIndex(flow.currentPhase);
+      h.phaseSeconds = flow.phaseSecondsRemaining;
+      h.round = flow.round;
+
+      const frame = encoder.encode(
+        h,
+        session.ackedSnapshot,
+        // This client's own authoritative sim state, at full precision. It is compared
+        // against a prediction rather than drawn, and quantisation error in a comparison is
+        // indistinguishable from a misprediction.
+        player.simState,
+        this.entities,
+        this.entityCount,
+      );
+      if (frame.length === 0) continue;
+      session.lastSnapshotId = h.snapshotId;
+      session.send(frame);
+    }
+  }
+
+  private sendEvents(): void {
+    const frame = this.match.outgoing.finish();
+    if (frame === null) return;
+    for (const seat of this.seats.values()) {
+      if (seat.session.closed) continue;
+      seat.session.send(frame);
+    }
+  }
+
+  /** Send one pre-encoded frame to everybody seated here. */
+  broadcast(frame: Uint8Array): void {
+    for (const seat of this.seats.values()) {
+      if (!seat.session.closed) seat.session.send(frame);
+    }
+  }
+
+  // -- teardown --------------------------------------------------------------
+
+  /**
+   * Release everything (§4.18).
+   *
+   * *"A `LiveMatch` is now created and destroyed on every cycle, so any per-match leak
+   * accumulates continuously in a long-lived process."* The list §4.18 gives is: every
+   * `EventBus` subscription, every timer and pending promise, object pools, snapshot buffers,
+   * hitbox history ring buffers, bot brains, path caches, and every reference held by the
+   * router, the session layer and the allocator.
+   *
+   * Most of that is reached through `ServerMatch.dispose`, which unsubscribes the match's own
+   * bus handlers and disposes the flow, the score system and the bot director. What is added
+   * here is the network half: the encoders (each holds a full baseline snapshot), the entity
+   * pool, and the seat map — the last of which is how the *session layer* would otherwise keep
+   * a destroyed instance alive through a `Seat` holding a `NetPlayer`.
+   *
+   * Subclasses override to add their own, and must call `super.dispose()`.
+   */
+  dispose(): void {
+    this.match.viewLagMsFor = null;
+    this.match.dispose();
+    this.encoders.clear();
+    this.seats.clear();
+    // The pool is per instance and would otherwise be 64 live objects per destroyed match.
+    this.entities.length = 0;
+    this.entityCount = 0;
+    this.state_ = InstanceState.DESTROYED;
+  }
+
+  protected setState(next: InstanceStateId, why: string): void {
+    if (this.state_ === next) return;
+    log.info(`instance ${this.id}: ${stateName(this.state_)} -> ${stateName(next)} (${why})`);
+    this.state_ = next;
+  }
+}
+
+function stateName(state: InstanceStateId): string {
+  for (const [name, value] of Object.entries(InstanceState)) {
+    if (value === state) return name;
+  }
+  return String(state);
+}
+
+// -- entity flattening --------------------------------------------------------
+//
+// Lifted verbatim from M10's `GameServer`. The only change is where it lives: an entity list
+// is a property of a world, and there are two worlds now.
+
+function writePlayer(e: EntitySnapshot, p: NetPlayer): void {
+  const sim = p.controller.sim;
+  const weapon = p.weapons.weapon;
+  e.entityId = p.entityId;
+  e.displayName = p.displayName;
+  e.x = sim.x;
+  e.y = sim.y;
+  e.z = sim.z;
+  e.yaw = sim.yaw;
+  e.pitch = sim.pitch;
+  e.vx = sim.vx;
+  e.vz = sim.vz;
+  e.stance = sim.stance;
+  e.heightScale = p.rig.heightScale;
+  e.health = clampByte(p.health.current);
+  e.weaponIndex = weaponIndexOf(p.weapons.definition.id);
+  e.flags =
+    (p.alive ? EFlag.Alive : 0) |
+    (isDown(p.lastButtons, Btn.Fire) ? EFlag.Firing : 0) |
+    (weapon.reloading ? EFlag.Reloading : 0) |
+    (weapon.adsFraction > 0.5 ? EFlag.Ads : 0) |
+    (sim.sprintActive || sim.tacSprintActive ? EFlag.Sprinting : 0) |
+    (sim.grounded ? EFlag.Grounded : 0) |
+    (p.team === 'B' ? EFlag.TeamB : 0);
+  copyVisual(e, p.visual);
+}
+
+function writeBot(e: EntitySnapshot, b: Bot): void {
+  const sim = b.controller.sim;
+  const weapon = b.weapons.weapon;
+  e.entityId = b.entityId;
+  e.displayName = b.displayName;
+  e.x = sim.x;
+  e.y = sim.y;
+  e.z = sim.z;
+  e.yaw = sim.yaw;
+  e.pitch = sim.pitch;
+  e.vx = sim.vx;
+  e.vz = sim.vz;
+  e.stance = sim.stance;
+  e.heightScale = b.rig.heightScale;
+  e.health = clampByte(b.health.current);
+  e.weaponIndex = weaponIndexOf(b.weapons.definition.id);
+  e.flags =
+    (b.health.alive ? EFlag.Alive : 0) |
+    (isDown(b.lastCommand.buttons, Btn.Fire) ? EFlag.Firing : 0) |
+    (weapon.reloading ? EFlag.Reloading : 0) |
+    (weapon.adsFraction > 0.5 ? EFlag.Ads : 0) |
+    (sim.sprintActive || sim.tacSprintActive ? EFlag.Sprinting : 0) |
+    (sim.grounded ? EFlag.Grounded : 0) |
+    EFlag.Bot |
+    (b.team === 'B' ? EFlag.TeamB : 0);
+  copyVisual(e, b.visual);
+}
+
+/**
+ * The M3 visual serials, verbatim.
+ *
+ * Directions become a single angle on the wire: a fall or a flinch only ever uses the
+ * horizontal direction, so two components carrying a normalised vector is two bytes spent
+ * saying what one angle says exactly.
+ */
+function copyVisual(
+  e: EntitySnapshot,
+  v: {
+    deathSerial: number;
+    deathDirX: number;
+    deathDirZ: number;
+    spawnSerial: number;
+    flinchSerial: number;
+    flinchDirX: number;
+    flinchDirZ: number;
+  },
+): void {
+  e.deathSerial = v.deathSerial;
+  e.deathAngle = Math.atan2(v.deathDirX, v.deathDirZ);
+  e.spawnSerial = v.spawnSerial;
+  e.flinchSerial = v.flinchSerial;
+  e.flinchAngle = Math.atan2(v.flinchDirX, v.flinchDirZ);
+}
+
+function clampByte(v: number): number {
+  const i = Math.round(v);
+  return i < 0 ? 0 : i > 255 ? 255 : i;
+}

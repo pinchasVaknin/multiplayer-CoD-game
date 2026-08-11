@@ -17,13 +17,19 @@ import {
   writeBye,
   writeCommands,
   writeHello,
+  writeLoadout,
   writePing,
+  writeReady,
+  writeVote,
   SFlag,
   type EventSink,
   type SnapshotHeader,
+  type SummaryInfo,
+  type VoteInfo,
   type WelcomeInfo,
 } from './Messages';
 import { Prediction } from './Prediction';
+import type { NetLoadout } from './Skirmish';
 import { COMMAND_REDUNDANCY, quantiseCommandInPlace, rejectText } from './Protocol';
 import { copyEntitySnapshot, EFlag, makeEntitySnapshot, type EntitySnapshot } from './Snapshot';
 import type { INetLink } from './Transport';
@@ -83,6 +89,13 @@ export interface NetClientDeps {
   /** Gameplay events from the server, for presentation. */
   readonly events?: EventSink | undefined;
   readonly displayName: string;
+  /**
+   * The player's class, sent with the `Hello` (M11, Tier 1 #20).
+   *
+   * Sent in the handshake rather than after it, because the seat is created *during* the
+   * handshake — see `writeHello`. Undefined is legal and means the server defaults.
+   */
+  readonly loadout?: NetLoadout | null | undefined;
   /** Ask the server for the S7 rewind panel feed. */
   readonly wantRewindDebug?: boolean | undefined;
   /**
@@ -94,6 +107,37 @@ export interface NetClientDeps {
    * above this class, so this reports it rather than acting on it.
    */
   readonly onNewMatch?: ((welcome: WelcomeInfo) => void) | undefined;
+
+  /**
+   * The M11 skirmish messages (§6.4, §6.5, §6.9).
+   *
+   * Reported rather than acted on, for the same reason `onNewMatch` is: what to *do* about a
+   * `Prepare` is to build meshes and textures, which is a client-only concern this class
+   * cannot see from `shared/`. Optional throughout, so the M10 harnesses and any caller that
+   * only wants the netcode compile and run unchanged.
+   */
+  readonly skirmish?: SkirmishSink | undefined;
+}
+
+/** Callbacks for the skirmish flow's server-to-client messages. */
+export interface SkirmishSink {
+  /** The vote cycle's state as the server sees it. Render it; never compute a tally. */
+  readonly onVoteState?: ((info: VoteInfo) => void) | undefined;
+  /** Start building this map in the background. Answer with `sendReady` when done (§6.5). */
+  readonly onPrepare?: ((matchId: number, mapId: string, modeId: string) => void) | undefined;
+  /** End-of-match stats and the XP breakdown, delivered before teardown (§6.9). */
+  readonly onSummary?: ((info: SummaryInfo) => void) | undefined;
+  /** A short line for the player: allocation failed, the arena was rebuilt. */
+  readonly onNotice?: ((text: string) => void) | undefined;
+  /**
+   * This client has been moved to another instance, effective on `welcome.effectiveTick`.
+   *
+   * Distinct from `onNewMatch`, which M10 fires for a rotation on the same connection. A
+   * migration additionally means the *map* may differ and the client may already have built
+   * it — so the two are reported separately rather than the caller having to infer which
+   * happened from the payload.
+   */
+  readonly onMigrated?: ((welcome: WelcomeInfo) => void) | undefined;
 }
 
 /** Everything the S7 network and prediction panels display. */
@@ -161,6 +205,29 @@ export class NetClient {
    */
   sawMatchOver = false;
 
+  /**
+   * Which instance this client is seated in (M11). `WARMUP_MATCH_ID` until told otherwise.
+   *
+   * Read by the client's flow to decide whether a `MATCH_END` belongs to the match it is
+   * playing, and by the migration log to attribute mispredictions to the right instance.
+   */
+  matchId = 0;
+
+  /** The server tick this seat became live. The named tick from §4.18. */
+  effectiveTick = 0;
+
+  /** How many migrations this connection has been through. Instrumentation. */
+  migrations = 0;
+
+  /**
+   * Set on every seat assignment, cleared by the first owner block that follows it.
+   *
+   * See the branch it guards in `onSnapshot`. Starts true because a fresh connection is in
+   * exactly the same position as a migrated one: a controller at the origin and no idea where
+   * the server thinks it is.
+   */
+  private awaitingFirstAuthoritativePose = true;
+
   readonly stats: NetClientStats = {
     rttMs: 0,
     jitterMs: 0,
@@ -186,6 +253,15 @@ export class NetClient {
   private currentTick = 0;
 
   private readonly deps: NetClientDeps;
+
+  /**
+   * The controller prediction runs through. Swappable — see `swapController`.
+   *
+   * Held here rather than read off `deps` on every use, because a migration to another map
+   * replaces it and `NetClientDeps.controller` is readonly by design: the dependency is what
+   * this client was *built* with, and this field is what it is *using*.
+   */
+  private controller: PlayerController;
   private readonly reader = new ByteReader(new Uint8Array(0));
   private readonly writer = new ByteWriter(1024);
   private readonly owner: PlayerSimState = makePlayerSimState();
@@ -232,7 +308,29 @@ export class NetClient {
 
   constructor(deps: NetClientDeps) {
     this.deps = deps;
+    this.controller = deps.controller;
     for (let i = 0; i < COMMAND_REDUNDANCY; i++) this.pending.push(blank());
+  }
+
+  /**
+   * Replace the predicted controller after a migration to a different map (M11, §4.18).
+   *
+   * A `PlayerController` is bound to one `CollisionWorld` for its lifetime, and prediction
+   * sweeps a capsule against that geometry — so a client that migrated from the greybox arena
+   * to Foundry and kept its controller would predict against the arena's walls while the
+   * server simulated Foundry's. That is not a subtle divergence: it is a misprediction on
+   * every tick that touches geometry, and it would read as the netcode having broken at
+   * exactly the moment the match started.
+   *
+   * Safe only immediately after a seat assignment, which is why it is called from
+   * `onMigrated`: `onWelcome` has just reset the prediction ring and cleared the interpolation
+   * buffers, so there is no recorded state left that belonged to the old world. `Prediction`
+   * takes the controller as a per-call argument rather than holding it, so nothing else needs
+   * to be told.
+   */
+  swapController(next: PlayerController): void {
+    this.controller = next;
+    this.prediction.reset();
   }
 
   /** Begin the handshake. The link must already be open. */
@@ -243,7 +341,9 @@ export class NetClient {
     // The `#rw` suffix is how a client opts into the rewind debug feed without the protocol
     // growing a field only a debug panel reads.
     const name = this.deps.wantRewindDebug === true ? `${this.deps.displayName}#rw` : this.deps.displayName;
-    this.deps.link.send(writeHello(this.writer, name));
+    // The class rides the handshake, so the seat is built with it rather than reconfigured
+    // afterwards. See `writeHello` for the measured cost of the alternative.
+    this.deps.link.send(writeHello(this.writer, name, this.deps.loadout ?? null));
     this.lastPingMs = 0;
     this.rateWindowMs = nowMs();
   }
@@ -271,15 +371,34 @@ export class NetClient {
     this.closeReason = '';
     this.lastPingMs = 0;
     this.rateWindowMs = nowMs();
-    this.onWelcome(
-      welcome.entityId,
-      welcome.team,
-      welcome.mapId,
-      welcome.modeId,
-      welcome.serverTick,
-      welcome.serverMs,
-      receivedAtMs,
-    );
+    this.onWelcome(welcome, receivedAtMs);
+  }
+
+  // -- M11: the skirmish messages ---------------------------------------------
+
+  /**
+   * Send the player's class (Tier 1 #20).
+   *
+   * Ids only — see `writeLoadout`. Call after joining and again whenever the loadout editor
+   * closes; the server applies it on the next spawn and locks it into the `MatchRequest` at
+   * migration, which is what makes the perk the client predicts with the perk the server
+   * simulates with.
+   */
+  sendLoadout(loadout: NetLoadout): void {
+    if (this.state !== 'joined') return;
+    this.deps.link.send(writeLoadout(this.writer, loadout));
+  }
+
+  /** Vote for `option` in `phase`. Rejected server-side if the window has closed (§4.20). */
+  sendVote(phase: number, option: number): void {
+    if (this.state !== 'joined') return;
+    this.deps.link.send(writeVote(this.writer, phase, option));
+  }
+
+  /** Report that the background build for `matchId` is finished (§6.5). */
+  sendReady(matchId: number): void {
+    if (this.state !== 'joined') return;
+    this.deps.link.send(writeReady(this.writer, matchId));
   }
 
   /** Leave cleanly, so the server frees the seat without waiting for a timeout (S6.1). */
@@ -367,7 +486,26 @@ export class NetClient {
 
     switch (msg.kind) {
       case 'welcome':
-        this.onWelcome(msg.entityId, msg.team, msg.mapId, msg.modeId, msg.serverTick, msg.serverMs);
+        this.onWelcome(msg);
+        return;
+      case 'migrate':
+        // Same handler, and that is the point: a migration and a join say the same thing
+        // about this seat, so there is one path that resets prediction and interpolation
+        // rather than two that must be kept in step. See `onWelcome`.
+        this.onWelcome(msg);
+        this.deps.skirmish?.onMigrated?.(this.matchInfo());
+        return;
+      case 'voteState':
+        this.deps.skirmish?.onVoteState?.(msg);
+        return;
+      case 'prepare':
+        this.deps.skirmish?.onPrepare?.(msg.matchId, msg.mapId, msg.modeId);
+        return;
+      case 'summary':
+        this.deps.skirmish?.onSummary?.(msg);
+        return;
+      case 'notice':
+        this.deps.skirmish?.onNotice?.(msg.text);
         return;
       case 'reject':
         this.state = 'rejected';
@@ -397,21 +535,30 @@ export class NetClient {
     }
   }
 
-  private onWelcome(
-    entityId: number,
-    team: 'A' | 'B',
-    mapId: string,
-    modeId: string,
-    serverTick: number,
-    serverMs: number,
-    receivedAtMs = nowMs(),
-  ): void {
+  /**
+   * A seat assignment — a join, a rotation, or an M11 migration.
+   *
+   * All three are the same event from this class's point of view: *"your entity id, team, map
+   * and mode are now these, in this instance."* §4.18 lists what the client must do on a
+   * migration — flush unacked commands, discard the prediction ring, resync the clock and
+   * clear interpolation — and every item on that list is something a rejoin already had to do
+   * for the M10 rotation path. Sharing the path is what stops the two drifting: a migration
+   * that skipped one of them produces corrections that read as netcode bugs and are not.
+   */
+  private onWelcome(info: WelcomeInfo, receivedAtMs = nowMs()): void {
+    const { entityId, team, mapId, modeId, serverTick, serverMs } = info;
     const rejoin = this.state === 'joined';
     this.entityId = entityId;
     this.team = team;
     this.mapId = mapId;
     this.modeId = modeId;
+    this.matchId = info.matchId;
+    this.effectiveTick = info.effectiveTick;
     this.state = 'joined';
+    if (info.migrated) this.migrations++;
+    // Whatever this controller currently believes about its position belongs to the instance
+    // we have just left. Nothing it predicts counts until the server has said where we are.
+    this.awaitingFirstAuthoritativePose = true;
 
     /**
      * A second `Welcome` means the server started a new match (M10, playtest round 2).
@@ -453,6 +600,9 @@ export class NetClient {
       serverTick: this.stats.serverTick,
       serverMs: 0,
       snapshotHz: 0,
+      matchId: this.matchId,
+      effectiveTick: this.effectiveTick,
+      migrated: this.migrations > 0,
     };
   }
 
@@ -539,6 +689,46 @@ export class NetClient {
     // ---- now apply the owner block -------------------------------------------
     if (!hasOwner) return;
 
+    if (this.awaitingFirstAuthoritativePose) {
+      /**
+       * Nothing to be wrong about yet (M11, §4.18).
+       *
+       * A seat assignment — a join, a rotation or a migration — leaves the client holding a
+       * `PlayerController` that has never been told where it is. On a migration to another map
+       * it is a *brand new* controller sitting at the origin, which in the greybox room is
+       * inside geometry: the ticks before the first owner block arrives are spent predicting a
+       * de-penetration the server never performed, and every one of them is later compared
+       * against an authoritative state from somewhere else entirely.
+       *
+       * `respawned` below handles the same idea for a death, and this is the same argument one
+       * step earlier: *"this is not the client having been wrong, it is the client having had
+       * nothing to be wrong about."* Measured before this latch: 1-3 mispredictions in the 60
+       * ticks after every return to the arena, on every client, at the same tick offsets —
+       * which is the signature of a shared sim event rather than a link problem, and is what
+       * gave it away.
+       *
+       * Cleared here, so exactly one adopt is exempted and ordinary prediction resumes on the
+       * next snapshot. A latch that stayed set would be a client that never reconciles.
+       */
+      this.awaitingFirstAuthoritativePose = false;
+      this.respawned = false;
+      /**
+       * Adopt without replaying.
+       *
+       * Replaying the unacked commands here was tried and measured, on the theory that the
+       * client is two ticks behind its own input at this point. It moved the residual
+       * misprediction from the arena-return transition onto the into-match transition instead
+       * of removing it — 1 and 1 where there had been 0 and 1 — because the first snapshot
+       * from a freshly seated instance carries an `ackSeq` from a command buffer that has only
+       * just started filling, so the replay depth it implies is not the real one.
+       *
+       * Left as the plain adopt, which is what M10 shipped and what the respawn path below
+       * uses. See PLAN.md for the residual this leaves and its measured size.
+       */
+      this.prediction.adopt(this.owner, this.controller);
+      return;
+    }
+
     if (this.respawned) {
       /**
        * A respawn is not a misprediction.
@@ -555,11 +745,11 @@ export class NetClient {
        */
       this.respawned = false;
       this.prediction.reset();
-      this.prediction.adopt(this.owner, this.deps.controller);
+      this.prediction.adopt(this.owner, this.controller);
       return;
     }
 
-    this.prediction.reconcile(this.header.ackSeq, this.owner, this.deps.controller);
+    this.prediction.reconcile(this.header.ackSeq, this.owner, this.controller);
   }
 
   // -- simulate ---------------------------------------------------------------
@@ -590,9 +780,9 @@ export class NetClient {
     let steps = 0;
     while (this.currentTick < target && steps < MAX_CATCHUP_STEPS) {
       const cmd = this.neutralise(this.deps.sample(this.currentTick));
-      this.deps.controller.step(cmd);
+      this.controller.step(cmd);
       this.deps.applyNonReplayed?.(cmd);
-      this.prediction.record(cmd, this.deps.controller);
+      this.prediction.record(cmd, this.controller);
       this.queue(cmd);
       this.currentTick++;
       steps++;

@@ -98,11 +98,43 @@ export class CollisionWorld {
   broadphaseTests = 0;
   narrowphaseTests = 0;
 
-  constructor(colliders: ColliderSet, bounds: Box, cellSize = 4) {
+  /**
+   * Build the hash from `bounds`, or adopt one that has already been built.
+   *
+   * The second form is what `CollisionWorld.sharing` uses; prefer that named factory at call
+   * sites, because "a `SpatialHash` where a `Box` normally goes" reads as a mistake.
+   */
+  constructor(colliders: ColliderSet, bounds: Box | SpatialHash, cellSize = 4) {
     this.colliders = colliders;
-    this.hash = new SpatialHash(cellSize);
-    this.hash.build(colliders, bounds);
+    if (bounds instanceof SpatialHash) {
+      this.hash = bounds;
+    } else {
+      this.hash = new SpatialHash(cellSize);
+      this.hash.build(colliders, bounds);
+    }
     this.raycaster = new Raycaster(colliders, this.hash);
+  }
+
+  /**
+   * A second view over collider geometry that has **already been built** (M11, S4.19).
+   *
+   * S4.19 requires the static spatial hash to be baked once at server boot and shared
+   * read-only across instances, because baking on demand would put bake time straight into
+   * the transition the players are supposed to experience as seamless.
+   *
+   * Only two things in this class are written after construction, and both are per-caller
+   * scratch rather than world state: the `candidates`/`contact`/`best` buffers, which live
+   * entirely inside a single query, and `broadphaseTests`/`narrowphaseTests`, which the debug
+   * overlay resets each tick. So the *geometry* — the collider set, the hash and the
+   * raycaster over them — is genuinely immutable and shareable, and the scratch is not.
+   *
+   * This factory is what draws that line: two instances get two `CollisionWorld`s with two
+   * sets of scratch over **one** set of geometry. Handing the same object to both would work
+   * today only because the master loop steps instances sequentially, and would become an
+   * unreproducible desync the moment anything about that changed.
+   */
+  static sharing(colliders: ColliderSet, hash: SpatialHash): CollisionWorld {
+    return new CollisionWorld(colliders, hash);
   }
 
   configure(maxSlopeDeg: number, skin: number): void {
