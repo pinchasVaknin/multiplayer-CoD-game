@@ -25,7 +25,11 @@ import {
 import { PlayerController } from '../../shared/player/PlayerController';
 import { findMap } from '../../shared/modes/ModeRegistry';
 import { loadMapCollision } from '../../shared/world/MapLoader';
+import { STREAK_DEFS } from '../../shared/streaks/StreakDefs';
 import { NodeLink } from './NodeLink';
+
+/** The Chopper Gunner's index in `STREAK_DEFS`, resolved once rather than hardcoded. */
+const CHOPPER_KIND = STREAK_DEFS.findIndex((d) => d.id === 'chopper');
 
 /**
  * A client with no browser (M10, S7).
@@ -188,6 +192,11 @@ export interface HeadlessClientReport {
   readonly peakStreakEntities: number;
   /** Frames carrying a friendly UAV sweep, and how many activations were asked for. */
   readonly sweepFrames: number;
+  /** Frames carrying a live Chopper Gunner, and when the last one arrived (§8.23). */
+  readonly chopperFrames: number;
+  readonly lastChopperMs: number;
+  /** When a chopper owned by each entity was last seen, for the §8.23 case-4 assertion. */
+  readonly lastChopperMsByOwner: ReadonlyMap<number, number>;
   readonly pendingSeen: number;
   readonly streakRequests: number;
   readonly contactsSeen: number;
@@ -307,6 +316,10 @@ export class HeadlessClient {
   private readonly streakInstanceIds = new Set<number>();
   private peakStreakEntities = 0;
   private sweepFrames = 0;
+  private chopperFrames = 0;
+  private lastChopperMs = 0;
+  /** When a chopper owned by each entity id was last seen. Keyed by owner, see `onStreaks`. */
+  private readonly lastChopperMsByOwner = new Map<number, number>();
   /** Entity ids this client has ever seen as a UAV contact. The Ghost assertion reads it. */
   readonly contactIds = new Set<number>();
   /** Contacts seen while in a live match, and the entity id held there. See `onStreaks`. */
@@ -414,6 +427,23 @@ export class HeadlessClient {
         onStreaks: (view) => {
           this.streakFrames++;
           for (const e of view.entities) this.streakInstanceIds.add(e.instanceId);
+          /**
+           * When a Chopper Gunner was last seen in the sky (§8.23).
+           *
+           * A timestamp rather than a count, because the four Chopper cases are all questions
+           * about *when it stopped* — the gunner died, disconnected, the match ended, the
+           * instance was destroyed — and a total cannot answer any of them. The harness reads
+           * this against the moment it injected the fault.
+           */
+          for (const e of view.entities) {
+            if (e.kind !== CHOPPER_KIND) continue;
+            this.chopperFrames++;
+            this.lastChopperMs = nowMs();
+            // **Per owner**, which is the whole point. Three clients each called in a chopper,
+            // so "was any chopper present" stays true from the other two for the full duration
+            // and cannot see the one orphaned body it is supposed to be watching.
+            this.lastChopperMsByOwner.set(e.ownerId, nowMs());
+          }
           if (view.entities.length > this.peakStreakEntities) {
             this.peakStreakEntities = view.entities.length;
           }
@@ -761,6 +791,9 @@ export class HeadlessClient {
       streakEntitiesSeen: this.streakInstanceIds.size,
       peakStreakEntities: this.peakStreakEntities,
       sweepFrames: this.sweepFrames,
+      chopperFrames: this.chopperFrames,
+      lastChopperMs: this.lastChopperMs,
+      lastChopperMsByOwner: new Map(this.lastChopperMsByOwner),
       pendingSeen: this.pendingSeen,
       streakRequests: this.streakRequests,
       contactsSeen: this.contactIds.size,

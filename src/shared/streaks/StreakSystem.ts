@@ -306,6 +306,29 @@ export class StreakSystem implements ObjectiveProvider {
     }
   }
 
+  /**
+   * The owner has left the match entirely (M11 Gate B, §8.23).
+   *
+   * The fourth of §8.23's Chopper Gunner cases, and the one nothing covered. The other three
+   * all arrive as events this class already subscribes to — `EV.EntityKilled` retires a
+   * gunner's chopper, `EV.MatchEnded` and `EV.RoundEnded` end everything, and teardown goes
+   * through `dispose`. A **disconnect** is none of those: no death is emitted, the match is
+   * still running, and the instance is still alive. So a gunner who pulled their network cable
+   * left a chopper in the sky flying on a command that would never arrive again, owned by an
+   * entity id that no longer existed, crediting its kills to nobody and replicated to every
+   * remaining client as a live entity until its duration ran out.
+   *
+   * Deliberately the **same path as death**, rather than a separate one. The rules are already
+   * decided and they are the right ones here too: the chopper ends, because the player who was
+   * flying it is gone; the pending streaks are lost, because they are lost on death and a
+   * disconnect should not be a way to bank them; and a sentry or care package they placed
+   * *stays*, because those already outlive their owner's death and a placed object does not
+   * care who put it there.
+   */
+  onOwnerRemoved(entityId: number): void {
+    this.onDeath(entityId);
+  }
+
   dispose(): void {
     this.endAll();
     for (const off of this.unsubscribe) off();

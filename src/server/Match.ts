@@ -814,6 +814,15 @@ export class ServerMatch {
     this.rewind.unregister(entityId);
     this.loadouts.delete(entityId);
     this.pendingLoadouts.delete(entityId);
+    /**
+     * Their chopper comes down with them (M11 Gate B, §8.23).
+     *
+     * The fourth Chopper Gunner case. Every other exit a gunner has is an event `StreakSystem`
+     * already listens for; leaving the match is not one of them, so without this a disconnected
+     * player's gunship kept flying, owned by an entity that had just stopped existing. See
+     * `StreakSystem.onOwnerRemoved` for why this deliberately reuses the death rules.
+     */
+    this.streaks.onOwnerRemoved(entityId);
     const rosterAt = this.bots.roster.indexOf(player);
     if (rosterAt >= 0) this.bots.roster.splice(rosterAt, 1);
 

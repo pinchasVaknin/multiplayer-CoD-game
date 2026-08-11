@@ -76,6 +76,14 @@ interface HarnessOptions {
    * contact list is empty, not that Ghost works.
    */
   readonly ghost: boolean;
+  /**
+   * Drop the last client while it is flying a Chopper Gunner (§8.23, case 4).
+   *
+   * The one Chopper case that no event covers. Death, match end, round end and teardown all
+   * reach `StreakSystem` through subscriptions it already holds; a disconnect reaches nothing,
+   * so the gunship kept flying with an owner that no longer existed.
+   */
+  readonly dropGunner: boolean;
 }
 
 /**
@@ -259,6 +267,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let observedBots = 0;
   /** Which match the streak grant has already been applied to, so it happens once each. */
   let grantedTo = -1;
+  let gunnerDropped = false;
+  let droppedAtMs = 0;
   let lastCycle = 0;
   let lastPhase = -1;
   const phaseBoundaries: { cycle: number; phase: string; atMs: number }[] = [];
@@ -303,6 +313,23 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
        * everything downstream of "this player now holds a UAV" is the shipping code, and only
        * the four kills that would have produced it are stood in for.
        */
+      /**
+       * Drop the gunner once their chopper is actually in the sky (§8.23, case 4).
+       *
+       * Waits for the streak to be *live* rather than dropping on a timer: the case being
+       * tested is a chopper in flight losing its owner, and a client dropped a tick before the
+       * grant landed would test nothing while looking identical in the log.
+       */
+      if (opts.dropGunner && !gunnerDropped && gunnerFlying(clients)) {
+        const victim = clients[clients.length - 1];
+        if (victim !== undefined) {
+          gunnerDropped = true;
+          droppedAtMs = nowMs();
+          log.info(`dropping ${victim.report().name} while their chopper is up (§8.23 case 4).`);
+          victim.disconnect(false);
+        }
+      }
+
       if (opts.grantStreak !== null && grantedTo !== running.id) {
         grantedTo = running.id;
         for (const seat of running.sessions) {
@@ -364,6 +391,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     cycleReports,
     phaseBoundaries,
     firstInputMs,
+    droppedAtMs,
   });
 }
 
@@ -495,10 +523,13 @@ interface FlowReportInput {
   readonly cycleReports: readonly CycleReport[];
   readonly phaseBoundaries: readonly { cycle: number; phase: string; atMs: number }[];
   readonly firstInputMs: number;
+  /** When `--drop-gunner` cut the gunner's link, or 0 if it never fired (§8.23). */
+  readonly droppedAtMs: number;
 }
 
 function reportFlow(input: FlowReportInput): number {
-  const { opts, cfg, server, reports, cycleReports, phaseBoundaries, firstInputMs } = input;
+  const { opts, cfg, server, reports, cycleReports, phaseBoundaries, firstInputMs, droppedAtMs } =
+    input;
 
   const migrations = server.migrationLog.log;
   const failedMigrations = migrations.filter((m) => !m.ok);
@@ -584,8 +615,15 @@ function reportFlow(input: FlowReportInput): number {
    * and the brief is explicit that it is not to be explained away.
    */
   const problems: string[] = [];
-  if (stillConnected !== reports.length) {
-    problems.push(`${reports.length - stillConnected} client(s) dropped`);
+  /**
+   * One client is *supposed* to be gone under `--drop-gunner` (§8.23 case 4).
+   *
+   * The run deliberately cuts the last client's link mid-chopper, so counting it as an
+   * unexpected drop would make the case-4 test permanently red for the reason it exists.
+   */
+  const expectedDrops = opts.dropGunner ? 1 : 0;
+  if (stillConnected < reports.length - expectedDrops) {
+    problems.push(`${reports.length - expectedDrops - stillConnected} client(s) dropped`);
   }
   /**
    * A fault run is *supposed* to reach no match.
@@ -642,6 +680,15 @@ function reportFlow(input: FlowReportInput): number {
    */
   if (opts.ghost && !checkGhost(reports)) {
     problems.push('a Ghost player appeared as a UAV contact on an enemy client');
+  }
+
+  /** §8.23 case 4. Blocking: an orphaned gunship shoots people. */
+  if (opts.dropGunner) {
+    if (droppedAtMs === 0) {
+      problems.push('--drop-gunner was set but no chopper was ever seen flying');
+    } else if (!checkDroppedGunner(reports, reports[reports.length - 1], droppedAtMs, 1500)) {
+      problems.push('a Chopper Gunner outlived the gunner who disconnected');
+    }
   }
 
   if (problems.length === 0) {
@@ -772,6 +819,71 @@ function checkGhost(reports: readonly HeadlessClientReport[]): boolean {
   return leaked === 0;
 }
 
+/** Whether any client can currently see a Chopper Gunner in the sky (§8.23). */
+function gunnerFlying(clients: readonly HeadlessClient[]): boolean {
+  for (const c of clients) {
+    const r = c.report();
+    // "Recently" rather than "ever": the question is whether one is up *now*, and a chopper
+    // that expired ten seconds ago would otherwise answer yes for the rest of the run.
+    if (r.chopperFrames > 0 && nowMs() - r.lastChopperMs < 500) return true;
+  }
+  return false;
+}
+
+/**
+ * §8.23 case 4: a gunner who disconnects takes their chopper with them.
+ *
+ * Asserted against the **survivors**, which is the only place it can be seen — the client that
+ * left is not receiving anything. If the chopper outlived its owner, the remaining clients keep
+ * being sent it as a live entity, so a `lastChopperMs` after the drop is the leak.
+ *
+ * The grace window covers the frames genuinely in flight when the socket closed: the drop, the
+ * server noticing, and the snapshot cadence. Anything past it is a chopper that is still being
+ * simulated for a player who is gone.
+ */
+function checkDroppedGunner(
+  reports: readonly HeadlessClientReport[],
+  gunner: HeadlessClientReport | undefined,
+  droppedAtMs: number,
+  graceMs: number,
+): boolean {
+  if (gunner === undefined) return true;
+  const owner = gunner.liveEntityId;
+  let bad = 0;
+
+  for (const r of reports) {
+    if (r.name === gunner.name) continue;
+    /**
+     * **This gunner's** chopper, not any chopper.
+     *
+     * Every client in the run called one in, so a check for "was a chopper present" stays true
+     * from the survivors' own gunships for the full duration and can never see the orphan. The
+     * first version of this did exactly that and reported a failure that was really two other
+     * players flying normally — it looked like a real bug for as long as it took to read the
+     * log. Keyed by owner, the question is the one being asked.
+     */
+    const last = r.lastChopperMsByOwner.get(owner);
+    if (last === undefined) {
+      log.info(`${r.name}: never saw a chopper owned by entity ${owner}.`);
+      continue;
+    }
+    const after = last - droppedAtMs;
+    if (after > graceMs) {
+      bad++;
+      log.error(
+        `CHOPPER OUTLIVED ITS GUNNER: ${r.name} was still sent entity ${owner}'s chopper ` +
+          `${Math.round(after)}ms after they disconnected (grace ${graceMs}ms).`,
+      );
+    } else {
+      log.info(
+        `${r.name}: entity ${owner}'s chopper last seen ${Math.round(after)}ms ` +
+          `relative to the drop — within the ${graceMs}ms grace.`,
+      );
+    }
+  }
+  return bad === 0;
+}
+
 function streakLine(r: HeadlessClientReport): string {
   if (r.streakFrames === 0) return '';
   return (
@@ -813,6 +925,7 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     voteFor: num('--vote', -1),
     grantStreak: get('--grant-streak'),
     ghost: argv.includes('--ghost'),
+    dropGunner: argv.includes('--drop-gunner'),
   };
 }
 
