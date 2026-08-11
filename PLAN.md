@@ -4839,7 +4839,8 @@ match was already present (state X)`.
 **Gate A is sealed. Gate B is part-done.** Six commits on
 `gate-b/objective-replication` beyond the objective-replication groundwork:
 `2064b32` mode state · `0b8a4b7` bot replacement · `1740c6c` streaks server-side ·
-`f33d7d1` streaks on the wire and Ghost · `65c8adb` Chopper case 4 · this one. Everything below is measured, not asserted; where
+`f33d7d1` streaks on the wire and Ghost · `65c8adb` Chopper case 4 · `9ac32a6` server-side
+equipment. Everything below is measured, not asserted; where
 something is unverified it says so.
 
 ## The one root cause behind most of it
@@ -5028,8 +5029,21 @@ three more times in one sitting.
 
 In rough dependency order. The first item unblocks the most.
 
-1. **Grenades.** `ServerMatch` still has no equipment thrower for humans. Predicted by the
-   thrower, authoritative on the instance, and smoke must occlude bot LOS server-side.
+1. **The grenade projectile channel.** The authoritative half landed in `9ac32a6`:
+   `EquipmentSystem`, `BotThrower` and a `ThrowController` **per connected human** all run on
+   the server, driven from the command the player's body just consumed, and
+   `bots.perception.occluder` gives §6.8's smoke occlusion. Measured at 4 thrown / 4 detonated
+   in a live match, against zero before.
+
+   What is missing is replication. A client predicts and draws its **own** grenade correctly —
+   same command, same tick, same trajectory both sides — but one thrown by a bot or another
+   player exists on the server, damages people and is **invisible**. Needs `MsgS.Projectiles`
+   plus the smoke field, and then §8.24's reconciliation claim: blend the predicted arc onto the
+   authoritative one rather than snapping, and measure that there is no visible teleport.
+
+   **Check while building it:** the networked client still simulates its own `MatchEquipment`
+   unguarded — pre-existing since M10, not introduced here — so confirm a client-side blast
+   cannot apply damage a second time to its own player.
 2. **Networked S&D spectator** for one-life rounds; M7's was local. Note that with the round
    reset fixed, a dead player now has a real wait to fill.
 3. **Divergence checker headless.** It exists client-only (`client/debug/DivergenceChecker.ts`);
