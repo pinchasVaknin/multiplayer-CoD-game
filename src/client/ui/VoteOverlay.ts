@@ -320,7 +320,7 @@ export class VoteOverlay {
       row.name.textContent = `${item.index + 1}  ${item.label}`;
       row.count.textContent = String(item.count);
       row.fill.style.width = `${item.pct}%`;
-      row.button.classList.toggle('op-option--on', item.self);
+      row.button.classList.toggle('op-vote__option--on', item.self);
       // Still announced: which option *this* player chose is real information, even though the
       // control cannot be operated with a pointer.
       row.button.setAttribute('aria-pressed', item.self ? 'true' : 'false');
@@ -330,16 +330,16 @@ export class VoteOverlay {
   private buildRow(item: OptionView): HTMLButtonElement {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'op-option';
+    button.className = 'op-vote__option';
 
     const fill = document.createElement('span');
-    fill.className = 'op-option__fill';
+    fill.className = 'op-vote__option-fill';
 
     const name = document.createElement('span');
-    name.className = 'op-option__name';
+    name.className = 'op-vote__option-name';
 
     const count = document.createElement('span');
-    count.className = 'op-option__count';
+    count.className = 'op-vote__option-count';
 
     button.append(fill, name, count);
     /**

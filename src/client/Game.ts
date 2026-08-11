@@ -16,7 +16,7 @@ import { Loop } from './engine/FrameLoop';
 import { ChopperCamera } from './streaks/ChopperCamera';
 import { DEG2RAD } from '../shared/core/MathUtil';
 import { LocalBotTransport, type ICommandQueue } from '../shared/net/Transport';
-import { isServerConfigured, multiplayerJoinOptions, parseJoinOptions } from './net/JoinOptions';
+import { isServerConfigured, multiplayerJoinOptions } from './net/JoinOptions';
 import { handshake, HandshakeError, type HandshakeOptions } from './net/Handshake';
 import { logger } from '../shared/core/Log';
 import type { SummaryInfo, WelcomeInfo } from '../shared/net/Messages';
@@ -202,7 +202,6 @@ export class Game {
    * path built in M1-M8 still takes — HARD RULE 8 requires opening the page to behave exactly
    * as it did, and it does.
    */
-  private readonly joinOptions = parseJoinOptions(window.location.search);
 
   /**
    * The connection and the `Welcome`, once the handshake has completed (M10, playtest
@@ -391,7 +390,17 @@ export class Game {
       audio: this.audio,
       selection: this.selection,
       // Connect before building anything, so the server dictates the map. See `launchMatch`.
-      onLaunch: () => void this.launchMatch(),
+      /**
+       * Play Solo's Start button. Never connects — see `launchMatch`.
+       *
+       * `multiplayerJoin` is cleared first because it survives a return to the menu: a player
+       * who played multiplayer, quit to the menu and then chose Play Solo would otherwise be
+       * dialled straight back into the arena by the leftover options.
+       */
+      onLaunch: () => {
+        this.multiplayerJoin = null;
+        void this.launchMatch();
+      },
       onPlayMultiplayer: () => void this.playMultiplayer(),
       serverConfigured: () => isServerConfigured(window.location.search),
       displayName: () => this.profile.settings.callsign,
@@ -1137,13 +1146,19 @@ export class Game {
 
   private async launchMatch(): Promise<void> {
     /**
-     * The button's options win over the URL's.
+     * **Only the Play Multiplayer button connects** (M11 playtest, §6.2).
      *
-     * `?server=` still boots straight into a connection, which is what M10 built and what the
-     * harnesses use. `multiplayerJoin` is set only by the Play Multiplayer button and carries
-     * the callsign from the profile rather than from the query string.
+     * This used to fall back to `this.joinOptions`, which is non-null whenever `?server=` is on
+     * the URL or `VITE_SERVER_URL` is baked in — so on any build configured for multiplayer,
+     * **Play Solo connected to the server too**. The player got a warmup arena and a vote cycle
+     * from a button that promised neither.
+     *
+     * §6.2 is explicit that Play Solo is *"the existing local path: the client drives the shared
+     * simulation locally, exactly as it did before M9"*. So the address is now configuration for
+     * the multiplayer button and nothing else: `?server=` decides where that button dials and
+     * whether it is enabled, and never what Play Solo does.
      */
-    const join = this.multiplayerJoin ?? this.joinOptions;
+    const join = this.multiplayerJoin;
     if (join === null || this.server !== null) {
       // Single-player, or a connection that is already up (resuming, or a rotation).
       this.transitionTo('MATCH');
