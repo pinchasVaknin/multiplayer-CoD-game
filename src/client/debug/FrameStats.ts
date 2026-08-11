@@ -9,6 +9,23 @@
 export const HISTORY_LENGTH = 600;
 
 export class FrameStats {
+  /**
+   * Milliseconds spent on the M11 background map build, this frame and at worst (§7).
+   *
+   * §6.5: *"Report your chunking approach and the worst frame time observed during a
+   * background build."* Tracked separately from the frame time itself so the two questions
+   * stay apart — *"how long was the frame"* and *"how much of that was the build"* have
+   * different answers and only the second one is this milestone's to defend.
+   */
+  backgroundBuildMs = 0;
+  worstBackgroundBuildMs = 0;
+
+  /** Called by `Game.draw` with whatever the build queue spent. */
+  noteBackgroundBuildMs(ms: number): void {
+    this.backgroundBuildMs = ms;
+    if (ms > this.worstBackgroundBuildMs) this.worstBackgroundBuildMs = ms;
+  }
+
   private readonly frames = new Float32Array(HISTORY_LENGTH);
   private readonly sim = new Float32Array(HISTORY_LENGTH);
   private readonly render = new Float32Array(HISTORY_LENGTH);

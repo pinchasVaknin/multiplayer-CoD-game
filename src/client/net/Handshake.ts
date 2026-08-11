@@ -1,5 +1,6 @@
 import { logger } from '../../shared/core/Log';
 import { decodeHeader, writeHello, type WelcomeInfo } from '../../shared/net/Messages';
+import type { NetLoadout } from '../../shared/net/Skirmish';
 import { HANDSHAKE_TIMEOUT_MS, PROTOCOL_VERSION, rejectText } from '../../shared/net/Protocol';
 import type { NetConditions } from '../../shared/net/NetSim';
 import { ByteReader, ByteWriter } from '../../shared/net/Wire';
@@ -69,6 +70,8 @@ export interface HandshakeResult {
 }
 
 export interface HandshakeOptions {
+  /** The player's class, sent with the `Hello` (M11, Tier 1 #20). */
+  readonly loadout?: NetLoadout | null;
   readonly url: string;
   readonly displayName: string;
   readonly conditions: NetConditions;
@@ -111,7 +114,18 @@ export async function handshake(options: HandshakeOptions): Promise<HandshakeRes
   // The `#rw` suffix is how a client opts into the rewind debug feed without the protocol
   // growing a field only a debug panel reads. Mirrored from `NetClient.connect`.
   const name = options.wantRewindDebug ? `${options.displayName}#rw` : options.displayName;
-  link.send(writeHello(new ByteWriter(256), name));
+  /**
+   * The class rides the `Hello` (M11, Tier 1 #20).
+   *
+   * It has to be here rather than in a message that follows, because the server creates the
+   * seat *inside* the handshake and the entity's constructor is what applies the perks. A
+   * class arriving one frame later arrives after the body it was meant to configure — measured
+   * at 178 mispredictions in 1277 comparisons. See `writeHello`.
+   *
+   * The buffer is sized for a name plus a full class: eight ids, two weapons with attachments,
+   * and their camo strings.
+   */
+  link.send(writeHello(new ByteWriter(1024), name, options.loadout ?? null));
 
   try {
     const { welcome, receivedAtMs, pending } = await awaitWelcome(link);

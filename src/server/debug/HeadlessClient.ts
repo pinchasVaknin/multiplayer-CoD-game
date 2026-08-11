@@ -460,20 +460,23 @@ export class HeadlessClient {
    * kind. A bare count cannot tell them apart, and the two have nothing in common.
    */
   private pumpMigrationWindow(): void {
-    const window = this.migrationWindow;
-    if (window === null) return;
+    // Named `span` rather than `window`: the boundary check bans that identifier outright in
+    // `server/`, and it is right to — a bare `window.innerWidth` crosses the partition just as
+    // completely as an import does, and no import graph can see it.
+    const span = this.migrationWindow;
+    if (span === null) return;
 
-    const soFar = this.net.prediction.stats.mispredictions - window.baseline;
-    if (soFar > window.seen) {
-      window.seen = soFar;
-      window.atTicks.push(this.ticks - (window.untilTick - POST_MIGRATION_WINDOW_TICKS));
+    const soFar = this.net.prediction.stats.mispredictions - span.baseline;
+    if (soFar > span.seen) {
+      span.seen = soFar;
+      span.atTicks.push(this.ticks - (span.untilTick - POST_MIGRATION_WINDOW_TICKS));
     }
 
-    if (this.ticks < window.untilTick) return;
+    if (this.ticks < span.untilTick) return;
     this.postMigrationWindows.push(soFar);
-    if (window.intoLive) this.intoLiveWindows.push(soFar);
+    if (span.intoLive) this.intoLiveWindows.push(soFar);
     else this.toArenaWindows.push(soFar);
-    if (soFar > 0) this.migrationMispredictionTicks.push(...window.atTicks);
+    if (soFar > 0) this.migrationMispredictionTicks.push(...span.atTicks);
     this.migrationWindow = null;
   }
 

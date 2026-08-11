@@ -24,6 +24,13 @@ export interface MenuDeps {
   readonly host: HTMLElement;
   readonly selection: MenuSelection;
   readonly onLaunch: () => void;
+  /** M11 (§6.1): connect and drop straight into the warmup arena. No intermediate screen. */
+  readonly onPlayMultiplayer: () => void;
+  /** Whether an address is configured at all. False disables the button with a reason. */
+  readonly serverConfigured: () => boolean;
+  /** The persisted callsign, prefilled so it never blocks entry (§6.1). */
+  readonly displayName: () => string;
+  readonly onDisplayName: (name: string) => void;
   /** M6: enter the `LOADOUT` state. */
   readonly onLoadout: () => void;
   /** M8: enter the `SETTINGS` state. */
@@ -123,11 +130,31 @@ export class Menus {
   }
 
   private paintMain(): void {
-    const play = this.button('Play', () => {
+    /**
+     * Two buttons (M11, §6.1).
+     *
+     * **Play Multiplayer** is first and primary, and it is one click from shooting: no server
+     * picker, no name gate, no intermediate screen. §6.1 is explicit that a display name is
+     * *requested* but never *blocks* — the field below is prefilled with a generated default,
+     * so a player who ignores it entirely is in the arena within a round trip.
+     *
+     * **Play Solo** keeps the M1-M8 game reachable. §6.2: *"Leaving this button inert would
+     * ship a build in which all of that work is unreachable."* It goes to the existing mode and
+     * map picker, unchanged.
+     */
+    const multiplayer = this.button('Play Multiplayer', () => this.deps.onPlayMultiplayer());
+    multiplayer.classList.add('op-btn--primary');
+    if (!this.deps.serverConfigured()) {
+      // No address configured at build or runtime (§4.9 forbids hardcoding one). Disabled with
+      // a reason rather than failing on click — an inert button is what §6.2 refuses.
+      multiplayer.disabled = true;
+      multiplayer.title = 'No server address configured — set VITE_SERVER_URL or ?server=';
+    }
+
+    const play = this.button('Play Solo', () => {
       this.page = 'PLAY';
       this.paint();
     });
-    play.classList.add('op-btn--primary');
 
     const loadout = this.button('Create a class', () => this.deps.onLoadout());
     const settings = this.button('Settings', () => this.deps.onSettings());
@@ -164,6 +191,8 @@ export class Menus {
       title('OPERATOR'),
       subtitle(this.deps.statusLine()),
       profile,
+      multiplayer,
+      this.nameField(),
       play,
       loadout,
       settings,
@@ -171,7 +200,40 @@ export class Menus {
       subtitle(FULLSCREEN_HINT),
       this.resetControl(),
     );
-    play.focus();
+    multiplayer.focus();
+  }
+
+  /**
+   * The display name (§6.1).
+   *
+   * *"A display name is requested but a default is generated so a player can be in the arena
+   * in one click."* So this is a field, not a gate: it starts filled, it is never validated
+   * before entry, and nothing about it can stop the button above it working. The value is
+   * written straight back to the profile on every keystroke, which is also how it survives a
+   * reload.
+   */
+  private nameField(): HTMLElement {
+    const wrap = document.createElement('label');
+    wrap.className = 'op-field';
+
+    const label = document.createElement('span');
+    label.className = 'op-label';
+    label.textContent = 'CALLSIGN';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'op-input';
+    input.maxLength = 20;
+    input.value = this.deps.displayName();
+    input.spellcheck = false;
+    input.autocomplete = 'off';
+    input.addEventListener('input', () => this.deps.onDisplayName(input.value));
+    // The menu is a DOM surface over a canvas that owns the keyboard. Without this, typing
+    // "W" in the callsign field also walks the player forward.
+    input.addEventListener('keydown', (e) => e.stopPropagation());
+
+    wrap.append(label, input);
+    return wrap;
   }
 
   /**

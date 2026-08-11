@@ -6,7 +6,8 @@ import { EV, type GameBus } from '../../shared/core/Events';
 import type { InputCommand } from '../../shared/core/InputCommand';
 import { logger } from '../../shared/core/Log';
 import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
-import { NetClient, type NetClientState } from '../../shared/net/NetClient';
+import type { NetLoadout } from '../../shared/net/Skirmish';
+import { NetClient, type SkirmishSink, type NetClientState } from '../../shared/net/NetClient';
 import { phaseAt, SFlag, type WelcomeInfo } from '../../shared/net/Messages';
 import { EFlag, weaponIdAt } from '../../shared/net/Snapshot';
 import type { PlayerController } from '../../shared/player/PlayerController';
@@ -77,6 +78,16 @@ export interface NetSessionDeps {
   readonly wantRewindDebug?: boolean;
   /** The server rotated to a new match. The world must be rebuilt. */
   readonly onNewMatch?: (welcome: WelcomeInfo) => void;
+  /**
+   * M11 (§6.4, §6.5, §6.9): the skirmish messages, passed straight through to `NetClient`.
+   *
+   * Not handled here, because every one of them is a decision above this class — open an
+   * overlay, start a mesh build, show a summary. This layer's job is the socket and the
+   * prediction loop.
+   */
+  readonly skirmish?: SkirmishSink;
+  /** The class to send with the `Hello` (Tier 1 #20). See `writeHello`. */
+  readonly loadout?: NetLoadout | null;
 }
 
 export class NetSession {
@@ -143,12 +154,24 @@ export class NetSession {
       sample: deps.sample,
       applyNonReplayed: deps.applyWeapon,
       displayName: deps.displayName,
+      loadout: deps.loadout ?? null,
       wantRewindDebug: deps.wantRewindDebug,
       onNewMatch: (welcome) => {
         // A rotation reassigns entity ids, so the identity has to move with it or every
         // filter downstream starts testing against the seat we held in the previous match.
         deps.identity.adopt(welcome.entityId);
         deps.onNewMatch?.(welcome);
+      },
+      skirmish: {
+        ...deps.skirmish,
+        onMigrated: (welcome) => {
+          // Same reason as `onNewMatch` above, and it has to happen here as well: a migration
+          // is the other way this client's entity id changes, and an identity left pointing at
+          // the seat we held in the arena makes every "was that me?" test in the presentation
+          // layer wrong for the whole live match.
+          deps.identity.adopt(welcome.entityId);
+          deps.skirmish?.onMigrated?.(welcome);
+        },
       },
       events: {
         // ---- the bridge (S3) ------------------------------------------------

@@ -75,6 +75,18 @@ export interface SettingsV1 {
   colorblind: ColorblindMode;
   /** Physical input to action, by action id. See `core/Keybinds.ts`. */
   bindings: BindingMap;
+
+  // ---- M11 ----------------------------------------------------------------
+  /**
+   * The name other players see on the scoreboard (§6.1).
+   *
+   * Persisted so it is asked for once rather than every session, and defaulted to a generated
+   * callsign so it can never be the reason somebody is not in the arena yet: §6.1 requires *"a
+   * display name is requested but a default is generated so a player can be in the arena in one
+   * click"*. The server sanitises it again on arrival — this is attacker-controlled text
+   * crossing a trust boundary, and one side validating it is not enough.
+   */
+  callsign: string;
 }
 
 export const SHADOW_QUALITIES = ['off', 'low', 'medium', 'high'] as const;
@@ -184,7 +196,20 @@ export function defaultSettings(modeId: string, mapId: string, fov: number): Set
     motionBlur: false,
     colorblind: 'off',
     bindings: defaultBindings(),
+    callsign: generateCallsign(),
   };
+}
+
+/**
+ * A default name, so the callsign field is never empty (§6.1).
+ *
+ * Deliberately not `Math.random()` — that is banned in gameplay (§4.14) and, while this is not
+ * gameplay, a second rule about where the ban applies is a rule somebody will get wrong. The
+ * clock is the entropy, and a collision only means two players share a name for one session.
+ */
+export function generateCallsign(): string {
+  const suffix = (Date.now() % 1000).toString().padStart(3, '0');
+  return `OPERATOR-${suffix}`;
 }
 
 /**
@@ -456,6 +481,13 @@ export function normaliseSave(raw: unknown, fallbackSettings: SettingsV1): SaveR
     s.musicVolume = unit(settings['musicVolume'], fallbackSettings.musicVolume);
     s.uiVolume = unit(settings['uiVolume'], fallbackSettings.uiVolume);
     s.shadowQuality = oneOf(settings['shadowQuality'], SHADOW_QUALITIES, fallbackSettings.shadowQuality);
+    // A save written before M11 has no callsign; generate one rather than leaving it blank,
+    // so an upgrading player is still one click from the arena.
+    const storedCallsign = settings['callsign'];
+    s.callsign =
+      typeof storedCallsign === 'string' && storedCallsign.trim() !== ''
+        ? storedCallsign.slice(0, 20)
+        : fallbackSettings.callsign;
     s.showFps = settings['showFps'] === true;
     s.motionBlur = settings['motionBlur'] === true;
     s.colorblind = oneOf(settings['colorblind'], COLORBLIND_MODES, fallbackSettings.colorblind);

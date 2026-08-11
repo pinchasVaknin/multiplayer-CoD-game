@@ -8,8 +8,13 @@ import {
   writeBye,
   writeNotice,
   writePong,
+  writePrepare,
   writeReject,
+  writeSummary,
+  writeVoteState,
   writeWelcome,
+  type SummaryInfo,
+  type VoteInfo,
   type WelcomeInfo,
 } from '../../shared/net/Messages';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
@@ -493,6 +498,37 @@ export class Session {
   /** A short line for the player. Allocation failed, migration failed, the arena was rebuilt. */
   notice(text: string): void {
     this.send(writeNotice(this.out, text));
+  }
+
+  /**
+   * The M11 server-to-client messages, each encoded with **this session's** writer.
+   *
+   * ## Why these live here rather than on the caller
+   *
+   * `ByteWriter.bytes()` returns a *view* into the writer's buffer, not a copy. A caller that
+   * held one shared writer and encoded into it for every session would hand out several views
+   * of the same memory, and the last encode would win — every earlier frame would go out
+   * carrying the last one's bytes.
+   *
+   * It is not hypothetical. `Server` did exactly that, and the symptom was that the `Prepare`
+   * starting each client's background build was overwritten by the 4 Hz vote broadcast that
+   * followed it on the next tick. No client ever began building, every readiness handshake hit
+   * its eight-second timeout, and the transition that the whole milestone exists to make
+   * seamless fell back to a synchronous build with a visible hitch — with nothing in either
+   * log saying why.
+   *
+   * One writer per session, owned by the session, makes that unrepresentable.
+   */
+  sendPrepare(matchId: number, mapId: string, modeId: string): void {
+    this.send(writePrepare(this.out, matchId, mapId, modeId));
+  }
+
+  sendVoteState(info: VoteInfo): void {
+    this.send(writeVoteState(this.out, info));
+  }
+
+  sendSummary(info: SummaryInfo): void {
+    this.send(writeSummary(this.out, info));
   }
 
   /**

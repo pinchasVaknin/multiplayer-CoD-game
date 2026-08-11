@@ -34,6 +34,35 @@ const log = logger('join');
 /** Injected at build time by Vite. Absent in a plain `npm run dev`. */
 declare const __SERVER_URL__: string | undefined;
 
+/**
+ * Whether a server address is configured at all (M11, §6.1).
+ *
+ * §4.9 forbids hardcoding one, so "configured" means `?server=` on the URL or `VITE_SERVER_URL`
+ * baked in at build time. When neither is present the Play Multiplayer button is disabled with
+ * a reason rather than failing on click — §6.2's rule that a known-broken feature with a cause
+ * attached beats an inert button.
+ */
+export function isServerConfigured(search: string): boolean {
+  const params = new URLSearchParams(search);
+  if (params.get('server') !== null) return true;
+  return typeof __SERVER_URL__ === 'string' && __SERVER_URL__ !== '';
+}
+
+/**
+ * The join options for the Play Multiplayer button (M11, §6.1).
+ *
+ * Differs from `parseJoinOptions` in exactly one way: the display name comes from the player's
+ * profile rather than from the URL, because by M11 there is a field for it on the menu and a
+ * persisted default behind that. Everything else — the address resolution order, the condition
+ * simulator flag, the rewind debug flag — is shared, so a `?net=bad` run through the button
+ * behaves the same as one through the URL.
+ */
+export function multiplayerJoinOptions(search: string, displayName: string): HandshakeOptions | null {
+  const base = parseJoinOptions(search);
+  if (base === null) return null;
+  return { ...base, displayName: sanitiseName(displayName) };
+}
+
 export function parseJoinOptions(search: string): HandshakeOptions | null {
   const params = new URLSearchParams(search);
 

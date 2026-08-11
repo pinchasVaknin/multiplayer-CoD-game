@@ -499,6 +499,10 @@ export class NetClient {
         this.deps.skirmish?.onVoteState?.(msg);
         return;
       case 'prepare':
+        // Logged because it is the starting gun for the background build (§6.5), it happens
+        // once a cycle, and "did the client ever hear about the map" is the first question
+        // when a transition hitches.
+        log.info(`prepare: match ${msg.matchId} on ${msg.mapId} (${msg.modeId}).`);
         this.deps.skirmish?.onPrepare?.(msg.matchId, msg.mapId, msg.modeId);
         return;
       case 'summary':
@@ -587,7 +591,16 @@ export class NetClient {
     log.info(
       `${rejoin ? 'rejoined' : 'joined'} as entity ${entityId} on team ${team}, ${modeId} on ${mapId}.`,
     );
-    if (rejoin) this.deps.onNewMatch?.(this.matchInfo());
+    /**
+     * A rotation reports through `onNewMatch`; a migration reports through `onMigrated`.
+     *
+     * Never both. They mean the same thing to the layer above — *"rebuild your world"* — so a
+     * client told twice rebuilds twice: two teardowns, two map loads, and on the second one the
+     * background build has already been consumed by the first, so it builds synchronously and
+     * hitches. Observed in the browser as the world being built twice per migration, with the
+     * second build warning that no prebuilt map was ready.
+     */
+    if (rejoin && !info.migrated) this.deps.onNewMatch?.(this.matchInfo());
   }
 
   /** The `Welcome`'s payload, for a caller that needs to build a world from it. */

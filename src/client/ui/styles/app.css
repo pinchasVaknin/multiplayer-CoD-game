@@ -664,3 +664,181 @@ body.op-locked #viewport {
 .op-fps--good { color: var(--c-good); }
 .op-fps--fair { color: var(--c-warn); }
 .op-fps--poor { color: var(--c-bad); }
+
+/* ---------------------------------------------------------------------------
+ * M11: the callsign field and the vote overlay.
+ *
+ * The overlay is the one surface in the project drawn *over live gameplay while the player is
+ * still playing* (§4.20: "players keep moving and shooting through it"). Everything below
+ * follows from that: it does not take pointer events except on the buttons, it does not dim
+ * the world, and it sits out of the centre of the screen where the crosshair is.
+ * ------------------------------------------------------------------------ */
+
+.op-field {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.op-input {
+  appearance: none;
+  background: var(--c-surface);
+  border: 1px solid var(--c-line-hi);
+  border-radius: var(--radius);
+  color: var(--c-text);
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  padding: var(--s-2) var(--s-3);
+  min-width: 180px;
+}
+
+.op-input:focus-visible {
+  outline: none;
+  border-color: var(--c-accent);
+}
+
+.op-vote {
+  position: absolute;
+  /* Right-hand side, clear of the crosshair and above the killfeed. */
+  top: 12%;
+  right: var(--s-6);
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  /*
+   * The overlay is not clickable; its buttons are (see `.op-option`). This single pair of
+   * rules is what makes "non-blocking" true rather than aspirational — every pixel of this
+   * surface that is not a vote button passes the click through to the game.
+   */
+  pointer-events: none;
+  z-index: 5;
+}
+
+.op-vote[hidden] {
+  display: none;
+}
+
+.op-vote__banner {
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-display);
+  text-transform: uppercase;
+  color: var(--c-void);
+  background: var(--c-accent);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.op-vote__banner[hidden] {
+  display: none;
+}
+
+.op-vote__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--c-line-hi);
+  padding-bottom: var(--s-1);
+}
+
+.op-vote__heading {
+  margin: 0;
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-display);
+  text-transform: uppercase;
+  color: var(--c-text-dim);
+}
+
+.op-vote__clock {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-lead);
+  font-weight: var(--w-heavy);
+  color: var(--c-accent);
+}
+
+.op-vote__options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.op-vote__hint {
+  margin: 0;
+  font-size: var(--t-micro);
+  letter-spacing: var(--track-label);
+  color: var(--c-text-faint);
+  text-align: right;
+}
+
+.op-vote__hint[hidden] {
+  display: none;
+}
+
+.op-option {
+  position: relative;
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  border: 1px solid var(--c-line-hi);
+  border-radius: var(--radius);
+  background: rgba(12, 14, 17, 0.72);
+  color: var(--c-text);
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  padding: var(--s-2) var(--s-3);
+  cursor: pointer;
+  overflow: hidden;
+  /* Re-enabled here and nowhere else. See `.op-vote`. */
+  pointer-events: auto;
+}
+
+.op-option:hover,
+.op-option:focus-visible {
+  border-color: var(--c-accent);
+  outline: none;
+}
+
+.op-option--on {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+/*
+ * The tally bar, behind the label rather than beside it.
+ *
+ * A width transition rather than a jump: the tally arrives at 4 Hz and an instant resize on
+ * every broadcast reads as flicker. `width` is the only animated property and the element is
+ * absolutely positioned, so it cannot reflow the row it sits in — a row that reflowed under
+ * the pointer would be the click-eating bug arriving by a different route.
+ */
+.op-option__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: var(--c-accent-glow);
+  transition: width var(--dur-slow, 220ms) var(--ease);
+  pointer-events: none;
+}
+
+.op-option__name,
+.op-option__count {
+  position: relative;
+}
+
+.op-option__count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-dim);
+}

@@ -173,6 +173,34 @@ export const PERK_SLOTS = 3;
 export const STREAK_SLOTS = 3;
 
 /**
+ * A local `LoadoutSlot`, flattened to the ids that cross the wire (Tier 1 #20, rule 1).
+ *
+ * The inverse of `sanitiseNetLoadout`, and deliberately a plain projection: it copies ids and
+ * computes nothing. *"Send ids, not resolved numbers. Resolve server-side with the same shared
+ * `resolveLoadout`, so a def-table reorder cannot silently change meaning."*
+ */
+export function toNetLoadout(slot: LoadoutSlot): NetLoadout {
+  return {
+    name: slot.name,
+    primary: {
+      weaponId: slot.primary.weaponId,
+      attachments: [...slot.primary.attachments],
+      camo: slot.primary.camo,
+    },
+    secondary: {
+      weaponId: slot.secondary.weaponId,
+      attachments: [...slot.secondary.attachments],
+      camo: slot.secondary.camo,
+    },
+    lethal: slot.lethal,
+    tactical: slot.tactical,
+    fieldUpgrade: slot.fieldUpgrade,
+    perks: [...slot.perks],
+    streaks: [...slot.streaks],
+  };
+}
+
+/**
  * Validate a class at the boundary and **never throw** (handover #20, rule 2).
  *
  * Returns a `LoadoutSlot` built only from ids that are real, with anything unrecognised

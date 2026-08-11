@@ -1,8 +1,6 @@
 import { nowMs } from '../shared/core/Clock';
 import { logger } from '../shared/core/Log';
-import { ByteWriter } from '../shared/net/Wire';
-import { writePrepare, writeSummary, writeVoteState, type VoteInfo } from '../shared/net/Messages';
-import { MAX_SERVER_FRAME_BYTES } from '../shared/net/Protocol';
+import type { VoteInfo } from '../shared/net/Messages';
 // Importing this module is also what runs its boot-time check that both ballots name things
 // the registry actually has — see the bottom of `Skirmish.ts`.
 import { InstanceState, MAP_BALLOT, MODE_BALLOT, sanitiseNetLoadout } from '../shared/net/Skirmish';
@@ -77,7 +75,6 @@ export class Server {
   private allocating = false;
 
   private readonly sessions: Session[] = [];
-  private readonly out = new ByteWriter(MAX_SERVER_FRAME_BYTES);
 
   private bootReport: BootBakeReport | null = null;
   private lastMetricsMs = 0;
@@ -514,11 +511,17 @@ export class Server {
        * the message that starts it, and the readiness reports that answer it are what
        * `READY_WAIT` waits on.
        */
+      let prepared = 0;
       for (const seat of this.warmup.sessions) {
         seat.session.readyForMatch = -1;
         seat.session.prepareSentAtMs = nowMs();
-        seat.session.send(writePrepare(this.out, handle.id, resolution.mapId, resolution.modeId));
+        seat.session.sendPrepare(handle.id, resolution.mapId, resolution.modeId);
+        prepared++;
       }
+      // Logged because it is one half of §7's per-client readiness time, and because "did the
+      // start-building message actually go out" is the first question when every client hits
+      // the readiness timeout.
+      log.info(`sent Prepare for match ${handle.id} (${resolution.mapId}) to ${prepared} client(s).`);
     } catch (err) {
       const kind = err instanceof AllocationError ? err.kind : 'failure';
       const text =
@@ -581,8 +584,9 @@ export class Server {
   private finishLive(instance: LiveMatch, tickIndex: number): void {
     if (!instance.summaryAlreadySent) {
       const summary = instance.buildSummary();
-      const frame = writeSummary(this.out, summary);
-      instance.broadcast(frame);
+      // Per-session encode, for the reason `Session.sendPrepare` documents at length: one
+      // shared writer hands out several views of the same buffer.
+      for (const seat of instance.sessions) seat.session.sendSummary(summary);
       instance.markSummarySent();
       log.info(
         `match ${instance.id} over — ${summary.winner} ${summary.scoreA}-${summary.scoreB} ` +
@@ -698,7 +702,7 @@ export class Server {
       decidedMap: this.voteCycle.decided.map,
       humans: this.warmup.playerCount,
     };
-    session.send(writeVoteState(this.out, info));
+    session.sendVoteState(info);
   }
 
   /**
@@ -712,9 +716,7 @@ export class Server {
     const live = this.live;
     if (live === null || live.instance.state !== InstanceState.READY_WAIT) return;
     session.prepareSentAtMs = nowMs();
-    session.send(
-      writePrepare(this.out, live.id, live.instance.mapId, live.instance.modeId),
-    );
+    session.sendPrepare(live.id, live.instance.mapId, live.instance.modeId);
   }
 
   private sendSeatTo(

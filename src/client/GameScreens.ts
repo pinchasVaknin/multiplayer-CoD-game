@@ -39,6 +39,11 @@ export interface GameScreensDeps {
 
   // ---- intents. `Game` owns the state machine; the screens only ask --------
   readonly onLaunch: () => void;
+  /** M11 (§6.1): connect and drop into the warmup arena. */
+  readonly onPlayMultiplayer: () => void;
+  readonly serverConfigured: () => boolean;
+  readonly displayName: () => string;
+  readonly onDisplayName: (name: string) => void;
   readonly onLoadout: () => void;
   /** M8. Open the settings screen from the menu or the pause screen. */
   readonly onSettings: () => void;
@@ -66,6 +71,10 @@ export class GameScreens {
       host: deps.host,
       selection: deps.selection,
       onLaunch: deps.onLaunch,
+      onPlayMultiplayer: deps.onPlayMultiplayer,
+      serverConfigured: deps.serverConfigured,
+      displayName: deps.displayName,
+      onDisplayName: deps.onDisplayName,
       onLoadout: deps.onLoadout,
       onSettings: deps.onSettings,
       onResetProgress: () => deps.profile.resetProgress(),

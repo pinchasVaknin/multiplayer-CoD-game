@@ -30,6 +30,8 @@ import type { InputCommand } from '../shared/core/InputCommand';
 import type { WelcomeInfo } from '../shared/net/Messages';
 import { LocalIdentity } from '../shared/combat/LocalIdentity';
 import type { BrowserLink } from './net/BrowserLink';
+import type { SkirmishSink } from '../shared/net/NetClient';
+import type { NetLoadout } from '../shared/net/Skirmish';
 import { NetSession } from './net/NetSession';
 import { logger } from '../shared/core/Log';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
@@ -155,6 +157,20 @@ export interface NetworkedMatchOptions {
   readonly wantRewindDebug: boolean;
   /** The server rotated to another match. The world has to be rebuilt from the new welcome. */
   readonly onNewMatch: (welcome: WelcomeInfo) => void;
+  /** M11: the skirmish messages. Handled by `Game`, which owns the overlay and the build. */
+  readonly skirmish?: SkirmishSink;
+  /** M11: the class to send with the `Hello` (Tier 1 #20). */
+  readonly loadout?: NetLoadout | null;
+  /**
+   * M11 (§6.5): a map this client already built in the background, adopted instead of
+   * building a new one.
+   *
+   * This is the payoff of the whole design. When it is present, constructing the world does
+   * no meshing and no texture work at all — the transition costs a scene swap rather than the
+   * seconds §6.5 exists to move off the critical path. Null falls back to building here, which
+   * is the §4.18 slow-client case: late, visible, and correct.
+   */
+  readonly prebuiltMap?: LoadedMap | null;
 }
 
 export class MatchWorld {
@@ -188,7 +204,21 @@ export class MatchWorld {
   constructor(deps: MatchWorldDeps) {
     this.deps = deps;
 
-    const map = loadMap(deps.mapEntry.def, deps.textures, deps.profile.settings.shadowQuality);
+    /**
+     * Adopt the background build if it produced the map we need (M11, §6.5).
+     *
+     * The identity check is not paranoia: the build is started when the map vote resolves and
+     * adopted when the migration lands, and between those two the allocation can fail or a
+     * different map can win a re-run cycle. Adopting a map for the wrong world would put the
+     * player in geometry the server is not simulating, which is the M10 map-desync bug —
+     * spawning outside the world, walking through walls that are not there — arriving by a
+     * new route.
+     */
+    const prebuilt = deps.server?.prebuiltMap ?? null;
+    const map =
+      prebuilt !== null && prebuilt.def.id === deps.mapEntry.def.id
+        ? prebuilt
+        : loadMap(deps.mapEntry.def, deps.textures, deps.profile.settings.shadowQuality);
     this.map = map;
     deps.scene.add(map.root);
     applyAmbient(deps.scene, map.def);
@@ -228,6 +258,8 @@ export class MatchWorld {
             identity: this.identity,
             wantRewindDebug: server.wantRewindDebug,
             onNewMatch: server.onNewMatch,
+            skirmish: server.skirmish,
+            loadout: server.loadout,
             // Both of these are filled in properly the moment the match exists — see below.
             // They are indirected through `this.match` rather than captured, because the
             // match cannot exist before the session it is being handed to.

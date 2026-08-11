@@ -16,10 +16,14 @@ import { Loop } from './engine/FrameLoop';
 import { ChopperCamera } from './streaks/ChopperCamera';
 import { DEG2RAD } from '../shared/core/MathUtil';
 import { LocalBotTransport, type ICommandQueue } from '../shared/net/Transport';
-import { parseJoinOptions } from './net/JoinOptions';
-import { handshake, HandshakeError } from './net/Handshake';
+import { isServerConfigured, multiplayerJoinOptions, parseJoinOptions } from './net/JoinOptions';
+import { handshake, HandshakeError, type HandshakeOptions } from './net/Handshake';
 import { logger } from '../shared/core/Log';
-import type { WelcomeInfo } from '../shared/net/Messages';
+import type { SummaryInfo, WelcomeInfo } from '../shared/net/Messages';
+import type { SkirmishSink } from '../shared/net/NetClient';
+import { toNetLoadout, type NetLoadout } from '../shared/net/Skirmish';
+import { VoteOverlay } from './ui/VoteOverlay';
+import { MapBuildQueue } from './world/MapBuildQueue';
 import type { NetworkedMatchOptions } from './MatchWorld';
 import { CameraRig, type CameraDrive } from './engine/CameraRig';
 import { ProceduralAudio } from './engine/ProceduralAudio';
@@ -35,6 +39,7 @@ import { MatchHarness } from './debug/MatchHarness';
 import { Speedometer } from './debug/Speedometer';
 import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStates';
 import type { Match } from './ClientMatch';
+import type { MatchResult } from '../shared/modes/GameMode';
 import { PLAYER_ENTITY_ID } from '../shared/combat/DamageSystem';
 import { MatchWorld } from './MatchWorld';
 import { GameScreens } from './GameScreens';
@@ -99,6 +104,25 @@ interface StateHandlers {
 const stateChangePayload = { from: 'BOOT' as GameStateId, to: 'BOOT' as GameStateId };
 
 const netLog = logger('join');
+
+/**
+ * The server's authoritative summary, in the shape the M6 summary screen already renders.
+ *
+ * A projection and nothing more: no number is recomputed, no winner is re-derived. The point
+ * is that the screen built in M6 for single-player renders a networked result without knowing
+ * it is one, which is the same seam S3 asks for on the event bus.
+ */
+function netMatchResult(net: SummaryInfo): MatchResult {
+  return {
+    kind: 'match',
+    winner: net.winner as MatchResult['winner'],
+    reason: net.reason,
+    scoreA: net.scoreA,
+    scoreB: net.scoreB,
+    roundsA: 0,
+    roundsB: 0,
+  };
+}
 
 export class Game {
   readonly bus: GameBus = createGameBus();
@@ -179,6 +203,31 @@ export class Game {
 
   /** True while the handshake is in flight, so a second click cannot start a second one. */
   private joining = false;
+
+  // ---- M11: the skirmish flow ----------------------------------------------
+
+  /** Set by the Play Multiplayer button. Wins over `?server=`. See `launchMatch`. */
+  private multiplayerJoin: HandshakeOptions | null = null;
+
+  /** The non-blocking vote overlay (§4.20). Built at boot, shown only while balloting. */
+  private readonly voteOverlay: VoteOverlay;
+
+  /** The chunked background map build (§6.5). Pumped from the render pass. */
+  private readonly buildQueue: MapBuildQueue;
+
+  /**
+   * A migration the server has announced, acted on from the render pass.
+   *
+   * Same reasoning as `pendingRotation`: it arrives inside a snapshot decode, and tearing the
+   * world down from there is a null dereference in the middle of an event dispatch.
+   */
+  private pendingMigration: WelcomeInfo | null = null;
+
+  /** The most recent summary from a live match, held until SUMMARY renders it (§6.9). */
+  private pendingNetSummary: SummaryInfo | null = null;
+
+  /** The instance a `Prepare` named, so the readiness report is addressed to it (§6.5). */
+  private pendingMatchId = -1;
 
   /**
    * Set when the server rotates to a new match while we are in one.
@@ -293,6 +342,10 @@ export class Game {
       selection: this.selection,
       // Connect before building anything, so the server dictates the map. See `launchMatch`.
       onLaunch: () => void this.launchMatch(),
+      onPlayMultiplayer: () => void this.playMultiplayer(),
+      serverConfigured: () => isServerConfigured(window.location.search),
+      displayName: () => this.profile.settings.callsign,
+      onDisplayName: (name) => this.profile.patchSettings({ callsign: name }),
       onLoadout: () => this.transitionTo('LOADOUT'),
       onSettings: () => this.transitionTo('SETTINGS'),
       onLoadoutBack: () => this.transitionTo('MENU'),
@@ -315,6 +368,38 @@ export class Game {
     this.input.onEscape(() => this.onEscape());
 
     this.fpsCounter = new FpsCounter(uiHost, this.stats);
+
+    /**
+     * The vote overlay and the background build, both process-wide (M11).
+     *
+     * Built at boot and kept, like every other front-end surface: they outlive a match by
+     * design. The build queue in particular *must* — its whole purpose is to be working on the
+     * next map while the current world is still up, and a queue owned by the world would be
+     * disposed by the transition it exists to make seamless.
+     */
+    this.voteOverlay = new VoteOverlay({
+      host: uiHost,
+      onVote: (phase, option) => this.world?.net?.client.sendVote(phase, option),
+      currentTick: () => this.world?.net?.client.stats.clientTick ?? 0,
+    });
+
+    this.buildQueue = new MapBuildQueue({
+      textures: this.textures,
+      shadowQuality: () => this.profile.settings.shadowQuality,
+      onComplete: (mapId, _built, report) => {
+        // Report ready the moment the build lands, which is what `READY_WAIT` is waiting on.
+        // The map itself is held by the queue until the migration that needs it arrives.
+        const client = this.world?.net?.client;
+        // Addressed to the match being prepared, not the one we are seated in — the whole
+        // point is that we are still in the arena while this builds. The server rejects and
+        // logs a `Ready` for any other instance (§8.15).
+        client?.sendReady(this.pendingMatchId);
+        netLog.info(
+          `background build for ${mapId}: ${report.elapsedMs}ms wall, ${report.workMs}ms work, ` +
+            `${report.chunks} chunks, worst chunk ${report.worstChunkMs}ms.`,
+        );
+      },
+    });
     this.settingsScreen = new Settings({
       host: uiHost,
       read: () => this.profile.settings,
@@ -589,7 +674,20 @@ export class Game {
     this.states.set('SUMMARY', {
       enter: () => {
         const match = this.world?.match ?? null;
-        const result = match?.flow.result ?? null;
+        /**
+         * The server's result wins over the local one (M11, §6.9).
+         *
+         * Over the network the authoritative outcome arrives as `MsgS.Summary`, built by the
+         * instance from its own `ScoreSystem` **before teardown**. The client's `MatchFlow` has
+         * a result too, reconstructed from replicated state, and where they disagree the
+         * server is right by definition — §4.15 puts scores and match flow on the replicated
+         * side of the table.
+         *
+         * The local one is still the fallback, because single-player has no other.
+         */
+        const net = this.pendingNetSummary;
+        this.pendingNetSummary = null;
+        const result = net !== null ? netMatchResult(net) : (match?.flow.result ?? null);
         if (match === null || result === null) {
           // Nothing to summarise: this can only happen if SUMMARY is entered by hand.
           this.transitionTo('MENU');
@@ -739,8 +837,95 @@ export class Game {
    * fall back to single-player: a player who asked to join a server and silently got a bot
    * match instead would have no way to tell, and would report it as "the server is empty".
    */
+  /**
+   * This client's class, as ids on the wire (Tier 1 #20).
+   *
+   * Read from the profile every time rather than cached, so a class edited in the loadout
+   * editor is the class the next connection sends. The ids are the same ones `resolveLoadout`
+   * takes locally, which is what makes the server's resolution and the client's agree.
+   */
+  private netLoadout(): NetLoadout | null {
+    return toNetLoadout(this.profile.equippedLoadout());
+  }
+
+  /**
+   * The server-to-client skirmish messages (§6.4, §6.5, §6.9).
+   *
+   * Every one of these is deferred to the render pass or handed to a screen; none of them
+   * touches the world directly, because all of them arrive inside a snapshot decode.
+   */
+  private skirmishSink(): SkirmishSink {
+    return {
+      onVoteState: (info) => this.voteOverlay.apply(info),
+      onPrepare: (matchId, mapId) => {
+        this.pendingMatchId = matchId;
+        /**
+         * Start building the chosen map now, while the player is still shooting (§6.5).
+         *
+         * This is the mechanism that removes the loading screen. The server has nothing to
+         * load — its maps were baked at boot — so the whole cost of a map transition is this,
+         * and it is paid during warmup rather than at the transition.
+         */
+        this.buildQueue.start(mapId);
+      },
+      onMigrated: (welcome) => {
+        this.pendingMigration = welcome;
+      },
+      onSummary: (info) => {
+        this.pendingNetSummary = info;
+      },
+      onNotice: (text) => {
+        /**
+         * A line the server wants the player to read: allocation failed, the arena was
+         * rebuilt (§4.17, §4.18).
+         *
+         * Emitted onto the bus rather than drawn here, so it reaches the HUD's existing
+         * announcement channel and obeys the same timing and styling as every other piece of
+         * feedback. S3's rule that *"a networked event and a local one must be
+         * indistinguishable to the client"* applies to this too.
+         */
+        this.voteOverlay.notice(text);
+        netLog.info(`server notice: ${text}`);
+      },
+    };
+  }
+
+  /**
+   * Play Multiplayer (M11, §6.1).
+   *
+   * One click to shooting. There is no server picker, no ready-up and no lobby — the address
+   * is configuration (§4.9), the callsign is prefilled, and the only screen between the button
+   * and the arena is the word "connecting". Everything a traditional flow does in a static menu
+   * this one does later, while the player is holding a gun.
+   *
+   * It reuses `launchMatch` rather than duplicating the connect path, so the map/mode desync
+   * fix from M10's playtest — *build nothing until the server has said what it is running* —
+   * covers this entry too by construction.
+   */
+  private async playMultiplayer(): Promise<void> {
+    const join = multiplayerJoinOptions(window.location.search, this.profile.settings.callsign);
+    if (join === null) {
+      // The button is disabled in this case, so reaching here means the config changed under
+      // us. Say so rather than failing silently.
+      this.screens.menus.showBoot('NO SERVER CONFIGURED — SET VITE_SERVER_URL OR ?SERVER=');
+      window.setTimeout(() => {
+        if (this.state === 'MENU') this.screens.menus.show();
+      }, 3000);
+      return;
+    }
+    this.multiplayerJoin = join;
+    await this.launchMatch();
+  }
+
   private async launchMatch(): Promise<void> {
-    const join = this.joinOptions;
+    /**
+     * The button's options win over the URL's.
+     *
+     * `?server=` still boots straight into a connection, which is what M10 built and what the
+     * harnesses use. `multiplayerJoin` is set only by the Play Multiplayer button and carries
+     * the callsign from the profile rather than from the query string.
+     */
+    const join = this.multiplayerJoin ?? this.joinOptions;
     if (join === null || this.server !== null) {
       // Single-player, or a connection that is already up (resuming, or a rotation).
       this.transitionTo('MATCH');
@@ -751,7 +936,8 @@ export class Game {
     this.joining = true;
     this.screens.menus.showBoot(`CONNECTING TO ${hostOf(join.url)}…`);
     try {
-      const result = await handshake(join);
+      // The class goes with the `Hello`, not after it. See `handshake` and Tier 1 #20.
+      const result = await handshake({ ...join, loadout: this.netLoadout() });
       this.server = {
         link: result.link,
         welcome: result.welcome,
@@ -762,6 +948,12 @@ export class Game {
         onNewMatch: (welcome) => {
           this.pendingRotation = welcome;
         },
+        // The class rides the handshake so the seat is built with it (Tier 1 #20). By this
+        // point `handshake` has already sent the `Hello`, so this copy is what a *rebuilt*
+        // session — a rotation or a migration — will send if it ever reconnects.
+        loadout: this.netLoadout(),
+        skirmish: this.skirmishSink(),
+        prebuiltMap: null,
       };
       this.joining = false;
       this.transitionTo('MATCH');
@@ -805,7 +997,27 @@ export class Game {
       // *first* welcome, and replaying those frames into a new match would apply state from
       // the previous one. A rotation's own welcome arrives through `NetClient.receive`, which
       // never drops what follows it.
-      this.server = { ...previous, welcome, receivedAtMs: performance.now(), pending: undefined };
+      /**
+       * Adopt the background build, if it is for the map we are moving to (§6.5).
+       *
+       * `take` hands over ownership and clears the queue, so the map is disposed by the world
+       * that adopts it rather than by two owners or none. A miss — no build, or a build for a
+       * different map — leaves this null and `MatchWorld` builds synchronously, which is the
+       * §4.18 slow-client path: a visible hitch instead of a seamless transition, and correct.
+       */
+      const prebuiltMap = this.buildQueue.take(welcome.mapId);
+      if (prebuiltMap === null && welcome.mapId !== previous.welcome.mapId) {
+        netLog.warn(
+          `no background build ready for ${welcome.mapId}; building it now (expect a hitch).`,
+        );
+      }
+      this.server = {
+        ...previous,
+        welcome,
+        receivedAtMs: performance.now(),
+        pending: undefined,
+        prebuiltMap,
+      };
       this.teardownWorld({ keepConnection: true });
 
       if (this.state === 'MATCH') {
@@ -984,6 +1196,24 @@ export class Game {
       this.pendingRotation = null;
       this.applyRotation(rotation);
     }
+
+    /**
+     * A migration (M11, §4.18, §6.7).
+     *
+     * Handled through `applyRotation`, because from this class's point of view the two are the
+     * same event: *"the server has put you in a different world; rebuild."* Sharing the path is
+     * what guarantees a migration also does the things a rotation learned to do — keep the
+     * socket, clear the prediction state, adopt the new entity id — rather than a second
+     * implementation that has to remember all of them.
+     *
+     * What is different is the map: a migration usually has one waiting from the background
+     * build, and `applyRotation` picks it up through `takePrebuilt`.
+     */
+    const migration = this.pendingMigration;
+    if (migration !== null) {
+      this.pendingMigration = null;
+      this.applyRotation(migration);
+    }
   }
 
   private simulate(tick: number): void {
@@ -1074,6 +1304,21 @@ export class Game {
     this.lastRenderMs = now;
 
     this.fpsCounter.update(dt);
+
+    /**
+     * The countdown and the background build, once per frame (M11, §6.4, §6.5).
+     *
+     * Both before the world check, because both matter with no world: the overlay's clock must
+     * keep running through a transition, and the build must keep making progress while the
+     * world is being swapped underneath it — that swap is the moment it exists to cover.
+     *
+     * The build is pumped **after** the frame's game logic in the sense that matters: it takes
+     * a small fixed budget and yields, so a frame that was already expensive simply does one
+     * chunk fewer. See `MapBuildQueue`.
+     */
+    this.voteOverlay.tick();
+    const buildMs = this.buildQueue.pump();
+    if (buildMs > 0) this.stats.noteBackgroundBuildMs(buildMs);
 
     const world = this.world;
     if (world === null) {
