@@ -23,6 +23,12 @@
  * the whole match.
  */
 /**
+ * v6 (M11 Gate B): killstreaks cross the wire — `MsgC.Streak` and `MsgS.Streaks`.
+ *
+ * The server has run `StreakSystem` since the previous commit and no client could see or spend
+ * anything it produced. `Streaks` is the protocol's first genuinely per-recipient message: earn
+ * state is private to a player and UAV contacts are private to a team.
+ *
  * v5 (M11 Gate B): the rest of the mode state — Kill Confirmed's tags and S&D's bomb.
  *
  * v4's objective channel fixed Domination and left the same hole open in two other modes, for
@@ -36,7 +42,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
@@ -64,6 +70,18 @@ export const MsgC = {
   Vote: 6,
   /** "My background build for match N is finished" (§6.5). Answers `READY_WAIT`. */
   Ready: 7,
+  /**
+   * "Spend the streak I have earned" (M11 Gate B, §8.22).
+   *
+   * A **request**, not an instruction. §4.16 makes the client fully untrusted, so the server
+   * checks that this player actually holds that streak before granting it — `activate` already
+   * returns false for a streak nobody has earned, and that is the whole validation.
+   *
+   * Carries the mortar's marked coordinates, which are the one piece of activation state the
+   * client legitimately chooses: the player picks a point on the map overlay before spending it.
+   * Every other streak ignores them and is placed at the player's own body.
+   */
+  Streak: 8,
 } as const;
 
 /** Server -> client message ids. */
@@ -124,6 +142,15 @@ export const MsgS = {
    * countdown runs from `onTick`, and a networked client does not simulate `MatchFlow`.
    */
   Bomb: 141,
+  /**
+   * Killstreaks — live entities, plus this recipient's own earn state and intel (§6.8, §8.22).
+   *
+   * The one message in the protocol that is genuinely **per recipient rather than broadcast**,
+   * and it has to be: what you have earned is yours, and a UAV's contacts belong to the team
+   * that called it in. Sending everyone everything and filtering in the client would put a UAV's
+   * entire value inside the untrusted half of the system (§4.16).
+   */
+  Streaks: 142,
 } as const;
 
 export type MsgCId = (typeof MsgC)[keyof typeof MsgC];

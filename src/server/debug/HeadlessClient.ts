@@ -182,6 +182,25 @@ export interface HeadlessClientReport {
   readonly objectiveUpdates: number;
   readonly objectivesOwned: number;
   /** Tag broadcasts, distinct tag ids ever seen, and the most on the floor at once. */
+  /** Streak frames received, distinct live entities ever seen, and the peak at once. */
+  readonly streakFrames: number;
+  readonly streakEntitiesSeen: number;
+  readonly peakStreakEntities: number;
+  /** Frames carrying a friendly UAV sweep, and how many activations were asked for. */
+  readonly sweepFrames: number;
+  readonly pendingSeen: number;
+  readonly streakRequests: number;
+  readonly contactsSeen: number;
+  /**
+   * Entity ids seen as UAV contacts **while in a live match**, and the id held there.
+   *
+   * The pair travels together because comparing one against an id from another instance is
+   * meaningless — see `onStreaks`.
+   */
+  readonly contactIdList: readonly number[];
+  readonly liveEntityId: number;
+  /** Which side the server put this client on. Decides who is an enemy for the Ghost test. */
+  readonly team: 'A' | 'B';
   readonly tagUpdates: number;
   readonly tagsSeen: number;
   readonly peakTags: number;
@@ -284,6 +303,20 @@ export class HeadlessClient {
 
   private objectiveUpdates = 0;
   private objectivesOwned = 0;
+  private streakFrames = 0;
+  private readonly streakInstanceIds = new Set<number>();
+  private peakStreakEntities = 0;
+  private sweepFrames = 0;
+  /** Entity ids this client has ever seen as a UAV contact. The Ghost assertion reads it. */
+  readonly contactIds = new Set<number>();
+  /** Contacts seen while in a live match, and the entity id held there. See `onStreaks`. */
+  private readonly liveContactIds = new Set<number>();
+  private liveEntityId = -1;
+  private pendingSeen = 0;
+  /** Kind index the replica says is spendable, or -1. Consumed by `update`. */
+  private wantStreak = -1;
+  private streakRequests = 0;
+  private lastStreakRequestTick = -999;
   private tagUpdates = 0;
   private readonly tagIds = new Set<number>();
   private peakTags = 0;
@@ -364,6 +397,50 @@ export class HeadlessClient {
         onObjectives: (states) => {
           this.objectiveUpdates++;
           for (const s of states) if (s.owner !== 0) this.objectivesOwned++;
+        },
+        /**
+         * Killstreaks (Gate B, §8.22).
+         *
+         * The counters are chosen to fail against the plausible bugs rather than to succeed
+         * against the feature. `streakEntitiesSeen` counts **distinct instance ids**, so a
+         * server that replicated an empty list twenty times a second scores zero; and the
+         * contact bookkeeping records *which entity ids* were seen rather than how many, which
+         * is what makes the Ghost assertion possible at all.
+         *
+         * Spending is driven from here too: the moment the replica says something is
+         * spendable, ask for it. That closes the loop — earn, replicate, request, grant,
+         * replicate the entity — through the real messages rather than a test hook.
+         */
+        onStreaks: (view) => {
+          this.streakFrames++;
+          for (const e of view.entities) this.streakInstanceIds.add(e.instanceId);
+          if (view.entities.length > this.peakStreakEntities) {
+            this.peakStreakEntities = view.entities.length;
+          }
+          if (view.sweepAngle >= 0) this.sweepFrames++;
+          /**
+           * Contacts, and the entity id they must be compared against (Gate B, §8.22).
+           *
+           * **Entity ids are per instance.** A client is entity 2 in the live match and entity
+           * 5 back in the arena, because two `ServerMatch`es hand them out independently — the
+           * reason `Session.playerId` exists at all. So a Ghost assertion that compared the id
+           * read at *report* time against contacts recorded during the *match* is comparing ids
+           * from two different worlds, and can never find a leak however broken Ghost is.
+           *
+           * Both halves are therefore captured together, while the live match is the current
+           * instance: the contacts seen there, and the id this client held there.
+           */
+          for (const c of view.contacts) this.contactIds.add(c.entityId);
+          if (this.net.matchId !== WARMUP_MATCH_ID) {
+            this.liveEntityId = this.net.entityId;
+            for (const c of view.contacts) this.liveContactIds.add(c.entityId);
+          }
+          if (view.pending.length > 0) {
+            this.pendingSeen++;
+            this.wantStreak = view.pending[0] ?? -1;
+          } else {
+            this.wantStreak = -1;
+          }
         },
         /**
          * Dog tags (Gate B, §6.8).
@@ -615,6 +692,24 @@ export class HeadlessClient {
       this.net.sendLoadout(edit);
     }
 
+    /**
+     * Spend whatever the server says is spendable (Gate B, §8.22).
+     *
+     * The request goes out once per pending list rather than every frame: the replica keeps
+     * reporting the streak as pending until the grant comes back and the next `Streaks` frame
+     * clears it, which at a snapshot interval is several client ticks. Re-asking every one of
+     * them would be a self-inflicted rate-limit test rather than a streak test.
+     *
+     * The mark is this client's own position, which is meaningless for five of the six and is
+     * a legitimate mortar target for the sixth.
+     */
+    if (this.wantStreak >= 0 && this.ticks - this.lastStreakRequestTick > 30) {
+      this.lastStreakRequestTick = this.ticks;
+      this.streakRequests++;
+      const sim = this.controller.sim;
+      this.net.sendStreak(this.wantStreak, sim.x, sim.z);
+    }
+
     const steps = this.net.update();
     this.ticks += steps;
 
@@ -662,6 +757,16 @@ export class HeadlessClient {
       migrations: this.net.migrations,
       objectiveUpdates: this.objectiveUpdates,
       objectivesOwned: this.objectivesOwned,
+      streakFrames: this.streakFrames,
+      streakEntitiesSeen: this.streakInstanceIds.size,
+      peakStreakEntities: this.peakStreakEntities,
+      sweepFrames: this.sweepFrames,
+      pendingSeen: this.pendingSeen,
+      streakRequests: this.streakRequests,
+      contactsSeen: this.contactIds.size,
+      contactIdList: [...this.liveContactIds],
+      liveEntityId: this.liveEntityId,
+      team: this.net.team,
       tagUpdates: this.tagUpdates,
       tagsSeen: this.tagIds.size,
       peakTags: this.peakTags,

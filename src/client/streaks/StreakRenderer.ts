@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { CarePackage } from '../../shared/streaks/CarePackage';
 import { SentryGun } from '../../shared/streaks/SentryGun';
 import type { StreakSystem } from '../../shared/streaks/StreakSystem';
+import { STREAK_DEFS } from '../../shared/streaks/StreakDefs';
+import { OBJ_TEAM_B, type StreakEntityState } from '../../shared/net/Skirmish';
 import { CarePackageMesh, SentryMesh } from './StreakMeshes';
 
 /**
@@ -30,31 +32,99 @@ export class StreakRenderer {
     this.group.name = 'streaks';
   }
 
+  /** The local simulation's streaks. Single-player, and the arena before a migration. */
   update(): void {
     this.present.clear();
 
     for (const streak of this.streaks.active) {
       if (streak instanceof SentryGun) {
-        this.present.add(streak.instanceId);
-        let mesh = this.sentries.get(streak.instanceId);
-        if (mesh === undefined) {
-          mesh = new SentryMesh(streak.x, streak.y, streak.z, streak.restYaw, streak.team);
-          this.sentries.set(streak.instanceId, mesh);
-          this.group.add(mesh.group);
-        }
-        mesh.aim(streak.turretYaw, streak.turretPitch);
+        this.syncSentry(
+          streak.instanceId,
+          streak.x,
+          streak.y,
+          streak.z,
+          streak.restYaw,
+          streak.team,
+          streak.turretYaw,
+          streak.turretPitch,
+        );
       } else if (streak instanceof CarePackage) {
-        this.present.add(streak.instanceId);
-        let mesh = this.packages.get(streak.instanceId);
-        if (mesh === undefined) {
-          mesh = new CarePackageMesh(streak.x, streak.y, streak.z);
-          this.packages.set(streak.instanceId, mesh);
-          this.group.add(mesh.group);
-        }
-        mesh.setHeight(streak.y);
+        this.syncPackage(streak.instanceId, streak.x, streak.y, streak.z);
       }
     }
 
+    this.sweep();
+  }
+
+  /**
+   * The server's streaks (M11 Gate B, §8.22).
+   *
+   * The same reconcile against a different source. A networked client does not own these
+   * objects — `StreakSystem` on the server does — so there is nothing here to simulate and the
+   * whole of the client's job is to keep a mesh pointed at each replicated record.
+   *
+   * Kinds without a body are skipped rather than special-cased: they are in the list because
+   * *"a UAV is up"* is something the HUD needs to know, and a UAV has nothing to draw here.
+   */
+  updateReplicated(entities: readonly StreakEntityState[]): void {
+    this.present.clear();
+
+    for (const e of entities) {
+      const def = STREAK_DEFS[e.kind];
+      if (def === undefined) continue;
+      if (def.id === 'sentry') {
+        this.syncSentry(
+          e.instanceId,
+          e.x,
+          e.y,
+          e.z,
+          // The mesh takes a rest yaw once, at construction, and is aimed every frame after.
+          // The turret's current bearing is the best available answer on the frame it appears.
+          e.yaw,
+          e.team === OBJ_TEAM_B ? 'B' : 'A',
+          e.yaw,
+          e.pitch,
+        );
+      } else if (def.id === 'care_package') {
+        this.syncPackage(e.instanceId, e.x, e.y, e.z);
+      }
+    }
+
+    this.sweep();
+  }
+
+  private syncSentry(
+    instanceId: number,
+    x: number,
+    y: number,
+    z: number,
+    restYaw: number,
+    team: 'A' | 'B',
+    turretYaw: number,
+    turretPitch: number,
+  ): void {
+    this.present.add(instanceId);
+    let mesh = this.sentries.get(instanceId);
+    if (mesh === undefined) {
+      mesh = new SentryMesh(x, y, z, restYaw, team);
+      this.sentries.set(instanceId, mesh);
+      this.group.add(mesh.group);
+    }
+    mesh.aim(turretYaw, turretPitch);
+  }
+
+  private syncPackage(instanceId: number, x: number, y: number, z: number): void {
+    this.present.add(instanceId);
+    let mesh = this.packages.get(instanceId);
+    if (mesh === undefined) {
+      mesh = new CarePackageMesh(x, y, z);
+      this.packages.set(instanceId, mesh);
+      this.group.add(mesh.group);
+    }
+    mesh.setHeight(y);
+  }
+
+  private sweep(): void {
     if (this.sentries.size + this.packages.size !== this.present.size) this.retireAbsent();
   }
 

@@ -5,11 +5,23 @@ import { logger } from '../../shared/core/Log';
 import { makeSnapshotHeader, phaseIndex, SFlag, type SnapshotHeader } from '../../shared/net/Messages';
 import {
   InstanceState,
+  MAX_STREAK_ENTITIES,
+  MAX_UAV_CONTACTS,
   ownerCode,
+  SEFlag,
   type InstanceStateId,
   type MatchId,
   type ObjectiveState,
+  type StreakEntityState,
+  type UavContactState,
 } from '../../shared/net/Skirmish';
+import { CarePackage } from '../../shared/streaks/CarePackage';
+import { ChopperGunner } from '../../shared/streaks/ChopperGunner';
+import type { Killstreak } from '../../shared/streaks/KillstreakBase';
+import { MortarStrike } from '../../shared/streaks/MortarStrike';
+import { SentryGun } from '../../shared/streaks/SentryGun';
+import { STREAK_DEFS, type StreakId } from '../../shared/streaks/StreakDefs';
+import { Uav } from '../../shared/streaks/Uav';
 import { EFlag, makeEntitySnapshot, weaponIndexOf, type EntitySnapshot } from '../../shared/net/Snapshot';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
 import type { ServerMatch } from '../Match';
@@ -87,6 +99,9 @@ export abstract class MatchInstance {
   private readonly entities: EntitySnapshot[] = [];
   /** Reused per tick. Nothing in the per-tick send path allocates (S4.7). */
   private readonly objectiveScratch: ObjectiveState[] = [];
+  private readonly streakScratch: StreakEntityState[] = [];
+  private readonly contactScratch: UavContactState[] = [];
+  private readonly pendingScratch: number[] = [];
   private entityCount = 0;
 
   /** Milliseconds the last step took. Per-instance half of the §7 instance panel. */
@@ -249,6 +264,7 @@ export abstract class MatchInstance {
       this.sendObjectives();
       this.sendTags();
       this.sendBomb();
+      this.sendStreaks();
     }
     this.sendEvents();
 
@@ -393,6 +409,79 @@ export abstract class MatchInstance {
     if (info === null) return;
     for (const seat of this.seats.values()) {
       if (!seat.session.closed) seat.session.sendBomb(info);
+    }
+  }
+
+  /**
+   * Killstreaks, per recipient (M11 Gate B, §6.8, §8.22).
+   *
+   * The only message in the protocol built per seat rather than broadcast, because three of its
+   * four parts are private and one of them is the whole value of a killstreak.
+   *
+   * ## The two filters, and why they are different
+   *
+   * **Bodies are common.** A sentry and a care package are physical objects that both teams can
+   * see, walk into and shoot. The entity list is built once and every seat gets the same one.
+   *
+   * **Intel is not.** A UAV's contacts go only to the team whose UAV recorded them. Broadcasting
+   * them and trusting the client to ignore the other team's would put a UAV's entire value in
+   * the untrusted half of the system (§4.16) — and "trust the client to not look" is precisely
+   * the shape of bug a wallhack is.
+   *
+   * **Ghost is inside the intel filter, not beside it.** `Uav.onTick` already declines to record
+   * a contact for anyone whose `visibleToUav` is false, so a Ghost player never enters this list
+   * in the first place. Note what is *not* happening: their entity stays in `buildEntities` and
+   * their body is drawn normally. Ghost hides you from UAV intel; it does not make you invisible,
+   * and an entity filter — the obvious reading of §8.22's *"absent from the snapshot"* — would
+   * ship a different perk from the one M6 designed.
+   */
+  private sendStreaks(): void {
+    const streaks = this.match.streaks;
+    const score = this.match.score;
+
+    // The common half, built once. Nothing here is per recipient.
+    this.streakScratch.length = 0;
+    for (const streak of streaks.active) {
+      if (this.streakScratch.length >= MAX_STREAK_ENTITIES) break;
+      this.streakScratch.push(describeStreak(streak));
+    }
+
+    for (const seat of this.seats.values()) {
+      const { session, player } = seat;
+      if (session.closed) continue;
+
+      const pending = streaks.pendingFor(player.entityId);
+      this.pendingScratch.length = 0;
+      for (const id of pending) this.pendingScratch.push(streakKindIndex(id));
+
+      const next = streaks.nextFor(player.entityId);
+      const uav = streaks.uavFor(player.team);
+
+      // Only this player's team's UAV, and only the contacts it actually recorded.
+      this.contactScratch.length = 0;
+      if (uav !== null) {
+        for (const c of uav.contacts) {
+          if (!c.active) continue;
+          if (this.contactScratch.length >= MAX_UAV_CONTACTS) break;
+          this.contactScratch.push({
+            entityId: c.entityId,
+            x: c.x,
+            z: c.z,
+            ageCs: Math.round(c.age * 100),
+          });
+        }
+      }
+
+      session.sendStreaks({
+        pending: this.pendingScratch,
+        streakCount: score.row(player.entityId)?.streak ?? 0,
+        nextKind: next === null ? -1 : streakKindIndex(next.def.id),
+        nextRequirement: next?.requirement ?? 0,
+        scrambled: streaks.minimapScrambledFor(player.team),
+        sweepAngle: uav === null ? -1 : uav.sweepAngle,
+        contacts: this.contactScratch,
+        entities: this.streakScratch,
+      });
     }
   }
 
@@ -545,4 +634,91 @@ function copyVisual(
 function clampByte(v: number): number {
   const i = Math.round(v);
   return i < 0 ? 0 : i > 255 ? 255 : i;
+}
+
+// -- streak flattening (M11 Gate B, §8.22) ------------------------------------
+
+/**
+ * One live streak, as the wire sees it.
+ *
+ * `instanceof` here rather than a virtual method on `Killstreak`, deliberately and against the
+ * usual instinct. `streaks/` is shared code that knows nothing about a wire format, and putting
+ * a `toNetState()` on the base class would push a networking concern into six gameplay classes
+ * to save one switch in the one place that has the concern. The same reasoning that keeps
+ * `EntitySnapshot` flattening in this file rather than on `NetPlayer`.
+ *
+ * The kinds that are pure intel or pure effect — UAV, Counter-UAV, Mortar — still send a record.
+ * A UAV has no mesh, but the *fact that one is up* is what the HUD's "UAV ONLINE" banner and the
+ * minimap sweep are drawn from, and an absent record cannot say that.
+ */
+function describeStreak(streak: Killstreak): StreakEntityState {
+  const base = {
+    instanceId: streak.instanceId,
+    kind: streakKindIndex(streak.def.id),
+    ownerId: streak.ownerId,
+    team: ownerCode(streak.ownerTeam),
+    yaw: 0,
+    pitch: 0,
+    // 255 is "cannot be shot down", which is every kind except the sentry.
+    health: 255,
+    fraction: 0,
+    flags: SEFlag.Alive,
+  };
+
+  if (streak instanceof SentryGun) {
+    return {
+      ...base,
+      x: streak.x,
+      y: streak.y,
+      z: streak.z,
+      yaw: streak.turretYaw,
+      pitch: streak.turretPitch,
+      health: clampByte(streak.health.current),
+      flags: streak.health.alive ? SEFlag.Alive | SEFlag.Landed : 0,
+    };
+  }
+
+  if (streak instanceof CarePackage) {
+    return {
+      ...base,
+      x: streak.x,
+      y: streak.y,
+      z: streak.z,
+      fraction: clampByte(streak.claimFraction * 255),
+      flags:
+        SEFlag.Alive |
+        (streak.landed ? SEFlag.Landed : 0) |
+        (streak.claimantId >= 0 ? SEFlag.Claiming : 0),
+    };
+  }
+
+  if (streak instanceof ChopperGunner) {
+    return { ...base, x: streak.x, y: streak.y, z: streak.z, yaw: streak.yaw, pitch: streak.pitch };
+  }
+
+  if (streak instanceof Uav) {
+    // No body. The sweep bearing rides the per-recipient half of the message, where it can be
+    // withheld from the other team; this record only says a UAV is up and whose it is.
+    return { ...base, x: 0, y: 0, z: 0 };
+  }
+
+  if (streak instanceof MortarStrike) {
+    return { ...base, x: streak.markX, y: 0, z: streak.markZ };
+  }
+
+  // Counter-UAV, and anything added later: presence, owner and team, which is all a streak with
+  // no body in the world can meaningfully say.
+  return { ...base, x: 0, y: 0, z: 0 };
+}
+
+/**
+ * A streak id as an index into `STREAK_DEFS`.
+ *
+ * An index rather than the string, for the same reason the objective channel uses one: both
+ * runtimes build their table from the same module in the same order, so the index *is* the
+ * identity and costs one byte where `'chopper_gunner'` costs fifteen.
+ */
+function streakKindIndex(id: StreakId): number {
+  const at = STREAK_DEFS.findIndex((d) => d.id === id);
+  return at < 0 ? 0 : at;
 }

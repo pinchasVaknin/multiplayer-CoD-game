@@ -27,6 +27,7 @@ import {
   type PlayerSlot,
 } from './MatchAllocator';
 import { Migration, seatInfo } from './Migration';
+import { STREAK_DEFS } from '../shared/streaks/StreakDefs';
 import { Router } from './Router';
 import { Session } from './net/Session';
 import { WsServer, type WsLink } from './net/WsServer';
@@ -269,10 +270,64 @@ export class Server {
         onLoadout: (s, raw) => this.onLoadout(s, raw),
         onVote: (s, phase, option) => this.onVote(s, phase, option),
         onReady: (s, matchId) => this.onReady(s, matchId),
+        onStreakRequest: (s, kind, x, z) => this.onStreakRequest(s, kind, x, z),
       },
       () => this.loop.currentTick,
     );
     this.sessions.push(session);
+  }
+
+  /**
+   * A client asked to spend a streak (M11 Gate B, §8.22).
+   *
+   * A **request**, and every part of granting it is the server's. §4.16: *"The client is fully
+   * untrusted."* So the three things that could be lied about are each answered here rather than
+   * taken from the message:
+   *
+   * - **Which instance.** The router, never the client. A request from somebody in the arena
+   *   cannot reach into the live match.
+   * - **Whether they have it.** `StreakSystem.activate` returns null for a streak this entity
+   *   has not earned, which is the whole of the entitlement check — the pending list is the
+   *   authoritative one and the client's copy is a replica of it.
+   * - **Where it goes.** At the player's own body, from the *server's* copy of their position.
+   *   The only coordinates taken from the client are the mortar's marked point, which is a
+   *   genuine choice the player makes on the map overlay and is clamped to the map by
+   *   `MortarStrike` itself.
+   *
+   * A refused request is logged at debug and otherwise silent. It is the ordinary consequence of
+   * a double keypress arriving either side of a death, and answering it would mean a message
+   * whose only reader is a HUD that the next `Streaks` frame corrects anyway.
+   */
+  private onStreakRequest(session: Session, kind: number, x: number, z: number): void {
+    const instance = this.router.instanceOf(session.playerId);
+    const player = session.player;
+    if (instance === null || player === null) return;
+
+    const def = STREAK_DEFS[kind];
+    if (def === undefined) {
+      // A kind index outside the table is malformed rather than merely wrong, and §4.16 puts
+      // the response to malformed input at the boundary: count it, drop it, never throw.
+      log.warn(`${session.displayName} asked for streak kind ${kind}, which does not exist.`);
+      return;
+    }
+
+    const sim = player.controller.sim;
+    // The mortar is marked on the map overlay; everything else is placed where the caller
+    // stands. `MortarStrike` clamps the mark to the playable area.
+    const isMortar = def.id === 'mortar';
+    const granted = instance.match.streaks.activate(
+      player.entityId,
+      def.id,
+      isMortar ? x : sim.x,
+      isMortar ? 0 : sim.y,
+      isMortar ? z : sim.z,
+      sim.yaw,
+    );
+    if (granted === null) {
+      log.debug(`${session.displayName} asked for ${def.id} and does not hold one.`);
+      return;
+    }
+    log.info(`${session.displayName} called in ${def.id} in instance ${instance.id}.`);
   }
 
   private onLeave(session: Session, reason: string): void {

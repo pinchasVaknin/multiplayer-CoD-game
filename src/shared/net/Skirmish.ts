@@ -268,6 +268,103 @@ export interface BombReplica {
   readonly plantedSite: number;
 }
 
+// -- killstreaks (M11 Gate B, §6.8, §8.22) ------------------------------------
+
+/**
+ * One live streak entity, as everybody sees it.
+ *
+ * §4.15 puts *"killstreak earn, activation, entity state"* on the replicated side. A sentry and
+ * a care package are **physical objects both teams can see and shoot**, so this list is the same
+ * for every recipient — it is the *intel* below that is filtered, not the bodies.
+ *
+ * One record shape for all six rather than a tagged union per kind. The fields a sentry does not
+ * use cost it four bytes of zeroes, and the alternative is six encoders and six decoders that
+ * can each drift from their counterpart. `kind` says how to read the two soft fields.
+ */
+export interface StreakEntityState {
+  /** Unique per activation. Identity across frames, which the renderer's mesh pool needs. */
+  readonly instanceId: number;
+  /** Index into `STREAK_DEFS`. */
+  readonly kind: number;
+  readonly ownerId: number;
+  /** `OBJ_TEAM_A` or `OBJ_TEAM_B`. */
+  readonly team: number;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  /** Body yaw — a sentry's turret, a chopper's heading, a UAV's sweep bearing. */
+  readonly yaw: number;
+  /** Turret or gunner pitch. Zero for the kinds with no elevation. */
+  readonly pitch: number;
+  /** A sentry's health, 0..255. `255` for every kind that cannot be shot down. */
+  readonly health: number;
+  /** A care package's claim progress, 0..255. Zero elsewhere. */
+  readonly fraction: number;
+  /** `SEFlag` bits. */
+  readonly flags: number;
+}
+
+/** Bits in `StreakEntityState.flags`. */
+export const SEFlag = {
+  /** A care package that has touched the ground, or a sentry that is still alive. */
+  Landed: 1 << 0,
+  Alive: 1 << 1,
+  /** Somebody is currently claiming this crate. */
+  Claiming: 1 << 2,
+} as const;
+
+/**
+ * One UAV contact — **intel, and the thing Ghost actually hides**.
+ *
+ * Two filters stand between an enemy position and an enemy client, and they are different:
+ *
+ * 1. **Ghost**, applied at record time inside `Uav.onTick`: a player whose `visibleToUav` is
+ *    false is *never recorded as a contact at all*, so the perk is invisible to everything
+ *    downstream. Note what this is not — the player's **body stays in the entity list**. Ghost
+ *    hides you from UAV intel; it does not make you invisible, and an entity filter would.
+ * 2. **Ownership**, applied at send time in `MatchInstance`: contacts go only to the team whose
+ *    UAV recorded them. Broadcasting them and expecting the client to ignore the other team's
+ *    would put the whole point of a UAV in the untrusted half of the system.
+ */
+export interface UavContactState {
+  readonly entityId: number;
+  readonly x: number;
+  readonly z: number;
+  /** Hundredths of a second since the beam crossed. Drives the minimap fade. */
+  readonly ageCs: number;
+}
+
+/**
+ * Everything one recipient is told about streaks this tick.
+ *
+ * Built per seat rather than broadcast, because three of its parts are private: what *you* have
+ * earned, what *your* team's UAV can see, and whether *your* minimap is scrambled. The entity
+ * list is common and is simply carried along with them.
+ */
+export interface StreakView {
+  /** Kind indices this player has earned and not yet spent, in key order. */
+  readonly pending: readonly number[];
+  /** Consecutive kills, for the HUD's progress readout. */
+  readonly streakCount: number;
+  /** The next streak this player is working toward, or -1. */
+  readonly nextKind: number;
+  /** Kills needed for it, already discounted by Hardline. */
+  readonly nextRequirement: number;
+  /** An enemy Counter-UAV is up: this player's minimap is scrambled. */
+  readonly scrambled: boolean;
+  /** Sweep bearing of a friendly UAV, or -1 when this team has none. */
+  readonly sweepAngle: number;
+  readonly contacts: readonly UavContactState[];
+  readonly entities: readonly StreakEntityState[];
+}
+
+/** Live streak entities in one frame. Two instances of six streaks is already unusual. */
+export const MAX_STREAK_ENTITIES = 16;
+/** Contacts a sweep can carry. One per roster slot, and the roster caps well below this. */
+export const MAX_UAV_CONTACTS = 24;
+/** Streaks a player can hold at once — three keys, three slots (M7 playtest). */
+export const MAX_PENDING_STREAKS = 3;
+
 // -- loadout on the wire (Tier 1 #20) ----------------------------------------
 
 /**

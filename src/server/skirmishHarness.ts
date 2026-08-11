@@ -3,6 +3,7 @@ import { logger } from '../shared/core/Log';
 import { EventBus } from '../shared/core/EventBus';
 import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } from '../shared/net/NetSim';
 import { votePhaseName, type NetLoadout } from '../shared/net/Skirmish';
+import type { StreakId } from '../shared/streaks/StreakDefs';
 import { loadConfig, usesShortenedTimings, type ServerConfig } from './Config';
 import { HeadlessClient, type HeadlessClientReport } from './debug/HeadlessClient';
 import { installServerLogging, metric } from './log';
@@ -57,6 +58,24 @@ interface HarnessOptions {
   readonly editClass: boolean;
   /** Make every client vote for this ballot index, or -1 for the default spread. */
   readonly voteFor: number;
+  /**
+   * Grant every seated human this streak once the live match is running (§8.22).
+   *
+   * The earn path itself is M7 code, unchanged and already proven in single-player: four kills
+   * is four kills. What Gate B added is everything *after* it — replicate the pending list,
+   * let the client ask, validate and grant server-side, replicate the resulting entity — and
+   * waiting for a headless client to happen to get four kills would make that a test that
+   * sometimes runs. This makes it a test that always runs.
+   */
+  readonly grantStreak: string | null;
+  /**
+   * Give the second client the Ghost perk (§8.22).
+   *
+   * The control for the Ghost assertion. Run with it and the ghost must never appear as a UAV
+   * contact; run without it and they must — a probe that only ever goes green proves that the
+   * contact list is empty, not that Ghost works.
+   */
+  readonly ghost: boolean;
 }
 
 /**
@@ -77,6 +96,23 @@ const NO_PERK_CLASS: NetLoadout = {
   tactical: 'smoke',
   fieldUpgrade: 'stim',
   perks: [null, null, null],
+  streaks: ['uav', null, null],
+};
+
+/**
+ * The same class carrying Ghost (§8.22).
+ *
+ * Ghost is the perk whose whole effect is an absence, which makes it the one perk that cannot
+ * be verified by looking at the player who has it — only by looking at what an enemy is told.
+ */
+const GHOST_CLASS: NetLoadout = {
+  name: 'HARNESS-GHOST',
+  primary: { weaponId: 'ar_carbine', attachments: [], camo: null },
+  secondary: { weaponId: 'pistol_talon', attachments: [], camo: null },
+  lethal: 'frag',
+  tactical: 'flashbang',
+  fieldUpgrade: 'munitions',
+  perks: ['ghost', null, null],
   streaks: ['uav', null, null],
 };
 
@@ -171,7 +207,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       seed: 1000 + i * 37,
       // `--no-perks` fields the same class with the perk slots empty. The control run for
       // §8.9: if a residual misprediction survives it, the cause is not the loadout.
-      loadout: opts.noPerks ? { ...LIGHTWEIGHT_CLASS, perks: [null, null, null] } : LIGHTWEIGHT_CLASS,
+      loadout: streakHarnessClass(opts, i),
       /**
        * A deliberate tie on the first two clients, then a spread.
        *
@@ -221,6 +257,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   /** The live match's roster, as last seen while it was running. See the sampler below. */
   let observedHumans = 0;
   let observedBots = 0;
+  /** Which match the streak grant has already been applied to, so it happens once each. */
+  let grantedTo = -1;
   let lastCycle = 0;
   let lastPhase = -1;
   const phaseBoundaries: { cycle: number; phase: string; atMs: number }[] = [];
@@ -257,6 +295,21 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     if (running !== undefined && running.running) {
       observedHumans = running.playerCount;
       observedBots = running.botCount;
+
+      /**
+       * Put a streak in every seated player's hand, once per match (§8.22).
+       *
+       * Granted through `debugGrant`, which is the same `grant` the earn path calls — so
+       * everything downstream of "this player now holds a UAV" is the shipping code, and only
+       * the four kills that would have produced it are stood in for.
+       */
+      if (opts.grantStreak !== null && grantedTo !== running.id) {
+        grantedTo = running.id;
+        for (const seat of running.sessions) {
+          running.match.streaks.debugGrant(seat.player.entityId, opts.grantStreak as StreakId);
+        }
+        log.info(`granted ${opts.grantStreak} to ${running.playerCount} player(s) in match ${running.id}.`);
+      }
     }
 
     const vote = server.vote;
@@ -486,6 +539,7 @@ function reportFlow(input: FlowReportInput): number {
         `spawn window ${r.spawnWindowMispredictions}, ` +
         `objectives ${r.objectiveUpdates} upd/${r.objectivesOwned} owned, ` +
         modeStateLine(r) +
+        streakLine(r) +
         `post-migration windows [${r.postMigrationWindows.join(",")}] at ticks [${r.migrationMispredictionTicks.join(",")}], ` +
         `${r.buildsCompleted} build(s) worst ${r.worstBuildMs}ms, ` +
         `${r.votesCast} vote(s), ${r.summaries} summary(s), ` +
@@ -579,6 +633,17 @@ function reportFlow(input: FlowReportInput): number {
     problems.push(`${worstIntoLive} misprediction(s) entering a live match (Tier 1 #20)`);
   }
 
+  /**
+   * Ghost, when the run armed it (§8.22).
+   *
+   * A blocking failure rather than a warning. A perk whose entire effect is an absence fails
+   * silently by definition — nothing looks wrong when it stops working, because what it
+   * suppresses is a dot on somebody else's map.
+   */
+  if (opts.ghost && !checkGhost(reports)) {
+    problems.push('a Ghost player appeared as a UAV contact on an enemy client');
+  }
+
   if (problems.length === 0) {
     log.info('FLOW CHECK PASSED.');
     return 0;
@@ -629,6 +694,93 @@ function modeStateLine(r: HeadlessClientReport): string {
   return out;
 }
 
+/**
+ * The Gate B streak channel, reported only when it carried something.
+ *
+ * `entities` counts **distinct instance ids** rather than frames, because a server replicating
+ * an empty list twenty times a second is exactly the shape of the bug this is watching for and
+ * a frame counter would call it green.
+ */
+/**
+ * Which class client `index` fields.
+ *
+ * Client 1 (index 1) is the ghost when `--ghost` is set, because the default team assignment
+ * alternates and index 1 therefore lands on the opposite side from indices 0 and 2 — which is
+ * what makes the other two *enemies* who would see them on a sweep.
+ */
+function streakHarnessClass(opts: HarnessOptions, index: number): NetLoadout {
+  /**
+   * `--no-perks` wins over `--ghost`, deliberately — it is what makes the red control possible.
+   *
+   * `--ghost --no-perks` arms the assertion and strips the perk it is asserting about, which is
+   * the run that has to **fail**. Ordered the other way, as this was first written, the control
+   * still equips Ghost and reports a clean pass — a probe that cannot go red, which is the exact
+   * trap the standing lesson names. It was caught by running it.
+   */
+  if (opts.noPerks) return { ...LIGHTWEIGHT_CLASS, perks: [null, null, null] };
+  if (opts.ghost && index === 1) return GHOST_CLASS;
+  return LIGHTWEIGHT_CLASS;
+}
+
+/**
+ * §8.22's Ghost check: *"show a Ghost player's position absent from the snapshot sent to enemy
+ * clients."*
+ *
+ * The wording of the criterion is worth reading carefully, because the obvious implementation of
+ * it is wrong. Removing a Ghost player's **entity** from the snapshot would make their body
+ * invisible, and Ghost does not do that — it hides you from UAV intel. So what is asserted here
+ * is the absence of the ghost from the **contact list**, and their continued presence in the
+ * entity list is what makes it the right absence rather than a bigger one.
+ *
+ * Asserted against enemies only. A ghost is visible to their own team's UAV by construction —
+ * `Uav.onTick` skips friendlies before it ever consults `visibleToUav` — so folding teammates
+ * into the check would make it pass for the wrong reason.
+ */
+function checkGhost(reports: readonly HeadlessClientReport[]): boolean {
+  const ghost = reports[1];
+  if (ghost === undefined) return true;
+
+  let enemies = 0;
+  let leaked = 0;
+  for (const r of reports) {
+    if (r.name === ghost.name || r.team === ghost.team) continue;
+    enemies++;
+    if (r.contactIdList.includes(ghost.liveEntityId)) {
+      leaked++;
+      log.error(
+        `GHOST LEAK: ${r.name} (team ${r.team}) saw ${ghost.name} (live entity ${ghost.liveEntityId}) ` +
+          `as a UAV contact. Contacts seen: [${r.contactIdList.join(',')}].`,
+      );
+    }
+  }
+
+  if (enemies === 0) {
+    log.warn(
+      `ghost check inconclusive: no client was on the opposite team from ${ghost.name}. ` +
+        'The assertion needs an enemy to be hidden from.',
+    );
+    return true;
+  }
+  log.info(
+    `ghost check: ${ghost.name} (live entity ${ghost.liveEntityId}, team ${ghost.team}) against ` +
+      `${enemies} enemy client(s) — ${leaked} leak(s). ` +
+      `Enemy contact sets: ${reports
+        .filter((r) => r.team !== ghost.team)
+        .map((r) => `${r.name}[${r.contactIdList.join(',')}]`)
+        .join(' ')}`,
+  );
+  return leaked === 0;
+}
+
+function streakLine(r: HeadlessClientReport): string {
+  if (r.streakFrames === 0) return '';
+  return (
+    `streaks ${r.streakFrames} frm/${r.pendingSeen} pend/${r.streakRequests} req/` +
+    `${r.streakEntitiesSeen} ent/${r.peakStreakEntities} peak/` +
+    `${r.sweepFrames} sweep/${r.contactsSeen} contacts, `
+  );
+}
+
 function parseArgs(argv: readonly string[]): HarnessOptions {
   const get = (flag: string): string | null => {
     const at = argv.indexOf(flag);
@@ -659,6 +811,8 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     noPerks: argv.includes('--no-perks'),
     editClass: argv.includes('--edit-class'),
     voteFor: num('--vote', -1),
+    grantStreak: get('--grant-streak'),
+    ghost: argv.includes('--ghost'),
   };
 }
 

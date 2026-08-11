@@ -36,11 +36,14 @@ import { StreakAudio } from './streaks/StreakAudio';
 import { ClientStreakPresentation } from './streaks/ClientStreakPresentation';
 import { StreakRenderer } from './streaks/StreakRenderer';
 import { StreakSystem } from '../shared/streaks/StreakSystem';
+import { ReplicatedStreaks } from './streaks/ReplicatedStreaks';
+import type { StreakView } from '../shared/net/Skirmish';
 import {
   ALL_STREAK_IDS,
   DEFAULT_STREAK_CONFIG,
   streakDef,
   type StreakConfig,
+  type StreakDef,
   type StreakId,
 } from '../shared/streaks/StreakDefs';
 import type { CamoId } from '../shared/meta/Camos';
@@ -156,6 +159,16 @@ export interface MatchDeps {
    * learns which kind of match it is in.
    */
   readonly networked?: boolean;
+
+  /**
+   * Ask the server to spend a streak (M11 Gate B, §8.22).
+   *
+   * Supplied only by a networked match; single-player activates locally and never calls it.
+   * The coordinates are the mortar's marked point — every other streak is placed by the server
+   * from its own copy of where this player is standing, because the position a streak lands at
+   * is not a thing an untrusted client gets to choose (§4.16).
+   */
+  readonly onStreakRequest?: ((id: StreakId, markX: number, markZ: number) => void) | undefined;
 
   /**
    * Where the drawable bodies come from (M10, S6.5).
@@ -326,6 +339,15 @@ export class Match {
    * player's current command, stashed here immediately before `simulate`.
    */
   private lastStreakCommand: InputCommand | null = null;
+
+  /**
+   * The server's streak state (M11 Gate B, §8.22).
+   *
+   * Populated only in a networked match, where `this.streaks` is constructed but never
+   * simulated. See `ReplicatedStreaks` for why the client does not simply fold its own
+   * replicated kill events into its own counter.
+   */
+  private readonly replicatedStreaks = new ReplicatedStreaks();
   /**
    * Where a mortar will land if one is called in.
    *
@@ -1144,8 +1166,18 @@ export class Match {
     if (!this.isNetworked) this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
     // Streaks tick after the bots that may have just shot one down, and before the flow that
     // may declare the match over and end them all.
-    this.lastStreakCommand = cmd;
-    this.streaks.simulate(cmd.tickIndex);
+    /**
+     * The server owns every live streak in a networked match (S4.15).
+     *
+     * Simulating here as well would put a second sentry, with its own aim and its own damage,
+     * on top of the one the server is already resolving shots against — the Domination flag bug
+     * with a trigger. The client keeps the object because the HUD and the renderer are written
+     * against it, and feeds them from `replicatedStreaks` instead.
+     */
+    if (!this.isNetworked) {
+      this.lastStreakCommand = cmd;
+      this.streaks.simulate(cmd.tickIndex);
+    }
     this.syncChopperBody();
     if (!this.playerDead && !this.mortarOverlay.isOpen) this.stepStreakInput(cmd);
     // Local matches only (M11 Gate B). A networked client's Use key is already in the command
@@ -1313,7 +1345,7 @@ export class Match {
       const bit = bits[i];
       if (bit === undefined) continue;
       if (!justPressed(cmd.buttons, this.prevButtons, bit)) continue;
-      const held = this.streaks.pendingFor(this.localId);
+      const held = this.heldStreaks();
       const id = held[i];
       if (id === undefined) continue;
 
@@ -1326,21 +1358,68 @@ export class Match {
         this.overlayPitch = cmd.pitch;
         return;
       }
-      // Two metres along the facing, so a sentry is placed rather than worn.
-      const ahead = 2;
-      const px = sim.x - Math.sin(sim.yaw) * ahead;
-      const pz = sim.z - Math.cos(sim.yaw) * ahead;
-      const useAhead = id === 'sentry';
-      this.streaks.activate(
-        PLAYER_ENTITY_ID,
-        id,
-        useAhead ? px : sim.x,
-        sim.y,
-        useAhead ? pz : sim.z,
-        sim.yaw,
-      );
+      this.spendStreak(id, sim.x, sim.z);
       return;
     }
+  }
+
+  /**
+   * Spend a streak — locally, or by asking the server (M11 Gate B, §8.22).
+   *
+   * The networked path sends a **request** and changes nothing locally. There is deliberately no
+   * optimistic activation: §4.15 puts killstreak activation on the replicated side, and a client
+   * that put a sentry down and then had it taken away by the next frame would be showing a
+   * correction for a thing that was never true. The round trip is one frame at any playable
+   * ping, and a sentry that appears a frame late is not something a player can perceive — a
+   * sentry that appears and vanishes is.
+   *
+   * The coordinates sent are the mortar's mark and nothing else; the server places every other
+   * streak from its own copy of where the player is standing.
+   */
+  private spendStreak(id: StreakId, markX: number, markZ: number): void {
+    if (this.isNetworked) {
+      this.deps.onStreakRequest?.(id, markX, markZ);
+      return;
+    }
+    const sim = this.deps.player.sim;
+    // Two metres along the facing, so a sentry is placed rather than worn.
+    const ahead = 2;
+    const px = sim.x - Math.sin(sim.yaw) * ahead;
+    const pz = sim.z - Math.cos(sim.yaw) * ahead;
+    const useAhead = id === 'sentry';
+    this.streaks.activate(
+      this.localId,
+      id,
+      id === 'mortar' ? markX : useAhead ? px : sim.x,
+      sim.y,
+      id === 'mortar' ? markZ : useAhead ? pz : sim.z,
+      sim.yaw,
+    );
+  }
+
+  /**
+   * What this player may spend right now.
+   *
+   * The server's list in a networked match and the local system's otherwise. Routed through one
+   * accessor rather than branched at each of the three call sites, because the failure when one
+   * of them is missed is a HUD that offers a streak the server will refuse.
+   */
+  private heldStreaks(): readonly StreakId[] {
+    return this.isNetworked ? this.replicatedStreaks.pending : this.streaks.pendingFor(this.localId);
+  }
+
+  private nextStreak(): { def: StreakDef; requirement: number } | null {
+    return this.isNetworked ? this.replicatedStreaks.next : this.streaks.nextFor(this.localId);
+  }
+
+  /** Adopt one `Streaks` frame (§8.22). Called by `MatchWorld` from the net session. */
+  applyReplicatedStreaks(view: StreakView): void {
+    this.replicatedStreaks.apply(view);
+  }
+
+  /** Drop every replicated streak. Called on migration, per §4.18's obligation list. */
+  clearReplicatedStreaks(): void {
+    this.replicatedStreaks.clear();
   }
 
   /**
@@ -1493,8 +1572,20 @@ export class Match {
     this.fx.update(dt);
     this.equipment.render(alpha, dt, camera);
     this.meta.render(dt);
-    this.streaks.render(dt, alpha);
-    this.streakRenderer.update();
+    /**
+     * One source of streaks, chosen once (M11 Gate B).
+     *
+     * `streaks.render` advances presentation state on locally-owned streak objects, of which a
+     * networked client has none — and `streakRenderer.update()` reconciles against that same
+     * empty local list, so calling it here as well would delete every replicated mesh the line
+     * above just built.
+     */
+    if (this.isNetworked) {
+      this.streakRenderer.updateReplicated(this.replicatedStreaks.entities);
+    } else {
+      this.streaks.render(dt, alpha);
+      this.streakRenderer.update();
+    }
 
     // A dead player is not holding a rifle — and a scoped one is looking through an optic
     // rather than at a weapon, so the viewmodel hands off to the scope overlay (M7). See
@@ -1569,15 +1660,20 @@ export class Match {
    */
   private fillStreakHud(): void {
     const hud = this.ui.streakState;
-    const held = this.streaks.pendingFor(this.localId);
+    const held = this.heldStreaks();
     for (let i = 0; i < hud.slots.length; i++) {
       const slot = hud.slots[i];
       if (slot === undefined) continue;
       const id = held[i];
       slot.name = id === undefined ? '' : streakDef(id).name;
     }
-    hud.streak = this.score.row(this.localId)?.streak ?? 0;
-    const next = this.streaks.nextFor(this.localId);
+    // The streak count is the server's too when there is one: it is the number the earn
+    // threshold is measured against, and two opinions about it is two opinions about whether
+    // the player has earned anything.
+    hud.streak = this.isNetworked
+      ? this.replicatedStreaks.streakCount
+      : (this.score.row(this.localId)?.streak ?? 0);
+    const next = this.nextStreak();
     hud.nextName = next?.def.name ?? '';
     hud.nextRequirement = next?.requirement ?? 0;
 
@@ -1732,23 +1828,49 @@ export class Match {
     const map = this.ui.hud.minimap;
     // Whose UAV this is, and whose minimap is being scrambled, is "which side am I on".
     const friendly = this.localTeam;
-    const uav = this.streaks.uavFor(friendly);
-    map.sweepAngle = uav === null ? null : uav.sweepAngle;
-    map.scrambled = this.streaks.minimapScrambledFor(friendly);
-
     for (const slot of map.contacts) slot.active = false;
-    if (uav !== null) {
-      map.contactFadeSeconds = this.streaks.contactFadeSeconds;
-      let i = 0;
-      for (const contact of uav.contacts) {
-        if (!contact.active || i >= map.contacts.length) continue;
-        const slot = map.contacts[i];
+    map.contactFadeSeconds = this.streaks.contactFadeSeconds;
+
+    if (this.isNetworked) {
+      /**
+       * The server's intel, and only ever this team's (M11 Gate B, §8.22).
+       *
+       * The client is not filtering here — there is nothing to filter. `MatchInstance` sends
+       * each seat only the contacts its own team's UAV recorded, and a Ghost player was never
+       * recorded in the first place. What arrives is already the whole truth this player is
+       * entitled to, which is the point: a client that received both teams' contacts and chose
+       * to draw one would be one edited line away from a wallhack.
+       */
+      const rep = this.replicatedStreaks;
+      map.sweepAngle = rep.sweepAngle < 0 ? null : rep.sweepAngle;
+      map.scrambled = rep.scrambled;
+      let n = 0;
+      for (const contact of rep.contacts) {
+        if (n >= map.contacts.length) break;
+        const slot = map.contacts[n];
         if (slot === undefined) continue;
         slot.x = contact.x;
         slot.z = contact.z;
-        slot.age = contact.age;
+        slot.age = contact.ageCs / 100;
         slot.active = true;
-        i++;
+        n++;
+      }
+    } else {
+      const uav = this.streaks.uavFor(friendly);
+      map.sweepAngle = uav === null ? null : uav.sweepAngle;
+      map.scrambled = this.streaks.minimapScrambledFor(friendly);
+      if (uav !== null) {
+        let i = 0;
+        for (const contact of uav.contacts) {
+          if (!contact.active || i >= map.contacts.length) continue;
+          const slot = map.contacts[i];
+          if (slot === undefined) continue;
+          slot.x = contact.x;
+          slot.z = contact.z;
+          slot.age = contact.age;
+          slot.active = true;
+          i++;
+        }
       }
     }
 

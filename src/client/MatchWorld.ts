@@ -19,6 +19,7 @@ import type { Speedometer } from './debug/Speedometer';
 import { Match } from './ClientMatch';
 import { KillConfirmed } from '../shared/modes/KillConfirmed';
 import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
+import { STREAK_DEFS, type StreakId } from '../shared/streaks/StreakDefs';
 import type { EquipmentConfig } from '../shared/equipment/EquipmentConfig';
 import type { ResolvedLoadout } from '../shared/meta/Loadouts';
 import type { Profile } from './meta/Profile';
@@ -291,6 +292,19 @@ export class MatchWorld {
       localTeam: server?.welcome.team,
       localName: server?.displayName,
       actors: this.net === null ? undefined : () => netSessionActors(this.net),
+      /**
+       * Spend a streak by asking the server (Gate B, §8.22).
+       *
+       * Undefined in single-player, where `ClientMatch` activates locally against its own
+       * system — the branch is on the presence of this callback's owner rather than on a flag,
+       * so a local match cannot accidentally send.
+       */
+      onStreakRequest:
+        this.net === null
+          ? undefined
+          : (id, markX, markZ) => {
+              this.net?.client.sendStreak(streakKindIndex(id), markX, markZ);
+            },
       scene: deps.scene,
       viewmodel: deps.viewmodel,
       cameraRig: deps.cameraRig,
@@ -396,6 +410,17 @@ export class MatchWorld {
       net.onBomb = (info) => {
         const mode = this.match.mode;
         if (mode instanceof SearchAndDestroy) mode.applyReplicatedBomb(info);
+      };
+
+      /**
+       * Killstreaks (Gate B, §8.22).
+       *
+       * Straight into the match's replica, which the HUD, the minimap and the streak renderer
+       * are pointed at whenever the match is networked. Nothing is filtered here: the server
+       * already sent this seat exactly what it is entitled to see.
+       */
+      net.onStreaks = (view) => {
+        this.match.applyReplicatedStreaks(view);
       };
 
       net.onAuthoritativeState = (header) => {
@@ -587,3 +612,15 @@ function netSessionActors(net: NetSession | null): Iterable<RenderableActor> {
 }
 
 const EMPTY_ACTORS: readonly RenderableActor[] = [];
+
+/**
+ * A streak id as its index in `STREAK_DEFS` (Gate B, §8.22).
+ *
+ * The mirror of the server's own lookup in `MatchInstance`. Both runtimes build the table from
+ * the same module in the same order, so the index is identity — and a string on the wire for a
+ * value drawn from a fixed six-entry table is fifteen bytes spent saying what one says.
+ */
+function streakKindIndex(id: StreakId): number {
+  const at = STREAK_DEFS.findIndex((d) => d.id === id);
+  return at < 0 ? 0 : at;
+}

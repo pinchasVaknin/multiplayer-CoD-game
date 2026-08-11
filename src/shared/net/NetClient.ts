@@ -20,6 +20,7 @@ import {
   writeLoadout,
   writePing,
   writeReady,
+  writeStreakRequest,
   writeVote,
   SFlag,
   type EventSink,
@@ -29,7 +30,7 @@ import {
   type WelcomeInfo,
 } from './Messages';
 import { Prediction } from './Prediction';
-import type { NetLoadout, ObjectiveState } from './Skirmish';
+import type { NetLoadout, ObjectiveState, StreakView } from './Skirmish';
 import type { BombInfo, TagInfo } from '../modes/GameMode';
 import { COMMAND_REDUNDANCY, quantiseCommandInPlace, rejectText } from './Protocol';
 import { copyEntitySnapshot, EFlag, makeEntitySnapshot, type EntitySnapshot } from './Snapshot';
@@ -141,6 +142,14 @@ export interface SkirmishSink {
   readonly onTags?: ((tags: readonly TagInfo[]) => void) | undefined;
   /** Search & Destroy's bomb, once per snapshot tick (M11 Gate B, §6.8). */
   readonly onBomb?: ((info: BombInfo) => void) | undefined;
+  /**
+   * Killstreaks — live entities, this player's earn state, this team's intel (§8.22).
+   *
+   * The one per-recipient message in the protocol. What arrives has already been filtered by
+   * the server to what this seat is entitled to; there is nothing here for the client to
+   * narrow, and narrowing in the client is what a UAV must never depend on.
+   */
+  readonly onStreaks?: ((view: StreakView) => void) | undefined;
   /**
    * This client has been moved to another instance, effective on `welcome.effectiveTick`.
    *
@@ -407,6 +416,17 @@ export class NetClient {
     this.deps.link.send(writeVote(this.writer, phase, option));
   }
 
+  /**
+   * Ask to spend a streak (M11 Gate B, §8.22).
+   *
+   * A request. The server checks that this player actually holds it — the pending list the HUD
+   * draws from is a replica, and a replica can be a frame behind a death that cleared it.
+   */
+  sendStreak(kind: number, markX: number, markZ: number): void {
+    if (this.state !== 'joined') return;
+    this.deps.link.send(writeStreakRequest(this.writer, kind, markX, markZ));
+  }
+
   /** Report that the background build for `matchId` is finished (§6.5). */
   sendReady(matchId: number): void {
     if (this.state !== 'joined') return;
@@ -531,6 +551,9 @@ export class NetClient {
         return;
       case 'bomb':
         this.deps.skirmish?.onBomb?.(msg.bomb);
+        return;
+      case 'streaks':
+        this.deps.skirmish?.onStreaks?.(msg.view);
         return;
       case 'reject':
         this.state = 'rejected';

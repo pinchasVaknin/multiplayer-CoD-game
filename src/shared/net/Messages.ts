@@ -25,6 +25,12 @@ import {
   type EntitySnapshot,
 } from './Snapshot';
 import {
+  MAX_PENDING_STREAKS,
+  MAX_STREAK_ENTITIES,
+  MAX_UAV_CONTACTS,
+  type StreakEntityState,
+  type StreakView,
+  type UavContactState,
   BOMB_CARRIED,
   BOMB_DEFUSED,
   BOMB_EXPLODED,
@@ -544,6 +550,75 @@ function bombStateFromCode(code: number): BombInfo['state'] {
   return 'CARRIED';
 }
 
+/**
+ * "Spend this streak" (M11 Gate B, §8.22).
+ *
+ * The coordinates are the mortar's marked point and are meaningless for the other five, which
+ * are placed at the player's own body. Sent anyway rather than conditionally, because five bytes
+ * saved on a message a player sends at most three times a match is not worth a variable layout.
+ */
+export function writeStreakRequest(w: ByteWriter, kind: number, x: number, z: number): Uint8Array {
+  head(w, MsgC.Streak);
+  w.u8v(kind & 0xff);
+  w.i16(quantPos(x));
+  w.i16(quantPos(z));
+  return w.bytes();
+}
+
+/**
+ * Everything one recipient is told about streaks (M11 Gate B, §6.8, §8.22).
+ *
+ * Encoded per seat, which is what makes the two private sections private — see `MsgS.Streaks`
+ * and `StreakView`. The entity list is the same for everybody and simply rides along.
+ */
+export function writeStreaks(w: ByteWriter, view: StreakView): Uint8Array {
+  head(w, MsgS.Streaks);
+
+  const pending = Math.min(view.pending.length, MAX_PENDING_STREAKS);
+  w.u8v(pending);
+  for (let i = 0; i < pending; i++) w.u8v((view.pending[i] ?? 0) & 0xff);
+
+  w.u8v(Math.max(0, Math.min(255, view.streakCount)));
+  w.i8(view.nextKind);
+  w.u8v(Math.max(0, Math.min(255, view.nextRequirement)));
+  // Sweep as a quantised angle with a sentinel: -1 means "your team has no UAV up", which is a
+  // different statement from "the beam is at zero" and the minimap draws them differently.
+  w.u8v(view.scrambled ? 1 : 0);
+  w.u8v(view.sweepAngle < 0 ? 0 : 1);
+  w.u16(view.sweepAngle < 0 ? 0 : quantAngle(view.sweepAngle));
+
+  const contacts = Math.min(view.contacts.length, MAX_UAV_CONTACTS);
+  w.u8v(contacts);
+  for (let i = 0; i < contacts; i++) {
+    const c = view.contacts[i];
+    if (c === undefined) continue;
+    w.i16(c.entityId);
+    w.i16(quantPos(c.x));
+    w.i16(quantPos(c.z));
+    w.u16(Math.max(0, Math.min(0xffff, c.ageCs)));
+  }
+
+  const entities = Math.min(view.entities.length, MAX_STREAK_ENTITIES);
+  w.u8v(entities);
+  for (let i = 0; i < entities; i++) {
+    const e = view.entities[i];
+    if (e === undefined) continue;
+    w.u16(e.instanceId & 0xffff);
+    w.u8v(e.kind & 0xff);
+    w.i16(e.ownerId);
+    w.u8v(e.team & 0x03);
+    w.i16(quantPos(e.x));
+    w.i16(quantPos(e.y));
+    w.i16(quantPos(e.z));
+    w.u16(quantAngle(e.yaw));
+    w.i16(quantPitch(e.pitch));
+    w.u8v(Math.max(0, Math.min(255, e.health)));
+    w.u8v(Math.max(0, Math.min(255, e.fraction)));
+    w.u8v(e.flags & 0xff);
+  }
+  return w.bytes();
+}
+
 export function writeNotice(w: ByteWriter, text: string): Uint8Array {
   head(w, MsgS.Notice);
   w.str(text);
@@ -860,6 +935,8 @@ export type Decoded =
   | { kind: 'notice'; text: string }
   | { kind: 'objectives'; states: readonly ObjectiveState[] }
   | { kind: 'tags'; tags: readonly TagInfo[] }
+  | { kind: 'streaks'; view: StreakView }
+  | { kind: 'streakRequest'; streakKind: number; x: number; z: number }
   | { kind: 'bomb'; bomb: BombInfo }
   | { kind: 'bad' };
 
@@ -944,6 +1021,12 @@ export function decodeHeader(r: ByteReader): Decoded {
     case MsgC.Ready: {
       const matchId = r.u16();
       return r.overran ? BAD : { kind: 'ready', matchId };
+    }
+    case MsgC.Streak: {
+      const streakKind = r.u8v();
+      const x = dequantPos(r.i16());
+      const z = dequantPos(r.i16());
+      return r.overran ? BAD : { kind: 'streakRequest', streakKind, x, z };
     }
     case MsgS.Vote: {
       const phase = r.u8v();
@@ -1083,6 +1166,81 @@ export function decodeHeader(r: ByteReader): Decoded {
               interactFraction,
               interactEntity,
               plantedSiteIndex,
+            },
+          };
+    }
+    case MsgS.Streaks: {
+      const pendingCount = r.u8v();
+      if (r.overran || pendingCount > MAX_PENDING_STREAKS) return BAD;
+      const pending: number[] = [];
+      for (let i = 0; i < pendingCount; i++) pending.push(r.u8v());
+
+      const streakCount = r.u8v();
+      const nextKind = r.i8();
+      const nextRequirement = r.u8v();
+      const scrambled = r.u8v() === 1;
+      const hasSweep = r.u8v() === 1;
+      const sweepRaw = r.u16();
+      const sweepAngle = hasSweep ? dequantAngle(sweepRaw) : -1;
+
+      const contactCount = r.u8v();
+      // A count past the cap is a malformed frame. S4.16: never allocate against a number the
+      // other end controls, even when the other end is meant to be the server.
+      if (r.overran || contactCount > MAX_UAV_CONTACTS) return BAD;
+      const contacts: UavContactState[] = [];
+      for (let i = 0; i < contactCount; i++) {
+        const entityId = r.i16();
+        const x = dequantPos(r.i16());
+        const z = dequantPos(r.i16());
+        const ageCs = r.u16();
+        contacts.push({ entityId, x, z, ageCs });
+      }
+
+      const entityCount = r.u8v();
+      if (r.overran || entityCount > MAX_STREAK_ENTITIES) return BAD;
+      const entities: StreakEntityState[] = [];
+      for (let i = 0; i < entityCount; i++) {
+        const instanceId = r.u16();
+        const kindIndex = r.u8v();
+        const ownerId = r.i16();
+        const team = r.u8v();
+        const x = dequantPos(r.i16());
+        const y = dequantPos(r.i16());
+        const z = dequantPos(r.i16());
+        const yaw = dequantAngle(r.u16());
+        const pitch = dequantPitch(r.i16());
+        const health = r.u8v();
+        const fraction = r.u8v();
+        const flags = r.u8v();
+        entities.push({
+          instanceId,
+          kind: kindIndex,
+          ownerId,
+          team,
+          x,
+          y,
+          z,
+          yaw,
+          pitch,
+          health,
+          fraction,
+          flags,
+        });
+      }
+
+      return r.overran
+        ? BAD
+        : {
+            kind: 'streaks',
+            view: {
+              pending,
+              streakCount,
+              nextKind,
+              nextRequirement,
+              scrambled,
+              sweepAngle,
+              contacts,
+              entities,
             },
           };
     }

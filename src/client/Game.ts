@@ -1095,6 +1095,17 @@ export class Game {
         this.buildQueue.start(mapId);
       },
       onMigrated: (welcome) => {
+        /**
+         * Discard the streaks the instance we are leaving told us about (Gate B, §4.18).
+         *
+         * §4.18's obligation list on a migration is flush, discard, resync, clear — and this is
+         * the same rule applied to a channel that did not exist when it was written. The
+         * replica is overwritten wholesale by the next frame from the new instance, but "the
+         * next frame" is up to a snapshot interval away, and a sentry from the arena standing
+         * in the live match's opening frames is exactly the stale-state artefact the list is
+         * there to prevent.
+         */
+        this.world?.match.clearReplicatedStreaks();
         this.pendingMigration = welcome;
         this.openMigrationWindow(welcome.matchId);
       },

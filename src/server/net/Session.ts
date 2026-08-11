@@ -11,6 +11,7 @@ import {
   writeObjectives,
   writePong,
   writeTags,
+  writeStreaks,
   writePrepare,
   writeReject,
   writeSummary,
@@ -21,7 +22,12 @@ import {
   type WelcomeInfo,
 } from '../../shared/net/Messages';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
-import { sanitiseNetLoadout, type NetLoadout, type ObjectiveState } from '../../shared/net/Skirmish';
+import {
+  sanitiseNetLoadout,
+  type NetLoadout,
+  type ObjectiveState,
+  type StreakView,
+} from '../../shared/net/Skirmish';
 import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
 import {
   CLIENT_TIMEOUT_MS,
@@ -125,6 +131,8 @@ export interface SessionEvents {
   readonly onVote: (session: Session, phase: number, option: number) => void;
   /** "My background build for `matchId` is done" (§6.5). */
   readonly onReady: (session: Session, matchId: number) => void;
+  /** "Spend the streak I have earned" (§8.22). The instance decides whether they have. */
+  readonly onStreakRequest: (session: Session, kind: number, x: number, z: number) => void;
 }
 
 /** Snapshot ids kept per client so a late ack can still be used as a delta baseline. */
@@ -339,6 +347,17 @@ export class Session {
         }
         this.events.onReady(this, msg.matchId);
         return;
+      case 'streakRequest':
+        if (this.state !== 'live') {
+          this.refuse(Reject.OutOfOrder, 'streak before hello');
+          return;
+        }
+        // Not validated here beyond the ordering. Whether this player has actually earned the
+        // streak is a question about the simulation, and the instance is the only thing that
+        // can answer it — see `Server.onStreakRequest`. §4.16's boundary validation is about
+        // *shape*, and the decoder above has already done that.
+        this.events.onStreakRequest(this, msg.streakKind, msg.x, msg.z);
+        return;
       case 'bad':
         this.refuse(Reject.Malformed, 'malformed frame');
         return;
@@ -545,6 +564,10 @@ export class Session {
 
   sendBomb(info: BombInfo): void {
     this.send(writeBomb(this.out, info));
+  }
+
+  sendStreaks(view: StreakView): void {
+    this.send(writeStreaks(this.out, view));
   }
 
   /**
