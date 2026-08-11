@@ -176,6 +176,16 @@ export class Domination extends GameMode implements ObjectiveProvider {
     }
   }
 
+  /**
+   * This mode's objectives, for replication (M11 Gate B, §6.8).
+   *
+   * The same array the renderer walks, so the client's zone N and the server's zone N are the
+   * same authored objective.
+   */
+  override get objectiveZones(): readonly ObjectiveZone[] {
+    return this.zones;
+  }
+
   override checkWinCondition(): MatchResult | RoundResult | null {
     const a = this.teamScore('A');
     const b = this.teamScore('B');

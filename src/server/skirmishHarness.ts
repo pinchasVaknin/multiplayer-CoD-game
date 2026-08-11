@@ -55,6 +55,8 @@ interface HarnessOptions {
   readonly noPerks: boolean;
   /** Have one client change its class mid-warmup (§6.6). */
   readonly editClass: boolean;
+  /** Make every client vote for this ballot index, or -1 for the default spread. */
+  readonly voteFor: number;
 }
 
 /**
@@ -178,7 +180,14 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
        * produces a genuine tie whenever there are at least three clients and an empty ballot
        * when there is only one abstainer — both without the harness having to fake a tally.
        */
-      voteFor: i < 2 ? 0 : i === 2 ? 1 : -1,
+      /**
+       * `--vote N` makes every client vote the same way, which is how a run targets one mode.
+       *
+       * Without it the spread below produces a tie and an abstention on purpose — see §8.4.
+       * With it, a run can ask for Domination specifically, which is the only way to exercise
+       * objective replication: TDM and FFA author no zones and correctly send nothing.
+       */
+      voteFor: opts.voteFor >= 0 ? opts.voteFor : i < 2 ? 0 : i === 2 ? 1 : -1,
       // §8.8: one client that misses the readiness timeout on purpose.
       buildMs: opts.slowClient && i === opts.clients - 1 ? cfg.readyTimeoutMs + 2000 : 40,
       /**
@@ -434,6 +443,7 @@ function reportFlow(input: FlowReportInput): number {
       `${r.name}: entity ${r.entityId}, match ${r.matchId}, ${r.migrations} migration(s), ` +
         `${r.mispredictions}/${r.comparisons} mispredictions (p50 ${r.mispredictionP50}m, p99 ${r.mispredictionP99}m), ` +
         `spawn window ${r.spawnWindowMispredictions}, ` +
+        `objectives ${r.objectiveUpdates} upd/${r.objectivesOwned} owned, ` +
         `post-migration windows [${r.postMigrationWindows.join(",")}] at ticks [${r.migrationMispredictionTicks.join(",")}], ` +
         `${r.buildsCompleted} build(s) worst ${r.worstBuildMs}ms, ` +
         `${r.votesCast} vote(s), ${r.summaries} summary(s), ` +
@@ -575,6 +585,7 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     slowClient: argv.includes('--slow-client'),
     noPerks: argv.includes('--no-perks'),
     editClass: argv.includes('--edit-class'),
+    voteFor: num('--vote', -1),
   };
 }
 

@@ -3,7 +3,13 @@ import { nowMs } from '../../shared/core/Clock';
 import { Btn, isDown } from '../../shared/core/InputCommand';
 import { logger } from '../../shared/core/Log';
 import { makeSnapshotHeader, phaseIndex, SFlag, type SnapshotHeader } from '../../shared/net/Messages';
-import { InstanceState, type InstanceStateId, type MatchId } from '../../shared/net/Skirmish';
+import {
+  InstanceState,
+  ownerCode,
+  type InstanceStateId,
+  type MatchId,
+  type ObjectiveState,
+} from '../../shared/net/Skirmish';
 import { EFlag, makeEntitySnapshot, weaponIndexOf, type EntitySnapshot } from '../../shared/net/Snapshot';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
 import type { ServerMatch } from '../Match';
@@ -70,6 +76,8 @@ export abstract class MatchInstance {
 
   private readonly header: SnapshotHeader = makeSnapshotHeader();
   private readonly entities: EntitySnapshot[] = [];
+  /** Reused per tick. Nothing in the per-tick send path allocates (S4.7). */
+  private readonly objectiveScratch: ObjectiveState[] = [];
   private entityCount = 0;
 
   /** Milliseconds the last step took. Per-instance half of the §7 instance panel. */
@@ -208,6 +216,10 @@ export abstract class MatchInstance {
     if (this.clock.shouldSnapshot() || ending) {
       this.buildEntities();
       this.sendSnapshots(absoluteTick);
+      // Objective state rides the snapshot cadence: it is world state, not an event, and a
+      // client that had entities from tick N and flags from tick N-3 would draw a capture ring
+      // around a body that is no longer standing in it.
+      this.sendObjectives();
     }
     this.sendEvents();
 
@@ -281,6 +293,40 @@ export abstract class MatchInstance {
       if (frame.length === 0) continue;
       session.lastSnapshotId = h.snapshotId;
       session.send(frame);
+    }
+  }
+
+  /**
+   * Replicate the mode's objective zones (M11 Gate B, §6.8).
+   *
+   * §6.8: *"The instance owns every piece of mode state; clients render what they are told and
+   * hold no authoritative timers."* Domination is the case that made this necessary: the server
+   * captured flags correctly all along, and the client drew its own copy — permanently neutral,
+   * because a networked client's `Domination` has an empty roster and counts nobody standing on
+   * anything. The flags worked and were invisible.
+   *
+   * Skipped entirely for a mode with no objectives, which is TDM, FFA and the arena — three of
+   * the five, and the ones that would otherwise pay a frame for a message of length zero.
+   */
+  private sendObjectives(): void {
+    const zones = this.match.mode.objectiveZones;
+    if (zones.length === 0) return;
+
+    this.objectiveScratch.length = 0;
+    for (const zone of zones) {
+      this.objectiveScratch.push({
+        owner: ownerCode(zone.owner),
+        capturing: ownerCode(zone.capturingTeam),
+        // 0..1 to a byte. A flag takes several seconds to capture, so 1/255 is far finer than
+        // the eye or the capture ring can show.
+        progress: Math.max(0, Math.min(255, Math.round(zone.progress * 255))),
+        countA: zone.countA,
+        countB: zone.countB,
+      });
+    }
+
+    for (const seat of this.seats.values()) {
+      if (!seat.session.closed) seat.session.sendObjectives(this.objectiveScratch);
     }
   }
 

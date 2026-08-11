@@ -23,11 +23,13 @@
  * the whole match.
  */
 /**
+ * v4 (M11 Gate B): objective state replication.
+ *
  * v3 (M11): the skirmish flow. Five new messages in each direction's id space, and `Welcome`
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
@@ -89,6 +91,15 @@ export const MsgS = {
   Summary: 137,
   /** A short line for the player: allocation failed, migration failed, the arena was rebuilt. */
   Notice: 138,
+  /**
+   * Objective state — Domination flags, S&D sites (M11 Gate B, §6.8).
+   *
+   * Sent on every snapshot tick alongside the world state rather than inside it: the snapshot
+   * is delta-encoded against a per-client baseline and objectives change on their own schedule,
+   * so folding them in would either break the delta or force a full snapshot whenever a flag
+   * ticked. Small enough at four bytes a zone that a separate frame is cheaper than either.
+   */
+  Objectives: 139,
 } as const;
 
 export type MsgCId = (typeof MsgC)[keyof typeof MsgC];

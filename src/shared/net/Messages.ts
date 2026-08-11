@@ -24,7 +24,7 @@ import {
   writeOwnerState,
   type EntitySnapshot,
 } from './Snapshot';
-import type { NetLoadout, NetWeaponLoadout } from './Skirmish';
+import { MAX_OBJECTIVES, type NetLoadout, type NetWeaponLoadout, type ObjectiveState } from './Skirmish';
 import { ByteReader, ByteWriter } from './Wire';
 
 /**
@@ -439,6 +439,31 @@ export function writeSummary(w: ByteWriter, info: SummaryInfo): Uint8Array {
 const MAX_SUMMARY_ROWS = 24;
 const MAX_XP_LINES = 12;
 
+/**
+ * Objective state, one record per zone in the mode's own order (M11 Gate B, §6.8).
+ *
+ * Four bytes a zone: owner and capturing team packed into one, progress as a byte, and the two
+ * body counts. The counts are what the HUD's contested indicator reads, and §6.8 requires
+ * contested state not to flicker under jitter — sending the counts rather than a derived
+ * boolean means the client renders exactly what the server counted rather than re-deriving it
+ * from a position list that is 100 ms in the past.
+ */
+export function writeObjectives(w: ByteWriter, states: readonly ObjectiveState[]): Uint8Array {
+  head(w, MsgS.Objectives);
+  const n = Math.min(states.length, MAX_OBJECTIVES);
+  w.u8v(n);
+  for (let i = 0; i < n; i++) {
+    const o = states[i];
+    if (o === undefined) continue;
+    // Owner in the low two bits, capturing team in the next two. Both are 0-2.
+    w.u8v((o.owner & 0x03) | ((o.capturing & 0x03) << 2));
+    w.u8v(o.progress);
+    w.u8v(Math.min(255, o.countA));
+    w.u8v(Math.min(255, o.countB));
+  }
+  return w.bytes();
+}
+
 export function writeNotice(w: ByteWriter, text: string): Uint8Array {
   head(w, MsgS.Notice);
   w.str(text);
@@ -753,6 +778,7 @@ export type Decoded =
   | { kind: 'prepare'; matchId: number; mapId: string; modeId: string }
   | ({ kind: 'summary' } & SummaryInfo)
   | { kind: 'notice'; text: string }
+  | { kind: 'objectives'; states: readonly ObjectiveState[] }
   | { kind: 'bad' };
 
 const BAD: Decoded = { kind: 'bad' };
@@ -919,6 +945,19 @@ export function decodeHeader(r: ByteReader): Decoded {
     case MsgS.Notice: {
       const text = r.str();
       return r.overran ? BAD : { kind: 'notice', text };
+    }
+    case MsgS.Objectives: {
+      const n = r.u8v();
+      if (r.overran || n > MAX_OBJECTIVES) return BAD;
+      const states: ObjectiveState[] = [];
+      for (let i = 0; i < n; i++) {
+        const packed = r.u8v();
+        const progress = r.u8v();
+        const countA = r.u8v();
+        const countB = r.u8v();
+        states.push({ owner: packed & 0x03, capturing: (packed >> 2) & 0x03, progress, countA, countB });
+      }
+      return r.overran ? BAD : { kind: 'objectives', states };
     }
     case MsgS.Reject: {
       const code = r.u8v();

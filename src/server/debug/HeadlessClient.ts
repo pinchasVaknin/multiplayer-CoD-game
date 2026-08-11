@@ -178,6 +178,9 @@ export interface HeadlessClientReport {
    *
    * The playtest's "severe rubberbanding at spawn" in one number.
    */
+  /** Objective broadcasts received, and how many carried an owned (non-neutral) zone. */
+  readonly objectiveUpdates: number;
+  readonly objectivesOwned: number;
   readonly spawnWindowMispredictions: number;
   readonly worstPostMigrationMispredictions: number;
   readonly postMigrationWindows: readonly number[];
@@ -267,6 +270,8 @@ export class HeadlessClient {
   private spawnWindowUntilTick = -1;
   private spawnWindowMispredictions = 0;
 
+  private objectiveUpdates = 0;
+  private objectivesOwned = 0;
   private editSent = false;
   private buildsCompleted = 0;
   private worstBuildMs = 0;
@@ -326,6 +331,17 @@ export class HeadlessClient {
         },
         onNotice: (text) => {
           this.notices.push(text);
+        },
+        /**
+         * Objective replication (Gate B, §6.8).
+         *
+         * Counted, and the owner codes recorded, so a headless run can prove the flags are
+         * actually crossing the wire and *changing* — a count alone would go green on a stream
+         * of permanently neutral zones, which is the exact bug this replication exists to fix.
+         */
+        onObjectives: (states) => {
+          this.objectiveUpdates++;
+          for (const s of states) if (s.owner !== 0) this.objectivesOwned++;
         },
       },
     });
@@ -587,6 +603,8 @@ export class HeadlessClient {
       metresSinceRespawn: Math.round(this.metresSinceRespawn * 10) / 10,
       matchId: this.net.matchId,
       migrations: this.net.migrations,
+      objectiveUpdates: this.objectiveUpdates,
+      objectivesOwned: this.objectivesOwned,
       spawnWindowMispredictions: this.spawnWindowMispredictions,
       worstPostMigrationMispredictions:
         this.postMigrationWindows.length === 0 ? 0 : Math.max(...this.postMigrationWindows),

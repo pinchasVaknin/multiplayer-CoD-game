@@ -29,7 +29,7 @@ import {
   type WelcomeInfo,
 } from './Messages';
 import { Prediction } from './Prediction';
-import type { NetLoadout } from './Skirmish';
+import type { NetLoadout, ObjectiveState } from './Skirmish';
 import { COMMAND_REDUNDANCY, quantiseCommandInPlace, rejectText } from './Protocol';
 import { copyEntitySnapshot, EFlag, makeEntitySnapshot, type EntitySnapshot } from './Snapshot';
 import type { INetLink } from './Transport';
@@ -129,6 +129,13 @@ export interface SkirmishSink {
   readonly onSummary?: ((info: SummaryInfo) => void) | undefined;
   /** A short line for the player: allocation failed, the arena was rebuilt. */
   readonly onNotice?: ((text: string) => void) | undefined;
+  /**
+   * Objective state, once per snapshot tick (M11 Gate B, §6.8).
+   *
+   * Reported rather than applied, like everything else here: *which* zone object a record
+   * belongs to is the caller's mode, and `shared/net` has no business reaching into it.
+   */
+  readonly onObjectives?: ((states: readonly ObjectiveState[]) => void) | undefined;
   /**
    * This client has been moved to another instance, effective on `welcome.effectiveTick`.
    *
@@ -510,6 +517,9 @@ export class NetClient {
         return;
       case 'notice':
         this.deps.skirmish?.onNotice?.(msg.text);
+        return;
+      case 'objectives':
+        this.deps.skirmish?.onObjectives?.(msg.states);
         return;
       case 'reject':
         this.state = 'rejected';

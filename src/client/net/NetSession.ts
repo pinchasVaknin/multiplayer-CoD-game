@@ -6,7 +6,7 @@ import { EV, type GameBus } from '../../shared/core/Events';
 import type { InputCommand } from '../../shared/core/InputCommand';
 import { logger } from '../../shared/core/Log';
 import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
-import type { NetLoadout } from '../../shared/net/Skirmish';
+import type { NetLoadout, ObjectiveState } from '../../shared/net/Skirmish';
 import { NetClient, type SkirmishSink, type NetClientState } from '../../shared/net/NetClient';
 import {
   phaseAt,
@@ -141,6 +141,15 @@ export class NetSession {
   onAuthoritativeState: ((header: SnapshotHeader) => void) | null = null;
 
   /**
+   * Where replicated objective state lands (M11 Gate B, §6.8).
+   *
+   * Set by `MatchWorld` once the match exists, like the other two — the session is built first
+   * because the match's renderer needs its actor list, so the dependency can only point this
+   * way.
+   */
+  onObjectives: ((states: readonly ObjectiveState[]) => void) | null = null;
+
+  /**
    * The most recent vote broadcast, kept for the §7 panel.
    *
    * Held here rather than in the overlay because the overlay is built per match and the vote
@@ -192,6 +201,10 @@ export class NetSession {
         onVoteState: (info) => {
           this.lastVote = info;
           deps.skirmish?.onVoteState?.(info);
+        },
+        onObjectives: (states) => {
+          this.onObjectives?.(states);
+          deps.skirmish?.onObjectives?.(states);
         },
         onMigrated: (welcome) => {
           // Same reason as `onNewMatch` above, and it has to happen here as well: a migration
@@ -377,6 +390,7 @@ export class NetSession {
   detach(): void {
     this.onMatchState = null;
     this.onAuthoritativeState = null;
+    this.onObjectives = null;
     this.onLocalState = null;
     this.onRosterEntry = null;
     this.actors.clear();

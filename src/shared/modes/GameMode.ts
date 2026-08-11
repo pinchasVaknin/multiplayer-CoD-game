@@ -1,4 +1,5 @@
 import type { Combatant } from '../ai/Combatant';
+import type { ObjectiveZone } from './ObjectiveZone';
 import type { HitZone } from '../combat/HitboxRig';
 import type { PlayerScore, ScoreSystem, ScoreTeam } from '../combat/ScoreSystem';
 import type { GameBus } from '../core/Events';
@@ -185,6 +186,21 @@ export abstract class GameMode {
 
   /** The team score the banner shows. Kills in TDM, captures in Domination. */
   abstract teamScore(team: ScoreTeam): number;
+
+  /**
+   * The mode's objective zones, in a fixed order, or empty (M11 Gate B, §6.8).
+   *
+   * The seam objective replication runs through. Declared on the base rather than tested for
+   * with `instanceof` at the call site, because the server must be able to ask *any* mode for
+   * its objectives without importing the concrete classes — and because a mode added later that
+   * forgets to override this replicates nothing rather than crashing the encoder.
+   *
+   * Order is identity on the wire. It comes from `MapDef.objectives`, which both runtimes build
+   * from the same data, so index N on the server is index N on the client.
+   */
+  get objectiveZones(): readonly ObjectiveZone[] {
+    return [];
+  }
 }
 
 /** Which of two team scores is ahead, for the result of a timed match. */

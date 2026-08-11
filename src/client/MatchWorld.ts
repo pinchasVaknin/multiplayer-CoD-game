@@ -33,7 +33,7 @@ import type { WelcomeInfo } from '../shared/net/Messages';
 import { LocalIdentity } from '../shared/combat/LocalIdentity';
 import type { BrowserLink } from './net/BrowserLink';
 import type { SkirmishSink } from '../shared/net/NetClient';
-import type { NetLoadout } from '../shared/net/Skirmish';
+import { ownerFromCode, type NetLoadout } from '../shared/net/Skirmish';
 import { NetSession } from './net/NetSession';
 import { logger } from '../shared/core/Log';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
@@ -341,6 +341,39 @@ export class MatchWorld {
        * `DivergenceChecker` for why comparing against `MatchFlow` instead would be a test that
        * cannot fail.
        */
+      /**
+       * Objective state, straight into the zones the renderer already walks (Gate B, §6.8).
+       *
+       * `MatchObjectives` reads `mode.zones` for Domination and `mode.sites` for S&D, and on a
+       * networked client those objects exist but are never ticked — the local mode's roster is
+       * empty, so `recountZones` counts nobody and every flag stays neutral for ever. The server
+       * was capturing correctly the whole time; the client was drawing its own blank copy.
+       *
+       * Index is identity: both sides build their zone list from `MapDef.objectives`, in order.
+       * A length mismatch means the two runtimes disagree about the map, which is a far larger
+       * problem than a flag — so it is logged rather than silently truncated.
+       */
+      net.onObjectives = (states) => {
+        const zones = this.match.mode.objectiveZones;
+        if (states.length !== zones.length) {
+          netLog.warn(
+            `objective count mismatch: server sent ${states.length}, this map has ${zones.length}. ` +
+              'Client and server disagree about the map.',
+          );
+          return;
+        }
+        for (let i = 0; i < zones.length; i++) {
+          const zone = zones[i];
+          const state = states[i];
+          if (zone === undefined || state === undefined) continue;
+          zone.owner = ownerFromCode(state.owner);
+          zone.capturingTeam = ownerFromCode(state.capturing);
+          zone.progress = state.progress / 255;
+          zone.countA = state.countA;
+          zone.countB = state.countB;
+        }
+      };
+
       net.onAuthoritativeState = (header) => {
         this.divergence.check(
           header,

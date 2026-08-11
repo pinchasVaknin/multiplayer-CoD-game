@@ -7,6 +7,7 @@ import {
   readCommand,
   writeBye,
   writeNotice,
+  writeObjectives,
   writePong,
   writePrepare,
   writeReject,
@@ -18,7 +19,7 @@ import {
   type WelcomeInfo,
 } from '../../shared/net/Messages';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
-import { sanitiseNetLoadout, type NetLoadout } from '../../shared/net/Skirmish';
+import { sanitiseNetLoadout, type NetLoadout, type ObjectiveState } from '../../shared/net/Skirmish';
 import {
   CLIENT_TIMEOUT_MS,
   HANDSHAKE_TIMEOUT_MS,
@@ -529,6 +530,10 @@ export class Session {
 
   sendSummary(info: SummaryInfo): void {
     this.send(writeSummary(this.out, info));
+  }
+
+  sendObjectives(states: readonly ObjectiveState[]): void {
+    this.send(writeObjectives(this.out, states));
   }
 
   /**

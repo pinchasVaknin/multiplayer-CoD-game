@@ -266,6 +266,16 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
    * planters: wiping the attacking team post-plant does not win the round, which is the
    * whole shape of an S&D post-plant.
    */
+  /**
+   * This mode's objectives, for replication (M11 Gate B, §6.8).
+   *
+   * The same array the renderer walks, so the client's zone N and the server's zone N are the
+   * same authored objective.
+   */
+  override get objectiveZones(): readonly ObjectiveZone[] {
+    return this.sites;
+  }
+
   override checkWinCondition(): MatchResult | RoundResult | null {
     const decided = this.roundOutcome;
     if (decided !== null) {

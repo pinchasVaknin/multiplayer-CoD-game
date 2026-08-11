@@ -138,6 +138,52 @@ export interface VoteView {
   readonly humans: number;
 }
 
+// -- objective state (M11 Gate B, §6.8) ---------------------------------------
+
+/**
+ * One objective's replicated state.
+ *
+ * §6.8: *"The instance owns every piece of mode state; clients render what they are told and
+ * hold no authoritative timers."* Domination's flags are the sharpest case — the server was
+ * already capturing them correctly and the client was rendering its own, permanently neutral,
+ * copy, because a networked client's `Domination` has an empty roster and its `onTick` counts
+ * nobody. A player stood on a flag, watched nothing happen, and reported that capture was
+ * broken. It was not; it was invisible.
+ *
+ * Ordered by the mode's own zone list rather than keyed by id, so a zone costs four bytes
+ * instead of four plus a string. The list is fixed at match construction on both sides — it
+ * comes from `MapDef.objectives` — so index *is* identity here.
+ */
+export interface ObjectiveState {
+  /** 0 = neutral, 1 = team A, 2 = team B. */
+  readonly owner: number;
+  /** Capture progress 0..255, belonging to `capturing`. */
+  readonly progress: number;
+  readonly capturing: number;
+  readonly countA: number;
+  readonly countB: number;
+}
+
+/** Owner codes on the wire. `BotTeam` is a string and this is two bits. */
+export const OBJ_NEUTRAL = 0;
+export const OBJ_TEAM_A = 1;
+export const OBJ_TEAM_B = 2;
+
+export function ownerCode(owner: string): number {
+  if (owner === 'A') return OBJ_TEAM_A;
+  if (owner === 'B') return OBJ_TEAM_B;
+  return OBJ_NEUTRAL;
+}
+
+export function ownerFromCode(code: number): 'A' | 'B' | 'NONE' {
+  if (code === OBJ_TEAM_A) return 'A';
+  if (code === OBJ_TEAM_B) return 'B';
+  return 'NONE';
+}
+
+/** Most objectives a map authors. Three flags or two bomb sites; eight is headroom. */
+export const MAX_OBJECTIVES = 8;
+
 // -- loadout on the wire (Tier 1 #20) ----------------------------------------
 
 /**
