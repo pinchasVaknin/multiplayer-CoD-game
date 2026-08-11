@@ -4836,9 +4836,10 @@ match was already present (state X)`.
 
 # M11 Gate B — in progress
 
-**Gate A is sealed. Gate B is part-done.** Three commits on
+**Gate A is sealed. Gate B is part-done.** Six commits on
 `gate-b/objective-replication` beyond the objective-replication groundwork:
-`2064b32`, `0b8a4b7`, `1740c6c`. Everything below is measured, not asserted; where
+`2064b32` mode state · `0b8a4b7` bot replacement · `1740c6c` streaks server-side ·
+`f33d7d1` streaks on the wire and Ghost · `65c8adb` Chopper case 4 · this one. Everything below is measured, not asserted; where
 something is unverified it says so.
 
 ## The one root cause behind most of it
@@ -4945,38 +4946,97 @@ the red state was the real shipped bug rather than a synthetic one.
 The subscription baseline moved 21 to 26 because the permanent arena now holds a `StreakSystem`
 too. The number that matters is the **delta across cycles**, which is 0.
 
-## Killstreaks: groundwork only
+## Killstreaks, end to end (protocol v6)
 
-`StreakSystem` runs per match on the server, earns and loses on the authoritative score,
-resolves all three perk hooks against the migrated class, and disposes flat. **It is not
-reachable over the wire**: a networked client cannot ask to spend one (`activate` has only ever
-been called from client-side input), and streak entity state is not replicated, so a sentry that
-exists on the server is invisible to every client. Both gaps are named in `ServerMatch`'s class
-header. This is groundwork for §8.22, not §8.22.
+Commits `1740c6c` (server-side system), `f33d7d1` (the wire and Ghost), `65c8adb`
+(Chopper case 4).
+
+**`MsgC.Streak`** is a request, not an instruction. §4.16 makes the client untrusted, so all
+three things it could lie about are answered from server state: *which instance* (the router),
+*whether they hold it* (`activate` returns null otherwise), and *where it lands* (the server's
+copy of the player's position). The only client-chosen coordinates are the mortar's mark.
+
+**`MsgS.Streaks`** is the first genuinely **per-recipient** message in the protocol, and it has
+to be:
+
+| Part | Scope | Why |
+|---|---|---|
+| Entity list | Common | A sentry is a physical object both teams see and shoot |
+| Earn state | Per player | What you have earned is yours |
+| UAV contacts | Per team | Broadcasting them puts a UAV's value in the untrusted half |
+
+**Ghost is inside the intel filter, not beside it.** §8.22 says *"show a Ghost player's position
+absent from the snapshot sent to enemy clients"*, and the obvious implementation of that
+sentence is wrong: removing the entity makes the **body** invisible, which is not what Ghost
+does. `Uav.onTick` already declines to record a contact for anyone failing `visibleToUav`, so
+the perk works by never entering the intel list — and `buildEntities` is untouched, so the
+player still renders and still dies.
+
+Client side: a networked match **no longer simulates its own `StreakSystem`**. That would put a
+second sentry, with its own aim and its own damage, on top of the one the server resolves shots
+against — the Domination flag bug with a trigger. `ReplicatedStreaks` holds the server's answer;
+the HUD, minimap and renderer each read it through one accessor. Cleared on migration.
+
+Two single-player shapes had to be generalised: `localId: number` became
+`reportProgressTo(id)`, and `simulate(tick, cmd)` became a per-streak `commandFor(id)` — the old
+signature flew whichever chopper matched `localId` off the one command it was handed, so two
+gunners on a server would have shared one stick.
+
+### Chopper Gunner, §8.23's four cases
+
+| Case | Covered by | Status |
+|---|---|---|
+| Gunner killed | `EV.EntityKilled` → `onDeath` | Pre-existing (M7) |
+| Match ends mid-streak | `EV.MatchEnded` → `endAll` | Pre-existing (M7) |
+| Instance destroyed mid-streak | `dispose` → `endAll` | Measured by the leak run |
+| **Gunner disconnects** | **nothing** | **Fixed here** |
+
+The fourth was a real hole: no death is emitted, the match is still running and the instance is
+still alive, so a gunner who pulled their cable left a gunship flying on a command that would
+never arrive again, owned by an entity that had stopped existing. Measured at **31.9 seconds** of
+orphaned flight. `StreakSystem.onOwnerRemoved` deliberately reuses the death rules — the chopper
+ends, pending streaks are lost, and a placed sentry or crate stays.
+
+### Measured, red before green
+
+| Probe | Red | Green |
+|---|---|---|
+| Streak loop | channel did not exist | granted → 3 pending → 3 requests → 3 grants → 1254 frames / 3 entities / 312 sweep frames |
+| Ghost | `OP1[108,105,**2**,106,107]` — 2 leaks, CHECK FAILED | `OP1[108,105,106,107]` — entity 2 gone, bots remain |
+| Chopper case 4 | entity 3's chopper sent to both survivors **31928 ms** after they left | last seen **0 ms** relative to the drop |
+| Leak | — | 12 cycles, subscriptions **26 → 26 (+0)**, heap +0.3 MiB |
+| Regression | — | 5/5 matches, scores identical on the same seeds |
+
+### Three probes were wrong before they were right
+
+Worth recording, because all three would have shipped as false greens:
+
+1. **`--ghost --no-perks` gave `--ghost` precedence**, so the control run that was supposed to
+   strip the perk equipped it anyway and passed. A probe that could not go red.
+2. **It compared entity ids from two different instances.** The ghost's id was read at *report*
+   time (entity 5, in the arena) against contacts recorded during the *match* (entity 2). Ids
+   are per-instance — the reason `Session.playerId` exists — so it could never have found a leak
+   however broken Ghost was.
+3. **The chopper probe asked "was any chopper present"**, and all three clients had called one
+   in, so the survivors' own gunships kept the answer true. It reported a failure that was really
+   two players flying normally. Keyed by owner now.
+
+The standing lesson — *watch every probe go red before believing it green* — earned its place
+three more times in one sitting.
 
 ## What Gate B still needs
 
 In rough dependency order. The first item unblocks the most.
 
-1. **Streak replication and activation.** A client-to-server activate request (carrying the
-   mortar's marked coordinates), and a channel for streak entity state — sentry pose and health,
-   care package position and claim, chopper body, UAV sweep contacts. `EventCollector`
-   replicates seven events today and none of them are streak events.
-2. **Ghost as an intel filter**, in `MatchInstance.buildEntities`/`sendSnapshots`, per recipient.
-   Heed the handover's warning: removing a Ghost player from the snapshot outright makes their
-   *body* invisible, which is not what Ghost does. `visibleToUav` already stops them being
-   recorded as a contact server-side; the filter is about what enemy clients are told.
-3. **Chopper Gunner's four cases** — gunner disconnects, gunner killed, match ends mid-streak,
-   instance destroyed mid-streak.
-4. **Grenades.** `ServerMatch` still has no equipment thrower for humans. Predicted by the
+1. **Grenades.** `ServerMatch` still has no equipment thrower for humans. Predicted by the
    thrower, authoritative on the instance, and smoke must occlude bot LOS server-side.
-5. **Networked S&D spectator** for one-life rounds; M7's was local. Note that with (3) above
-   fixed, a dead player now has a real wait to fill.
-6. **Divergence checker headless.** It exists client-only (`client/debug/DivergenceChecker.ts`);
+2. **Networked S&D spectator** for one-life rounds; M7's was local. Note that with the round
+   reset fixed, a dead player now has a real wait to fill.
+3. **Divergence checker headless.** It exists client-only (`client/debug/DivergenceChecker.ts`);
    `HeadlessClient` needs it before §8.21's "zero mismatches across all five modes" can be
    claimed at all.
-7. **Cosmetic audit** (§8.25) and **per-listener audio on Depot** (§8.26).
-8. **The verification battery**: every mode on every map to completion, a full S&D best-of-5
+4. **Cosmetic audit** (§8.25) and **per-listener audio on Depot** (§8.26).
+5. **The verification battery**: every mode on every map to completion, a full S&D best-of-5
    with the round-3 swap, the 100-cycle leak, hardening probes against `Tags` and `Bomb`, the
    12-hour soak, and every §7-conditions claim against a **deployed** server rather than
    loopback.
