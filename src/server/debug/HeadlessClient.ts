@@ -103,6 +103,15 @@ export interface HeadlessClientOptions {
    * slow client.
    */
   readonly buildMs?: number;
+  /**
+   * Send this class as a mid-session change, `editAfterTicks` into the run (§6.6).
+   *
+   * Exercises the Edit-Class-in-warmup path end to end: the client sends `MsgC.Loadout`, the
+   * server validates it, queues it, and applies it on the player's **next spawn** rather than
+   * to the standing body. Undefined never sends one.
+   */
+  readonly editClass?: NetLoadout;
+  readonly editAfterTicks?: number;
 }
 
 export interface HeadlessClientReport {
@@ -231,6 +240,7 @@ export class HeadlessClient {
     reported?: boolean;
   } | null = null;
 
+  private editSent = false;
   private buildsCompleted = 0;
   private worstBuildMs = 0;
   /** Migrations where no prepared build was waiting. Should be arena returns only. */
@@ -492,6 +502,19 @@ export class HeadlessClient {
 
   /** One update. Call at roughly frame rate. */
   update(): void {
+    /**
+     * The mid-session class change (§6.6).
+     *
+     * Sent once, from the same `sendLoadout` the browser's loadout editor calls on close. The
+     * server's answer is deferred to the next spawn on both sides — see
+     * `ServerMatch.setPendingLoadout` for why that is the only safe moment.
+     */
+    const edit = this.opts.editClass;
+    if (edit !== undefined && !this.editSent && this.ticks >= (this.opts.editAfterTicks ?? 120)) {
+      this.editSent = true;
+      this.net.sendLoadout(edit);
+    }
+
     const steps = this.net.update();
     this.ticks += steps;
     this.readOwnEntity();

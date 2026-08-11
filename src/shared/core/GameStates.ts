@@ -46,7 +46,18 @@ const LEGAL_TRANSITIONS: Readonly<Record<GameStateId, readonly GameStateId[]>> =
   MENU: ['LOADOUT', 'SETTINGS', 'MATCH'],
   LOADOUT: ['MENU', 'MATCH', 'PAUSED'],
   SETTINGS: ['MENU', 'MATCH', 'PAUSED'],
-  MATCH: ['SUMMARY', 'MENU', 'PAUSED'],
+  /**
+   * **MATCH -> LOADOUT is new in M11** (§6.6) and belongs to the warmup arena.
+   *
+   * *"There is no lobby, so Edit Class must be reachable from inside the warmup arena — the
+   * same loadout editor built in M6, opened as an overlay."* The flow deliberately has no
+   * static screen to put it on, so the only place left is the world itself.
+   *
+   * The edge is unconditional here because this table describes what is *legal*, not what is
+   * *offered*: `Game` opens the editor only while the player is in the arena, never inside a
+   * live match, because a class change mid-match is a different feature with different rules.
+   */
+  MATCH: ['SUMMARY', 'MENU', 'PAUSED', 'LOADOUT'],
   PAUSED: ['MATCH', 'MENU', 'LOADOUT', 'SETTINGS'],
   /**
    * **SUMMARY -> MATCH is new in M10** (playtest round 2) and belongs to the dedicated server.

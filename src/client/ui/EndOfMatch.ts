@@ -72,6 +72,20 @@ export class EndOfMatch {
   }
 
   /** Bind the mode's scoreboard columns. Same call the in-match board gets. */
+
+  /**
+   * Say who decides when this screen ends (M11, §6.9).
+   *
+   * Single-player: the player does, and the button reads "Continue". Over the network the
+   * server does — it migrates everybody back to the arena on its own clock — so the button says
+   * so rather than implying a choice the player does not have. Pressing it early is still
+   * allowed and simply leaves to the menu; what it cannot do is keep them here.
+   */
+  setReturnSeconds(seconds: number): void {
+    this.continueButton.textContent =
+      seconds > 0 ? `Continue — back to the arena in ${Math.round(seconds)}s` : 'Continue';
+  }
+
   setColumns(columns: ColumnDef[], modeName: string, mapName: string): void {
     this.board.setColumns(columns, modeName, mapName);
   }

@@ -134,7 +134,17 @@ export class GameScreens {
     mapName: string,
     report: XpReport | null,
     prestige: number,
+    /**
+     * Seconds the server will hold this screen before migrating everybody back (M11, §6.9).
+     *
+     * Zero in single-player, where the player leaves when they press Continue. Non-zero over
+     * the network, where they do not get to choose: the server takes them back to the arena on
+     * its own clock, and a button that said "Continue" without saying that would read as
+     * unresponsive for twelve seconds and then act on its own.
+     */
+    returnSeconds = 0,
   ): void {
+    this.summary.setReturnSeconds(returnSeconds);
     this.summary.setColumns(match.mode.getScoreboardColumns(), match.mode.name, mapName);
     this.summary.show(
       result.winner,

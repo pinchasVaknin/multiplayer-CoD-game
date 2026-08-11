@@ -295,10 +295,31 @@ export class Server {
       return;
     }
     session.loadout = clean;
+
+    /**
+     * Queue it on whichever instance holds this player, for their next spawn (§6.6).
+     *
+     * Two things happen and both matter. The session copy is what gets **locked into the
+     * `MatchRequest` at migration** (§4.18) — that is Tier 1 #20's fix and it is why the class
+     * lives on the connection rather than in a world. The instance copy is what takes effect
+     * *now*, on the next respawn in the arena, so a player who edits their class sees it in
+     * their hands before the match starts.
+     *
+     * A player with no instance is mid-migration; the session copy still lands, so the class
+     * travels with them and applies on their first spawn in the destination.
+     */
+    const instance = this.router.instanceOf(session.playerId);
+    const player = session.player;
+    const queued =
+      instance !== null && player !== null
+        ? instance.match.setPendingLoadout(player.entityId, clean)
+        : false;
+
     log.info(
       `${session.displayName} set class "${clean.name}" — ` +
         `${clean.primary.weaponId}/${clean.secondary.weaponId}, ` +
-        `perks [${clean.perks.filter((p) => p !== null).join(', ')}]. Applies on next spawn.`,
+        `perks [${clean.perks.filter((p) => p !== null).join(', ')}]. ` +
+        (queued ? 'Applies on next spawn.' : 'Applies when they next exist in a world.'),
     );
   }
 

@@ -1019,3 +1019,224 @@ const gl = document.querySelector('canvas').getContext('webgl2');
 
 24 and 8 is what the build asks for. A 16 there means the driver refused, and trim lips will
 fight at range no matter what the maps do.
+
+---
+
+# M11 — the skirmish flow
+
+Five new instruments, and the four questions they exist to answer.
+
+| Tool | Where | Answers |
+|---|---|---|
+| **Skirmish panel** | F1 overlay, right column | What phase is the vote in? Which instance am I in? Did that migration cost me anything? |
+| **Divergence checker** | `MatchWorld.divergence`, always on | Does my score agree with the server's? |
+| **Flow harness** | `npm run skirmish` | Does the whole flow work, unattended, under any network condition? |
+| **Leak harness** | `npm run leak` | Did allocating and destroying N matches leave anything behind? |
+| **Boot report** | Server log, first three lines | What did the map pre-bake cost, in time and memory? |
+
+---
+
+## "Why did a player stall on transition?"
+
+The transition is: map vote resolves → `Prepare` goes out → clients build in the background →
+every client reports `Ready` (or the timeout fires) → everybody migrates on one named tick.
+
+Read it in that order and the first thing missing is the cause.
+
+```bash
+grep -E "sent Prepare|ready for match|ready timeout|started on tick" server.log
+```
+
+A healthy cycle:
+
+```
+allocated match 1: SND on mp_dunes for 3 human(s).
+sent Prepare for match 1 (mp_dunes) to 3 client(s).
+OP1 ready for match 1 after 412ms of background build.
+OP2 ready for match 1 after 455ms of background build.
+OP3 ready for match 1 after 1170ms of background build.
+match 1 started on tick 2640 with 3 human(s) migrated.
+```
+
+**No `sent Prepare` line at all.** Allocation failed. Look for `allocation failed (capacity|
+failure)` immediately above it, and for a `Notice` reaching the players — §4.17 requires every
+one of them to stay in the arena with a message.
+
+**`sent Prepare` but no `ready for match`, then `ready timeout`.** The client never finished
+building. Three causes, in order of likelihood:
+
+1. **The tab was in the background.** `requestAnimationFrame` is throttled to near-zero, and the
+   build is pumped from the render pass, so it makes no progress. Working as designed: §4.18
+   migrates them anyway and they get the loading screen.
+2. **The `Prepare` never arrived.** Check the client console for `[netclient] prepare: match N on
+   mapId`. Absent means it was lost or never encoded — this is the failure mode the shared-writer
+   bug produced, and the fix was to give each session its own `ByteWriter`. If it recurs, look for
+   a new send path that encodes into a shared buffer.
+3. **The machine is genuinely slow.** The skirmish panel's *Last build* row gives the real
+   number. `READY_TIMEOUT_MS` is the knob.
+
+**A client that timed out and then never caught up.** The loading screen should be up. If the
+world is frozen with no screen, the deferral in `Game.servicePendingTransitions` did not run —
+the screen must paint *before* the blocking build, which is what `loadingHeldFrames` buys.
+
+---
+
+## "Why did the tally disagree?"
+
+It cannot, structurally: there is exactly one tally in the codebase (`VoteCycle.votes`, keyed by
+player id) and the client renders a broadcast of it. So a disagreement is one of three things.
+
+**A vote that did not count.** The server logs every rejection:
+
+```
+OP2 voted 3 in phase 2; the server is in phase 3 — rejected.
+```
+
+That is a vote arriving after its window closed, which is ordinary on a real link. The tally not
+moving is the client's feedback.
+
+**A tie or an empty ballot resolved "wrongly".** It was resolved randomly, and the draw is
+reconstructible rather than arguable:
+
+```
+map vote: no votes cast — broke randomly to option 1. seed=1 draw=1 candidates=[0,1,2]
+```
+
+Re-seed an `Rng` with `seed`, advance it `draw` times, and `int(0, candidates.length)` gives the
+same index. The structured form is on the `vote/randomPick` metric with the same fields.
+
+**Two clients showing different countdowns.** They cannot be showing different *numbers* from the
+same broadcast — the countdown is `(phaseEndsTick - clientTick) * DT` against the synced server
+clock. A difference means one client's clock sync is off; check the net panel's *Clock offset*
+and *Server / client tick* rows, not the vote panel.
+
+---
+
+## "Why did that hit not register?" — the M11 additions
+
+M10's answer still applies (rewind, interpolation delay, the 200 ms cap). What M11 adds is that
+**there are now two worlds**, and a shot resolved in the wrong one hits nothing.
+
+Check the skirmish panel's *This client* row against the server's instance metrics. If the client
+says `live match 1` and the server has the player seated in instance 0, the migration half-failed
+— read the migration log:
+
+```bash
+grep -E "migration" server.log | tail -20
+```
+
+Every move logs its tick and duration. A `failed` line names the reason; §4.18 requires the
+player to be left where they were, never dropped.
+
+---
+
+## "Did the server leak overnight?"
+
+Two numbers, and the second is the one to trust.
+
+```bash
+npm run leak            # 100 allocate/destroy cycles
+```
+
+```
+leak baseline: heap 11.61 MiB, 21 live subscriptions.
+cycle 100: heap 12.25 MiB, 21 subscriptions.
+LEAK CHECK PASSED.
+```
+
+**`EventBus.liveSubscriptions` is the leading indicator and must be exactly flat.** It is a
+process-wide count, incremented by `on` and decremented by `off` and `clear`, so it measures
+whether `dispose()` mirrors its constructor — not whether the garbage collector got round to the
+bus. A per-bus count would read zero for a bus that was leaked whole, which is precisely the case
+worth catching. At one leaked subscription per cycle, a twelve-hour soak ends with ~700 dead
+listeners on a bus every gameplay event walks.
+
+Heap is allowed a small margin because it is not a count: the collector's timing, the harness's
+own metric arrays and V8's growth all move it. Run with `--expose-gc` or the series is dominated
+by collection timing.
+
+---
+
+## The flow harness
+
+```bash
+npm run skirmish                          # 3 clients, 2 cycles, shipped timings
+npm run skirmish -- --cycles 5 --net bad  # under 100ms +/-30ms, 2% loss
+npm run skirmish -- --fault capacity      # latency | failure | capacity
+npm run skirmish -- --slow-client         # one client that misses the ready timeout
+npm run skirmish -- --no-perks            # the control run for the misprediction probe
+```
+
+The gate it enforces is **mispredictions in the 60 ticks after migrating into a live match**, and
+it must be zero. That is §8.9's regression test for Tier 1 #20.
+
+**The arena-return window is reported next to it and not folded into it.** They are different
+claims: entering a match is where the loadout is locked and where a movement perk could diverge;
+returning is the same machinery run backwards into a world that was already running. Summing them
+would let a real regression hide behind a residual that was never zero.
+
+### Shortening the timings is a documented hazard
+
+```bash
+PLAY_SECONDS=6 MODE_VOTE_SECONDS=4 MAP_VOTE_SECONDS=4 npm run skirmish
+```
+
+Every run that uses a shortened cycle says so in its first line and in its JSON
+(`shortenedTimings: true`). Handover Tier 2 §C: *"A harness that shortens a timer to go faster can
+shorten past the bug it exists to find."* The M11 case was a 6 s countdown reaching a match inside
+a 10 s session timeout every time, so the 30 s case that broke never ran. **Always do at least one
+pass at the shipped values before making a timing claim.**
+
+### `--no-perks` is the control, and it matters
+
+The misprediction probe can only mean something if it can fail. The harness fields a class
+carrying Lightweight and applies `speedScale` on its own controller, exactly as
+`MatchMeta.applyPerkHooks` does in the browser — so if the server has not been told about the
+perk, the two sides disagree by 7% on every tick and the number goes red. Comment out the
+assignment in `NetPlayer` and watch it go red before believing it green.
+
+---
+
+## The divergence checker
+
+Runs on every applied snapshot whether or not the overlay is open, and reports on the skirmish
+panel's *Divergence* row and in the console:
+
+```
+DIVERGENCE on tick 4213: scoreA — client says 14, server says 15.
+Confirmed across 4 consecutive snapshots.
+```
+
+**It compares two independent paths**: the score this client derived from replicated kill events
+through its own `ScoreSystem`, against the score stated in the snapshot header. Comparing the
+client's `MatchFlow` against the header instead would be comparing a value with itself — the flow
+is *assigned from* that header — and could never fail.
+
+A mismatch means a replicated event was dropped, counted twice, or credited to the wrong side.
+§8.21 makes any mismatch a blocking bug.
+
+**Single disagreeing samples are not reported.** A client's copy is always one snapshot stale, so
+a discrete field must disagree across four consecutive snapshots before it counts, and `timeLeft`
+is compared with a 1.5 s tolerance. Without that this fires on every kill, and a check that cries
+wolf teaches its reader to ignore it.
+
+---
+
+## The boot report
+
+First three lines of the server log, every start:
+
+```
+FOUNDRY: collision 1.2ms, navmesh 42.9ms, 0.37 MiB resident.
+DUNES:   collision 0.4ms, navmesh 20.4ms, 0.59 MiB resident.
+DEPOT:   collision 0.4ms, navmesh 21.3ms, 0.71 MiB resident.
+TESTBED: collision 0.2ms, navmesh  6.4ms, 0.24 MiB resident.
+baked 4 maps in 93.9ms — 1.90 MiB of geometry and navmesh, heap +0.55 MiB, RSS 69 MiB.
+```
+
+Four maps, not three: the warmup arena is the greybox room and it is baked here too, so its cost
+is in the report rather than hidden in a constructor.
+
+If this number ever climbs into the seconds, something has started baking on demand — §4.19
+forbids it, because a lazy bake is a stall in the middle of the transition §6.5 exists to make
+seamless. The structured form is on the `bakery/boot` metric.

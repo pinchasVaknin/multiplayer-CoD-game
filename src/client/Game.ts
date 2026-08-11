@@ -22,8 +22,9 @@ import { logger } from '../shared/core/Log';
 import type { SummaryInfo, WelcomeInfo } from '../shared/net/Messages';
 import type { SkirmishSink } from '../shared/net/NetClient';
 import { toNetLoadout, type NetLoadout } from '../shared/net/Skirmish';
+import { LoadingScreen } from './ui/LoadingScreen';
 import { VoteOverlay } from './ui/VoteOverlay';
-import { MapBuildQueue } from './world/MapBuildQueue';
+import { MapBuildQueue, type BuildReport } from './world/MapBuildQueue';
 import type { NetworkedMatchOptions } from './MatchWorld';
 import { CameraRig, type CameraDrive } from './engine/CameraRig';
 import { ProceduralAudio } from './engine/ProceduralAudio';
@@ -40,6 +41,7 @@ import { Speedometer } from './debug/Speedometer';
 import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStates';
 import type { Match } from './ClientMatch';
 import type { MatchResult } from '../shared/modes/GameMode';
+import type { XpReport } from '../shared/meta/XpRules';
 import { PLAYER_ENTITY_ID } from '../shared/combat/DamageSystem';
 import { MatchWorld } from './MatchWorld';
 import { GameScreens } from './GameScreens';
@@ -104,6 +106,22 @@ interface StateHandlers {
 const stateChangePayload = { from: 'BOOT' as GameStateId, to: 'BOOT' as GameStateId };
 
 const netLog = logger('join');
+
+/**
+ * Milliseconds of building per frame once the loading screen is up (§4.18).
+ *
+ * Two orders of magnitude above the background budget, and deliberately: the match has already
+ * started without this client, the screen is covering the world, and every frame spent
+ * trickling chunks is a frame they are not playing. The background path optimises for not being
+ * noticed; this one optimises for being over.
+ */
+const LOADING_DRAIN_BUDGET_MS = 200;
+
+/** The §7 window: *"misprediction count in the first 60 ticks after migration"*. */
+const POST_MIGRATION_WINDOW_TICKS = 60;
+
+/** Windows kept for the panel. A long session migrates twice a minute; this is an hour of them. */
+const MAX_MIGRATION_WINDOWS = 120;
 
 /**
  * The server's authoritative summary, in the shape the M6 summary screen already renders.
@@ -215,6 +233,26 @@ export class Game {
   /** The chunked background map build (§6.5). Pumped from the render pass. */
   private readonly buildQueue: MapBuildQueue;
 
+  /** The §4.18 fallback, for a client whose build did not finish before the migration. */
+  private readonly loadingScreen: LoadingScreen;
+
+  /** Frames the migration is held so the loading screen can paint. See the migration branch. */
+  private loadingHeldFrames = 0;
+
+  /** The last completed background build, for the §7 panel. */
+  private lastBuildReport: BuildReport | null = null;
+
+  /**
+   * Post-migration misprediction windows (§7, §8.9).
+   *
+   * *"Misprediction count in the first 60 ticks after migration, which is the direct regression
+   * test for Tier 1 #20."* One entry per migration, opened when the move lands and closed sixty
+   * ticks later. Bounded, because a long session migrates twice a minute and an unbounded array
+   * in a diagnostic is a slow leak in the tool built to find them.
+   */
+  private readonly migrationWindows: { matchId: number; tick: number; mispredictions: number }[] = [];
+  private openWindow: { untilTick: number; baseline: number; index: number } | null = null;
+
   /**
    * A migration the server has announced, acted on from the render pass.
    *
@@ -228,6 +266,16 @@ export class Game {
 
   /** The instance a `Prepare` named, so the readiness report is addressed to it (§6.5). */
   private pendingMatchId = -1;
+
+  /**
+   * How long the server said to hold the summary, seconds (§6.9: 12-15 s).
+   *
+   * Held rather than counted down here: the server migrates everybody back on its own clock,
+   * and a client that decided for itself when the summary was over would leave early and sit
+   * in a torn-down world. This exists so the screen can *say* how long is left, not so it can
+   * act on it. Zero in single-player, where the player leaves when they press Continue.
+   */
+  private summaryHoldSeconds = 0;
 
   /**
    * Set when the server rotates to a new match while we are in one.
@@ -296,6 +344,8 @@ export class Game {
   private overlayWasOpenBeforePause = false;
   /** Where the settings screen's Back button goes. Captured on entry (M8). */
   private settingsReturn: GameStateId = 'MENU';
+  /** Where Back from the loadout editor goes. Captured on entry. See the LOADOUT state. */
+  private loadoutReturn: GameStateId = 'MENU';
 
   constructor(canvas: HTMLCanvasElement, uiHost: HTMLElement, debugHost: HTMLElement) {
     // M6: one save object for everything (S6.6). Settings used to live in their own store;
@@ -348,7 +398,7 @@ export class Game {
       onDisplayName: (name) => this.profile.patchSettings({ callsign: name }),
       onLoadout: () => this.transitionTo('LOADOUT'),
       onSettings: () => this.transitionTo('SETTINGS'),
-      onLoadoutBack: () => this.transitionTo('MENU'),
+      onLoadoutBack: () => this.transitionTo(this.loadoutReturn),
       onQuitToMenu: () => this.transitionTo('MENU'),
       onResume: () => this.resumeFromPause(),
       onToggleOverlay: () => this.toggleOverlayFromPause(),
@@ -377,6 +427,8 @@ export class Game {
      * next map while the current world is still up, and a queue owned by the world would be
      * disposed by the transition it exists to make seamless.
      */
+    this.loadingScreen = new LoadingScreen(uiHost);
+
     this.voteOverlay = new VoteOverlay({
       host: uiHost,
       onVote: (phase, option) => this.world?.net?.client.sendVote(phase, option),
@@ -387,6 +439,7 @@ export class Game {
       textures: this.textures,
       shadowQuality: () => this.profile.settings.shadowQuality,
       onComplete: (mapId, _built, report) => {
+        this.lastBuildReport = report;
         // Report ready the moment the build lands, which is what `READY_WAIT` is waiting on.
         // The map itself is held by the queue until the migration that needs it arrives.
         const client = this.world?.net?.client;
@@ -576,16 +629,49 @@ export class Game {
      * screen, which is S6.3's "between spawns".
      */
     this.states.set('LOADOUT', {
-      enter: () => {
+      enter: (from) => {
+        /**
+         * Remember where Back goes (M11, §6.6).
+         *
+         * The editor is reachable from the menu, from the pause screen and — new in M11 — from
+         * inside the warmup arena, and Back must return to whichever one sent it. Before this,
+         * Back always went to `MENU`, which tore the world down: a player who opened Create a
+         * Class from a live arena to change a perk was dropped out of the server to do it.
+         *
+         * Same capture-on-entry as `settingsReturn`, and for the same reason.
+         */
+        this.loadoutReturn = from === 'MENU' ? 'MENU' : from;
         this.input.clearHeld();
         this.screens.loadoutEditor.show();
       },
       exit: (to) => {
         this.screens.loadoutEditor.hide();
-        if (to === 'MENU') this.teardownWorld();
+        if (to === 'MENU') {
+          this.teardownWorld();
+          return;
+        }
         // Back into a match that is still standing: hand the new class over live. A world
         // that was never torn down is the paused case, and `buildWorld` would no-op.
-        else if (this.world !== null) this.world.match.applyLoadout(this.applyLoadout());
+        if (this.world !== null) this.world.match.applyLoadout(this.applyLoadout());
+
+        /**
+         * Tell the server, which applies it on the next spawn (§6.6, Tier 1 #20).
+         *
+         * The local half above changes what this client predicts with; this is the half that
+         * changes what the server simulates with. They must land on the same tick or the gap
+         * between them is a misprediction on every tick inside it — so the server defers to the
+         * next spawn, and the client's own `applyLoadout` is likewise a next-spawn change on a
+         * living player. See `ServerMatch.setPendingLoadout`.
+         *
+         * The same ids are then locked into the `MatchRequest` at migration, which is what
+         * carries the edit into the live match.
+         */
+        const client = this.world?.net?.client;
+        const loadout = this.netLoadout();
+        if (client !== undefined && loadout !== null) {
+          client.sendLoadout(loadout);
+          netLog.info(`sent class "${loadout.name}" to the server; applies on next spawn.`);
+        }
       },
     });
 
@@ -688,6 +774,7 @@ export class Game {
         const net = this.pendingNetSummary;
         this.pendingNetSummary = null;
         const result = net !== null ? netMatchResult(net) : (match?.flow.result ?? null);
+        this.summaryHoldSeconds = net?.holdSeconds ?? 0;
         if (match === null || result === null) {
           // Nothing to summarise: this can only happen if SUMMARY is entered by hand.
           this.transitionTo('MENU');
@@ -698,13 +785,26 @@ export class Game {
         // is idempotent, so a harness that re-enters SUMMARY cannot double-count.
         const banks = findMode(this.selection.modeId).banksProgress;
         // "Did I win" is the server's team assignment, not the single-player constant.
-        const report = match.bankProgression(result.winner === match.localTeam);
+        const won = result.winner === match.localTeam;
+        /**
+         * The server's XP, when there is a server (§6.9).
+         *
+         * *"XP and challenge progress are awarded by the instance from authoritative events and
+         * delivered with the summary, **before teardown**. The client persists them to its own
+         * `localStorage` save."* So the client does not compute the total over the network — it
+         * receives it, animates it, and banks it. Locally it still computes its own, because in
+         * single-player there is nobody else to.
+         *
+         * Both paths end at `Profile.bankMatch`, which is the one place XP becomes durable.
+         */
+        const report = net !== null ? this.bankServerXp(net, won) : match.bankProgression(won);
         this.screens.showSummary(
           match,
           result,
           this.mapEntry().name,
           banks ? report : null,
           this.profile.prestige,
+          this.summaryHoldSeconds,
         );
       },
       exit: () => {
@@ -801,6 +901,11 @@ export class Game {
       },
       onConfigChanged: () => this.onConfigChanged(),
       onWeaponConfigChanged: () => this.onWeaponConfigChanged(),
+      // M11 (§7). Suppliers rather than values: all three outlive this world, which is the
+      // whole point of them — the build spans the transition that replaces it.
+      lastBuild: () => this.lastBuildReport,
+      buildProgress: () => this.buildQueue.progress,
+      migrationWindows: () => this.migrationWindows,
     });
   }
 
@@ -838,6 +943,78 @@ export class Game {
    * match instead would have no way to tell, and would report it as "the server is empty".
    */
   /**
+   * Open the sixty-tick misprediction window for a migration that has just landed (§7).
+   *
+   * The baseline is the running misprediction total at the moment of the move, so what is
+   * reported is what happened *inside* the window rather than the count since the page loaded.
+   * See `SkirmishPanel` for what a non-zero value means.
+   */
+  private openMigrationWindow(matchId: number): void {
+    const client = this.world?.net?.client;
+    if (client === undefined) return;
+    const tick = client.effectiveTick;
+    this.migrationWindows.push({ matchId, tick, mispredictions: 0 });
+    if (this.migrationWindows.length > MAX_MIGRATION_WINDOWS) this.migrationWindows.shift();
+    this.openWindow = {
+      untilTick: client.stats.clientTick + POST_MIGRATION_WINDOW_TICKS,
+      baseline: client.prediction.stats.mispredictions,
+      index: this.migrationWindows.length - 1,
+    };
+  }
+
+  /** Close the window once it has run its sixty ticks. Called from the render pass. */
+  private pumpMigrationWindow(): void {
+    const open = this.openWindow;
+    const client = this.world?.net?.client;
+    if (open === null || client === undefined) return;
+    const entry = this.migrationWindows[open.index];
+    if (entry === undefined) {
+      this.openWindow = null;
+      return;
+    }
+    entry.mispredictions = client.prediction.stats.mispredictions - open.baseline;
+    if (client.stats.clientTick >= open.untilTick) this.openWindow = null;
+  }
+
+  /**
+   * Bank the server's XP award, and shape it for the M6 summary bar (§6.9).
+   *
+   * The lines come from the instance, which built them from authoritative events before it was
+   * torn down. Everything else — the level before and after, the lifetime total the bar
+   * animates from — is local, because progression is client-side and there is no account on the
+   * server to ask (§6.9: *"no accounts, no server-side database"*).
+   *
+   * That trade-off is deliberate and is documented in `README.md`: a player can edit their own
+   * unlocks, and it affects only them.
+   */
+  private bankServerXp(net: SummaryInfo, won: boolean): XpReport {
+    const total = net.xp.reduce((sum, line) => sum + line.amount, 0);
+    const xpBefore = this.profile.xp;
+    const { levelBefore, levelAfter } = this.profile.bankMatch(total, won);
+    return {
+      lines: net.xp.map((line) => ({
+        // The server's lines are already the human-readable breakdown; they carry no source id
+        // because the id space is a client-side progression concept the server has no view of.
+        id: 'match',
+        label: line.label,
+        count: 1,
+        xp: line.amount,
+        kind: 'flat' as const,
+      })),
+      total,
+      xpBefore,
+      levelBefore,
+      levelAfter,
+      // Weapon levels, challenges and camos stay client-side and are not awarded over the wire.
+      // The server tracks no per-weapon progression, and inventing one here would be a number
+      // with no authority behind it.
+      weaponLevelUps: [],
+      challengesCompleted: [],
+      camosUnlocked: [],
+    };
+  }
+
+  /**
    * This client's class, as ids on the wire (Tier 1 #20).
    *
    * Read from the profile every time rather than cached, so a class edited in the loadout
@@ -870,6 +1047,7 @@ export class Game {
       },
       onMigrated: (welcome) => {
         this.pendingMigration = welcome;
+        this.openMigrationWindow(welcome.matchId);
       },
       onSummary: (info) => {
         this.pendingNetSummary = info;
@@ -1211,9 +1389,64 @@ export class Game {
      */
     const migration = this.pendingMigration;
     if (migration !== null) {
+      /**
+       * The background build won: adopt it and move, all in this frame (§6.5).
+       *
+       * This is the path the whole design exists to produce — a brief fade and you are in the
+       * new map, with no loading screen and no stall, because the meshing happened while you
+       * were still shooting in the arena.
+       */
+      if (this.buildQueue.hasReady(migration.mapId) || migration.mapId === this.currentMapId()) {
+        this.pendingMigration = null;
+        this.applyRotation(migration);
+        return;
+      }
+
+      /**
+       * The background build did not finish: show the screen, **then** build (§4.18).
+       *
+       * The migration is held for one frame rather than acted on now. That frame is what lets
+       * the browser paint the loading screen; showing it and building in the same task paints
+       * nothing, and the player gets a frozen frame of the world they have already left — which
+       * is indistinguishable from a crash.
+       *
+       * `loadingHeldFrames` is the deferral. One frame is enough for a paint and is the least
+       * this can cost.
+       */
+      if (!this.loadingScreen.visible) {
+        this.loadingScreen.show(migration.mapId);
+        this.loadingHeldFrames = 1;
+        return;
+      }
+      this.loadingScreen.update(this.buildQueue.progress);
+      if (this.loadingHeldFrames > 0) {
+        this.loadingHeldFrames--;
+        return;
+      }
+
+      /**
+       * Drain whatever is left of the build in one go, then move.
+       *
+       * A large budget on purpose: the match has already started without this client and every
+       * further frame spent trickling chunks is a frame they are not in it. The screen is up,
+       * so a long task here costs nothing visually — which is exactly the trade the chunked
+       * path refuses to make during warmup and the right one to make here.
+       */
+      if (this.buildQueue.building) {
+        this.buildQueue.pump(LOADING_DRAIN_BUDGET_MS);
+        this.loadingScreen.update(this.buildQueue.progress);
+        return;
+      }
+
       this.pendingMigration = null;
       this.applyRotation(migration);
+      this.loadingScreen.hide();
     }
+  }
+
+  /** The map the world is currently built on, or '' when there is none. */
+  private currentMapId(): string {
+    return this.world?.map.def.id ?? '';
   }
 
   private simulate(tick: number): void {
@@ -1317,6 +1550,7 @@ export class Game {
      * chunk fewer. See `MapBuildQueue`.
      */
     this.voteOverlay.tick();
+    this.pumpMigrationWindow();
     const buildMs = this.buildQueue.pump();
     if (buildMs > 0) this.stats.noteBackgroundBuildMs(buildMs);
 

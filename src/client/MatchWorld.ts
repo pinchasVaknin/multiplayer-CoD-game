@@ -11,6 +11,8 @@ import type { ProceduralTextures } from './engine/ProceduralTextures';
 import type { Renderer } from './engine/Renderer';
 import { BotHarness, type BotHarnessOptions } from './debug/BotHarness';
 import { DebugSuite } from './debug/DebugSuite';
+import { DivergenceChecker } from './debug/DivergenceChecker';
+import type { BuildReport } from './world/MapBuildQueue';
 import type { FrameStats } from './debug/FrameStats';
 import type { MatchHarness } from './debug/MatchHarness';
 import type { Speedometer } from './debug/Speedometer';
@@ -126,6 +128,11 @@ export interface MatchWorldDeps {
   readonly onConfigChanged: () => void;
   readonly onWeaponConfigChanged: () => void;
 
+  // ---- M11 (§7): instrumentation owned by `Game`, shown by this world's panel ----
+  readonly lastBuild: () => BuildReport | null;
+  readonly buildProgress: () => { done: number; total: number; label: string } | null;
+  readonly migrationWindows: () => readonly { matchId: number; tick: number; mispredictions: number }[];
+
   /**
    * Play this match against a dedicated server instead of locally (M10, S6).
    *
@@ -179,6 +186,14 @@ export class MatchWorld {
   readonly match: Match;
   /** The F1 overlay and every visualiser and panel that hangs off it. */
   readonly debug: DebugSuite;
+  /**
+   * §7's state-divergence checker. Per world, because it is per match.
+   *
+   * Lives here rather than in `DebugSuite` because it is fed from the network path and must
+   * run whether or not the debug overlay has ever been opened — a check that only samples
+   * while somebody is looking at it is not a check.
+   */
+  readonly divergence = new DivergenceChecker();
   /** M8. Airborne dust or haze, or null on a map that authors none. */
   readonly particulate: Particulate | null;
 
@@ -319,6 +334,23 @@ export class MatchWorld {
       };
 
       /**
+       * The §7 divergence checker.
+       *
+       * Fed the raw header and the score this client derived *from replicated events* through
+       * its own `ScoreSystem` — two independent paths to the same number. See
+       * `DivergenceChecker` for why comparing against `MatchFlow` instead would be a test that
+       * cannot fail.
+       */
+      net.onAuthoritativeState = (header) => {
+        this.divergence.check(
+          header,
+          this.match.flow,
+          this.match.mode.teamScore('A'),
+          this.match.mode.teamScore('B'),
+        );
+      };
+
+      /**
        * The killfeed and the scoreboard resolve ids to names, and on a networked client the
        * only place those names exist is the snapshot. See `NetSession.directory`.
        */
@@ -370,6 +402,12 @@ export class MatchWorld {
       profile: deps.profile,
       onConfigChanged: deps.onConfigChanged,
       onWeaponConfigChanged: deps.onWeaponConfigChanged,
+      // M11 (§7). Owned by `Game` because they outlive a world: the build runs across the very
+      // transition that replaces this suite, and the migration windows span both sides of it.
+      divergence: this.divergence,
+      lastBuild: deps.lastBuild,
+      buildProgress: deps.buildProgress,
+      migrationWindows: deps.migrationWindows,
     });
   }
 

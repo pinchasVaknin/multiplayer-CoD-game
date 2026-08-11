@@ -24,7 +24,10 @@ import { ArsenalHarness } from './ArsenalHarness';
 import { ArsenalPanel } from './ArsenalPanel';
 import { CollisionDebug } from './CollisionDebug';
 import { EquipmentPanel } from './EquipmentPanel';
+import type { DivergenceChecker } from './DivergenceChecker';
+import type { BuildReport } from '../world/MapBuildQueue';
 import { NetPanel } from './NetPanel';
+import { SkirmishPanel } from './SkirmishPanel';
 import type { NetSession } from '../net/NetSession';
 import { DebugOverlay } from './DebugOverlay';
 import type { FrameStats } from './FrameStats';
@@ -71,6 +74,14 @@ export interface DebugSuiteContext {
   readonly match: Match;
   /** M10: the live connection, or a supplier returning null in single-player. */
   readonly netSession: () => NetSession | null;
+  // ---- M11 (§7) ------------------------------------------------------------
+  /** This world's divergence checker, so the panel can show its verdict. */
+  readonly divergence: DivergenceChecker;
+  /** The last completed background build, and any build in flight. Owned by `Game`. */
+  readonly lastBuild: () => BuildReport | null;
+  readonly buildProgress: () => { done: number; total: number; label: string } | null;
+  /** Post-migration misprediction windows, newest last. Owned by `Game`. */
+  readonly migrationWindows: () => readonly { matchId: number; tick: number; mispredictions: number }[];
   readonly movementConfig: MovementConfig;
   readonly cameraConfig: CameraConfig;
   readonly weaponDef: WeaponDef;
@@ -104,6 +115,8 @@ export class DebugSuite {
   readonly equipmentPanel: EquipmentPanel;
   /** M10 (S7): network, prediction and rewind read-outs. */
   readonly netPanel: NetPanel;
+  /** M11 (§7): vote cycle, instance, migration and background build. */
+  readonly skirmishPanel: SkirmishPanel;
   /** M6: progression, perks, challenges, the event tap, the simulator and the inspector. */
   readonly metaPanel: MetaPanel;
   /** M7: streak state, sentry targeting and care-package contest (S7). */
@@ -201,6 +214,17 @@ export class DebugSuite {
     // M10 (S7): network, prediction and rewind. A supplier rather than the session itself,
     // because the suite is built alongside the world and the connection may still be dialling.
     this.netPanel = new NetPanel(this.overlay, ctx.netSession);
+
+    // M11 (§7): vote cycle, instance, migration and background build, in one panel. See
+    // `SkirmishPanel` for why the per-instance tick ms lives on the server instead.
+    this.skirmishPanel = new SkirmishPanel(this.overlay, {
+      session: ctx.netSession,
+      divergence: () => ctx.divergence,
+      stats: ctx.stats,
+      lastBuild: ctx.lastBuild,
+      buildProgress: ctx.buildProgress,
+      migrationWindows: ctx.migrationWindows,
+    });
     ctx.scene.add(this.equipmentPanel.group);
 
     this.metaPanel = new MetaPanel(this.overlay, ctx.match, ctx.profile, ctx.bus);

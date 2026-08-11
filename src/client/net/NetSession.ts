@@ -8,7 +8,13 @@ import { logger } from '../../shared/core/Log';
 import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
 import type { NetLoadout } from '../../shared/net/Skirmish';
 import { NetClient, type SkirmishSink, type NetClientState } from '../../shared/net/NetClient';
-import { phaseAt, SFlag, type WelcomeInfo } from '../../shared/net/Messages';
+import {
+  phaseAt,
+  SFlag,
+  type SnapshotHeader,
+  type VoteInfo,
+  type WelcomeInfo,
+} from '../../shared/net/Messages';
 import { EFlag, weaponIdAt } from '../../shared/net/Snapshot';
 import type { PlayerController } from '../../shared/player/PlayerController';
 import {
@@ -124,6 +130,25 @@ export class NetSession {
    */
   onLocalState: ((health: number, alive: boolean) => void) | null = null;
 
+  /**
+   * The raw authoritative header, once per applied snapshot (M11, §7).
+   *
+   * Distinct from `onMatchState`, which hands over the *interpreted* replicated state the HUD
+   * consumes. The divergence checker needs the statement itself, before anything has been
+   * assigned from it — comparing against the interpretation would be comparing a value with
+   * itself. Set by `MatchWorld` alongside the others.
+   */
+  onAuthoritativeState: ((header: SnapshotHeader) => void) | null = null;
+
+  /**
+   * The most recent vote broadcast, kept for the §7 panel.
+   *
+   * Held here rather than in the overlay because the overlay is built per match and the vote
+   * cycle is not — a panel that only had what arrived after it was opened would show nothing
+   * for up to a quarter of a second and would lose everything on a migration.
+   */
+  lastVote: VoteInfo | null = null;
+
   private lastScoreA = -1;
   private lastScoreB = -1;
   private lastLocalHealth = -1;
@@ -164,6 +189,10 @@ export class NetSession {
       },
       skirmish: {
         ...deps.skirmish,
+        onVoteState: (info) => {
+          this.lastVote = info;
+          deps.skirmish?.onVoteState?.(info);
+        },
         onMigrated: (welcome) => {
           // Same reason as `onNewMatch` above, and it has to happen here as well: a migration
           // is the other way this client's entity id changes, and an identity left pointing at
@@ -347,6 +376,7 @@ export class NetSession {
    */
   detach(): void {
     this.onMatchState = null;
+    this.onAuthoritativeState = null;
     this.onLocalState = null;
     this.onRosterEntry = null;
     this.actors.clear();
@@ -385,6 +415,9 @@ export class NetSession {
       replicatedState.scoreB = h.scoreB;
       replicatedState.serverTick = h.serverTick;
       this.onMatchState?.(replicatedState);
+      // §7's divergence checker, sampled once per applied snapshot. See `DivergenceChecker`
+      // for why it is fed the header *and* an independently derived score.
+      this.onAuthoritativeState?.(h);
     }
 
     /**

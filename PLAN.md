@@ -3275,7 +3275,8 @@ build still plays exactly as it did at M8. Both, or the milestone is not done.
 ## Milestone 10 — Netcode Foundation
 
 **Goal**: two humans connected to the **deployed external server**, on Foundry, in TDM, moving and
-shooting with hit registration that feels the way single-player feels. No lobby, no other modes, no
+shooting with hit registration that feels the way single-player feels. No front end for joining, no
+other modes, no
 other maps, no killstreaks.
 
 **Phases**
@@ -3311,8 +3312,12 @@ simulated latency. TTK measured single-player and networked is identical. The he
 
 **Phases**
 
-1. **Lobby.** Server-side roster, team select and balance, map and mode selection with a documented
-   chooser, bot fill with difficulty, late-join rules per mode, return-to-lobby after summary.
+1. **~~Lobby.~~ Superseded — see "Milestone 11 — Skirmish Multiplayer Flow" below.** The V1 draft
+   specified a lobby with a server-side roster, team select and a map/mode chooser. It is
+   discarded in full: the shipped flow has no lobby, no queue and no ready-up, because a static
+   screen between the menu and the match is the thing the design exists to remove. A player
+   clicking Play Multiplayer is shooting in a permanent warmup arena within one round trip, and
+   votes on what to play next while already playing.
 2. **All five modes.** Every timer and every piece of objective state server-owned. S&D is the hard
    one: round state, bomb timer, interruptible plant/defuse, networked spectator flow, side swap.
 3. **All six killstreaks.** Ghost filtered server-side — a Ghost player's position never enters an
@@ -4556,3 +4561,157 @@ respawn timer counting down, respawned bodies not stuck flat, respawns cutting r
 sliding, the weapon-swap model, the FFA banner, the S&D alive counter, Domination colours and
 the thermal pass **as a team-B player**, and a real single-click test on any periodically
 rebuilt UI.
+
+---
+
+# Milestone 11 — Skirmish Multiplayer Flow
+
+**Gate A is complete. Gate B is not started.** Everything below is Gate A.
+
+The flow, in one sentence: click Play Multiplayer, be shooting in a permanent warmup arena
+within one round trip, vote on what to play next while already playing, and slide into the real
+match without a loading screen.
+
+## What replaced what
+
+`GameServer` — a match, a loop, a socket listener and a rotation policy in one class — is gone.
+`Server` is a scheduler over two instances: a permanent `WarmupMatch` that exists from boot to
+shutdown, and at most one `LiveMatch` allocated when a vote resolves and destroyed when it ends.
+
+```
+server/
+  Server.ts          process entry, capacity, boot bake, the tick
+  Router.ts          the single answer to "which instance is this player in"
+  Migration.ts       the named-tick move
+  MatchAllocator.ts  IMatchAllocator, in-process, and the faulty wrapper
+  MapBakery.ts       all four maps baked once, before the listener opens
+  instance/
+    MatchInstance.ts base: lifecycle, seats, snapshots, teardown
+    WarmupMatch.ts   the permanent arena — greybox room, FFA, dummies, 3 bots
+    LiveMatch.ts     ALLOCATING -> LOADING -> READY_WAIT -> RUNNING -> ENDED -> DESTROYED
+    VoteCycle.ts     the 60 s cycle
+    InstanceClock.ts per-instance tick index and snapshot phase offset
+```
+
+Protocol is **v3**: `Loadout`, `Vote` and `Ready` client-side; `Migrate`, `Vote`, `Prepare`,
+`Summary` and `Notice` server-side. `Welcome` gained an instance id and the named migration tick.
+
+## The four binding handover items
+
+| Item | Where it landed |
+|---|---|
+| **Tier 1 #20** — the Lightweight misprediction | The class rides the `Hello`. See below. |
+| **Tier 2 §A** — forced snapshot when stepping stops | `MatchInstance.step` |
+| **Tier 2 §C** — "playing" is not "live" | `SessionState` renamed; see `Session` |
+| **Tier 2 §D** — `afterIdentity` ordering | `JoinResult.afterIdentity`, called last |
+
+### #20 needed the transport to be the handshake, not a message after it
+
+The handover said the fix needed *"some path for the client's class to reach the server before
+`addPlayer`"*. The first attempt used a `MsgC.Loadout` sent immediately after joining, and it was
+measured at **178 mispredictions in 1277 comparisons** — because the seat is created *inside* the
+handshake, so a class arriving one frame later arrives after the entity it was meant to
+configure. Moving it into `Hello` took that to **0**.
+
+`MsgC.Loadout` still exists, for a class edited mid-session (§6.6). That path defers to the
+player's next spawn on both sides, which is the one moment client and server already agree is a
+discontinuity.
+
+## Deviations, and why
+
+1. **S&D best-of-5 is longer than what shipped, not shorter.** §6.4 asks for *"a shortened
+   best-of-5, not best-of-9"*. There has been no best-of-9 since M7's playtest cut `SND_CONFIG`
+   to a best of three. Built to the brief — `SND_SKIRMISH_CONFIG`, swap after round 2 so round 3
+   is the first from the other side — but it *lengthens* the mode by one round per side.
+2. **The warmup arena is FFA with both limits switched off, not `RANGE`.** §6.3 asks for
+   free-for-all rules with damage live; `RANGE` sets `populatesRoster: false`, which is right for
+   a testbed and wrong for an arena two people are meant to duel in. The M2 dummies survive
+   because they are *map* data, not mode data. See `FFA_WARMUP_CONFIG`.
+3. **A `VotePhase.IDLE` that is not in the brief's table.** §4.20 requires the cycle to cancel
+   when every human leaves; an arena with nobody in it is not in a phase of a countdown.
+4. **The instance panel is split across two places.** §7 wants both instances side by side with
+   per-instance and total tick ms. A client can see exactly one instance and cannot observe the
+   server's event loop at all, so the server reports that pair in its metrics and the client
+   panel reports what a player's machine can actually see. See `SkirmishPanel`.
+
+## Bugs found by running it
+
+Six, none of which a typecheck could have caught.
+
+1. **An `ENDED` instance stops being stepped**, so a summary hold measured against its own clock
+   could never elapse. Every player sat on the summary forever. Held against the master tick.
+2. **The vote cycle counted humans in the arena**, so a successful migration was
+   indistinguishable from a mass disconnect: the cycle cancelled the moment everybody entered the
+   match and no further ballot ever opened. Counts humans *connected to the server* now.
+3. **`ByteWriter.bytes()` returns a view, and `Server` held one writer for every send.** The
+   `Prepare` that starts each client's background build was overwritten by the vote broadcast
+   behind it. Every readiness handshake hit its eight-second timeout and every transition fell
+   back to a synchronous build, with nothing in either log saying why. Encoding moved onto the
+   session, which owns its own writer.
+4. **A migration fired `onNewMatch` and `onMigrated`**, so the client rebuilt its world twice —
+   and the second rebuild found the background build already consumed by the first.
+5. **A relocation past 5 m was counted as a failed prediction.** One spawn gave a p99 of
+   **30.26 m** — the width of Foundry, and the same signature M10 recorded before the respawn
+   case was handled. `Prediction.reconcile` now treats a large jump as a relocation.
+6. **A cancelled background build leaked its geometries and materials.** `buildMapChunked` wraps
+   its body in `try/finally` and `cancel()` calls `.return()`.
+
+## Verified — Gate A
+
+Loopback unless stated. Structural claims only; see HARD RULE 9.
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Click to first accepted input | **43-70 ms** loopback, **165 ms** at +100 ms simulated latency — one round trip |
+| 2 | Play Solo | Works, unchanged. The M9 split held: the local path needed no repair, only a button. |
+| 3 | Warmup arena | Greybox room, FFA, instant respawn, 3 bots, M2 dummies present |
+| 4 | Full vote cycle | Phase boundaries exact against config on every cycle. Tie and empty ballot both broken randomly with seed, draw index and candidate set logged |
+| 6 | Vote tally server-only | Tally exists in exactly one place (`VoteCycle.votes`); out-of-window votes rejected and logged |
+| 9 | **Post-migration mispredictions entering a live match** | **0 for every client on every cycle**, at full timings under 100ms +/-30ms, 2% loss |
+| 13 | Allocate/destroy cycles | 20 cycles: `EventBus` subscriptions **flat at 21**, heap +0.3 MiB |
+| 14 | `FaultyMatchAllocator` | All three: latency allocates late and everybody migrates; failure and capacity leave every player in the arena with a message, nothing orphaned |
+| 15 | Routing | A message addressed to another instance is rejected and counted (`Router.misroutedMessages`) |
+| 28 | Total tick ms, both instances live | **~1.3 ms mean** (arena ~0.3, live ~0.95) against a 3.0 ms per-instance budget |
+| 29 | Boot bake | **93.9 ms** for four maps, **1.90 MiB** resident |
+
+Verified in a real browser against a live server: the menu, one click to the arena, the world
+built from the server's map, the overlay drawing the announced mode above the map ballot with a
+server-derived countdown over live gameplay, allocation at **6.1 ms**, migration at
+**0.9-1.2 ms**, and the joining browser logged server-side as `perks LIGHTWEIGHT · QUICKDRAW` —
+the shipped ASSAULT class, applied to the seat created during its handshake.
+
+## Not verified, and why
+
+- **Client background build time per map (§8.7)** and **a single click landing on a vote button
+  (§8.18)**. Both need a browser that composites. The preview pane never fires
+  `requestAnimationFrame` — confirmed directly, the callback does not run — so `draw()` never
+  runs, the build is never pumped and the overlay's clock never ticks. The readiness timeouts
+  observed there are that, not the flow. **These two numbers are open.**
+- **Anything against a deployed external server.** Every number above is loopback.
+- The 100-cycle leak run and the 12-hour soak. The 20-cycle run is a proxy for the first.
+
+## The residual this leaves
+
+Migrations **into** a live match are clean. Migrations **back to the arena** carry 1-3
+mispredictions in their 60-tick window, all sub-25 cm, at roughly M10's shipped residual rate
+(~1% of comparisons). It is not Tier 1 #20's signature — that is a sustained, every-tick,
+perk-driven divergence measured at 407/559 — and it survives with the perk removed, so it is not
+loadout-related. The gate distinguishes the two rather than summing them, because folding two
+different claims into one number is how a real regression gets waved through on the grounds that
+the number was never zero anyway.
+
+## What Gate B needs to know
+
+- **`MatchInstance.buildEntities` is where Ghost goes.** It builds one entity list shared by
+  every client in the instance, which is correct for TDM and is exactly the assumption Ghost
+  breaks. Note that removing a Ghost player from the snapshot outright would make their *body*
+  invisible, which is not what Ghost does — it hides you from UAV intel. The per-recipient filter
+  belongs there and needs to be an intel filter, not an entity filter.
+- **The divergence checker compares two independent paths** — score from replicated events
+  against score from the snapshot header — and deliberately not `MatchFlow` against the header,
+  which is assigned from it and could never fail.
+- **`variant: 'SKIRMISH'`** is how a live match differs from a menu match. S&D reads it today.
+- **The arena must never reach `MATCH_END`.** `WarmupMatch.step` has a latched error for it.
+- **The loadout is locked at migration**, captured into `MatchRequest` from `Session.loadout`.
+  Anything Gate B adds that changes a player's class must go through `setPendingLoadout`, which
+  defers to the next spawn — never applied to a standing body.

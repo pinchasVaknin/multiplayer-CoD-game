@@ -182,6 +182,16 @@ export class ServerMatch {
    */
   private readonly loadouts = new Map<number, ResolvedLoadout | null>();
 
+  /**
+   * Class changes waiting for their owner's next spawn (M11, §6.6).
+   *
+   * Separate from `loadouts`, which is what each player is *currently carrying*. Merging them
+   * would mean `perksOf` started answering with a class that has not been applied yet — and
+   * `perksOf` is what the Dead Silence hook and the streak system read, so they would act on a
+   * loadout the player is not yet using.
+   */
+  private readonly pendingLoadouts = new Map<number, ResolvedLoadout>();
+
   private readonly spectator: Spectator;
   private readonly unsubscribe: Array<() => void> = [];
   private result: MatchResult | null = null;
@@ -527,6 +537,23 @@ export class ServerMatch {
   }
 
   /**
+   * Queue a class change, to take effect on this player's **next spawn** (M11, §6.6).
+   *
+   * §6.6: *"Changes take effect on the next warmup respawn, not immediately on the living
+   * player."* That is CoD behaviour, and it is also the only version of this that is safe over
+   * a wire — see `NetPlayer.applyLoadout` for why applying it to a standing body reintroduces
+   * Tier 1 #20's divergence through a different door.
+   *
+   * Stored rather than applied, so there is exactly one place a class is ever swapped and it is
+   * a place both runtimes already treat as a discontinuity.
+   */
+  setPendingLoadout(entityId: number, slot: LoadoutSlot): boolean {
+    if (this.getPlayer(entityId) === undefined) return false;
+    this.pendingLoadouts.set(entityId, resolveLoadout(slot, 0));
+    return true;
+  }
+
+  /**
    * Remove a disconnected client (S6.1, S8.11).
    *
    * *"A dropped client must not stall the server tick or leave a ghost entity in the world."*
@@ -544,6 +571,7 @@ export class ServerMatch {
     this.damage.unregister(entityId);
     this.rewind.unregister(entityId);
     this.loadouts.delete(entityId);
+    this.pendingLoadouts.delete(entityId);
     const rosterAt = this.bots.roster.indexOf(player);
     if (rosterAt >= 0) this.bots.roster.splice(rosterAt, 1);
 
@@ -673,6 +701,23 @@ export class ServerMatch {
       this.spawnChoice.z = fallback.position.z;
       this.spawnChoice.yaw = fallback.facingYaw;
     }
+    /**
+     * Apply a queued class change here, before the body goes live (M11, §6.6).
+     *
+     * The spawn is the discontinuity both sides already agree on, which is what makes this the
+     * one safe moment. See `NetPlayer.applyLoadout`.
+     */
+    const pending = this.pendingLoadouts.get(player.entityId);
+    if (pending !== undefined) {
+      this.pendingLoadouts.delete(player.entityId);
+      this.loadouts.set(player.entityId, pending);
+      player.applyLoadout(pending.primary, pending.secondary, pending.perkState);
+      log.info(
+        `${player.displayName} respawned with class "${pending.name}" — ` +
+          `${pending.primary.id}/${pending.secondary.id}, perks ${describePerkState(pending.perkState)}.`,
+      );
+    }
+
     const c = this.spawnChoice;
     player.spawn(c.x, c.y, c.z, c.yaw);
     // Backfill the whole history with the spawn pose, so a shot rewound into the window

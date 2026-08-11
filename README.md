@@ -165,6 +165,35 @@ sudo systemctl enable --now operator
 Everything operational — address, port, snapshot rate, bot count, interpolation delay — comes
 from that env file. Nothing is hardcoded.
 
+#### What the server actually runs (M11)
+
+One process holds **two worlds**. There is no lobby, no queue and no ready-up.
+
+- A **permanent warmup arena** — the greybox room, free-for-all, damage live, instant respawn,
+  three bots and the target dummies. It exists from boot to shutdown and is where every player
+  lands. Clicking *Play Multiplayer* puts you in it within one round trip.
+- At most one **live match**, allocated when a vote resolves and destroyed completely when it
+  ends.
+
+A 60-second cycle runs continuously in the arena: 40 s of free play, 10 s to vote on a mode,
+10 s to vote on a map. The overlay is non-blocking — you keep moving and shooting through it,
+and vote with the number keys. When the map is decided your browser starts building it in the
+background while you are still playing, so the transition into the match has no loading screen.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `WARMUP_BOTS` | 3 | Bots in the arena |
+| `PLAY_SECONDS` | 40 | Free play before the ballot opens |
+| `MODE_VOTE_SECONDS` | 10 | |
+| `MAP_VOTE_SECONDS` | 10 | |
+| `READY_TIMEOUT_MS` | 8000 | How long a slow client's background build is waited on before the match starts without it |
+| `SUMMARY_HOLD_SECONDS` | 14 | How long the post-match summary is held before everybody returns |
+| `FAULT_INJECTION` | off | Diagnostic only. Lets the allocator be made to stall and fail |
+
+Shortening the vote timings is supported and is a **diagnostic setting, not a tuning knob** —
+see `DEBUG.md` for why a harness that shortens a timer can shorten past the bug it exists to
+find.
+
 #### TLS
 
 A browser **will refuse a plaintext `ws://` socket from an `https://` page.** If the client is
@@ -188,12 +217,32 @@ loopback.
 **Or terminate in Node** — set `TLS_CERT` and `TLS_KEY` to PEM paths and bind a public
 interface. Simpler to reason about, but the certificate renewal is then yours to arrange.
 
-#### A note on progression
+#### A note on progression — read this one
 
 There is no server database (S4.16). XP and unlocks stay in the browser's `localStorage`, so
 progression is **per-device and per-browser** and a player who clears site data loses it.
 That is a deliberate consequence of having no accounts, and it is written down here rather
 than left to be discovered.
+
+**It also means a player can edit their own unlocks.** The save is a JSON blob in their own
+browser; nothing stops anybody opening the console and granting themselves level 55. From M11
+the server accepts whatever class a client sends and validates only that the ids are *real* —
+`sanitiseNetLoadout` checks a weapon exists, and deliberately cannot check whether the player
+earned it, because the server has no profile to check against.
+
+This is a **known and accepted trade**, not an oversight:
+
+- It affects only the player who does it. Progression gates *which* gun you may bring, and every
+  gun is balanced against every other — there is no pay-to-win ladder to climb, because there is
+  nothing above the twelve weapons everybody can eventually field.
+- The alternative is server-side accounts and a database, which S4.16 and S9 put out of scope,
+  and which would be a large amount of machinery to protect a number that decides nothing about
+  who wins a gunfight.
+- Everything that *does* decide a gunfight — position, health, damage, hit registration, ammo,
+  scores, objective state — is server-authoritative and is not editable from the browser at all.
+
+So: a player can arrive with a weapon they have not unlocked. They cannot arrive with more
+health, a faster gun, or a hit that did not happen.
 
 ---
 

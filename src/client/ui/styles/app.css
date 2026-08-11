@@ -842,3 +842,58 @@ body.op-locked #viewport {
   font-variant-numeric: tabular-nums;
   color: var(--c-text-dim);
 }
+
+/* ---------------------------------------------------------------------------
+ * M11: the fallback loading screen (§4.18).
+ *
+ * Full-screen and opaque, deliberately: it covers a world that is about to be torn down and
+ * replaced, and a translucent panel over a dead scene reads as a bug rather than as loading.
+ * ------------------------------------------------------------------------ */
+
+.op-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-4);
+  background: var(--c-void);
+  z-index: 20;
+}
+
+.op-loading[hidden] {
+  display: none;
+}
+
+.op-loading__title {
+  margin: 0;
+  font-size: var(--t-display);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-display);
+  text-transform: uppercase;
+  color: var(--c-text);
+}
+
+.op-loading__track {
+  width: min(420px, 60vw);
+  height: 4px;
+  background: var(--c-surface-hi);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.op-loading__fill {
+  height: 100%;
+  width: 0;
+  background: var(--c-accent);
+  transition: width var(--dur-fast) var(--ease);
+}
+
+.op-loading__detail {
+  margin: 0;
+  font-size: var(--t-micro);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--c-text-faint);
+}

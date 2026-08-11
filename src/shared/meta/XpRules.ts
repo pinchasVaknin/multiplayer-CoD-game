@@ -30,7 +30,16 @@ export type XpSourceId =
   | 'mvp'
   | 'streak'
   | 'challenge'
-  | 'weaponLevel';
+  | 'weaponLevel'
+  /**
+   * A flat award issued by a server instance (M11, §6.9).
+   *
+   * The dedicated server computes its own XP breakdown from authoritative events and sends it
+   * with the summary. Those lines are already labelled for display, so they carry this one id
+   * rather than being reverse-engineered back into the client-side source taxonomy above —
+   * which the server has no view of and could only be guessed at from the label text.
+   */
+  | 'match';
 
 export interface XpSource {
   readonly id: XpSourceId;

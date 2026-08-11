@@ -140,11 +140,44 @@ export class NetPlayer implements Combatant {
      * been told about is not a perk; it is a permanent misprediction.
      */
     this.controller.speedScale = deps.perks.moveSpeedMult;
+    this.perks_ = deps.perks;
   }
+
+  /**
+   * The live perk state.
+   *
+   * A field rather than a read-through to `deps`, because a class can now change mid-session
+   * (§6.6) and `deps` is the class this player *joined* with. Everything that asks about perks
+   * — bot perception's Dead Silence check, the streak system's discount — must see the current
+   * answer, not the founding one.
+   */
+  private perks_: PerkState;
 
   /** The perks this player is carrying. Read by bot perception and the streak system. */
   get perks(): PerkState {
-    return this.deps.perks;
+    return this.perks_;
+  }
+
+  /**
+   * Swap this player's class, in one place, at one moment (M11, §6.6, Tier 1 #20).
+   *
+   * Called **only** from `ServerMatch.spawnPlayer`, and that is the whole safety argument.
+   * Handover #20 rule 3: *"Applying a class change live to a standing networked world
+   * reintroduced the same divergence by another door. Deferring to next spawn is CoD behaviour
+   * anyway."*
+   *
+   * The divergence it avoids is precise. `controller.speedScale` is an input to
+   * `PlayerController.step`, which reconciliation requires to be a pure function of (state,
+   * command) **across both runtimes**. Change it on the server on tick N and on the client on
+   * tick N+3 and every tick in between is a misprediction — the same arithmetic as the original
+   * bug, just bounded. A spawn is the one moment both sides already agree is a discontinuity:
+   * the client adopts the authoritative pose and discards its prediction ring there anyway.
+   */
+  applyLoadout(primary: WeaponDef, secondary: WeaponDef, perks: PerkState): void {
+    this.weapons.equip(0, primary);
+    this.weapons.equip(1, secondary);
+    this.perks_ = perks;
+    this.controller.speedScale = perks.moveSpeedMult;
   }
 
   // -- Combatant -------------------------------------------------------------

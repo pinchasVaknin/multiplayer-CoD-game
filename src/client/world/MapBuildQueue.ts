@@ -101,6 +101,11 @@ export class MapBuildQueue {
     return this.ready?.mapId ?? this.mapId;
   }
 
+  /** Whether a finished map for `mapId` is waiting to be taken. */
+  hasReady(mapId: string): boolean {
+    return this.ready?.mapId === mapId;
+  }
+
   /**
    * Start building a map in the background.
    *

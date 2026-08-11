@@ -53,6 +53,8 @@ interface HarnessOptions {
   readonly slowClient: boolean;
   /** Field the class with no perks. The control run for the §8.9 misprediction probe. */
   readonly noPerks: boolean;
+  /** Have one client change its class mid-warmup (§6.6). */
+  readonly editClass: boolean;
 }
 
 /**
@@ -64,6 +66,18 @@ interface HarnessOptions {
  * when the server had not been told about it. A harness that fielded the empty default class
  * would report zero mispredictions and prove nothing.
  */
+/** The same class with the perk slots empty. See `editClass` in `runFlow`. */
+const NO_PERK_CLASS: NetLoadout = {
+  name: 'HARNESS-EDIT',
+  primary: { weaponId: 'smg_wasp', attachments: [], camo: null },
+  secondary: { weaponId: 'pistol_talon', attachments: [], camo: null },
+  lethal: 'semtex',
+  tactical: 'smoke',
+  fieldUpgrade: 'stim',
+  perks: [null, null, null],
+  streaks: ['uav', null, null],
+};
+
 const LIGHTWEIGHT_CLASS: NetLoadout = {
   name: 'HARNESS',
   primary: { weaponId: 'ar_carbine', attachments: [], camo: null },
@@ -167,6 +181,17 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       voteFor: i < 2 ? 0 : i === 2 ? 1 : -1,
       // §8.8: one client that misses the readiness timeout on purpose.
       buildMs: opts.slowClient && i === opts.clients - 1 ? cfg.readyTimeoutMs + 2000 : 40,
+      /**
+       * One client edits its class mid-warmup (§6.6, §8.10).
+       *
+       * The first client swaps to a class with **no** movement perk part-way through the first
+       * warmup period. That is the interesting direction: it changes `speedScale` away from the
+       * value both sides started with, so a server that applied it at the wrong moment — or not
+       * at all — shows up immediately as a divergence, and one that applies it on the next spawn
+       * on both sides shows nothing.
+       */
+      editClass: opts.editClass && i === 0 ? NO_PERK_CLASS : undefined,
+      editAfterTicks: 240,
     });
     clients.push(client);
   }
@@ -545,6 +570,7 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     port: num('--port', 8177),
     slowClient: argv.includes('--slow-client'),
     noPerks: argv.includes('--no-perks'),
+    editClass: argv.includes('--edit-class'),
   };
 }
 
