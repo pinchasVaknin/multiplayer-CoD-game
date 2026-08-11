@@ -11,6 +11,8 @@ import { EV } from '../core/Events';
 import { DT } from '../core/Loop';
 import {
   GameMode,
+  type BombInfo,
+  type MutableBombInfo,
   type ColumnDef,
   type Entity,
   type GameModeId,
@@ -167,17 +169,21 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
    */
   carrierId = -1;
   /**
-   * One entity that must ask before it picks the bomb up (post-M8 playtest).
+   * Which entities must ask before they pick the bomb up (post-M8 playtest).
    *
-   * Set to the local player by `Match`. Bots keep walking onto the bomb and collecting it,
-   * because a bot has no key to press and `onArrived` is the only interaction verb it has;
-   * the player now presses Use, like every other interaction in the mode.
+   * Bots keep walking onto the bomb and collecting it, because a bot has no key to press and
+   * `onArrived` is the only interaction verb it has; a human presses Use, like every other
+   * interaction in the mode.
    *
-   * An *id* rather than a `isPlayer` flag because the mode has no business knowing which
-   * combatant is human — it is told which one drives itself, exactly as `BotDirector` is
-   * told which entities have silent footsteps.
+   * A *predicate* rather than the single id this used to be (M11 Gate B). One id is exactly
+   * right for single-player, where there is one human by definition, and silently wrong on a
+   * dedicated server where there are several: every human past the first would have collected
+   * the bomb by walking over it, in a mode whose own playtest ruled that out. It matches the
+   * shape of the codebase's other hooks of this kind — `silentFootsteps`, `targetable`,
+   * `visibleToUav` — all of which answer a question about an entity id without the mode ever
+   * learning what a human is.
    */
-  manualPickupId = -1;
+  manualPickup: (entityId: number) => boolean = () => false;
   /** Where the bomb is lying, when nobody is carrying it. */
   bombX = 0;
   bombY = 0;
@@ -193,6 +199,20 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
   private roundOutcome: RoundResult | null = null;
   private roundIndex = 1;
   private readonly scratch: MutableObjectiveTarget = makeObjectiveTarget();
+
+  /** The one object `bombInfo` returns. Mutated in place; never replaced. See S4.7. */
+  private readonly bombScratch: MutableBombInfo = {
+    state: 'CARRIED',
+    carrierId: -1,
+    attackers: 'B',
+    x: 0,
+    y: 0,
+    z: 0,
+    secondsLeft: 0,
+    interactFraction: 0,
+    interactEntity: -1,
+    plantedSiteIndex: -1,
+  };
 
   private readonly evPlanted = { siteId: '', label: '', entityId: 0, x: 0, y: 0, z: 0 };
   private readonly evDefused = { siteId: '', label: '', entityId: 0 };
@@ -274,6 +294,60 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
    */
   override get objectiveZones(): readonly ObjectiveZone[] {
     return this.sites;
+  }
+
+  /**
+   * The bomb, for replication (M11 Gate B, §6.8).
+   *
+   * One object, owned here and mutated in place, because this is read on the snapshot cadence
+   * from inside the tick and S4.7 permits no allocation there. See `GameMode.bombInfo`.
+   *
+   * `plantedSiteIndex` is resolved against `this.sites` rather than sent as a site id: the two
+   * runtimes build that array from `MapDef.objectives` in the same order, so an index is
+   * identity and costs one byte where a string costs its length.
+   */
+  override get bombInfo(): BombInfo | null {
+    const info = this.bombScratch;
+    info.state = this.bomb;
+    info.carrierId = this.carrierId;
+    info.attackers = this.attackers;
+    info.x = this.bombX;
+    info.y = this.bombY;
+    info.z = this.bombZ;
+    info.secondsLeft = this.bombTimer;
+    info.interactFraction = this.interactFraction;
+    info.interactEntity = this.interactEntity;
+    info.plantedSiteIndex =
+      this.plantedSite === null ? -1 : this.sites.indexOf(this.plantedSite);
+    return info;
+  }
+
+  /**
+   * Adopt the server's bomb (§6.8).
+   *
+   * Called on a networked client only. Everything here is otherwise **frozen** rather than
+   * merely stale: `stepPickup`, `stepPlant`, `stepDefuse` and the fuse countdown all run from
+   * `onTick`, which `MatchFlow` drives and a networked client does not simulate. Without this
+   * the bomb timer holds its constructed value for the entire round and the HUD counts down
+   * from a number that never changes.
+   *
+   * `attackers` is adopted too, and it is the one that would be silently wrong for half a
+   * match: the side swap happens on the server at round 3 (§6.4), and a client that kept its
+   * initial assignment would draw every objective marker on the wrong side of the map from
+   * there on.
+   */
+  applyReplicatedBomb(info: BombInfo): void {
+    this.bomb = info.state;
+    this.carrierId = info.carrierId;
+    this.attackers = info.attackers;
+    this.bombX = info.x;
+    this.bombY = info.y;
+    this.bombZ = info.z;
+    this.bombTimer = info.secondsLeft;
+    this.interactFraction = info.interactFraction;
+    this.interactEntity = info.interactEntity;
+    this.plantedSite =
+      info.plantedSiteIndex < 0 ? null : (this.sites[info.plantedSiteIndex] ?? null);
   }
 
   override checkWinCondition(): MatchResult | RoundResult | null {
@@ -482,7 +556,7 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
   private stepPickup(): void {
     if (this.carrierId >= 0) return;
     for (const c of this.deps.roster) {
-      if (c.entityId === this.manualPickupId) continue;
+      if (this.manualPickup(c.entityId)) continue;
       if (this.tryPickup(c)) return;
     }
   }

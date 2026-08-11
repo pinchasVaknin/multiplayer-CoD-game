@@ -7,6 +7,7 @@ import type { InputCommand } from '../../shared/core/InputCommand';
 import { logger } from '../../shared/core/Log';
 import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
 import type { NetLoadout, ObjectiveState } from '../../shared/net/Skirmish';
+import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
 import { NetClient, type SkirmishSink, type NetClientState } from '../../shared/net/NetClient';
 import {
   phaseAt,
@@ -149,6 +150,10 @@ export class NetSession {
    */
   onObjectives: ((states: readonly ObjectiveState[]) => void) | null = null;
 
+  /** Kill Confirmed's tags and S&D's bomb, wired the same way (Gate B, §6.8). */
+  onTags: ((tags: readonly TagInfo[]) => void) | null = null;
+  onBomb: ((info: BombInfo) => void) | null = null;
+
   /**
    * The most recent vote broadcast, kept for the §7 panel.
    *
@@ -205,6 +210,14 @@ export class NetSession {
         onObjectives: (states) => {
           this.onObjectives?.(states);
           deps.skirmish?.onObjectives?.(states);
+        },
+        onTags: (tags) => {
+          this.onTags?.(tags);
+          deps.skirmish?.onTags?.(tags);
+        },
+        onBomb: (info) => {
+          this.onBomb?.(info);
+          deps.skirmish?.onBomb?.(info);
         },
         onMigrated: (welcome) => {
           // Same reason as `onNewMatch` above, and it has to happen here as well: a migration
@@ -391,6 +404,8 @@ export class NetSession {
     this.onMatchState = null;
     this.onAuthoritativeState = null;
     this.onObjectives = null;
+    this.onTags = null;
+    this.onBomb = null;
     this.onLocalState = null;
     this.onRosterEntry = null;
     this.actors.clear();

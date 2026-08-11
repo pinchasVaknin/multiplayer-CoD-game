@@ -2,6 +2,9 @@ import { DEFAULT_SCHEDULER, type SchedulerConfig } from '../shared/ai/AiSchedule
 import { BOT_ID_BASE, BotDirector, RESPAWN_SECONDS } from '../shared/ai/BotDirector';
 import type { BotTeam, Combatant } from '../shared/ai/Combatant';
 import { makeSpawnChoice, type SpawnChoice } from '../shared/ai/SpawnSelector';
+import { isObjectiveProvider } from '../shared/ai/ObjectiveIntent';
+import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
+import { Btn, isDown } from '../shared/core/InputCommand';
 import { AR_DEFAULT, PISTOL_DEFAULT } from '../shared/weapons/WeaponDefs';
 import { EventCollector } from './net/EventCollector';
 import { Rewind } from './net/Rewind';
@@ -288,6 +291,41 @@ export class ServerMatch {
       noted: (id) => this.flow.noteRespawn(id),
     };
 
+    /**
+     * Hand the bot director the mode's objectives (M11 Gate B, §6.8).
+     *
+     * **This was missing, and it made three of the five modes unplayable on a dedicated
+     * server.** `ClientMatch` has set it since M7; `ServerMatch` never did, so
+     * `BotDirector.objectives` was null in every networked match and `ObjectiveIntent` had
+     * nothing to ask. Server-side bots therefore pursued no flag, chased no dog tag, and never
+     * walked onto the bomb — and since a bot's entire interaction vocabulary is `onArrived`,
+     * *no Search & Destroy round played over the network could be decided by a plant*. It read
+     * as a mode that was merely quiet: rounds still ended, on elimination and the clock, so
+     * nothing crashed and nothing logged.
+     *
+     * This is the M9 authority migration's standing failure mode. The mode moved to the server
+     * and the wiring around it stayed on the client, where it kept working for single-player
+     * and proved nothing about the half that had moved.
+     */
+    this.bots.objectives = isObjectiveProvider(this.mode) ? this.mode : null;
+    /**
+     * How hard the mode wants bots to push (M7).
+     *
+     * The other half of the same omission. S&D sets it below 1 so defenders hold sites instead
+     * of hunting, and on the server every mode has been running at the default.
+     */
+    this.bots.pushAggressionScale = this.modeEntry.pushAggressionScale ?? 1;
+    /**
+     * Every human asks; every bot walks on (post-M8 playtest, generalised at M11 Gate B).
+     *
+     * `players` is the connected humans and is consulted live rather than snapshotted, because
+     * seats are created and released throughout a match — a set captured at construction would
+     * be empty, this instance having been built before anybody migrated into it.
+     */
+    if (this.mode instanceof SearchAndDestroy) {
+      this.mode.manualPickup = (entityId) => this.getPlayer(entityId) !== undefined;
+    }
+
     // Dead Silence, server-side. The client half has existed since M6 and decided nothing over
     // the network, because the bots that hear the footsteps live here and this hook was never set.
     this.bots.silentFootsteps = (entityId) => !this.perksOf(entityId).audibleFootsteps;
@@ -393,6 +431,10 @@ export class ServerMatch {
     this.bots.inputFrozen = this.inputFrozen;
     // `sampledAtMs` is instrumentation only and no simulation reads it; ticks are the clock.
     this.bots.simulate(tickIndex, tickIndex * DT * 1000);
+    // Before the flow, which is what advances a plant timer — in the same order `ClientMatch`
+    // does it, so the two runtimes resolve a plant that starts and completes on the same tick
+    // identically.
+    this.stepBombInteractions();
     this.flow.simulate(tickIndex);
 
     for (const player of this.players) this.maybeRespawn(player);
@@ -403,6 +445,59 @@ export class ServerMatch {
     this.rewind.record(tickIndex);
 
     this.ticks++;
+  }
+
+  /**
+   * Every connected human's Use key, against the bomb (M11 Gate B, §6.8).
+   *
+   * §6.8: *"Plant and defuse are interruptible and resolve server-side."* They did not resolve
+   * server-side at all before this. The whole interaction — pick up, plant, defuse, cancel —
+   * lived in `ClientMatch.stepBombInteraction`, driven by the local player's Use key, and the
+   * dedicated server had no equivalent. Combined with the bots having no objectives (see the
+   * constructor), **nobody in a networked Search & Destroy could touch the bomb**: not a bot,
+   * because it had no target, and not a human, because the only code that reads Use for this
+   * purpose was running on a client whose mode is not authoritative.
+   *
+   * A port of the client's logic rather than a new one, and deliberately so — the rules about
+   * who may plant and where live in `SearchAndDestroy`, and this only reports that a particular
+   * body is standing in the right place with the key held. The mode is still the only thing
+   * that decides whether that means anything.
+   *
+   * Hold, not press: `beginInteract` is idempotent for the same actor, and releasing the key
+   * cancels. That is what makes an interruption free — there is no state here to unwind, and a
+   * player who dies mid-plant is handled by `onKill` inside the mode.
+   */
+  private stepBombInteractions(): void {
+    const mode = this.mode;
+    if (!(mode instanceof SearchAndDestroy)) return;
+
+    for (const player of this.players) {
+      const holding = isDown(player.lastButtons, Btn.Use);
+      if (!holding || !player.alive) {
+        // Only cancel what *this* player started. Another player's plant is not theirs to stop,
+        // and neither is a bot's.
+        if (mode.interactEntity === player.entityId) mode.cancelInteract();
+        continue;
+      }
+
+      if (mode.bomb === 'PLANTED') {
+        if (player.team !== mode.defenders) continue;
+        const site = mode.plantedSite;
+        if (site === null || !site.contains(player)) continue;
+        mode.beginInteract(player, true);
+        continue;
+      }
+      if (mode.bomb !== 'CARRIED') continue;
+      if (player.team !== mode.attackers) continue;
+      // One key does both, and pickup is tested first because you cannot plant a bomb you are
+      // not carrying (post-M8 playtest).
+      if (!mode.isCarrier(player.entityId)) {
+        mode.tryPickup(player);
+        continue;
+      }
+      if (mode.siteContaining(player) === null) continue;
+      mode.beginInteract(player, false);
+    }
   }
 
   /**

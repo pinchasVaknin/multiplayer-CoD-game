@@ -201,7 +201,84 @@ export abstract class GameMode {
   get objectiveZones(): readonly ObjectiveZone[] {
     return [];
   }
+
+  /**
+   * Loose objects the mode has put on the floor — Kill Confirmed's tags (M11 Gate B, §6.8).
+   *
+   * The second seam replication runs through, and it exists for the same reason the first one
+   * does: the server must be able to ask *any* mode what it has dropped without importing
+   * `KillConfirmed`.
+   *
+   * **`null` and `[]` mean different things, and conflating them costs a bug.** `null` is "this
+   * mode has no such thing", and the instance sends no message at all. `[]` is "this mode drops
+   * tags and there are none on the floor *right now*", which must still be sent — a client told
+   * only about non-empty lists would never learn that the last tag was collected and would draw
+   * it lying there for the rest of the match. The zones channel can skip on empty because a
+   * zone list is fixed at construction; a tag list is not.
+   *
+   * The shape is structural rather than `DogTag` itself, which would put a concrete mode's
+   * type on its own base class and make the import circular. `DogTag` satisfies it — it has
+   * these five fields and two more that are nobody else's business.
+   */
+  get dogTags(): readonly TagInfo[] | null {
+    return null;
+  }
+
+  /**
+   * The mode's bomb, or null for the four modes that have none (M11 Gate B, §6.8).
+   *
+   * Returned as **one stable object the mode owns and mutates**, never a fresh literal. This
+   * is read on the snapshot cadence from inside the tick, and S4.7 allows no allocation on
+   * that path; a getter that built a record would allocate 20 objects a second per instance
+   * for the whole of a Search & Destroy match.
+   */
+  get bombInfo(): BombInfo | null {
+    return null;
+  }
 }
+
+/**
+ * A dropped object's replicable state, structurally.
+ *
+ * `id` is what makes a tag the same tag from one frame to the next, which the renderer's mesh
+ * pool depends on and which an index into a list that shrinks in the middle cannot give it.
+ */
+export interface TagInfo {
+  readonly id: number;
+  /** The side that died. Enemy tags confirm; your own deny. */
+  readonly team: ScoreTeam;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/** Everything about the bomb that a client may not work out for itself (§6.8). */
+export interface BombInfo {
+  readonly state: 'CARRIED' | 'PLANTED' | 'DEFUSED' | 'EXPLODED';
+  /** Who is carrying it, or -1 while it is on the ground. */
+  readonly carrierId: number;
+  /** Which side attacks this round. */
+  readonly attackers: ScoreTeam;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  /** Fuse remaining, seconds. Zero unless planted. */
+  readonly secondsLeft: number;
+  /** 0..1 on the plant or defuse currently running. */
+  readonly interactFraction: number;
+  /** Who is doing it, so an interrupted plant does not resume under somebody else. */
+  readonly interactEntity: number;
+  /** Index into `objectiveZones` once planted, or -1. */
+  readonly plantedSiteIndex: number;
+}
+
+/**
+ * The writable face of `BombInfo`, for the single instance a mode owns and rewrites each tick.
+ *
+ * Mapped rather than declared twice so a field added to `BombInfo` cannot be forgotten here —
+ * which is the failure mode of two hand-written interfaces that are meant to stay in step.
+ */
+export type MutableBombInfo = { -readonly [K in keyof BombInfo]: BombInfo[K] };
 
 /** Which of two team scores is ahead, for the result of a timed match. */
 export function leaderOf(a: number, b: number): ScoreTeam | 'DRAW' {

@@ -30,6 +30,7 @@ import {
 } from './Messages';
 import { Prediction } from './Prediction';
 import type { NetLoadout, ObjectiveState } from './Skirmish';
+import type { BombInfo, TagInfo } from '../modes/GameMode';
 import { COMMAND_REDUNDANCY, quantiseCommandInPlace, rejectText } from './Protocol';
 import { copyEntitySnapshot, EFlag, makeEntitySnapshot, type EntitySnapshot } from './Snapshot';
 import type { INetLink } from './Transport';
@@ -136,6 +137,10 @@ export interface SkirmishSink {
    * belongs to is the caller's mode, and `shared/net` has no business reaching into it.
    */
   readonly onObjectives?: ((states: readonly ObjectiveState[]) => void) | undefined;
+  /** Kill Confirmed's tag list, once per snapshot tick (M11 Gate B, §6.8). */
+  readonly onTags?: ((tags: readonly TagInfo[]) => void) | undefined;
+  /** Search & Destroy's bomb, once per snapshot tick (M11 Gate B, §6.8). */
+  readonly onBomb?: ((info: BombInfo) => void) | undefined;
   /**
    * This client has been moved to another instance, effective on `welcome.effectiveTick`.
    *
@@ -520,6 +525,12 @@ export class NetClient {
         return;
       case 'objectives':
         this.deps.skirmish?.onObjectives?.(msg.states);
+        return;
+      case 'tags':
+        this.deps.skirmish?.onTags?.(msg.tags);
+        return;
+      case 'bomb':
+        this.deps.skirmish?.onBomb?.(msg.bomb);
         return;
       case 'reject':
         this.state = 'rejected';

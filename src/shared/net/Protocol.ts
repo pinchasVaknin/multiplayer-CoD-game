@@ -23,13 +23,20 @@
  * the whole match.
  */
 /**
+ * v5 (M11 Gate B): the rest of the mode state — Kill Confirmed's tags and S&D's bomb.
+ *
+ * v4's objective channel fixed Domination and left the same hole open in two other modes, for
+ * the same root cause: every one of these lives behind `MatchFlow.simulate`, which a networked
+ * client does not run. Domination's flags were merely *stale*; a networked Kill Confirmed had
+ * no tags on the floor at all and a networked S&D had a fuse that never counted.
+ *
  * v4 (M11 Gate B): objective state replication.
  *
  * v3 (M11): the skirmish flow. Five new messages in each direction's id space, and `Welcome`
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
@@ -100,6 +107,23 @@ export const MsgS = {
    * ticked. Small enough at four bytes a zone that a separate frame is cheaper than either.
    */
   Objectives: 139,
+  /**
+   * Kill Confirmed's dog tags (M11 Gate B, §6.8).
+   *
+   * Separate from `Objectives` because the two are different *kinds* of state: a zone list is
+   * fixed at construction and indexed positionally, and a tag list appears, shrinks and is
+   * keyed by id. Folding them into one message would mean a length prefix per section and a
+   * mode-dependent reader, for two modes that never both have both.
+   */
+  Tags: 140,
+  /**
+   * Search & Destroy's bomb — carrier, fuse and plant/defuse progress (M11 Gate B, §6.8).
+   *
+   * §6.8 requires the fuse to be server-authoritative because *"a client-side timer will drift
+   * and will decide a round wrongly"*. On a networked client it does not drift, it stops: the
+   * countdown runs from `onTick`, and a networked client does not simulate `MatchFlow`.
+   */
+  Bomb: 141,
 } as const;
 
 export type MsgCId = (typeof MsgC)[keyof typeof MsgC];

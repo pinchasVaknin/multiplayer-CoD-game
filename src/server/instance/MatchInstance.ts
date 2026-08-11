@@ -220,6 +220,8 @@ export abstract class MatchInstance {
       // client that had entities from tick N and flags from tick N-3 would draw a capture ring
       // around a body that is no longer standing in it.
       this.sendObjectives();
+      this.sendTags();
+      this.sendBomb();
     }
     this.sendEvents();
 
@@ -327,6 +329,43 @@ export abstract class MatchInstance {
 
     for (const seat of this.seats.values()) {
       if (!seat.session.closed) seat.session.sendObjectives(this.objectiveScratch);
+    }
+  }
+
+  /**
+   * Replicate Kill Confirmed's dog tags (M11 Gate B, §6.8).
+   *
+   * Sent **including when the list is empty**, which is why the seam returns `null` for a mode
+   * with no tags rather than an empty array: the transition from one tag to none is exactly as
+   * much news as the transition from none to one, and a channel that only reported non-empty
+   * lists would leave the last tag of every firefight lying on the client's floor for ever.
+   *
+   * Authoritative pickup is already the server's, and §6.8's *"two players reaching a tag on the
+   * same tick resolves once, deterministically"* is a property of `KillConfirmed.onTick`: it
+   * walks the roster in a fixed order, takes the first collector it finds and splices the tag
+   * out in the same pass, so a second collector on the same tick finds nothing to collect. What
+   * this adds is that the *client* no longer has an opinion — it runs no pickup test at all.
+   */
+  private sendTags(): void {
+    const tags = this.match.mode.dogTags;
+    if (tags === null) return;
+    for (const seat of this.seats.values()) {
+      if (!seat.session.closed) seat.session.sendTags(tags);
+    }
+  }
+
+  /**
+   * Replicate Search & Destroy's bomb (M11 Gate B, §6.8).
+   *
+   * The fuse is the reason this is not optional. §6.8: *"a client-side timer will drift and will
+   * decide a round wrongly."* On a networked client it does not drift — `onTick` never runs, so
+   * it does not move at all.
+   */
+  private sendBomb(): void {
+    const info = this.match.mode.bombInfo;
+    if (info === null) return;
+    for (const seat of this.seats.values()) {
+      if (!seat.session.closed) seat.session.sendBomb(info);
     }
   }
 

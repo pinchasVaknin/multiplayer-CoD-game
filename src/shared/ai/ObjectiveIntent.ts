@@ -68,3 +68,21 @@ export function makeObjectiveTarget(): MutableObjectiveTarget {
 export type MutableObjectiveTarget = {
   -readonly [K in keyof ObjectiveTarget]: ObjectiveTarget[K];
 };
+
+/**
+ * Whether a mode also plays the objective-provider role.
+ *
+ * A structural test rather than an `instanceof` chain: a composition root is handed modes by
+ * the registry and has no business importing four concrete classes to ask them what they are.
+ *
+ * **Shared rather than private to the client (M11 Gate B).** It lived in `ClientMatch` and the
+ * dedicated server never had an equivalent, so `BotDirector.objectives` was null in every
+ * networked match: server-side bots pursued no flag, collected no dog tag, and — the visible
+ * one — never picked the bomb up, so no Search & Destroy round played on the server was ever
+ * decided by a plant. The mode moved to the server at M9 and this wiring did not come with it.
+ * One definition, imported by both roots, is the fix that keeps it from drifting again.
+ */
+export function isObjectiveProvider<T extends object>(mode: T): mode is T & ObjectiveProvider {
+  const candidate = mode as Partial<ObjectiveProvider>;
+  return typeof candidate.assign === 'function' && typeof candidate.onArrived === 'function';
+}

@@ -48,7 +48,7 @@ import type { ResolvedLoadout } from '../shared/meta/Loadouts';
 import type { Profile } from './meta/Profile';
 import type { XpReport } from '../shared/meta/XpRules';
 import type { GameMode } from '../shared/modes/GameMode';
-import type { ObjectiveProvider } from '../shared/ai/ObjectiveIntent';
+import { isObjectiveProvider } from '../shared/ai/ObjectiveIntent';
 import { MatchFlow } from '../shared/modes/MatchFlow';
 import type { MapEntry, ModeEntry } from '../shared/modes/ModeRegistry';
 import { Health, type HealthConfig } from '../shared/player/Health';
@@ -456,7 +456,9 @@ export class Match {
     this.bots.objectives = isObjectiveProvider(this.mode) ? this.mode : null;
     // Post-M8: the player collects the bomb with the Use key rather than by walking over it.
     // The mode is told *which* entity drives itself; it never learns that one of them is human.
-    if (this.mode instanceof SearchAndDestroy) this.mode.manualPickupId = this.localId;
+    if (this.mode instanceof SearchAndDestroy) {
+      this.mode.manualPickup = (id) => id === this.localId;
+    }
     this.bots.freeForAll = deps.mode.freeForAll === true;
     // There is no such thing as a teammate in FFA, so the friendly-fire gate at the damage
     // door has to come off or half the lobby is unkillable by the other half.
@@ -1136,7 +1138,11 @@ export class Match {
     this.streaks.simulate(cmd.tickIndex, cmd);
     this.syncChopperBody();
     if (!this.playerDead && !this.mortarOverlay.isOpen) this.stepStreakInput(cmd);
-    if (!this.playerDead) this.stepBombInteraction(cmd);
+    // Local matches only (M11 Gate B). A networked client's Use key is already in the command
+    // it just sent, and `ServerMatch.stepBombInteractions` acts on it there; running this as
+    // well would make the client a second authority over a plant timer the server owns, and
+    // §6.8 gives that to exactly one of them.
+    if (!this.isNetworked && !this.playerDead) this.stepBombInteraction(cmd);
     this.stepInteractPose();
     // The server owns when and where a body comes back (S4.15); the client is told. But
     // `stepPlayerRespawn` also *decrements the display timer*, and skipping the whole method
@@ -1890,17 +1896,6 @@ export class Match {
   get lowHealthThreshold(): number {
     return LOW_HEALTH_THRESHOLD;
   }
-}
-
-/**
- * Whether a mode also plays the objective-provider role.
- *
- * A structural test rather than an `instanceof` chain: `Match` composes modes it is handed by
- * the registry and has no business importing four concrete classes to ask them what they are.
- */
-function isObjectiveProvider(mode: GameMode): mode is GameMode & ObjectiveProvider {
-  const candidate = mode as Partial<ObjectiveProvider>;
-  return typeof candidate.assign === 'function' && typeof candidate.onArrived === 'function';
 }
 
 /**

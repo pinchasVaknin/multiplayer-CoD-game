@@ -444,6 +444,7 @@ function reportFlow(input: FlowReportInput): number {
         `${r.mispredictions}/${r.comparisons} mispredictions (p50 ${r.mispredictionP50}m, p99 ${r.mispredictionP99}m), ` +
         `spawn window ${r.spawnWindowMispredictions}, ` +
         `objectives ${r.objectiveUpdates} upd/${r.objectivesOwned} owned, ` +
+        modeStateLine(r) +
         `post-migration windows [${r.postMigrationWindows.join(",")}] at ticks [${r.migrationMispredictionTicks.join(",")}], ` +
         `${r.buildsCompleted} build(s) worst ${r.worstBuildMs}ms, ` +
         `${r.votesCast} vote(s), ${r.summaries} summary(s), ` +
@@ -554,6 +555,37 @@ function harnessConfig(opts: HarnessOptions): ServerConfig {
     faultInjection: opts.fault !== 'none',
     metricsSeconds: 0,
   };
+}
+
+/**
+ * The Gate B mode-state channels, reported only by the modes that have them.
+ *
+ * Kill Confirmed and Search & Destroy each broadcast on every snapshot tick, and printing
+ * `tags 0 seen` on a TDM run would be noise that reads like a failure. A mode that sent nothing
+ * says nothing.
+ *
+ * The two numbers chosen are the ones that go **red against the bug rather than green against
+ * the feature**: `seen` counts distinct tag ids rather than frames, because the bug produced a
+ * steady stream of empty lists; and `fuse` counts frames on which the timer was observed to
+ * *fall*, because the bug produced a fuse that was replicated and constant.
+ */
+function modeStateLine(r: HeadlessClientReport): string {
+  let out = '';
+  if (r.tagUpdates > 0) {
+    out += `tags ${r.tagUpdates} upd/${r.tagsSeen} seen/${r.peakTags} peak, `;
+  }
+  if (r.bombUpdates > 0) {
+    const events: string[] = [];
+    if (r.bombPlanted) events.push('planted');
+    if (r.bombDefused) events.push('defused');
+    if (r.bombExploded) events.push('exploded');
+    out +=
+      `bomb ${r.bombUpdates} upd/fuse ticked ${r.bombTimerTicked}/` +
+      `${r.bombInteractSeen} interact` +
+      (events.length > 0 ? `/${events.join('+')}` : '') +
+      ', ';
+  }
+  return out;
 }
 
 function parseArgs(argv: readonly string[]): HarnessOptions {

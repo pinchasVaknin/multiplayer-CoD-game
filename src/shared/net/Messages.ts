@@ -24,7 +24,20 @@ import {
   writeOwnerState,
   type EntitySnapshot,
 } from './Snapshot';
-import { MAX_OBJECTIVES, type NetLoadout, type NetWeaponLoadout, type ObjectiveState } from './Skirmish';
+import {
+  BOMB_CARRIED,
+  BOMB_DEFUSED,
+  BOMB_EXPLODED,
+  BOMB_PLANTED,
+  MAX_OBJECTIVES,
+  MAX_TAGS,
+  OBJ_TEAM_A,
+  OBJ_TEAM_B,
+  type NetLoadout,
+  type NetWeaponLoadout,
+  type ObjectiveState,
+} from './Skirmish';
+import type { BombInfo, TagInfo } from '../modes/GameMode';
 import { ByteReader, ByteWriter } from './Wire';
 
 /**
@@ -464,6 +477,73 @@ export function writeObjectives(w: ByteWriter, states: readonly ObjectiveState[]
   return w.bytes();
 }
 
+/**
+ * Kill Confirmed's dog tags (M11 Gate B, §6.8).
+ *
+ * Seven bytes a tag: a `uint16` id and three quantised `int16` positions. The id wraps at 65535
+ * and is compared for equality only, never ordered, so a match long enough to drop that many
+ * tags reuses an id that has been off the floor for hours.
+ *
+ * **The newest tags win when the list overflows.** A tag near the end of its 20 s life is the
+ * one whose absence a player is least likely to notice, and the one most likely to be gone
+ * before the next frame anyway; a tag that landed this tick is on a body somebody is standing
+ * over. Truncating the front rather than the back is the difference between a cap that degrades
+ * and a cap that hides exactly the tags being fought over.
+ */
+export function writeTags(w: ByteWriter, tags: readonly TagInfo[]): Uint8Array {
+  head(w, MsgS.Tags);
+  const skip = Math.max(0, tags.length - MAX_TAGS);
+  const n = Math.min(tags.length, MAX_TAGS);
+  w.u8v(n);
+  for (let i = skip; i < tags.length; i++) {
+    const t = tags[i];
+    if (t === undefined) continue;
+    w.u16(t.id & 0xffff);
+    w.u8v(t.team === 'B' ? OBJ_TEAM_B : OBJ_TEAM_A);
+    w.i16(quantPos(t.x));
+    w.i16(quantPos(t.y));
+    w.i16(quantPos(t.z));
+  }
+  return w.bytes();
+}
+
+/**
+ * Search & Destroy's bomb (M11 Gate B, §6.8).
+ *
+ * The fuse travels as hundredths of a second in a `uint16` — 655 s of range against a 45 s
+ * timer, and a hundredth is finer than the one-decimal HUD readout. It is **not** sent as a
+ * tick count: the client would have to hold the tick rate and the round's start tick to read
+ * it, which is three facts where one will do.
+ */
+export function writeBomb(w: ByteWriter, info: BombInfo): Uint8Array {
+  head(w, MsgS.Bomb);
+  w.u8v(bombStateCode(info.state));
+  w.i16(info.carrierId);
+  w.u8v(info.attackers === 'B' ? OBJ_TEAM_B : OBJ_TEAM_A);
+  w.i16(quantPos(info.x));
+  w.i16(quantPos(info.y));
+  w.i16(quantPos(info.z));
+  w.u16(Math.max(0, Math.min(0xffff, Math.round(info.secondsLeft * 100))));
+  w.u8v(Math.max(0, Math.min(255, Math.round(info.interactFraction * 255))));
+  w.i16(info.interactEntity);
+  w.i8(info.plantedSiteIndex);
+  return w.bytes();
+}
+
+function bombStateCode(state: BombInfo['state']): number {
+  if (state === 'PLANTED') return BOMB_PLANTED;
+  if (state === 'DEFUSED') return BOMB_DEFUSED;
+  if (state === 'EXPLODED') return BOMB_EXPLODED;
+  return BOMB_CARRIED;
+}
+
+function bombStateFromCode(code: number): BombInfo['state'] {
+  if (code === BOMB_PLANTED) return 'PLANTED';
+  if (code === BOMB_DEFUSED) return 'DEFUSED';
+  if (code === BOMB_EXPLODED) return 'EXPLODED';
+  return 'CARRIED';
+}
+
 export function writeNotice(w: ByteWriter, text: string): Uint8Array {
   head(w, MsgS.Notice);
   w.str(text);
@@ -779,6 +859,8 @@ export type Decoded =
   | ({ kind: 'summary' } & SummaryInfo)
   | { kind: 'notice'; text: string }
   | { kind: 'objectives'; states: readonly ObjectiveState[] }
+  | { kind: 'tags'; tags: readonly TagInfo[] }
+  | { kind: 'bomb'; bomb: BombInfo }
   | { kind: 'bad' };
 
 const BAD: Decoded = { kind: 'bad' };
@@ -958,6 +1040,51 @@ export function decodeHeader(r: ByteReader): Decoded {
         states.push({ owner: packed & 0x03, capturing: (packed >> 2) & 0x03, progress, countA, countB });
       }
       return r.overran ? BAD : { kind: 'objectives', states };
+    }
+    case MsgS.Tags: {
+      const n = r.u8v();
+      // A count past the cap is a malformed frame, not a big match. S4.16: drop it, never
+      // allocate against a number a client controls.
+      if (r.overran || n > MAX_TAGS) return BAD;
+      const tags: TagInfo[] = [];
+      for (let i = 0; i < n; i++) {
+        const id = r.u16();
+        const team = r.u8v() === OBJ_TEAM_B ? 'B' : 'A';
+        const x = dequantPos(r.i16());
+        const y = dequantPos(r.i16());
+        const z = dequantPos(r.i16());
+        tags.push({ id, team, x, y, z });
+      }
+      return r.overran ? BAD : { kind: 'tags', tags };
+    }
+    case MsgS.Bomb: {
+      const state = bombStateFromCode(r.u8v());
+      const carrierId = r.i16();
+      const attackers = r.u8v() === OBJ_TEAM_B ? 'B' : 'A';
+      const x = dequantPos(r.i16());
+      const y = dequantPos(r.i16());
+      const z = dequantPos(r.i16());
+      const secondsLeft = r.u16() / 100;
+      const interactFraction = r.u8v() / 255;
+      const interactEntity = r.i16();
+      const plantedSiteIndex = r.i8();
+      return r.overran
+        ? BAD
+        : {
+            kind: 'bomb',
+            bomb: {
+              state,
+              carrierId,
+              attackers,
+              x,
+              y,
+              z,
+              secondsLeft,
+              interactFraction,
+              interactEntity,
+              plantedSiteIndex,
+            },
+          };
     }
     case MsgS.Reject: {
       const code = r.u8v();

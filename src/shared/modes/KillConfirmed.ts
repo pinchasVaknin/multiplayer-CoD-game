@@ -19,6 +19,7 @@ import {
   type MatchResult,
   type ModeDeps,
   type RoundResult,
+  type TagInfo,
 } from './GameMode';
 
 /**
@@ -223,6 +224,55 @@ export class KillConfirmed extends GameMode implements ObjectiveProvider {
 
   override teamScore(team: ScoreTeam): number {
     return this.deps.score.team(team).score;
+  }
+
+  // -- replication (M11 Gate B, §6.8) -----------------------------------------
+
+  /** The seam `MatchInstance` reads. See `GameMode.dogTags`. */
+  override get dogTags(): readonly TagInfo[] {
+    return this.tags;
+  }
+
+  /**
+   * Adopt the server's tag list wholesale (§6.8).
+   *
+   * Called on a networked client only, where `onKill` and `onTick` never run and this list
+   * would otherwise stay empty for the whole match. The server's list *is* the list: a tag
+   * absent from the frame has been collected or has expired, and either way it is gone.
+   *
+   * Existing records are mutated in place where the id still matches, so the array does not
+   * churn on every snapshot — but the identity that matters to the renderer is `tag.id`, which
+   * `MatchObjectives.updateTags` pools by, so a tag keeps its mesh across the update either
+   * way.
+   *
+   * `life` is set to a nominal positive value rather than replicated. Nothing on the client
+   * reads it — expiry is the server's to decide and arrives as an absence — but leaving it at
+   * zero would make a tag look expired to any future reader, and lying about the number is
+   * worse than not having it.
+   */
+  applyReplicatedTags(states: readonly TagInfo[]): void {
+    for (let i = 0; i < states.length; i++) {
+      const state = states[i];
+      if (state === undefined) continue;
+      const existing = this.tags[i];
+      if (existing !== undefined && existing.id === state.id) {
+        // Same tag in the same slot: nothing to do, a tag does not move once dropped.
+        continue;
+      }
+      const replacement: DogTag = {
+        id: state.id,
+        team: state.team,
+        x: state.x,
+        y: state.y,
+        z: state.z,
+        life: this.config.tagLifetimeSeconds,
+        claimed: false,
+      };
+      if (i < this.tags.length) this.tags[i] = replacement;
+      else this.tags.push(replacement);
+    }
+    // Anything past the end of the server's list has been collected or has expired.
+    if (this.tags.length > states.length) this.tags.length = states.length;
   }
 
   // -- ObjectiveProvider ------------------------------------------------------

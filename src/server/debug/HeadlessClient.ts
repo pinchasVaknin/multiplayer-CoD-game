@@ -181,6 +181,18 @@ export interface HeadlessClientReport {
   /** Objective broadcasts received, and how many carried an owned (non-neutral) zone. */
   readonly objectiveUpdates: number;
   readonly objectivesOwned: number;
+  /** Tag broadcasts, distinct tag ids ever seen, and the most on the floor at once. */
+  readonly tagUpdates: number;
+  readonly tagsSeen: number;
+  readonly peakTags: number;
+  /** Bomb broadcasts, and what was observed happening to it. */
+  readonly bombUpdates: number;
+  readonly bombPlanted: boolean;
+  readonly bombDefused: boolean;
+  readonly bombExploded: boolean;
+  readonly bombInteractSeen: number;
+  /** Frames on which the fuse was seen to *decrease*. Zero means a frozen timer. */
+  readonly bombTimerTicked: number;
   readonly spawnWindowMispredictions: number;
   readonly worstPostMigrationMispredictions: number;
   readonly postMigrationWindows: readonly number[];
@@ -272,6 +284,16 @@ export class HeadlessClient {
 
   private objectiveUpdates = 0;
   private objectivesOwned = 0;
+  private tagUpdates = 0;
+  private readonly tagIds = new Set<number>();
+  private peakTags = 0;
+  private bombUpdates = 0;
+  private bombPlanted = false;
+  private bombDefused = false;
+  private bombExploded = false;
+  private bombInteractSeen = 0;
+  private bombTimerTicked = 0;
+  private lastBombTimer = -1;
   private editSent = false;
   private buildsCompleted = 0;
   private worstBuildMs = 0;
@@ -342,6 +364,41 @@ export class HeadlessClient {
         onObjectives: (states) => {
           this.objectiveUpdates++;
           for (const s of states) if (s.owner !== 0) this.objectivesOwned++;
+        },
+        /**
+         * Dog tags (Gate B, §6.8).
+         *
+         * `tagsSeen` counts *distinct ids*, not frames. A frame counter would go green on a
+         * server sending an empty list twenty times a second, which is precisely the state the
+         * bug produced — so the number that matters is how many tags ever actually existed.
+         */
+        onTags: (tags) => {
+          this.tagUpdates++;
+          for (const t of tags) this.tagIds.add(t.id);
+          if (tags.length > this.peakTags) this.peakTags = tags.length;
+        },
+        /**
+         * The bomb (Gate B, §6.8).
+         *
+         * `bombTimerTicked` is the probe with teeth, and it is written to go red against the
+         * bug rather than green against the feature: a frozen fuse — the networked client's
+         * actual behaviour before this — sends the same value for ever, so a *decrease* is the
+         * only observation that distinguishes a replicated countdown from a constant.
+         */
+        onBomb: (info) => {
+          this.bombUpdates++;
+          if (info.state === 'PLANTED') {
+            this.bombPlanted = true;
+            if (this.lastBombTimer >= 0 && info.secondsLeft < this.lastBombTimer) {
+              this.bombTimerTicked++;
+            }
+            this.lastBombTimer = info.secondsLeft;
+          } else {
+            this.lastBombTimer = -1;
+          }
+          if (info.state === 'DEFUSED') this.bombDefused = true;
+          if (info.state === 'EXPLODED') this.bombExploded = true;
+          if (info.interactFraction > 0) this.bombInteractSeen++;
         },
       },
     });
@@ -605,6 +662,15 @@ export class HeadlessClient {
       migrations: this.net.migrations,
       objectiveUpdates: this.objectiveUpdates,
       objectivesOwned: this.objectivesOwned,
+      tagUpdates: this.tagUpdates,
+      tagsSeen: this.tagIds.size,
+      peakTags: this.peakTags,
+      bombUpdates: this.bombUpdates,
+      bombPlanted: this.bombPlanted,
+      bombDefused: this.bombDefused,
+      bombExploded: this.bombExploded,
+      bombInteractSeen: this.bombInteractSeen,
+      bombTimerTicked: this.bombTimerTicked,
       spawnWindowMispredictions: this.spawnWindowMispredictions,
       worstPostMigrationMispredictions:
         this.postMigrationWindows.length === 0 ? 0 : Math.max(...this.postMigrationWindows),

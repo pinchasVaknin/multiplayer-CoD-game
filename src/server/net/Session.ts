@@ -5,10 +5,12 @@ import { logger } from '../../shared/core/Log';
 import {
   decodeHeader,
   readCommand,
+  writeBomb,
   writeBye,
   writeNotice,
   writeObjectives,
   writePong,
+  writeTags,
   writePrepare,
   writeReject,
   writeSummary,
@@ -20,6 +22,7 @@ import {
 } from '../../shared/net/Messages';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
 import { sanitiseNetLoadout, type NetLoadout, type ObjectiveState } from '../../shared/net/Skirmish';
+import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
 import {
   CLIENT_TIMEOUT_MS,
   HANDSHAKE_TIMEOUT_MS,
@@ -534,6 +537,14 @@ export class Session {
 
   sendObjectives(states: readonly ObjectiveState[]): void {
     this.send(writeObjectives(this.out, states));
+  }
+
+  sendTags(tags: readonly TagInfo[]): void {
+    this.send(writeTags(this.out, tags));
+  }
+
+  sendBomb(info: BombInfo): void {
+    this.send(writeBomb(this.out, info));
   }
 
   /**

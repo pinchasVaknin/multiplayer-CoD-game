@@ -17,6 +17,8 @@ import type { FrameStats } from './debug/FrameStats';
 import type { MatchHarness } from './debug/MatchHarness';
 import type { Speedometer } from './debug/Speedometer';
 import { Match } from './ClientMatch';
+import { KillConfirmed } from '../shared/modes/KillConfirmed';
+import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
 import type { EquipmentConfig } from '../shared/equipment/EquipmentConfig';
 import type { ResolvedLoadout } from '../shared/meta/Loadouts';
 import type { Profile } from './meta/Profile';
@@ -372,6 +374,28 @@ export class MatchWorld {
           zone.countA = state.countA;
           zone.countB = state.countB;
         }
+      };
+
+      /**
+       * Kill Confirmed's tags, and Search & Destroy's bomb (Gate B, §6.8).
+       *
+       * Both land in the mode objects `MatchObjectives` already walks, for the same reason the
+       * zones do: the renderer is correct and was being fed nothing. `updateTags` pools its
+       * meshes by `tag.id`, and the ids are the server's, so a tag keeps its mesh from the frame
+       * it lands to the frame it is collected.
+       *
+       * Guarded by a type test rather than assumed, because the mode a client holds is whatever
+       * the server told it to build — and a `Tags` frame arriving one tick after a migration
+       * into a TDM match would otherwise write tags onto a mode that has no floor for them.
+       */
+      net.onTags = (tags) => {
+        const mode = this.match.mode;
+        if (mode instanceof KillConfirmed) mode.applyReplicatedTags(tags);
+      };
+
+      net.onBomb = (info) => {
+        const mode = this.match.mode;
+        if (mode instanceof SearchAndDestroy) mode.applyReplicatedBomb(info);
       };
 
       net.onAuthoritativeState = (header) => {
