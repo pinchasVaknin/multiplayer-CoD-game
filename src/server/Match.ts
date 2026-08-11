@@ -5,6 +5,14 @@ import { makeSpawnChoice, type SpawnChoice } from '../shared/ai/SpawnSelector';
 import { isObjectiveProvider } from '../shared/ai/ObjectiveIntent';
 import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
 import { Btn, isDown } from '../shared/core/InputCommand';
+import { StreakSystem } from '../shared/streaks/StreakSystem';
+import { SILENT_PRESENTATION } from '../shared/streaks/StreakPresentation';
+import {
+  ALL_STREAK_IDS,
+  DEFAULT_STREAK_CONFIG,
+  type StreakId,
+} from '../shared/streaks/StreakDefs';
+import { Rng } from '../shared/core/Rng';
 import { AR_DEFAULT, PISTOL_DEFAULT } from '../shared/weapons/WeaponDefs';
 import { EventCollector } from './net/EventCollector';
 import { Rewind } from './net/Rewind';
@@ -71,9 +79,14 @@ const log = logger('Match');
  *   `Spectator` that never participates — the same mechanism the M3 AFK harness used.
  * - **No weapons for a human, no viewmodel, no melee, no equipment thrower.** Bots draw their
  *   own weapons (`ai/BotArsenal`), and everything else in that list is a local-player system.
- * - **No killstreaks yet.** `StreakSystem` needs a `StreakPresentation`, and
- *   `SILENT_PRESENTATION` is ready for it — but streaks are earned by a player's kill streak
- *   and the bot path for that is M11's business. Left out rather than half-wired.
+ * - **Killstreaks run here as of M11 Gate B, and are not yet reachable over the wire.** The
+ *   system is live: it folds over the authoritative score, so streaks are earned and lost on
+ *   death exactly as they are in a browser, all three M6 perk hooks resolve against the class
+ *   the player migrated in with, and `dispose` releases it (verified flat over 12
+ *   allocate/destroy cycles). What is missing is the two ends: a networked client cannot yet
+ *   *ask* to spend one — `activate` has only ever been called from client-side input — and
+ *   streak entity state is not yet replicated, so a sentry that exists here is invisible.
+ *   Named rather than left to be discovered: this is groundwork for §8.22, not §8.22.
  * - **No progression.** `MatchProgression` needs a `ProgressionStore`, and S4.16 says there is
  *   no server database. XP is awarded server-side from M10 and persisted client-side.
  */
@@ -149,6 +162,8 @@ export class ServerMatch {
   readonly mode: GameMode;
   readonly flow: MatchFlow;
   readonly bots: BotDirector;
+  /** The six killstreaks as instance-owned entities (M11 Gate B, §6.8). */
+  readonly streaks: StreakSystem;
 
   readonly mapEntry: MapEntry;
   readonly modeEntry: ModeEntry;
@@ -330,6 +345,58 @@ export class ServerMatch {
     // the network, because the bots that hear the footsteps live here and this hook was never set.
     this.bots.silentFootsteps = (entityId) => !this.perksOf(entityId).audibleFootsteps;
 
+    /**
+     * The six killstreaks, server-side (M11 Gate B, §6.8, §8.22).
+     *
+     * The header of this file used to read *"No killstreaks yet — `StreakSystem` needs a
+     * `StreakPresentation`, and `SILENT_PRESENTATION` is ready for it, but streaks are earned by
+     * a player's kill streak and the bot path for that is M11's business."* This is that
+     * business. Nothing about `StreakSystem` needed changing to run here beyond the two hooks
+     * that assumed a single local player — M9 already took the scene out of `streaks/`, which is
+     * what makes a streak a thing that runs in Node at all.
+     *
+     * §4.15 puts *"killstreak earn, activation, entity state"* on the replicated side of the
+     * line, so this is the only copy that decides anything: earning folds over the authoritative
+     * score, activation is a client request the server grants, and the sentries and crates in
+     * the world are entities here that clients draw.
+     *
+     * All three M6 perk hooks are answered from `perksOf`, which is the resolved loadout the
+     * player migrated in with — the same one Tier 1 #20 is about. Ghost is the interesting one
+     * and it is answered *twice*: here, so a Ghost player is never recorded as a UAV contact,
+     * and again in `MatchInstance` as a per-recipient intel filter.
+     */
+    this.streaks = new StreakSystem({
+      bus: this.bus,
+      score: this.score,
+      roster: this.bots.roster,
+      // Every connected human, rather than one local player: each gets their own progress and
+      // it is replicated to them alone.
+      reportProgressTo: (id) => this.getPlayer(id) !== undefined,
+      commandFor: (id) => this.getPlayer(id)?.lastCommand ?? null,
+      targetable: (id) => this.perksOf(id).targetedByStreaks,
+      visibleToUav: (id) => this.perksOf(id).visibleToUav,
+      streakDiscount: (id) => this.perksOf(id).streakDiscount,
+      // A bot has no class, so it keeps the full list and earns as it always has.
+      equippedStreaks: (id) => this.equippedStreaksOf(id),
+      context: {
+        bus: this.bus,
+        world: this.world,
+        damage: this.damage,
+        bots: this.bots,
+        // The port M9 built for exactly this. Every call is correctly a no-op: a bang with
+        // nobody to hear it is the client's business, driven by the replicated event.
+        present: SILENT_PRESENTATION,
+        mapDef: this.mapEntry.def,
+        cfg: DEFAULT_STREAK_CONFIG,
+        rng: new Rng(options.seed ^ 0x5bd1_e995),
+        tiers: this.tiers,
+        roster: this.bots.roster,
+      },
+    });
+    // Care packages are contestable in every mode, so they ride the second provider slot rather
+    // than the mode's — a crate is worth walking to whether or not there are flags.
+    this.bots.streakObjectives = this.streaks;
+
     this.unsubscribe.push(
       this.bus.on(EV.MatchEnded, () => {
         this.result = this.flow.result;
@@ -468,6 +535,9 @@ export class ServerMatch {
     // does it, so the two runtimes resolve a plant that starts and completes on the same tick
     // identically.
     this.stepBombInteractions();
+    // Streaks tick after the bots that may have just shot one down, and before the flow that
+    // may declare the match over and end them all. The same order `ClientMatch` uses.
+    this.streaks.simulate(tickIndex);
     this.flow.simulate(tickIndex);
 
     for (const player of this.players) this.maybeRespawn(player);
@@ -666,6 +736,20 @@ export class ServerMatch {
         (resolved === null ? ' (no loadout sent; server defaults)' : ''),
     );
     return player;
+  }
+
+  /**
+   * The three streaks an entity may earn (M7 playtest, §6.8).
+   *
+   * Six shipped streaks against three keys means a player who reached twelve kills would hold
+   * six things and be able to spend three, so the class decides which three — exactly as it
+   * decides which three perks. A bot has no class and keeps the full list, which is what it
+   * has always had.
+   */
+  private equippedStreaksOf(entityId: number): readonly StreakId[] {
+    const resolved = this.loadouts.get(entityId);
+    if (resolved == null) return ALL_STREAK_IDS;
+    return resolved.streaks.filter((id): id is StreakId => id !== null);
   }
 
   /**
@@ -929,6 +1013,17 @@ export class ServerMatch {
     this.unsubscribe.length = 0;
     this.flow.dispose();
     this.score.dispose();
+    /**
+     * Before the director, which streaks hold a reference to (§4.18).
+     *
+     * A live match is created and destroyed on every cycle, and §8.13 asks for a hundred of
+     * them to leave `EventBus.liveSubscriptions` exactly flat. `StreakSystem.dispose` retires
+     * every live streak — each of which may hold a damageable registration and bus handlers of
+     * its own — so a match torn down with a sentry still standing releases it rather than
+     * leaving it subscribed to a bus that outlives the world it was shooting into.
+     */
+    this.streaks.dispose();
+    this.bots.streakObjectives = null;
     this.bots.dispose();
   }
 

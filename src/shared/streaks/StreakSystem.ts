@@ -55,8 +55,25 @@ export interface StreakSystemDeps {
   readonly visibleToUav: (entityId: number) => boolean;
   /** Kills subtracted from every requirement for this entity (Hardline). */
   readonly streakDiscount: (entityId: number) => number;
-  /** The local player's id, so the HUD can be told about their streaks only. */
-  readonly localId: number;
+  /**
+   * Whose streak progress is worth announcing (M11 Gate B).
+   *
+   * Was `localId: number`, which is exactly right in a browser — there is one HUD and it
+   * belongs to one player — and cannot express a dedicated server, where every connected human
+   * needs their own progress and none of them is "the" local one. A predicate answers both:
+   * the client asks "is this me", the server asks "is this anybody I am talking to".
+   */
+  readonly reportProgressTo: (entityId: number) => boolean;
+
+  /**
+   * This entity's command for the current tick, or null (M11 Gate B).
+   *
+   * Only the Chopper Gunner reads it: a gunner flies with the same command their body would
+   * have consumed. Was threaded through `simulate(tick, cmd)` as the single local player's
+   * command, which on a server would have flown *every* chopper with whichever player's
+   * command happened to be passed — so two gunners would have shared one stick.
+   */
+  readonly commandFor: (entityId: number) => InputCommand | null;
   /**
    * The three streaks this entity has equipped, in key order (M7 playtest).
    *
@@ -222,14 +239,18 @@ export class StreakSystem implements ObjectiveProvider {
    * Iterated backwards so a streak that expires can be spliced out without the loop skipping
    * its neighbour, which is the classic version of this bug.
    */
-  simulate(tick: number, cmd: InputCommand): void {
+  simulate(tick: number): void {
     const t0 = nowMs();
     for (let i = this.active.length - 1; i >= 0; i--) {
       const streak = this.active[i];
       if (streak === undefined) continue;
 
-      // The chopper consumes the player's command, exactly as the player controller would.
-      if (streak instanceof ChopperGunner && streak.ownerId === this.deps.localId) streak.step(cmd);
+      // The chopper consumes its own owner's command, exactly as their body would. Asked per
+      // streak rather than handed one command, so two gunners in the same match fly separately.
+      if (streak instanceof ChopperGunner) {
+        const cmd = this.deps.commandFor(streak.ownerId);
+        if (cmd !== null) streak.step(cmd);
+      }
 
       if (streak.onTick(tick)) continue;
       this.retire(i, streak);
@@ -422,7 +443,7 @@ export class StreakSystem implements ObjectiveProvider {
   }
 
   private publishProgress(entityId: number, streak: number): void {
-    if (entityId !== this.deps.localId) return;
+    if (!this.deps.reportProgressTo(entityId)) return;
     const next = this.nextFor(entityId);
     const ev = this.evProgress;
     ev.entityId = entityId;

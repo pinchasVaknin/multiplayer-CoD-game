@@ -104,6 +104,8 @@ export class NetPlayer implements Combatant {
    * shoot. The weapon's own state cannot express that and the command can.
    */
   lastButtons = 0;
+  /** The whole of the last command consumed, or null before the first. See `advance`. */
+  lastCommand: InputCommand | null = null;
 
   constructor(
     readonly entityId: number,
@@ -332,6 +334,15 @@ export class NetPlayer implements Combatant {
 
   private advance(cmd: InputCommand): void {
     this.lastButtons = cmd.buttons;
+    /**
+     * Kept whole for the Chopper Gunner (M11 Gate B).
+     *
+     * `lastButtons` is enough for everything that only asks "was the trigger down"; a gunner
+     * flies with the aim angles too. Held by reference rather than copied because the streak
+     * system reads it inside the same tick it was written, before `InputBuffer` can hand the
+     * record to anybody else.
+     */
+    this.lastCommand = cmd;
     this.controller.step(cmd);
     const sim = this.controller.sim;
     this.weapons.step(cmd, sim);

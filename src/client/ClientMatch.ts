@@ -37,8 +37,8 @@ import { ClientStreakPresentation } from './streaks/ClientStreakPresentation';
 import { StreakRenderer } from './streaks/StreakRenderer';
 import { StreakSystem } from '../shared/streaks/StreakSystem';
 import {
+  ALL_STREAK_IDS,
   DEFAULT_STREAK_CONFIG,
-  STREAK_DEFS,
   streakDef,
   type StreakConfig,
   type StreakId,
@@ -231,7 +231,6 @@ const MORTAR_MARK_RADIUS = DEFAULT_STREAK_CONFIG.mortarScatter;
 const MORTAR_STEER_M_PER_RAD = 42;
 
 /** Every streak, for entities that have no loadout to narrow it — which is every bot. */
-const ALL_STREAK_IDS: readonly StreakId[] = STREAK_DEFS.map((d) => d.id);
 
 export class Match {
   readonly damage: DamageSystem;
@@ -319,6 +318,14 @@ export class Match {
   private playerDead = false;
   /** Previous tick's buttons, for edge detection in the sim (S4.2). */
   private prevButtons = 0;
+  /**
+   * The command this tick, for the Chopper Gunner (M11 Gate B).
+   *
+   * `StreakSystem` pulls per-owner commands now rather than being handed one, so that a server
+   * with two gunners does not fly both off the same stick. The client's answer is the local
+   * player's current command, stashed here immediately before `simulate`.
+   */
+  private lastStreakCommand: InputCommand | null = null;
   /**
    * Where a mortar will land if one is called in.
    *
@@ -614,7 +621,9 @@ export class Match {
       bus: deps.bus,
       score: this.score,
       roster: this.bots.roster,
-      localId: this.localId,
+      // One HUD, one player: the client's answer to both of these is "is this me" (M11 Gate B).
+      reportProgressTo: (id) => this.identity.is(id),
+      commandFor: (id) => (this.identity.is(id) ? this.lastStreakCommand : null),
       targetable: (id) => (this.identity.is(id) ? this.meta.state.targetedByStreaks : true),
       visibleToUav: (id) => (this.identity.is(id) ? this.meta.state.visibleToUav : true),
       streakDiscount: (id) => (this.identity.is(id) ? this.meta.state.streakDiscount : 0),
@@ -1135,7 +1144,8 @@ export class Match {
     if (!this.isNetworked) this.bots.simulate(cmd.tickIndex, cmd.sampledAtMs);
     // Streaks tick after the bots that may have just shot one down, and before the flow that
     // may declare the match over and end them all.
-    this.streaks.simulate(cmd.tickIndex, cmd);
+    this.lastStreakCommand = cmd;
+    this.streaks.simulate(cmd.tickIndex);
     this.syncChopperBody();
     if (!this.playerDead && !this.mortarOverlay.isOpen) this.stepStreakInput(cmd);
     // Local matches only (M11 Gate B). A networked client's Use key is already in the command

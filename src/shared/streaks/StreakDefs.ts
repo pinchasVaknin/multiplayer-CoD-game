@@ -207,3 +207,13 @@ export const DEFAULT_STREAK_CONFIG: StreakConfig = {
 export function cloneStreakConfig(src: StreakConfig): StreakConfig {
   return { ...src };
 }
+
+/**
+ * Every shipped streak id, in def order.
+ *
+ * The list a combatant with no class earns from — which is every bot, and is what bots have
+ * always had. Shared rather than rebuilt per composition root (M11 Gate B): it lived in
+ * `ClientMatch` and the dedicated server would have needed its own copy, which is one more
+ * pair of facts that can drift when a seventh streak is added.
+ */
+export const ALL_STREAK_IDS: readonly StreakId[] = STREAK_DEFS.map((d) => d.id);
