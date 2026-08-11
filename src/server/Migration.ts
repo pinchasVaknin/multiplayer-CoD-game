@@ -77,7 +77,12 @@ export class Migration {
     const loadout = session.loadout;
 
     // Release first, then seat. Both inside this call, so no tick sees the gap.
-    this.router.release(session.playerId);
+    //
+    // `'migrated'`, explicitly: this player is about to be seated one instance over and is not
+    // leaving anybody a body down, so the live match must not put a bot in their place (§6.7).
+    // Treating a migration as a departure would add a bot on every cycle and turn §8.13's flat
+    // hundred cycles into a staircase.
+    this.router.release(session.playerId, 'migrated');
     const player = to.seat(session, loadout);
     if (player === null) {
       /**

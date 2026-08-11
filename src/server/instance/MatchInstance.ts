@@ -57,6 +57,15 @@ export interface MatchInstanceDeps {
   readonly startTick: number;
 }
 
+/**
+ * Why a seat is being released.
+ *
+ * `'migrated'` is a player who is still connected and is being seated elsewhere in the same
+ * call; `'disconnected'` is a player who is gone. The bot-replacement rule in §6.7 applies to
+ * exactly one of them.
+ */
+export type UnseatCause = 'disconnected' | 'migrated';
+
 /** What the router needs to know about a seat without reaching into the simulation. */
 export interface Seat {
   readonly session: Session;
@@ -169,13 +178,31 @@ export abstract class MatchInstance {
     return player;
   }
 
-  /** Take a connection out of this world, leaving nothing of it behind. */
-  unseat(playerId: number): void {
+  /**
+   * Take a connection out of this world, leaving nothing of it behind.
+   *
+   * `cause` matters and is not cosmetic. A player who **disconnected** has left a side a body
+   * down and, in a live match, is replaced by a bot (§6.7). A player who **migrated** is still
+   * playing, one instance over, and replacing them would grow the roster by one on every cycle.
+   * Only the caller can tell the two apart, so only the caller says which.
+   */
+  unseat(playerId: number, cause: UnseatCause = 'disconnected'): void {
     const seat = this.seats.get(playerId);
     if (seat === undefined) return;
-    this.match.removePlayer(seat.player.entityId);
+    this.releaseEntity(seat.player.entityId, cause);
     this.encoders.delete(seat.player.entityId);
     this.seats.delete(playerId);
+  }
+
+  /**
+   * Drop the simulation entity behind a seat. Overridden by `LiveMatch` to leave a bot behind.
+   *
+   * Split out so the subclass can substitute the removal without having to repeat the encoder
+   * and seat-map bookkeeping around it — which is the half that, if forgotten, keeps a
+   * destroyed instance alive through a `Seat` holding a `NetPlayer`.
+   */
+  protected releaseEntity(entityId: number, _cause: UnseatCause): void {
+    this.match.removePlayer(entityId);
   }
 
   // -- the tick --------------------------------------------------------------

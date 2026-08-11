@@ -337,6 +337,39 @@ export class ServerMatch {
     );
 
     /**
+     * A new round puts everybody back where they started (M11 Gate B; post-M8 playtest).
+     *
+     * **The third piece of match wiring that never crossed to the server at M9**, and the one
+     * with the worst symptom. `ClientMatch` has subscribed to this since M8 and `ServerMatch`
+     * never did, so in a networked Search & Destroy the humans were never put back at a round
+     * boundary — and there is no other route home, because `maybeRespawn` gates on
+     * `flow.respawnAllowed`, which in a one-life mode is false by construction
+     * (`livesUsed < livesPerRound - 1` is `0 < 0`). A human who died in round one was dead for
+     * the rest of the match: able to look around, unable to move, while the bots played on
+     * around them. Exactly the failure `spawnPlayer`'s own comment warns about — *"a
+     * permanently dead player is not a visibly broken one"* — arriving from the other end.
+     *
+     * Bots were fine, because `BotDirector.respawnAll` is driven from the client's copy of this
+     * subscription in single-player and from the director's own round handling here. Only the
+     * human half was missing, which is why nothing in the logs said so.
+     *
+     * Guarded by `usesRoundReset` exactly as the client's is: a single-round mode fires this
+     * once, at the start, against a world that has just spawned everybody anyway.
+     */
+    this.unsubscribe.push(
+      this.bus.on(EV.RoundStarted, () => {
+        if (this.modeEntry.usesRoundReset !== true) return;
+        this.bots.respawnAll();
+        // `NetPlayer.spawn` already clears the respawn timer, resets health and bumps the
+        // spawn serial, so this is the whole of a human's round reset.
+        for (const player of this.players) {
+          this.spawnPlayer(player);
+          this.flow.noteRespawn(player.entityId);
+        }
+      }),
+    );
+
+    /**
      * Death and flinch for connected humans (M10).
      *
      * `BotDirector` already does this for bots, keyed off its own `byId` map, and a human is
@@ -604,7 +637,26 @@ export class ServerMatch {
     this.rewind.register(player);
     this.score.register(entityId, displayName, team);
 
-    this.spawnPlayer(player);
+    /**
+     * Spawn now — unless this is a one-life round already under way (§6.7, M7).
+     *
+     * §6.7: a human joining a running match *"is blocked mid-round in S&D per M7"*. One life a
+     * round means a body that appears halfway through has an advantage nobody else in the round
+     * has: everyone else has been shot at since the start. So they are seated, scored and
+     * routed — they simply have no body until the round ends, at which point the `RoundStarted`
+     * reset above puts them in with everybody else.
+     *
+     * `usesRoundReset` is the test rather than `livesPerRound`, because it is the same fact the
+     * reset keys off: a mode whose rounds put everybody back is a mode where waiting for the
+     * next round is a bounded wait.
+     */
+    if (this.joinBlockedMidRound()) {
+      log.info(
+        `${displayName} joined mid-round in ${this.modeEntry.id} — held out until the next round.`,
+      );
+    } else {
+      this.spawnPlayer(player);
+    }
     // The class is now a thing that can be wrong, and "what did the server think this player
     // brought" is the first question when a duel looks wrong.
     const perks = describePerkState(this.perksOf(entityId));
@@ -614,6 +666,17 @@ export class ServerMatch {
         (resolved === null ? ' (no loadout sent; server defaults)' : ''),
     );
     return player;
+  }
+
+  /**
+   * Whether a body arriving now would be joining a one-life round in progress (§6.7).
+   *
+   * `WARMUP` is deliberately not blocked: that is the 3-2-1 before a round, nobody has been
+   * shot at yet, and it is the phase every player migrating in at match start arrives during.
+   * Blocking there would hold *the whole lobby* out of round one.
+   */
+  private joinBlockedMidRound(): boolean {
+    return this.modeEntry.usesRoundReset === true && this.flow.currentPhase === 'LIVE';
   }
 
   /**

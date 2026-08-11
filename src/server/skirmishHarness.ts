@@ -218,6 +218,9 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let firstInputMs = -1;
 
   const cycleReports: CycleReport[] = [];
+  /** The live match's roster, as last seen while it was running. See the sampler below. */
+  let observedHumans = 0;
+  let observedBots = 0;
   let lastCycle = 0;
   let lastPhase = -1;
   const phaseBoundaries: { cycle: number; phase: string; atMs: number }[] = [];
@@ -243,6 +246,19 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       }
     }
 
+    /**
+     * Sample the live roster while the match is actually running (§6.7, §8.27).
+     *
+     * Taken here rather than in `snapshotCycle`, which fires on the *next* cycle's first tick —
+     * by which time the live match has been destroyed and every roster reads zero. A count
+     * that can only be zero is not a measurement.
+     */
+    const running = server.instances[1];
+    if (running !== undefined && running.running) {
+      observedHumans = running.playerCount;
+      observedBots = running.botCount;
+    }
+
     const vote = server.vote;
     if (vote.phase !== lastPhase) {
       lastPhase = vote.phase;
@@ -255,13 +271,19 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     }
 
     if (vote.cycle > lastCycle) {
-      if (lastCycle > 0) cycleReports.push(snapshotCycle(server, clients, lastCycle));
+      if (lastCycle > 0) {
+        cycleReports.push(snapshotCycle(server, clients, lastCycle, observedHumans, observedBots));
+        observedHumans = 0;
+        observedBots = 0;
+      }
       lastCycle = vote.cycle;
       if (cycleReports.length >= opts.cycles) break;
     }
   }
 
-  if (cycleReports.length < opts.cycles) cycleReports.push(snapshotCycle(server, clients, lastCycle));
+  if (cycleReports.length < opts.cycles) {
+    cycleReports.push(snapshotCycle(server, clients, lastCycle, observedHumans, observedBots));
+  }
 
   /**
    * Let the last round trip land before reading the reports.
@@ -300,9 +322,25 @@ interface CycleReport {
   readonly liveStepMs: number;
   readonly subscriptions: number;
   readonly heapMb: number;
+  /**
+   * The live match's roster, split (§6.7, §8.27).
+   *
+   * The number the bot-replacement rule actually constrains is the **total**: §6.7 fixes it at
+   * the mode's authored count, so three humans in a ten-body Team Deathmatch must show 3 + 7.
+   * Reported as the pair rather than the sum, because 13 and 10 are told apart by the sum and
+   * "the humans replaced bots on the wrong side" is only visible in the split.
+   */
+  readonly liveHumans: number;
+  readonly liveBots: number;
 }
 
-function snapshotCycle(server: Server, _clients: HeadlessClient[], cycle: number): CycleReport {
+function snapshotCycle(
+  server: Server,
+  _clients: HeadlessClient[],
+  cycle: number,
+  liveHumans: number,
+  liveBots: number,
+): CycleReport {
   const instances = server.instances;
   const warmup = instances[0];
   const live = instances[1];
@@ -314,6 +352,8 @@ function snapshotCycle(server: Server, _clients: HeadlessClient[], cycle: number
     liveStepMs: round(live?.meanStepMs ?? 0),
     subscriptions: EventBus.liveSubscriptions,
     heapMb: round(process.memoryUsage().heapUsed / 1024 / 1024),
+    liveHumans,
+    liveBots,
   };
 }
 
@@ -434,6 +474,7 @@ function reportFlow(input: FlowReportInput): number {
     log.info(
       `cycle ${c.cycle}: ${c.instances} instance(s), total ${c.totalStepMs}ms ` +
         `(warmup ${c.warmupStepMs}, live ${c.liveStepMs}), ` +
+        `live roster ${c.liveHumans}H+${c.liveBots}B=${c.liveHumans + c.liveBots}, ` +
         `${c.subscriptions} subs, heap ${c.heapMb} MiB`,
     );
   }

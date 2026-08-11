@@ -1,6 +1,6 @@
 import { logger } from '../shared/core/Log';
 import type { MatchId } from '../shared/net/Skirmish';
-import type { MatchInstance } from './instance/MatchInstance';
+import type { MatchInstance, UnseatCause } from './instance/MatchInstance';
 import type { PlayerId, Session } from './net/Session';
 
 const log = logger('router');
@@ -45,7 +45,9 @@ export class Router {
         `admit(${session.playerId}) but they are already in instance ${existing.id}. ` +
           'This is the "never two" half of the migration invariant; treating it as a move.',
       );
-      this.release(session.playerId);
+      // A move, as the message says: the player is about to be seated in `instance` on the
+      // next line, so nobody is leaving and no bot takes their place.
+      this.release(session.playerId, 'migrated');
     }
     this.byPlayer.set(session.playerId, instance);
   }
@@ -57,10 +59,10 @@ export class Router {
    * `onLeave` and from the migration's own cleanup, and the second should be a no-op rather
    * than an error.
    */
-  release(playerId: PlayerId): void {
+  release(playerId: PlayerId, cause: UnseatCause = 'disconnected'): void {
     const instance = this.byPlayer.get(playerId);
     if (instance === undefined) return;
-    instance.unseat(playerId);
+    instance.unseat(playerId, cause);
     this.byPlayer.delete(playerId);
   }
 

@@ -7,7 +7,7 @@ import { findMap, findMode } from '../../shared/modes/ModeRegistry';
 import type { BotTier } from '../../shared/ai/DifficultyTiers';
 import { ServerMatch } from '../Match';
 import type { MapBakery } from '../MapBakery';
-import { MatchInstance, type MatchInstanceDeps } from './MatchInstance';
+import { MatchInstance, type MatchInstanceDeps, type UnseatCause } from './MatchInstance';
 
 const log = logger('live');
 
@@ -255,6 +255,63 @@ export class LiveMatch extends MatchInstance {
   /** Mark this instance unusable after its step threw (§4.18). Its players go back. */
   fail(why: string): void {
     this.setState(InstanceState.FAILED, why);
+  }
+
+  /**
+   * A human takes a bot's place rather than being added beside it (§6.7, §8.27).
+   *
+   * §6.7: *"Bots fill to the mode's target player count — 10 for TDM / Domination / Kill
+   * Confirmed / S&D, 8 for FFA — at the tier configured"*, and *"a human joining a running
+   * match replaces a bot rather than adding a player, so team sizes stay fixed."*
+   *
+   * A live match spawns the mode's full authored roster at construction, before anybody has
+   * migrated in, because it has no way of knowing how many will make it through the readiness
+   * handshake. So every seat granted afterwards has to take a bot with it — otherwise three
+   * humans joining a ten-bot Team Deathmatch make it a thirteen-body match, with one side two
+   * players heavier than the other.
+   *
+   * The bot comes off **the team the human actually landed on**, which is why this runs after
+   * `super.seat` rather than before: `ServerMatch.addPlayer` balances the sides, and guessing
+   * the team in advance is how the count stays right in aggregate and wrong per side.
+   *
+   * `removeBotForSeat` rather than `bots.removeOne` — the director cannot unregister from
+   * `Rewind`, and a bot removed the short way leaves a phantom in the lag-compensation path
+   * that is written every tick for the rest of the match.
+   */
+  override seat(session: Parameters<MatchInstance['seat']>[0], loadout: Parameters<MatchInstance['seat']>[1]) {
+    const player = super.seat(session, loadout);
+    if (player === null) return null;
+    if (!this.match.removeBotForSeat(player.team)) {
+      // Not an error: a mode may have fewer bots than seats, and a match filled entirely with
+      // humans has none left to displace. Worth saying, because it is also what a bot-fill
+      // that silently did nothing would look like.
+      log.info(
+        `no bot on team ${player.team} to make room for ${session.displayName} — ` +
+          'the side is one body larger.',
+      );
+    }
+    return player;
+  }
+
+  /**
+   * A leaver's seat goes back to a bot, so their side is not left a body down (§6.7).
+   *
+   * Only on a **disconnect**, and only while the match is actually running. A migration is not
+   * a departure — the player is being seated one instance over in the same synchronous call —
+   * and treating it as one would add a bot on every cycle, in a process where the whole point
+   * of §8.13 is that a hundred cycles change nothing.
+   *
+   * It matters most in Search & Destroy, where `anyAlive` decides the round and nobody comes
+   * back: the last human on a side dropping out ends the round for everybody, scored as an
+   * elimination no one achieved.
+   */
+  protected override releaseEntity(entityId: number, cause: UnseatCause): void {
+    if (cause === 'disconnected' && this.state === InstanceState.RUNNING) {
+      this.match.replacePlayerWithBot(entityId);
+    }
+    // Unconditional, and safe either way: `removePlayer` no-ops on an entity already gone, so
+    // the path where no bot was available still releases the seat.
+    super.releaseEntity(entityId, cause);
   }
 
   override dispose(): void {
