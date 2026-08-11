@@ -56,6 +56,15 @@ export interface VoteCycleDeps {
   /** Seed for the tie-break RNG. Logged with every random pick so it is reconstructible. */
   readonly seed: number;
   readonly config?: VoteCycleConfig;
+  /**
+   * The cycle gave up before it could hand anything to the allocator.
+   *
+   * Unreachable today — both ballots are validated against the registry at module load — and
+   * wired anyway, because the alternative is a cycle that silently returns to free play and a
+   * player with no idea why the map they voted for never opened. §4.17's rule that every player
+   * is left *with a message* applies to every abort, not only to the allocator's.
+   */
+  readonly onAborted?: (reason: string) => void;
 }
 
 export class VoteCycle {
@@ -268,6 +277,7 @@ export class VoteCycle {
         `cycle ${this.cycleIndex}: resolved to mode ${this.decidedMode} / map ${this.decidedMap}, ` +
           'which are not both on the ballot. Returning to free play.',
       );
+      this.deps.onAborted?.('The vote could not be resolved — staying in the arena.');
       this.toIdle();
       return;
     }

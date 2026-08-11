@@ -118,6 +118,9 @@ export class Input {
   private lockListeners: Array<(locked: boolean) => void> = [];
   private escapeListeners: Array<() => void> = [];
 
+  /** See `onDigit`. Returns whether the handler consumed the key. */
+  private digitListeners: Array<(digit: number) => boolean> = [];
+
   /** Set true while a DOM control (a tuning slider, a menu button) has focus. */
   private domFocusGuard = false;
 
@@ -182,6 +185,7 @@ export class Input {
     document.removeEventListener('focusout', this.onFocusOut);
     this.lockListeners = [];
     this.escapeListeners = [];
+    this.digitListeners = [];
   }
 
   // -- pointer lock -------------------------------------------------------
@@ -269,6 +273,18 @@ export class Input {
    * case arrives through `onLockChange` instead. So one of the two always fires and never
    * both, which is what makes "Esc pauses, Esc resumes" a single rule.
    */
+
+  /**
+   * Offer digit keys to a consumer before they reach their binding (M11).
+   *
+   * The handler returns whether it took the key. Used by the vote overlay, which is open for
+   * twenty seconds in every sixty and needs 1-5 during that window without permanently
+   * stealing the weapon and killstreak keys. See `onKeyDown`.
+   */
+  onDigit(fn: (digit: number) => boolean): void {
+    this.digitListeners.push(fn);
+  }
+
   onEscape(fn: () => void): void {
     this.escapeListeners.push(fn);
   }
@@ -474,6 +490,31 @@ export class Input {
     if (!guarded && this.shouldPreventDefault(e.code)) e.preventDefault();
     if (guarded) return;
     if (e.repeat) return;
+
+    /**
+     * Digit keys get first refusal, for the M11 vote overlay (§6.4).
+     *
+     * Offered **before** the binding bits are set and consumed if a listener takes it, because
+     * the digits are already bound: 1 and 2 are weapon slots and 3-5 are killstreaks. Without
+     * the early return, voting for mode 3 would also try to call in a UAV.
+     *
+     * A listener returning false leaves the key to its normal binding, so the digits behave
+     * exactly as they always have whenever no ballot is open — which is forty seconds in every
+     * sixty, and all of a live match.
+     *
+     * Placed after the focus guard on purpose: a ballot must not swallow a keystroke aimed at
+     * the loadout editor or a debug slider.
+     */
+    const digit = digitFor(e.code, e.key);
+    if (digit > 0) {
+      for (const fn of this.digitListeners) {
+        if (fn(digit)) {
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+
     this.held.add(e.code);
     this.buttons |= this.keybinds.bitsFor(e.code);
   };
@@ -642,4 +683,24 @@ function isFormControl(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+}
+
+/**
+ * `Digit1`-`Digit9` and `Numpad1`-`Numpad9` to 1-9, or 0 for anything else.
+ *
+ * `e.code` first, like every other binding in this file: the physical key is what a player
+ * means, and on an AZERTY keyboard `e.key` for the top-row digits is a symbol.
+ *
+ * **`e.key` is the fallback when `code` is absent**, which is not a hypothetical. A synthetic
+ * event dispatched by automation carries an empty `code` — that is how this was found, with a
+ * keypress that reached the window and matched nothing — and the same is true of some on-screen
+ * and IME keyboards, which report a key without a physical position because there is not one.
+ * Taking `key` when `code` is missing costs nothing and is the difference between voting
+ * working and silently not working for those users.
+ */
+function digitFor(code: string, key: string): number {
+  if (code.startsWith('Digit')) return Number(code.slice(5)) || 0;
+  if (code.startsWith('Numpad')) return Number(code.slice(6)) || 0;
+  if (code === '' && key.length === 1 && key >= '0' && key <= '9') return Number(key);
+  return 0;
 }

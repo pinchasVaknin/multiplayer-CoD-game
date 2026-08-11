@@ -109,6 +109,13 @@ export class ClockSync {
 
   private readonly rtts = new Float64Array(WINDOW);
   private readonly offsets = new Float64Array(WINDOW);
+
+  /**
+   * Whether `offsetMs` is still the handshake's provisional guess rather than a measurement.
+   *
+   * Cleared by the first real round-trip sample, which replaces the guess outright. See `seed`.
+   */
+  private seeded = false;
   private count = 0;
   private head = 0;
 
@@ -124,6 +131,36 @@ export class ClockSync {
    * is wrong in detail and right enough in practice — an asymmetric route biases the estimate
    * by half the difference, and nothing here needs better than that.
    */
+  /**
+   * A provisional offset from the handshake, **not** a round-trip sample (M11 playtest).
+   *
+   * The `Welcome` carries a server timestamp but no round trip: the client knows when the frame
+   * arrived and nothing about how long it was in flight. Seeding the estimator with it as a
+   * sample means claiming `rtt = 0`, and that claim is poisonous here in a way it would not be
+   * in a mean-based estimator — `recompute` picks the offset belonging to the **lowest-RTT**
+   * sample in the window, and a zero always wins. One fabricated sample therefore owned the
+   * offset for the whole sixteen-sample window, about four seconds at 4 Hz.
+   *
+   * The consequence is exactly what the playtest reported. The seeded offset is half a real
+   * round trip *too low*, so `targetTick` runs the client behind where it should be, its
+   * commands arrive for ticks the server has already simulated, the input buffer starves and
+   * repeats, and prediction and simulation pull apart on every tick — heavy rubberbanding at
+   * spawn that eases as real samples finally displace it.
+   *
+   * So the seed sets the offset directly and stays out of the window. The first real ping
+   * replaces it outright rather than easing toward it (see `recompute`), because a provisional
+   * value is not evidence to be averaged with.
+   */
+  seed(serverMs: number, serverTick: number, receivedAtMs: number): void {
+    this.lastServerTick = serverTick;
+    this.lastServerMs = serverMs;
+    // No RTT term: the honest reading of a one-way timestamp is that the offset is unknown by
+    // up to half a round trip, and the first ping will say by how much.
+    this.offsetMs = serverMs - receivedAtMs;
+    this.seeded = true;
+    this.synced = true;
+  }
+
   sample(sentAtMs: number, receivedAtMs: number, serverMs: number, serverTick: number): void {
     const rtt = receivedAtMs - sentAtMs;
     if (!Number.isFinite(rtt) || rtt < 0 || rtt > 10_000) return;
@@ -218,6 +255,7 @@ export class ClockSync {
     this.rttMs = 0;
     this.jitterMs = 0;
     this.offsetMs = 0;
+    this.seeded = false;
     this.adaptiveMs = 0;
   }
 
@@ -250,7 +288,14 @@ export class ClockSync {
     //
     // Moved toward rather than snapped to, so a single unusually fast sample does not jerk
     // the whole client's tick number and produce a command gap the server has to fill.
-    if (this.offsetMs === 0) this.offsetMs = bestOffset;
-    else this.offsetMs += (bestOffset - this.offsetMs) * 0.25;
+    if (this.offsetMs === 0 || this.seeded) {
+      // Nothing to ease away from: either this is the first sample, or the current value is the
+      // handshake's provisional guess, which is not a measurement and must not be averaged with
+      // one. See `seed`.
+      this.seeded = false;
+      this.offsetMs = bestOffset;
+    } else {
+      this.offsetMs += (bestOffset - this.offsetMs) * 0.25;
+    }
   }
 }

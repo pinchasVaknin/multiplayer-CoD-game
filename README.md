@@ -176,8 +176,10 @@ One process holds **two worlds**. There is no lobby, no queue and no ready-up.
   ends.
 
 A 60-second cycle runs continuously in the arena: 40 s of free play, 10 s to vote on a mode,
-10 s to vote on a map. The overlay is non-blocking — you keep moving and shooting through it,
-and vote with the number keys. When the map is decided your browser starts building it in the
+10 s to vote on a map. The overlay is non-blocking — you keep moving and shooting through it —
+and voting is **keyboard only**: press 1-5. There is no click target, because the game holds
+pointer lock and a click on the overlay is a click the browser has already delivered to the
+canvas as a shot. When the map is decided your browser starts building it in the
 background while you are still playing, so the transition into the match has no loading screen.
 
 | Setting | Default | What it does |
@@ -186,7 +188,7 @@ background while you are still playing, so the transition into the match has no 
 | `PLAY_SECONDS` | 40 | Free play before the ballot opens |
 | `MODE_VOTE_SECONDS` | 10 | |
 | `MAP_VOTE_SECONDS` | 10 | |
-| `READY_TIMEOUT_MS` | 8000 | How long a slow client's background build is waited on before the match starts without it |
+| `READY_TIMEOUT_MS` | 20000 | How long a slow client's background build is waited on before the match starts without it. Paired with the client's per-frame build budget — see `MapBuildQueue` |
 | `SUMMARY_HOLD_SECONDS` | 14 | How long the post-match summary is held before everybody returns |
 | `FAULT_INJECTION` | off | Diagnostic only. Lets the allocator be made to stall and fail |
 

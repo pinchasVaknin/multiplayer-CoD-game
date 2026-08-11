@@ -87,11 +87,17 @@ export interface ServerConfig {
    * (§4.18, §6.5), ms.
    *
    * §4.18: *"A server that waits indefinitely on one slow client is a server that is stuck."*
-   * Eight seconds is sized from the measured build: the slowest map builds in about 1.6 s on
-   * the reference machine, so this is roughly five times the expected worst case — long enough
-   * that it never fires for a machine that is merely slow, short enough that a client which
-   * has genuinely stalled costs one player a loading screen rather than costing everybody the
-   * match.
+   *
+   * **Twenty seconds, and it is paired with the client's per-frame build budget.** The two are
+   * one decision: the client spends `MapBuildQueue`'s budget per frame, which delivers roughly
+   * 300 ms of build per second at 60 FPS and 150 ms/s at 30, so a two-second map build lands in
+   * 7-13 s of wall time. A timeout below that fires on healthy machines and sends every
+   * transition down the §4.18 loading-screen path — which is exactly what the first value, 8 s,
+   * did.
+   *
+   * It is still a bound, which is what §4.18 actually requires: a client that has genuinely
+   * stalled costs itself a loading screen after twenty seconds rather than costing everybody
+   * the match.
    */
   readonly readyTimeoutMs: number;
   /** Seconds the end-of-match summary is held before everybody returns (§6.9: 12-15 s). */
@@ -158,7 +164,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     metricsSeconds: intOr(env['METRICS_SECONDS'], 30, 0, 3600),
     rewindDisabled: (env['REWIND_DISABLED'] ?? '') === '1',
     warmupBots: intOr(env['WARMUP_BOTS'], 3, 0, 8),
-    readyTimeoutMs: intOr(env['READY_TIMEOUT_MS'], 8000, 500, 60_000),
+    readyTimeoutMs: intOr(env['READY_TIMEOUT_MS'], 20_000, 500, 120_000),
     summaryHoldSeconds: intOr(env['SUMMARY_HOLD_SECONDS'], 14, 1, 60),
     faultInjection: (env['FAULT_INJECTION'] ?? '') === '1',
     voteCycle: {

@@ -583,9 +583,15 @@ export class NetClient {
       for (const cmd of this.pending) blankInto(cmd);
     }
 
-    // Seed the clock from the welcome so the first tick number is roughly right before any
-    // ping has completed. The estimate is refined within 250 ms.
-    this.clock.sample(receivedAtMs, receivedAtMs, serverMs, serverTick);
+    /**
+     * Seed the clock from the welcome, as a *guess* rather than as a sample.
+     *
+     * This used to call `sample(receivedAtMs, receivedAtMs, ...)`, which claims a zero round
+     * trip — and `ClockSync` elects its offset from the lowest-RTT sample in the window, so a
+     * fabricated zero won for four seconds and held the client half a round trip behind the
+     * server. That is the rubberbanding-at-spawn the M11 playtest reported. See `ClockSync.seed`.
+     */
+    this.clock.seed(serverMs, serverTick, receivedAtMs);
     this.currentTick = this.clock.targetTick();
     this.prediction.reset();
     log.info(

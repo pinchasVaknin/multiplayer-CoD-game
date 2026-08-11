@@ -4715,3 +4715,119 @@ the number was never zero anyway.
 - **The loadout is locked at migration**, captured into `MatchRequest` from `Session.loadout`.
   Anything Gate B adds that changes a player's class must go through `setPendingLoadout`, which
   defers to the next spawn — never applied to a standing body.
+
+---
+
+## M11 playtest round 1 — three bugs from a real browser
+
+The headless harness passed every one of these. All three needed a human, a real
+`requestAnimationFrame` and a real keyboard.
+
+### 1. Severe rubberbanding at spawn — two independent causes
+
+**(a) The clock was seeded with a fabricated zero-RTT sample.** `NetClient.adopt` called
+`clock.sample(receivedAtMs, receivedAtMs, ...)`, which claims the `Welcome` arrived with no
+network delay. That is poisonous in this estimator specifically: `ClockSync.recompute` elects
+the offset belonging to the **lowest-RTT** sample in its window, and a fabricated zero always
+wins. One made-up sample therefore owned the clock offset for the whole sixteen-sample window —
+about four seconds at 4 Hz — and held it half a real round trip too low. The client ran behind
+where it should, its commands arrived for ticks already simulated, the input buffer starved and
+repeated, and prediction pulled apart from simulation on every tick.
+
+`ClockSync.seed` now sets a provisional offset **outside** the sample window, and the first real
+ping replaces it outright rather than being averaged with it.
+
+Measured with a new spawn-window probe (mispredictions in the first four seconds after joining),
+three clients at `100ms ±30ms, 2% loss`:
+
+| | OP1 | OP2 | OP3 |
+|---|---|---|---|
+| Before | 1 | 2 | 3 |
+| After | **0** | **0** | **0** |
+
+The probe was watched going red before being believed green, per standing lesson 4.
+
+**(b) The client resolved a different class than it sent.** Two separate paths:
+
+- `Game.applyLoadout` passed `this.selection.modeId` — the *local menu* selection — into
+  `applyEquippedLoadout`. The mode's `unrestricted` flag decides whether unlock gates are lifted,
+  and the Shooting Range lifts them *and resolves a different slot entirely*. A player whose menu
+  was last left on the range would send their equipped class and locally resolve the range class.
+- `resolveEquipped` sanitises the slot against unlocks **in place, at resolve time**;
+  `toNetLoadout` read the same slot at *handshake* time, which is earlier. So the raw slot went
+  over the wire and the stripped slot was resolved locally.
+
+Either one produces a different `perkState.moveSpeedMult` on the two sides, which is Tier 1 #20
+arriving from the client's side rather than the server's, and presents identically. The mode is
+now the server's when there is one, and the slot is sanitised before it is copied to the wire.
+
+### 2. Number keys did not register, and clicking fought pointer lock
+
+`VoteOverlay.handleDigit` was written and **never called** — the exact "implemented but not
+verified usually means unreachable" trap from the handover's standing lessons. `Input` had no
+digit hook at all.
+
+`Input.onDigit` now offers digit keys to a listener *before* the binding bits are set, and a
+listener that takes the key stops it reaching its normal binding. That matters because the digits
+are already bound: 1-2 are weapon slots and 3-5 are killstreaks. A ballot is open for twenty
+seconds in sixty and only in the arena, so the cost is bounded and the keys behave normally the
+rest of the time.
+
+Two further findings while verifying it:
+
+- **Synthetic key events carry an empty `e.code`.** Automation dispatches `key` without a
+  physical position, and so do some on-screen and IME keyboards. `digitFor` now falls back to
+  `e.key` when `code` is absent.
+- **Mouse voting is removed entirely**, at the playtest's request and for a good reason: the game
+  holds pointer lock, so a click on the overlay is a click the browser has already delivered to
+  the canvas as a *shot*. The whole surface is now `pointer-events: none` including the options,
+  which are rendered as `disabled` buttons — still the live tally and still the accessible name,
+  but not operable by pointer.
+
+Verified end to end in a browser against a live server: `map vote: option 2 won outright with 1`.
+
+### 3. The transition aborted silently and looped
+
+Three defects, and the first is a design error rather than a wiring bug.
+
+**(a) The background-build budget could never meet the readiness deadline.** `DEFAULT_BUDGET_MS`
+was 2 ms per frame, chosen so the arena could not judder — without checking it against the
+deadline it has to meet. 2 ms at 60 FPS is **120 ms of build per second of wall clock**, so a map
+costing a second or two of work needs 8-17 s to finish, against an 8 s timeout. The handshake was
+destined to time out on a *healthy* machine, and every transition fell through to the §4.18
+loading-screen path that exists for the exceptional case.
+
+The budget is now 5 ms (300 ms/s at 60 FPS, 150 ms/s at 30) and the timeout 20 s. They are one
+decision and are documented as one. **The measured build time per map is what validates the pair
+and still needs a real browser.**
+
+**(b) `stepFlow` was not wrapped.** §4.18 requires each *instance's* step to be guarded so one
+world cannot take down the process; the **scheduler** around them was not, and it is the newest
+code in the milestone — allocation continuations, the readiness handshake, the named-tick
+migration and teardown all run there. An exception escaping it reached `serve.ts`'s
+`uncaughtException` handler, which logs and keeps the process alive, leaving `this.live` set with
+no instance able to reach `ENDED`. Every cycle after that hit the one-live-match cap and returned
+everybody to the arena — a server that votes, counts down and then silently does nothing, for
+ever. It is now caught and **recovered**: the half-built match is destroyed, everybody goes back
+to the arena and is told, and the cycle resumes.
+
+The same hole existed in the per-session `receive()` loop. §4.16 requires malformed input never to
+crash the server, and the decode paths honour that — but the *handlers* above them can throw
+(`onLoadout` runs `resolveLoadout` over a class a client chose). Each session's drain is now
+wrapped, and a session that throws is dropped rather than taking the tick with it.
+
+**(c) Every abort was invisible.** `VoteOverlay.apply` hid the surface whenever the phase was not
+a ballot — and the phase during a failed allocation is `ALLOCATING`, so the next 4 Hz broadcast
+wiped the notice explaining what had happened. §4.17 requires every player to be left in the arena
+*with a message*, and a message shown for 250 ms is not one. A live notice now keeps the surface
+up, `ALLOCATING` renders a heading of its own, and **every** abort path notifies — not only the
+allocator's: nobody-left-to-migrate, a vote resolving onto an existing match, an unresolvable
+ballot, and the new flow-fault recovery.
+
+### Still not reproduced
+
+The exact browser sequence behind (3) was **not** reproduced headlessly — two full cycles at
+shipped timings ran clean. So (b) is a structural hole that produces precisely the reported
+symptom and makes it permanent, not a confirmed root cause. If it recurs, the new logging names
+it: `the skirmish flow threw`, `session N threw while receiving`, or `a vote resolved while a
+match was already present (state X)`.

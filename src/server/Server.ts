@@ -3,7 +3,13 @@ import { logger } from '../shared/core/Log';
 import type { VoteInfo } from '../shared/net/Messages';
 // Importing this module is also what runs its boot-time check that both ballots name things
 // the registry actually has — see the bottom of `Skirmish.ts`.
-import { InstanceState, MAP_BALLOT, MODE_BALLOT, sanitiseNetLoadout } from '../shared/net/Skirmish';
+import {
+  InstanceState,
+  instanceStateName,
+  MAP_BALLOT,
+  MODE_BALLOT,
+  sanitiseNetLoadout,
+} from '../shared/net/Skirmish';
 import { describeConfig, type ServerConfig } from './Config';
 import { LiveMatch } from './instance/LiveMatch';
 import type { MatchInstance } from './instance/MatchInstance';
@@ -143,6 +149,7 @@ export class Server {
        */
       humanCount: () => this.router.playerCount,
       onResolved: (resolution) => void this.onVoteResolved(resolution),
+      onAborted: (reason) => this.noticeAll(reason),
       seed: cfg.seed,
       config: cfg.voteCycle,
     });
@@ -362,8 +369,30 @@ export class Server {
   // -- the tick ---------------------------------------------------------------
 
   private tick(tickIndex: number): void {
-    // 1. Drain sockets. Commands land in input buffers before anything simulates.
-    for (const s of this.sessions) s.receive();
+    /**
+     * 1. Drain sockets. Commands land in input buffers before anything simulates.
+     *
+     * Wrapped **per session** (M11 playtest). S4.16 requires that *"malformed input must never
+     * crash the server"*, and the decode paths honour that — `ByteReader` does not throw and
+     * `decodeHeader` returns `bad` rather than raising. What was unguarded is the layer above:
+     * the *handlers*. `onLoadout` runs `resolveLoadout` over a class a client chose, and a
+     * throw there escaped the tick entirely, taking the rest of the drain, the whole
+     * simulation step and the flow with it.
+     *
+     * Per session rather than around the loop, so one client's bad frame costs that client its
+     * frame and nobody else theirs. The connection is dropped rather than left in an unknown
+     * state — S4.16's answer to anything the server does not like is to close the link.
+     */
+    for (const s of this.sessions) {
+      try {
+        s.receive();
+      } catch (err) {
+        const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+        log.error(`session ${s.playerId} (${s.displayName}) threw while receiving: ${message}`);
+        metric('server', 'receiveFault', { playerId: s.playerId, reason: String(err) });
+        s.close('malformed message');
+      }
+    }
 
     // 2. Step every RUNNING instance, each wrapped (§4.18).
     let total = 0;
@@ -379,7 +408,7 @@ export class Server {
     this.meanTotalStepMs = this.meanTotalStepMs * 0.98 + total * 0.02;
 
     // 3. The flow: vote, allocate, wait for readiness, migrate, end, tear down.
-    this.stepFlow(tickIndex);
+    this.stepFlowGuarded(tickIndex);
 
     // 4. Release whatever the per-link condition simulator has been holding.
     for (const s of this.sessions) {
@@ -459,6 +488,61 @@ export class Server {
 
   // -- the skirmish flow ------------------------------------------------------
 
+  /**
+   * The flow step, wrapped — and recovered from (M11 playtest).
+   *
+   * §4.18 requires each *instance's* step to be wrapped so one world cannot take down the
+   * process. The **scheduler** around them was not, and it is the newest and most intricate
+   * code in the milestone: allocation continuations, the readiness handshake, the named-tick
+   * migration and teardown all run here.
+   *
+   * An exception escaping this used to reach `serve.ts`'s `uncaughtException` handler, which
+   * logs it and keeps the process alive — leaving the flow in a half-built state with
+   * `this.live` set and no instance able to reach `ENDED`. Every subsequent cycle then hit the
+   * one-live-match cap and returned everybody to the arena. From the player's side that is a
+   * server which votes, counts down, and then silently does nothing, for ever, which is what
+   * the playtest reported.
+   *
+   * So it is caught here and **recovered**: the half-built match is destroyed, everybody is put
+   * back in the arena and told, and the cycle resumes. A cycle lost is a bad outcome; a server
+   * that has quietly stopped starting matches is a much worse one.
+   */
+  private stepFlowGuarded(tickIndex: number): void {
+    try {
+      this.stepFlow(tickIndex);
+    } catch (err) {
+      const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      log.error(`the skirmish flow threw: ${message}`);
+      metric('server', 'flowFault', { tick: tickIndex, reason: String(err) });
+      this.recoverFlow(tickIndex);
+    }
+  }
+
+  /**
+   * Put the flow back to a state it can run from.
+   *
+   * Deliberately blunt: whatever the live match was doing, it is now unreachable. Everybody
+   * goes back to the arena — the one world that always exists — the instance is released, and
+   * the cycle starts again from free play. Each step is itself guarded, because a recovery that
+   * throws is a recovery that leaves the process worse than it found it.
+   */
+  private recoverFlow(tickIndex: number): void {
+    try {
+      this.returnEveryoneToWarmup(tickIndex, '');
+    } catch (err) {
+      log.error(`flow recovery could not return every player to the arena: ${String(err)}`);
+    }
+    try {
+      void this.destroyLive();
+    } catch (err) {
+      log.error(`flow recovery could not destroy the live match: ${String(err)}`);
+    }
+    this.live = null;
+    this.allocating = false;
+    this.noticeAll('The match could not be started — back to the arena.');
+    this.voteCycle.resume(tickIndex);
+  }
+
   private stepFlow(tickIndex: number): void {
     this.voteCycle.step(tickIndex);
     this.broadcastVoteStatePeriodically(tickIndex);
@@ -489,7 +573,20 @@ export class Server {
    */
   private async onVoteResolved(resolution: VoteResolution): Promise<void> {
     if (this.allocating || this.live !== null) {
-      log.warn('a vote resolved while a match was already allocated or allocating; ignoring it.');
+      /**
+       * A vote resolved while a match already exists.
+       *
+       * §4.9 caps the process at one live match, so this is the cap doing its job — but it is
+       * also the signature of a `LiveMatch` that never reached `ENDED` and was therefore never
+       * destroyed, which would silently abort every cycle from then on. Logged loudly with the
+       * offending instance's state so the second reading is distinguishable from the first.
+       */
+      const state = this.live === null ? 'allocating' : instanceStateName(this.live.instance.state);
+      log.warn(
+        `a vote resolved while a match was already present (state ${state}); ignoring it. ` +
+          'If this repeats, a live match is stuck and is holding the only slot.',
+      );
+      this.noticeAll('The previous match has not finished — staying in the arena.');
       this.voteCycle.resume(this.loop.currentTick);
       return;
     }
@@ -577,7 +674,8 @@ export class Server {
        * §4.20's rule again, one stage later: no match for zero humans. The instance was built,
        * so unlike the allocation-failure path there *is* something to release.
        */
-      log.info(`match ${instance.id}: nobody left to migrate. Destroying it.`);
+      log.warn(`match ${instance.id}: nobody left in the arena to migrate. Destroying it.`);
+      this.noticeAll('The match was cancelled — nobody left to play it.');
       void this.destroyLive();
       this.voteCycle.resume(tickIndex);
       return;
@@ -738,6 +836,19 @@ export class Server {
     if (live === null || live.instance.state !== InstanceState.READY_WAIT) return;
     session.prepareSentAtMs = nowMs();
     session.sendPrepare(live.id, live.instance.mapId, live.instance.modeId);
+  }
+
+  /**
+   * A line for **every connected player**, wherever they are seated.
+   *
+   * Distinct from `instance.broadcast`, which reaches one world. An aborted transition is
+   * exactly the case where "one world" is the wrong set: the players are in the arena, the
+   * instance that failed may not exist, and §4.17 requires all of them to be told.
+   */
+  private noticeAll(text: string): void {
+    for (const session of this.sessions) {
+      if (!session.closed && session.state === 'live') session.notice(text);
+    }
   }
 
   private sendSeatTo(

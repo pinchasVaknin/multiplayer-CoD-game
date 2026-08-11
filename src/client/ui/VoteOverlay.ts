@@ -12,13 +12,22 @@ import type { GameModeId } from '../../shared/modes/GameMode';
 /**
  * The vote overlay (M11, §6.4, §6.10).
  *
- * ## It never blocks
+ * ## It never blocks, and it is keyboard-only
  *
  * §4.20: *"The vote UI is a **non-blocking overlay**. Players keep moving and shooting through
- * it."* That is not a matter of restraint in the CSS — the host element carries
- * `pointer-events: none` and only the buttons re-enable it, so the crosshair stays live over
- * every part of this surface that is not a vote button. Number keys work as well as clicks,
- * which is what makes it usable at all while you are holding an angle.
+ * it."* The whole surface carries `pointer-events: none` — **including the options** — so not
+ * one pixel of it can take a click.
+ *
+ * §6.4 offers *"number keys plus click"* and the click half is deliberately not built. The
+ * playtest found the reason: the game holds pointer lock, so a click on the overlay is a click
+ * the browser has already given to the canvas as a *shot*. Making the buttons clickable meant
+ * either releasing pointer lock to vote — which drops the player out of the game to answer a
+ * question they are meant to answer *while playing* — or fighting the lock and firing a round
+ * every time somebody voted. Neither is worth having when a keypress does the job.
+ *
+ * The options are still rendered as `<button>` elements, because they are still the live tally
+ * and the accessible name of each is what a screen reader should read. They are marked
+ * `disabled` and `aria-disabled` so nothing suggests they can be pressed.
  *
  * ## Every number here comes from the server
  *
@@ -104,7 +113,7 @@ export class VoteOverlay {
 
     this.hint = document.createElement('p');
     this.hint.className = 'op-vote__hint';
-    this.hint.textContent = 'NUMBER KEYS OR CLICK — YOU CAN KEEP PLAYING';
+    this.hint.textContent = 'PRESS 1-5 TO VOTE — KEEP PLAYING';
 
     const head = document.createElement('div');
     head.className = 'op-vote__head';
@@ -123,19 +132,46 @@ export class VoteOverlay {
   apply(info: VoteInfo): void {
     this.info = info;
     const balloting = info.phase === VotePhase.MODE_VOTE || info.phase === VotePhase.MAP_VOTE;
-    this.root.hidden = !balloting && info.phase !== VotePhase.PLAY;
+    /**
+     * A live notice keeps the surface up (M11 playtest).
+     *
+     * This used to be `hidden = !balloting && phase !== PLAY`, full stop — and the phase during
+     * a failed allocation is `ALLOCATING`, so the very next 4 Hz broadcast hid the overlay
+     * again. A notice explaining why the match did not start was therefore visible for at most
+     * one broadcast interval before being wiped, which is why the playtest reported the
+     * transition aborting *silently*.
+     *
+     * §4.17 requires every player to be left in the arena **with a message**. A message shown
+     * for 250 ms is not one.
+     */
+    this.root.hidden = !balloting && info.phase !== VotePhase.PLAY && this.noticeFramesLeft === 0;
 
     if (info.phase === VotePhase.PLAY) {
       // The countdown to the next ballot: *"visible but unobtrusive"* (§6.4). No options, no
       // banner — just how long you have left to shoot before you are asked.
       this.heading.textContent = 'NEXT VOTE IN';
-      this.banner.hidden = this.noticeFramesLeft === 0;
+      this.showNoticeOrHideBanner();
       this.hint.hidden = true;
       this.renderRows([]);
       this.tick();
       return;
     }
-    if (!balloting) return;
+
+    if (!balloting) {
+      /**
+       * `ALLOCATING`: no ballot, and normally nothing to say.
+       *
+       * The exception is a notice, and it is the important case — this is the phase a failed
+       * allocation leaves the cycle in. The clock and the options are cleared so the surface
+       * carries the message and nothing stale beside it.
+       */
+      this.heading.textContent = 'STARTING THE MATCH';
+      this.clock.textContent = '';
+      this.hint.hidden = true;
+      this.renderRows([]);
+      this.showNoticeOrHideBanner();
+      return;
+    }
 
     this.hint.hidden = false;
     this.heading.textContent = info.phase === VotePhase.MODE_VOTE ? 'VOTE — MODE' : 'VOTE — MAP';
@@ -157,6 +193,16 @@ export class VoteOverlay {
     this.tick();
   }
 
+  /** Put a live notice on the banner, or hide it. The only writer of both, outside `apply`. */
+  private showNoticeOrHideBanner(): void {
+    if (this.noticeFramesLeft > 0) {
+      this.banner.hidden = false;
+      this.banner.textContent = this.noticeText;
+      return;
+    }
+    this.banner.hidden = true;
+  }
+
   /**
    * Redraw the countdown. Called every frame; touches one text node.
    *
@@ -169,9 +215,15 @@ export class VoteOverlay {
       this.noticeFramesLeft--;
       if (this.noticeFramesLeft === 0) {
         this.noticeText = '';
-        // Left to `apply` to decide what the banner should say next; hiding it here would
-        // wipe an announced mode that is still meant to be on screen.
         this.banner.hidden = true;
+        /**
+         * The notice was the only reason this surface was up during `ALLOCATING`; take it down
+         * with the message. Without this the empty panel outlives the thing it existed to say.
+         */
+        const phase = this.info?.phase ?? VotePhase.IDLE;
+        if (phase !== VotePhase.PLAY && phase !== VotePhase.MODE_VOTE && phase !== VotePhase.MAP_VOTE) {
+          this.root.hidden = true;
+        }
       }
     }
 
@@ -190,7 +242,9 @@ export class VoteOverlay {
    */
   handleDigit(digit: number): boolean {
     const info = this.info;
-    if (info === null || this.root.hidden) return false;
+    // `root.hidden` is not the test: the overlay is also visible during PLAY, showing the
+    // countdown, and 1-5 must behave normally then. The ballot being *open* is the test.
+    if (info === null) return false;
     if (info.phase !== VotePhase.MODE_VOTE && info.phase !== VotePhase.MAP_VOTE) return false;
     const option = digit - 1;
     const size = info.phase === VotePhase.MODE_VOTE ? MODE_BALLOT.length : MAP_BALLOT.length;
@@ -210,7 +264,7 @@ export class VoteOverlay {
    * The expiry is a tick count against the render loop rather than a `setTimeout`, so it
    * cannot fire into a disposed overlay.
    */
-  notice(text: string, seconds = 5): void {
+  notice(text: string, seconds = 8): void {
     this.noticeText = text;
     this.noticeFramesLeft = Math.round(seconds * 60);
     this.root.hidden = false;
@@ -267,6 +321,8 @@ export class VoteOverlay {
       row.count.textContent = String(item.count);
       row.fill.style.width = `${item.pct}%`;
       row.button.classList.toggle('op-option--on', item.self);
+      // Still announced: which option *this* player chose is real information, even though the
+      // control cannot be operated with a pointer.
       row.button.setAttribute('aria-pressed', item.self ? 'true' : 'false');
     }
   }
@@ -286,12 +342,16 @@ export class VoteOverlay {
     count.className = 'op-option__count';
 
     button.append(fill, name, count);
-    // Attached ONCE, to a node that survives every broadcast. This is the whole fix.
-    button.addEventListener('click', () => {
-      const info = this.info;
-      if (info === null) return;
-      this.deps.onVote(info.phase, item.index);
-    });
+    /**
+     * No click listener, by design. See the class header.
+     *
+     * The `replaceChildren` discipline below still applies in full and is not weakened by
+     * this: rows are built once and updated in place because a node replaced on a 4 Hz
+     * broadcast also loses focus, `aria-live` continuity and any CSS transition mid-flight.
+     * The click argument was the sharpest case for it, not the only one.
+     */
+    button.disabled = true;
+    button.setAttribute('aria-disabled', 'true');
 
     this.rows.set(item.index, { button, name, count, fill });
     return button;

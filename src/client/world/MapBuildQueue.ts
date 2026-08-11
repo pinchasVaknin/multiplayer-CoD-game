@@ -62,11 +62,26 @@ export interface BuildReport {
 /**
  * Milliseconds of building per frame.
  *
- * At 60 FPS a frame is 16.7 ms and §4.7 gives game logic 3.0 ms of it. Two milliseconds is
- * what is left over on a comfortable frame without eating into that budget — enough that a map
- * completes in a couple of seconds, small enough that the arena does not judder while it does.
+ * ## The budget has to meet a deadline, and the first value did not
+ *
+ * This was 2 ms, chosen so the arena could not possibly judder. That reasoning was incomplete
+ * and the arithmetic never worked: 2 ms per frame at 60 FPS is **120 ms of build per second of
+ * wall clock**, so a map costing a second or two of work needs eight to seventeen seconds to
+ * finish — against a readiness timeout of eight. The handshake was therefore destined to time
+ * out on a *healthy* machine, not merely a slow one, and every transition fell through to the
+ * §4.18 loading-screen path that exists for the exceptional case.
+ *
+ * Five milliseconds is the size that meets the deadline. A frame at 60 FPS is 16.7 ms and §4.7
+ * reserves 3.0 ms of it for game logic; 5 ms leaves 8.7 ms for rendering, which is comfortable
+ * for a greybox arena with three bots in it. The delivered rate is 300 ms/s at 60 FPS and
+ * 150 ms/s at 30, so a two-second build lands in roughly 7 s or 13 s respectively — both inside
+ * `READY_TIMEOUT_MS`, which was raised to 20 s to cover the slower of the two with margin.
+ *
+ * **The measured build time per map is the number that validates this**, and it needs a real
+ * browser — see PLAN.md. If a map turns out to cost far more than two seconds of work, this
+ * budget and that timeout both need revisiting together; they are one decision, not two.
  */
-const DEFAULT_BUDGET_MS = 2;
+const DEFAULT_BUDGET_MS = 5;
 
 export class MapBuildQueue {
   private readonly deps: MapBuildQueueDeps;

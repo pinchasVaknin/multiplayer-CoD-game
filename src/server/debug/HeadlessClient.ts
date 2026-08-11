@@ -67,6 +67,16 @@ export type ClientBehaviour = 'strafe' | 'idle' | 'runner' | 'shooter' | 'seeker
  */
 const POST_MIGRATION_WINDOW_TICKS = 60;
 
+/**
+ * How long after joining counts as "at spawn" (M11 playtest, bug 1).
+ *
+ * Four seconds. Sized from what it is watching: `ClockSync` keeps a sixteen-sample window at
+ * 4 Hz, so a bad offset estimate takes about four seconds to be displaced. A window shorter
+ * than that would miss the tail of the problem; much longer and ordinary in-match corrections
+ * start to dominate the number.
+ */
+const SPAWN_WINDOW_TICKS = 240;
+
 export interface HeadlessClientOptions {
   readonly url: string;
   readonly name: string;
@@ -163,6 +173,12 @@ export interface HeadlessClientReport {
    * bad transition among twenty is still the bug and a sum would hide it behind nineteen
    * clean ones.
    */
+  /**
+   * Mispredictions in the first four seconds after joining. See `SPAWN_WINDOW_TICKS`.
+   *
+   * The playtest's "severe rubberbanding at spawn" in one number.
+   */
+  readonly spawnWindowMispredictions: number;
   readonly worstPostMigrationMispredictions: number;
   readonly postMigrationWindows: readonly number[];
   /**
@@ -239,6 +255,17 @@ export class HeadlessClient {
     readyAtMs: number;
     reported?: boolean;
   } | null = null;
+
+  /**
+   * Mispredictions in the first seconds after joining (M11 playtest, bug 1).
+   *
+   * The direct instrument for "severe rubberbanding at spawn". A clock seeded half a round trip
+   * wrong, or a class the two sides resolved differently, both show up here and nowhere else —
+   * the run-total averages them away across a match, and the post-migration window opens too
+   * late to see the join at all.
+   */
+  private spawnWindowUntilTick = -1;
+  private spawnWindowMispredictions = 0;
 
   private editSent = false;
   private buildsCompleted = 0;
@@ -517,6 +544,16 @@ export class HeadlessClient {
 
     const steps = this.net.update();
     this.ticks += steps;
+
+    // Opened on the first tick this client is actually simulating, closed SPAWN_WINDOW_TICKS
+    // later. See `spawnWindowMispredictions`.
+    if (this.spawnWindowUntilTick < 0 && this.net.state === 'joined' && steps > 0) {
+      this.spawnWindowUntilTick = this.ticks + SPAWN_WINDOW_TICKS;
+    }
+    if (this.spawnWindowUntilTick >= 0 && this.ticks <= this.spawnWindowUntilTick) {
+      this.spawnWindowMispredictions = this.net.prediction.stats.mispredictions;
+    }
+
     this.readOwnEntity();
     this.pumpBuild();
     this.pumpMigrationWindow();
@@ -550,6 +587,7 @@ export class HeadlessClient {
       metresSinceRespawn: Math.round(this.metresSinceRespawn * 10) / 10,
       matchId: this.net.matchId,
       migrations: this.net.migrations,
+      spawnWindowMispredictions: this.spawnWindowMispredictions,
       worstPostMigrationMispredictions:
         this.postMigrationWindows.length === 0 ? 0 : Math.max(...this.postMigrationWindows),
       postMigrationWindows: [...this.postMigrationWindows],

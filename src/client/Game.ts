@@ -416,6 +416,14 @@ export class Game {
     });
     this.input.onLockChange((locked) => this.onPointerLockChange(locked));
     this.input.onEscape(() => this.onEscape());
+    /**
+     * Digit keys vote while a ballot is open (M11, §6.4).
+     *
+     * Returning true consumes the key, so 1-5 do not also swap weapons and call in killstreaks
+     * during the twenty seconds a ballot is up. The overlay answers false whenever no ballot is
+     * open, which is every other moment of the game.
+     */
+    this.input.onDigit((digit) => this.voteOverlay.handleDigit(digit));
 
     this.fpsCounter = new FpsCounter(uiHost, this.stats);
 
@@ -847,9 +855,23 @@ export class Game {
     return findMode(this.selection.modeId);
   }
 
-  /** Resolve the equipped class into the three long-lived weapon objects. */
+  /**
+   * Resolve the equipped class into the three long-lived weapon objects.
+   *
+   * **The mode is the server's when there is one** (M11 playtest). It used to be
+   * `this.selection.modeId` — the *local menu* selection — and that is a divergence with teeth:
+   * `applyEquippedLoadout` passes the mode's `unrestricted` flag into `resolveEquipped`, and
+   * the Shooting Range lifts every unlock gate *and resolves a different slot entirely*. A
+   * player whose menu was last left on the range would join a networked FFA, send the class
+   * from their equipped slot, and then locally resolve the **range** slot — a different weapon,
+   * different perks, and therefore a different `speedScale` from the one the server applied.
+   *
+   * That is Tier 1 #20 all over again, arriving from the client's side rather than the
+   * server's, and it presents identically: a constant per-tick disagreement about speed that
+   * reads as rubberbanding.
+   */
   private applyLoadout(): ResolvedLoadout {
-    return applyEquippedLoadout(this.profile, this.selection.modeId, {
+    return applyEquippedLoadout(this.profile, this.modeEntry().id, {
       primary: this.weaponDef,
       secondary: this.secondaryDef,
       playerBase: this.playerBaseDef,
@@ -1022,6 +1044,24 @@ export class Game {
    * takes locally, which is what makes the server's resolution and the client's agree.
    */
   private netLoadout(): NetLoadout | null {
+    /**
+     * Sanitise **before** copying to the wire (M11 playtest).
+     *
+     * `resolveEquipped` sanitises the slot in place against the player's unlocks — a class
+     * carrying something they have not earned has it stripped — and it does that at *resolve*
+     * time, which is when the world is built. `toNetLoadout` reads the same slot at *handshake*
+     * time, which is earlier.
+     *
+     * So the raw slot went over the wire and the stripped slot was resolved locally, and the
+     * two sides ran different classes. If the difference touched a movement perk, client and
+     * server disagreed about speed on every tick for the whole session.
+     *
+     * Resolving first collapses that: the slot is sanitised, and the copy that crosses the wire
+     * is the one the client will itself resolve. The return value is discarded on purpose —
+     * what is wanted is the side effect on the slot, and the caller that needs the resolved
+     * form has `applyLoadout` for it.
+     */
+    this.profile.resolveEquipped(this.modeEntry().unrestricted);
     return toNetLoadout(this.profile.equippedLoadout());
   }
 

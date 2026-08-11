@@ -710,9 +710,9 @@ body.op-locked #viewport {
   flex-direction: column;
   gap: var(--s-2);
   /*
-   * The overlay is not clickable; its buttons are (see `.op-option`). This single pair of
-   * rules is what makes "non-blocking" true rather than aspirational — every pixel of this
-   * surface that is not a vote button passes the click through to the game.
+   * Nothing on this surface takes a pointer event, including the options. That is what makes
+   * "non-blocking" true rather than aspirational: every pixel passes the click through to the
+   * game, and the crosshair stays live across the whole overlay.
    */
   pointer-events: none;
   z-index: 5;
@@ -800,14 +800,13 @@ body.op-locked #viewport {
   padding: var(--s-2) var(--s-3);
   cursor: pointer;
   overflow: hidden;
-  /* Re-enabled here and nowhere else. See `.op-vote`. */
-  pointer-events: auto;
-}
-
-.op-option:hover,
-.op-option:focus-visible {
-  border-color: var(--c-accent);
-  outline: none;
+  /*
+   * Not clickable, deliberately (M11 playtest).
+   *
+   * The game holds pointer lock, so a click here is a click the browser has already delivered
+   * to the canvas as a shot. Voting is keyboard-only; see the header of `VoteOverlay.ts`.
+   */
+  pointer-events: none;
 }
 
 .op-option--on {

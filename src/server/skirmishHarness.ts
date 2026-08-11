@@ -416,6 +416,8 @@ function reportFlow(input: FlowReportInput): number {
       `${worstIntoLive} (§8.9 requires 0)`,
   );
   log.info(`worst in the 60 ticks after returning to the arena: ${worstToArena}`);
+  const worstSpawn = Math.max(0, ...reports.map((r) => r.spawnWindowMispredictions));
+  log.info(`worst in the first 4 s after joining: ${worstSpawn} (the playtest's spawn rubberband)`);
   log.info(`summaries received: ${summaries}`);
   log.info(`misrouted messages rejected: ${server.misroutedMessages}`);
 
@@ -431,6 +433,7 @@ function reportFlow(input: FlowReportInput): number {
     log.info(
       `${r.name}: entity ${r.entityId}, match ${r.matchId}, ${r.migrations} migration(s), ` +
         `${r.mispredictions}/${r.comparisons} mispredictions (p50 ${r.mispredictionP50}m, p99 ${r.mispredictionP99}m), ` +
+        `spawn window ${r.spawnWindowMispredictions}, ` +
         `post-migration windows [${r.postMigrationWindows.join(",")}] at ticks [${r.migrationMispredictionTicks.join(",")}], ` +
         `${r.buildsCompleted} build(s) worst ${r.worstBuildMs}ms, ` +
         `${r.votesCast} vote(s), ${r.summaries} summary(s), ` +
@@ -447,6 +450,7 @@ function reportFlow(input: FlowReportInput): number {
     cycles: cycleReports.map((c) => ({ ...c })),
     phaseBoundaries: phaseBoundaries.map((p) => ({ ...p })),
     migrations: migrations.map((m) => ({ ...m })),
+    worstSpawnMispredictions: worstSpawn,
     worstIntoLiveMispredictions: worstIntoLive,
     worstToArenaMispredictions: worstToArena,
     misrouted: server.misroutedMessages,
