@@ -11,7 +11,7 @@ import { clamp01 } from '../shared/core/MathUtil';
 import { Rng } from '../shared/core/Rng';
 import type { CameraRig } from './engine/CameraRig';
 import type { ProceduralAudio } from './engine/ProceduralAudio';
-import { BotThrower } from '../shared/equipment/BotThrower';
+import { BotThrower, type MutableThrowIntent } from '../shared/equipment/BotThrower';
 import type { EquipmentConfig } from '../shared/equipment/EquipmentConfig';
 import { EquipmentAudio } from './equipment/EquipmentAudio';
 import { EquipmentFx } from './equipment/EquipmentFx';
@@ -326,10 +326,3 @@ export class MatchEquipment {
 }
 
 /** The writable side of `ThrowIntent`; one instance, rewritten in place each tick. */
-interface MutableThrowIntent {
-  targetX: number;
-  targetY: number;
-  targetZ: number;
-  sinceSeen: number;
-  hasTarget: boolean;
-}

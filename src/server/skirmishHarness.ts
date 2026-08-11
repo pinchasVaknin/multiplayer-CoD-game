@@ -265,6 +265,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   /** The live match's roster, as last seen while it was running. See the sampler below. */
   let observedHumans = 0;
   let observedBots = 0;
+  let observedThrown = 0;
+  let observedDetonated = 0;
   /** Which match the streak grant has already been applied to, so it happens once each. */
   let grantedTo = -1;
   let gunnerDropped = false;
@@ -305,6 +307,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     if (running !== undefined && running.running) {
       observedHumans = running.playerCount;
       observedBots = running.botCount;
+      observedThrown = running.match.equipmentStats.thrown;
+      observedDetonated = running.match.equipmentStats.detonated;
 
       /**
        * Put a streak in every seated player's hand, once per match (§8.22).
@@ -352,9 +356,15 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
 
     if (vote.cycle > lastCycle) {
       if (lastCycle > 0) {
-        cycleReports.push(snapshotCycle(server, clients, lastCycle, observedHumans, observedBots));
+        cycleReports.push(
+          snapshotCycle(
+            server, clients, lastCycle, observedHumans, observedBots, observedThrown, observedDetonated,
+          ),
+        );
         observedHumans = 0;
         observedBots = 0;
+        observedThrown = 0;
+        observedDetonated = 0;
       }
       lastCycle = vote.cycle;
       if (cycleReports.length >= opts.cycles) break;
@@ -362,7 +372,11 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   }
 
   if (cycleReports.length < opts.cycles) {
-    cycleReports.push(snapshotCycle(server, clients, lastCycle, observedHumans, observedBots));
+    cycleReports.push(
+      snapshotCycle(
+        server, clients, lastCycle, observedHumans, observedBots, observedThrown, observedDetonated,
+      ),
+    );
   }
 
   /**
@@ -413,6 +427,15 @@ interface CycleReport {
    */
   readonly liveHumans: number;
   readonly liveBots: number;
+  /**
+   * Equipment thrown and detonated in the live match (§8.24).
+   *
+   * Both numbers, because they fail differently: zero thrown means nothing on the server has a
+   * grenade hand, and thrown-without-detonated means fuses are not burning. A single "grenades
+   * happened" counter could not tell those apart.
+   */
+  readonly thrown: number;
+  readonly detonated: number;
 }
 
 function snapshotCycle(
@@ -421,6 +444,8 @@ function snapshotCycle(
   cycle: number,
   liveHumans: number,
   liveBots: number,
+  thrown: number,
+  detonated: number,
 ): CycleReport {
   const instances = server.instances;
   const warmup = instances[0];
@@ -435,6 +460,8 @@ function snapshotCycle(
     heapMb: round(process.memoryUsage().heapUsed / 1024 / 1024),
     liveHumans,
     liveBots,
+    thrown,
+    detonated,
   };
 }
 
@@ -559,6 +586,7 @@ function reportFlow(input: FlowReportInput): number {
       `cycle ${c.cycle}: ${c.instances} instance(s), total ${c.totalStepMs}ms ` +
         `(warmup ${c.warmupStepMs}, live ${c.liveStepMs}), ` +
         `live roster ${c.liveHumans}H+${c.liveBots}B=${c.liveHumans + c.liveBots}, ` +
+        `equipment ${c.thrown} thrown/${c.detonated} detonated, ` +
         `${c.subscriptions} subs, heap ${c.heapMb} MiB`,
     );
   }

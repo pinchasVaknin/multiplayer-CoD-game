@@ -13,6 +13,10 @@ import {
   type StreakId,
 } from '../shared/streaks/StreakDefs';
 import { Rng } from '../shared/core/Rng';
+import { EquipmentSystem, makeEquipmentInventory, type EquipmentInventory } from '../shared/equipment/EquipmentSystem';
+import { BotThrower, type MutableThrowIntent } from '../shared/equipment/BotThrower';
+import { ThrowController } from '../shared/equipment/ThrowController';
+import { DEFAULT_EQUIPMENT_CONFIG, type EquipmentConfig } from '../shared/equipment/EquipmentConfig';
 import { AR_DEFAULT, PISTOL_DEFAULT } from '../shared/weapons/WeaponDefs';
 import { EventCollector } from './net/EventCollector';
 import { Rewind } from './net/Rewind';
@@ -77,16 +81,21 @@ const log = logger('Match');
  *
  * - **No local player.** S4.9: every player is a client. The roster's player seat is a
  *   `Spectator` that never participates — the same mechanism the M3 AFK harness used.
- * - **No weapons for a human, no viewmodel, no melee, no equipment thrower.** Bots draw their
- *   own weapons (`ai/BotArsenal`), and everything else in that list is a local-player system.
- * - **Killstreaks run here as of M11 Gate B, and are not yet reachable over the wire.** The
- *   system is live: it folds over the authoritative score, so streaks are earned and lost on
- *   death exactly as they are in a browser, all three M6 perk hooks resolve against the class
- *   the player migrated in with, and `dispose` releases it (verified flat over 12
- *   allocate/destroy cycles). What is missing is the two ends: a networked client cannot yet
- *   *ask* to spend one — `activate` has only ever been called from client-side input — and
- *   streak entity state is not yet replicated, so a sentry that exists here is invisible.
- *   Named rather than left to be discovered: this is groundwork for §8.22, not §8.22.
+ * - **No weapons for a human, no viewmodel, no melee.** Bots draw their own weapons
+ *   (`ai/BotArsenal`), and the rest of that list is a local-player presentation system.
+ * - **Killstreaks run here and cross the wire as of M11 Gate B** (§8.22). Earned from the
+ *   authoritative score, spent through `MsgC.Streak`, replicated per recipient — bodies to
+ *   everyone, earn state to their owner, UAV contacts to their team.
+ * - **Equipment runs here as of M11 Gate B, and only half of it is replicated** (§8.24). The
+ *   authoritative half is complete: bots throw, humans throw from the command their body just
+ *   consumed, blasts resolve through the one damage door, and smoke occludes bot LOS — §6.8's
+ *   requirement, and one that could only ever have been met here, because the bots whose sight
+ *   is blocked live in this process.
+ *
+ *   What is **not** done is the projectile channel. A client predicts and draws its *own*
+ *   grenade correctly — same command, same tick, same trajectory on both sides — but a grenade
+ *   thrown by a bot or another player exists on the server, damages people, and is invisible.
+ *   Named here rather than left to be found: this is §8.24's first half.
  * - **No progression.** `MatchProgression` needs a `ProgressionStore`, and S4.16 says there is
  *   no server database. XP is awarded server-side from M10 and persisted client-side.
  */
@@ -154,6 +163,12 @@ export interface ServerMatchResult {
   readonly ticks: number;
 }
 
+/** One player's grenade hand: what they are holding, and how far the cook has burned. */
+interface PlayerHand {
+  readonly thrower: ThrowController;
+  readonly inventory: EquipmentInventory;
+}
+
 export class ServerMatch {
   readonly bus: GameBus = createGameBus();
   readonly world: CollisionWorld;
@@ -164,6 +179,21 @@ export class ServerMatch {
   readonly bots: BotDirector;
   /** The six killstreaks as instance-owned entities (M11 Gate B, §6.8). */
   readonly streaks: StreakSystem;
+  /** Grenades and equipment, authoritative (M11 Gate B, §6.8, §8.24). */
+  readonly equipment: EquipmentSystem;
+  private readonly botThrower: BotThrower;
+  private readonly equipmentRng: Rng;
+  /** One cursor into the bot list, so one bot is considered per tick. See `stepBotThrows`. */
+  private throwCursor = 0;
+  /** One grenade hand per connected human. See `handOf`. */
+  private readonly hands = new Map<number, PlayerHand>();
+  private readonly throwIntent: MutableThrowIntent = {
+    hasTarget: false,
+    targetX: 0,
+    targetY: 0,
+    targetZ: 0,
+    sinceSeen: 0,
+  };
 
   readonly mapEntry: MapEntry;
   readonly modeEntry: ModeEntry;
@@ -175,6 +205,7 @@ export class ServerMatch {
   readonly tiers: TierTable = cloneTierTable(DEFAULT_TIERS);
   readonly perceptionConfig: PerceptionConfig = { ...DEFAULT_PERCEPTION };
   readonly schedulerConfig: SchedulerConfig = { ...DEFAULT_SCHEDULER };
+  readonly equipmentConfig: EquipmentConfig = { ...DEFAULT_EQUIPMENT_CONFIG };
 
   /**
    * Connected humans (M10, S6.2).
@@ -397,6 +428,39 @@ export class ServerMatch {
     // than the mode's — a crate is worth walking to whether or not there are flags.
     this.bots.streakObjectives = this.streaks;
 
+    /**
+     * Grenades and equipment, server-side (M11 Gate B, §6.8, §8.24).
+     *
+     * The header's *"no equipment thrower"* line was true and was the last of the four systems
+     * `ClientMatch` composes that this file did not. Every piece is the shared M5 code driven
+     * from a different place: one `EquipmentSystem` for the world, one `BotThrower` for the AI,
+     * and one `ThrowController` **per connected human** — the client has a single controller for
+     * its single local player, and a server needs one per hand holding a pin.
+     *
+     * §6.8's *"smoke occludes bot LOS server-side"* is the line below it, and it is the reason
+     * this cannot be a client-side feature: the bots whose sight is being blocked live here, and
+     * a smoke cloud the server does not know about blocks nothing that matters.
+     */
+    this.equipment = new EquipmentSystem({
+      bus: this.bus,
+      world: this.world,
+      damage: this.damage,
+      roster: this.bots.roster,
+      cfg: this.equipmentConfig,
+    });
+    this.botThrower = new BotThrower(this.equipment, this.world, this.equipmentConfig);
+    this.equipmentRng = new Rng(options.seed ^ 0x1b87_3593);
+    /**
+     * The §6.8 requirement, in one assignment.
+     *
+     * `Perception.occluder` is consulted on every line-of-sight test a bot makes, so a smoke
+     * cloud in front of a doorway stops the bots behind it seeing through — the same field, the
+     * same test and the same numbers the client has used since M5. Cleared in `dispose`, because
+     * a director outliving the field it points at is a use-after-free in a language that will
+     * not tell you.
+     */
+    this.bots.perception.occluder = this.equipment.smoke;
+
     this.unsubscribe.push(
       this.bus.on(EV.MatchEnded, () => {
         this.result = this.flow.result;
@@ -535,6 +599,18 @@ export class ServerMatch {
     // does it, so the two runtimes resolve a plant that starts and completes on the same tick
     // identically.
     this.stepBombInteractions();
+    /**
+     * Equipment, in `ClientMatch.simulate`'s order (M11 Gate B, §8.24).
+     *
+     * Throwers first so a grenade released this tick is in the world before the world steps,
+     * then the field integration, then one bot's throw evaluation. Getting this order wrong
+     * costs a grenade one tick of flight, which is 16 ms of trajectory — small, constant, and
+     * exactly the kind of systematic offset that makes a predicted arc land beside the
+     * authoritative one for ever.
+     */
+    this.stepThrowers();
+    this.equipment.simulate(0, 0, 0, PLAYER_TEAM, false);
+    this.stepBotThrows();
     // Streaks tick after the bots that may have just shot one down, and before the flow that
     // may declare the match over and end them all. The same order `ClientMatch` uses.
     this.streaks.simulate(tickIndex);
@@ -548,6 +624,90 @@ export class ServerMatch {
     this.rewind.record(tickIndex);
 
     this.ticks++;
+  }
+
+  /**
+   * Every connected human's grenade hand (M11 Gate B, §8.24).
+   *
+   * One `ThrowController` and one `EquipmentInventory` per player, because both are per-hand
+   * state: a cook timer, which slot is in it, and how many are left. `ClientMatch` has one of
+   * each because it has one local player; a server needs one per human and the client's shape
+   * does not generalise by itself.
+   *
+   * Driven from the command the player's body just consumed, so a pin pulled on tick N is the
+   * pin the client predicted pulling on tick N — the throw is a *consequence* of the same
+   * command, not a separate message that could arrive a tick either side of it.
+   */
+  private stepThrowers(): void {
+    for (const player of this.players) {
+      const cmd = player.lastCommand;
+      if (cmd === null) continue;
+      const hand = this.handOf(player.entityId);
+      hand.thrower.step(
+        cmd,
+        player.controller.sim,
+        player.entityId,
+        hand.inventory,
+        player.team,
+        player.alive,
+      );
+    }
+  }
+
+  /**
+   * One bot's throw evaluation per tick, round robin (M5).
+   *
+   * Verbatim from `MatchEquipment.stepBotThrows`, including the cursor: the trajectory check
+   * runs the real integrator and is the most expensive thing in `ai/` per call, so spreading
+   * it across ticks is what keeps it inside the §4.7 budget. At one bot per tick with a
+   * 12-30 s cooldown each, a ten-bot match spends a few dozen of them a minute.
+   */
+  private stepBotThrows(): void {
+    const bots = this.bots.bots;
+    if (bots.length === 0) return;
+    this.throwCursor = (this.throwCursor + 1) % bots.length;
+    const bot = bots[this.throwCursor];
+    if (bot === undefined || !bot.participating) return;
+
+    const bb = bot.blackboard;
+    this.throwIntent.hasTarget = bb.targetId >= 0;
+    this.throwIntent.targetX = bb.lastKnownX;
+    this.throwIntent.targetY = bb.lastKnownFeetY;
+    this.throwIntent.targetZ = bb.lastKnownZ;
+    this.throwIntent.sinceSeen = bb.sinceLos;
+
+    this.botThrower.consider(
+      bot,
+      bot.tierName,
+      this.tiers[bot.tierName],
+      this.throwIntent,
+      this.bots.roster,
+      this.equipmentRng,
+      // One evaluation per bot every `bots.length` ticks.
+      DT * bots.length,
+    );
+  }
+
+  /**
+   * This player's grenade hand, created on first use.
+   *
+   * Lazily rather than in `addPlayer`, so a seat that never throws costs nothing — and so that
+   * the map cannot be left holding a controller for an entity that has been removed, which
+   * `removePlayer` guarantees by deleting it.
+   */
+  private handOf(entityId: number): PlayerHand {
+    let hand = this.hands.get(entityId);
+    if (hand === undefined) {
+      const resolved = this.loadouts.get(entityId);
+      hand = {
+        thrower: new ThrowController(this.equipment, this.equipmentConfig),
+        // The class's grenades, not the M5 defaults — the same read `ClientMatch` does when it
+        // hands the inventory its loadout.
+        inventory: makeEquipmentInventory(resolved?.lethal ?? 'frag', resolved?.tactical ?? 'flashbang'),
+      };
+      this.hands.set(entityId, hand);
+    }
+    return hand;
   }
 
   /**
@@ -823,6 +983,9 @@ export class ServerMatch {
      * `StreakSystem.onOwnerRemoved` for why this deliberately reuses the death rules.
      */
     this.streaks.onOwnerRemoved(entityId);
+    // Their hand goes with them. A controller left in the map is a cook timer advancing for
+    // an entity that no longer exists — the same shape as the orphaned chopper above.
+    this.hands.delete(entityId);
     const rosterAt = this.bots.roster.indexOf(player);
     if (rosterAt >= 0) this.bots.roster.splice(rosterAt, 1);
 
@@ -969,6 +1132,20 @@ export class ServerMatch {
       );
     }
 
+    /**
+     * Equipment is per life (§6.3), refilled on the spawn rather than on a timer.
+     *
+     * `ClientMatch` gets this free — `MatchEquipment` refills on the `player.spawned` event
+     * that `PlayerController.spawn` emits. The server's hands are keyed by entity id in a map
+     * this class owns, so it refills them itself rather than subscribing to an event it would
+     * then have to filter by entity.
+     */
+    const hand = this.hands.get(player.entityId);
+    if (hand !== undefined) {
+      hand.thrower.reset();
+      EquipmentSystem.refill(hand.inventory);
+    }
+
     const c = this.spawnChoice;
     player.spawn(c.x, c.y, c.z, c.yaw);
     // Backfill the whole history with the spawn pose, so a shot rewound into the window
@@ -986,6 +1163,11 @@ export class ServerMatch {
     if (!this.flow.respawnAllowed(player.entityId)) return;
     this.flow.noteRespawn(player.entityId);
     this.spawnPlayer(player);
+  }
+
+  /** Equipment thrown and detonated this match. Read by the harness (§8.24). */
+  get equipmentStats(): { thrown: number; detonated: number } {
+    return { thrown: this.equipment.thrownTotal, detonated: this.equipment.detonatedTotal };
   }
 
   /** The outcome, or null while the match is still running. */
@@ -1033,6 +1215,10 @@ export class ServerMatch {
      */
     this.streaks.dispose();
     this.bots.streakObjectives = null;
+    // Before the director is disposed: `Perception` holds this field and a director outliving
+    // it is a reference into a world that no longer exists.
+    this.bots.perception.occluder = null;
+    this.equipment.clear();
     this.bots.dispose();
   }
 

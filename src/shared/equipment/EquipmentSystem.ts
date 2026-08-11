@@ -173,7 +173,22 @@ export class EquipmentSystem {
   }
 
   /** One sim tick: fly, fuse, trigger, detonate, and refresh the threat indicator. */
-  simulate(localX: number, localY: number, localZ: number, localTeam: BotTeam): void {
+  /**
+   * One sim tick for every live projectile and both fields.
+   *
+   * `trackThreat` exists because a dedicated server has no local player (M11 Gate B). The threat
+   * report is *"the nearest live threat to the local player"* — a HUD input, feeding the
+   * proximity beep and the danger arrow — and on a server there is nobody it could be about.
+   * Passing an origin position instead would compute a real threat report for a body that is not
+   * there, which is worse than not computing one: it is a plausible number that means nothing.
+   */
+  simulate(
+    localX: number,
+    localY: number,
+    localZ: number,
+    localTeam: BotTeam,
+    trackThreat = true,
+  ): void {
     this.smoke.step();
     this.flash.step();
 
@@ -231,7 +246,7 @@ export class EquipmentSystem {
         continue;
       }
 
-      this.noteThreat(p, localX, localY, localZ, localTeam);
+      if (trackThreat) this.noteThreat(p, localX, localY, localZ, localTeam);
     }
   }
 

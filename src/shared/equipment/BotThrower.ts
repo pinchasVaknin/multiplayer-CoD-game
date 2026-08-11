@@ -59,6 +59,15 @@ export interface ThrowIntent {
   readonly hasTarget: boolean;
 }
 
+/**
+ * The writable face of `ThrowIntent`, for the single instance a caller rewrites each tick.
+ *
+ * Shared rather than redeclared per composition root (M11 Gate B): `MatchEquipment` had a
+ * private copy and `ServerMatch` needed the same thing, which is one more pair of declarations
+ * that can drift when a field is added.
+ */
+export type MutableThrowIntent = { -readonly [K in keyof ThrowIntent]: ThrowIntent[K] };
+
 export class BotThrower {
   /** Diagnostics for the F1 panel. */
   throws = 0;
