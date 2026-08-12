@@ -14,6 +14,7 @@ import type { InputCommand } from '../shared/core/InputCommand';
 import { MAX_STEPS_PER_FRAME, type FrameSample } from '../shared/core/Loop';
 import { Loop } from './engine/FrameLoop';
 import { ChopperCamera } from './streaks/ChopperCamera';
+import { makeSnapshot, type PlayerSnapshot } from '../shared/player/PlayerState';
 import { DEG2RAD } from '../shared/core/MathUtil';
 import { LocalBotTransport, type ICommandQueue } from '../shared/net/Transport';
 import { isServerConfigured, multiplayerJoinOptions } from './net/JoinOptions';
@@ -328,6 +329,31 @@ export class Game {
   private state: GameStateId = 'BOOT';
 
   private readonly drainBuffer: InputCommand[] = [];
+  /**
+   * The pose handed to the rig while spectating (§6.8).
+   *
+   * One object, rewritten each frame. Every motion field is left at rest: a spectated body's bob
+   * and lean are *its* owner's, arriving interpolated in its mesh, and driving the camera from
+   * them as well would double the motion the viewer sees.
+   */
+  private readonly spectatePose: PlayerSnapshot = makeSnapshot();
+
+  /**
+   * The camera drive while spectating: everything off.
+   *
+   * A spectator is not sprinting, not sliding and not aiming down sights, whatever the body they
+   * are watching is doing — those drive *this* camera's FOV and roll, and inheriting them would
+   * make the view lurch on somebody else's input.
+   */
+  private readonly spectateDrive: CameraDrive = {
+    sprint: false,
+    tacSprint: false,
+    slide: false,
+    adsFraction: 0,
+    adsFovScale: 1,
+    adsViewmodelFovScale: 1,
+  };
+
   private readonly drive: CameraDrive = {
     sprint: false,
     tacSprint: false,
@@ -1650,17 +1676,49 @@ export class Game {
     this.drive.adsFovScale = def.adsFovScale;
     this.drive.adsViewmodelFovScale = def.adsViewmodelFovScale;
 
-    this.cameraRig.update(
-      player.prev,
-      player.curr,
-      alpha,
-      yaw,
-      pitch,
-      this.drive,
-      this.cameraConfig,
-      dt,
-      this.viewmodel,
-    );
+    /**
+     * A dead player in a one-life round watches a teammate (M11 Gate B, §6.8).
+     *
+     * Applied here rather than inside the rig because the rig's job is to turn a *pose* into a
+     * camera — bob, sway, shake, ADS blend — and it should not have to know that the pose
+     * sometimes belongs to somebody else. The rig is handed the spectated eye instead of the
+     * local one and does exactly what it always does.
+     *
+     * Null in every other case, which is every mode except Search & Destroy and every moment
+     * the player is alive, so the ordinary path is unchanged.
+     */
+    const spectated = match.spectatorView(alpha);
+    // `alpha` is 1 below because the pose handed over is already interpolated by the actor.
+    if (spectated !== null) {
+      this.spectatePose.x = spectated.x;
+      this.spectatePose.y = spectated.y;
+      this.spectatePose.z = spectated.z;
+      this.cameraRig.update(
+        this.spectatePose,
+        this.spectatePose,
+        1,
+        // Their facing, not the dead player's mouse. A spectator who could look around
+        // independently of the body they are inside is a floating camera with extra steps.
+        spectated.yaw,
+        0,
+        this.spectateDrive,
+        this.cameraConfig,
+        dt,
+        this.viewmodel,
+      );
+    } else {
+      this.cameraRig.update(
+        player.prev,
+        player.curr,
+        alpha,
+        yaw,
+        pitch,
+        this.drive,
+        this.cameraConfig,
+        dt,
+        this.viewmodel,
+      );
+    }
 
     const cam = this.cameraRig.camera;
     if (this.audio.isRunning) {

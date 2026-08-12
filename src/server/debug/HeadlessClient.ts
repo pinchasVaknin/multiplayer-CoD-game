@@ -27,6 +27,11 @@ import { findMap } from '../../shared/modes/ModeRegistry';
 import { loadMapCollision } from '../../shared/world/MapLoader';
 import { STREAK_DEFS } from '../../shared/streaks/StreakDefs';
 import { hashModeState, type ModeStateFacts } from '../../shared/debug/ModeStateHash';
+import {
+  NO_SPECTATOR_TARGET,
+  pickSpectatorTarget,
+  type SpectatorCandidate,
+} from '../../shared/modes/SpectatorTarget';
 import { bombStateCode } from '../../shared/net/Messages';
 import { OBJ_TEAM_A, OBJ_TEAM_B, type ObjectiveState } from '../../shared/net/Skirmish';
 import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
@@ -215,6 +220,11 @@ export interface HeadlessClientReport {
   /** Frames carrying a friendly UAV sweep, and how many activations were asked for. */
   readonly sweepFrames: number;
   /** §7/§8.21: mode-state hash samples, confirmed mismatches, and the first mismatching tick. */
+  /** §6.8 spectator picks, and the three invariant violations. All three must be zero. */
+  readonly spectatePicks: number;
+  readonly spectateSelfPicks: number;
+  readonly spectateEnemyPicks: number;
+  readonly spectateDeadPicks: number;
   readonly hashSamples: number;
   readonly hashMismatches: number;
   readonly firstMismatchTick: number;
@@ -358,6 +368,12 @@ export class HeadlessClient {
   private repTags: readonly TagInfo[] = [];
   private repBomb: BombInfo | null = null;
   private readonly factTagIds: number[] = [];
+  /** §6.8 spectator: picks made, and the three kinds of pick that must never happen. */
+  private spectateTarget = NO_SPECTATOR_TARGET;
+  private spectatePicks = 0;
+  private spectateSelfPicks = 0;
+  private spectateEnemyPicks = 0;
+  private spectateDeadPicks = 0;
   private projectileFrames = 0;
   private readonly remoteSerials = new Set<number>();
   private ownProjectileSeen = 0;
@@ -855,6 +871,38 @@ export class HeadlessClient {
       this.net.sendStreak(this.wantStreak, sim.x, sim.z);
     }
 
+    /**
+     * The spectator selection, evaluated whenever this client is dead (§6.8).
+     *
+     * A headless client has no camera, so what is checked is the half that can be wrong without
+     * anybody noticing: *which entity should I be watching*. Every answer is recorded and the
+     * harness asserts the invariants afterwards — never yourself, never an enemy, never a corpse.
+     * The camera that consumes it is a browser claim; the rule is an ordinary function with an
+     * ordinary answer.
+     */
+    if (this.net.entityId >= 0 && !this.net.localAlive) {
+      const target = pickSpectatorTarget(
+        this.net.entityId,
+        this.net.team,
+        this.spectatorCandidates(),
+        this.spectateTarget,
+      );
+      this.spectateTarget = target;
+      if (target !== NO_SPECTATOR_TARGET) {
+        this.spectatePicks++;
+        const interp = this.net.remotes.get(target);
+        if (target === this.net.entityId) this.spectateSelfPicks++;
+        if (interp !== undefined) {
+          const flags = interp.latest.flags;
+          const team = (flags & EFlag.TeamB) !== 0 ? 'B' : 'A';
+          if (team !== this.net.team) this.spectateEnemyPicks++;
+          if ((flags & EFlag.Alive) === 0) this.spectateDeadPicks++;
+        }
+      }
+    } else {
+      this.spectateTarget = NO_SPECTATOR_TARGET;
+    }
+
     const steps = this.net.update();
     this.ticks += steps;
 
@@ -906,6 +954,10 @@ export class HeadlessClient {
       streakEntitiesSeen: this.streakInstanceIds.size,
       peakStreakEntities: this.peakStreakEntities,
       sweepFrames: this.sweepFrames,
+      spectatePicks: this.spectatePicks,
+      spectateSelfPicks: this.spectateSelfPicks,
+      spectateEnemyPicks: this.spectateEnemyPicks,
+      spectateDeadPicks: this.spectateDeadPicks,
       hashSamples: this.hashSamples,
       hashMismatches: this.hashMismatches,
       firstMismatchTick: this.firstMismatchTick,
@@ -945,6 +997,21 @@ export class HeadlessClient {
       notices: [...this.notices],
       votesCast: this.votesCast,
     };
+  }
+
+  /** Bodies this client could watch, from the actors it has rebuilt from snapshots. */
+  private *spectatorCandidates(): Generator<SpectatorCandidate> {
+    for (const [entityId, interp] of this.net.remotes) {
+      // Team and liveness are **discrete** facts and live on the newest snapshot rather than on
+      // the interpolated pose — `EntityInterpolator` deliberately does not blend them, because
+      // a body half-way between alive and dead is not a state the game has.
+      const flags = interp.latest.flags;
+      yield {
+        entityId,
+        team: (flags & EFlag.TeamB) !== 0 ? 'B' : 'A',
+        alive: (flags & EFlag.Alive) !== 0,
+      };
+    }
   }
 
   /**

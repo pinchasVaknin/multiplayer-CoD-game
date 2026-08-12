@@ -742,6 +742,27 @@ function reportFlow(input: FlowReportInput): number {
     problems.push('the divergence checker took no samples — it is not running');
   }
 
+  /**
+   * §6.8's spectator invariants. Blocking, because two of the three are information leaks.
+   *
+   * Watching an enemy through their own eyes in Search & Destroy is a wallhack with a cinematic
+   * framing, in the one mode where a round is decided by who knows what. Watching yourself or a
+   * corpse is merely broken.
+   */
+  const specSelf = reports.reduce((n, r) => n + r.spectateSelfPicks, 0);
+  const specEnemy = reports.reduce((n, r) => n + r.spectateEnemyPicks, 0);
+  const specDead = reports.reduce((n, r) => n + r.spectateDeadPicks, 0);
+  const specPicks = reports.reduce((n, r) => n + r.spectatePicks, 0);
+  if (specSelf > 0) problems.push(`${specSelf} spectator pick(s) targeted the dead player themselves`);
+  if (specEnemy > 0) problems.push(`${specEnemy} spectator pick(s) targeted an enemy`);
+  if (specDead > 0) problems.push(`${specDead} spectator pick(s) targeted a corpse`);
+  if (specPicks > 0) {
+    log.info(
+      `spectator: ${specPicks} target selection(s) while dead — ` +
+        `${specSelf} self, ${specEnemy} enemy, ${specDead} dead (all must be 0).`,
+    );
+  }
+
   /** §8.23 case 4. Blocking: an orphaned gunship shoots people. */
   if (opts.dropGunner) {
     if (droppedAtMs === 0) {

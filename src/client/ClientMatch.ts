@@ -37,6 +37,14 @@ import { ClientStreakPresentation } from './streaks/ClientStreakPresentation';
 import { StreakRenderer } from './streaks/StreakRenderer';
 import { StreakSystem } from '../shared/streaks/StreakSystem';
 import { ReplicatedStreaks } from './streaks/ReplicatedStreaks';
+import {
+  NO_SPECTATOR_TARGET,
+  nextSpectatorTarget,
+  pickSpectatorTarget,
+  type SpectatorCandidate,
+} from '../shared/modes/SpectatorTarget';
+
+
 import type { ProjectileState, SmokeState, StreakView } from '../shared/net/Skirmish';
 
 /** Shared empties, so clearing replicated equipment allocates nothing. */
@@ -345,6 +353,15 @@ export class Match {
   private lastStreakCommand: InputCommand | null = null;
 
   /**
+   * Who this player is watching while dead (§6.8).
+   *
+   * Cleared on every round start — the §4.18 discard rule applied to a round boundary. Without
+   * it a spectator returns from the round they died in still pointed at a body that has since
+   * respawned somewhere else, which reads as the camera being stuck.
+   */
+  private spectatorTarget = NO_SPECTATOR_TARGET;
+
+  /**
    * The server's streak state (M11 Gate B, §8.22).
    *
    * Populated only in a networked match, where `this.streaks` is constructed but never
@@ -590,6 +607,8 @@ export class Match {
      */
     this.roundResetSubscription = deps.bus.on(EV.RoundStarted, () => {
       if (this.deps.mode.usesRoundReset !== true) return;
+      // No state leaks across a round boundary, the camera's included.
+      this.spectatorTarget = NO_SPECTATOR_TARGET;
       this.hardResetRound();
     });
 
@@ -1417,6 +1436,95 @@ export class Match {
 
   private nextStreak(): { def: StreakDef; requirement: number } | null {
     return this.isNetworked ? this.replicatedStreaks.next : this.streaks.nextFor(this.localId);
+  }
+
+  /**
+   * The body this dead player is watching, or null (M11 Gate B, §6.8).
+   *
+   * Only in a **one-life** mode, which is what makes this a spectator rather than a death cam:
+   * in Team Deathmatch a corpse is looking at the floor for four seconds and then playing again,
+   * and taking the camera somewhere else would be a worse experience than the wait. In Search &
+   * Destroy the wait is the rest of the round.
+   *
+   * Recomputed every frame rather than latched on death. A target can die, disconnect or be
+   * replaced by a bot at any moment, and a latch would have to be invalidated correctly on all
+   * three — asked every frame, there is nothing to get stuck.
+   */
+  get spectatorTargetId(): number {
+    if (!this.playerDead) return NO_SPECTATOR_TARGET;
+    if (this.deps.mode.usesRoundReset !== true) return NO_SPECTATOR_TARGET;
+    const chosen = pickSpectatorTarget(
+      this.localId,
+      this.localTeam,
+      this.spectatorCandidates(),
+      this.spectatorTarget,
+    );
+    this.spectatorTarget = chosen;
+    return chosen;
+  }
+
+  /**
+   * Where the spectator camera should sit, or null to leave it on the local body.
+   *
+   * The followed body's **feet** and its facing — `PlayerSnapshot` carries an eye height of its
+   * own, so adding one here would raise the camera twice. A first-person framing rather than a
+   * chase camera, deliberately: a third-person spectator needs collision of its own, and one
+   * that clips through a wall while the player is already waiting out a round is a worse answer
+   * than looking through a teammate's eyes.
+   */
+  spectatorView(alpha: number): { x: number; y: number; z: number; yaw: number } | null {
+    const id = this.spectatorTargetId;
+    if (id === NO_SPECTATOR_TARGET) return null;
+    for (const actor of this.deps.actors?.() ?? []) {
+      const a = actor as {
+        entityId?: number;
+        renderX?: (t: number) => number;
+        renderY?: (t: number) => number;
+        renderZ?: (t: number) => number;
+        renderYaw?: (t: number) => number;
+      };
+      if (a.entityId !== id) continue;
+      if (a.renderX === undefined || a.renderY === undefined || a.renderZ === undefined) return null;
+      return {
+        x: a.renderX(alpha),
+        y: a.renderY(alpha),
+        z: a.renderZ(alpha),
+        yaw: a.renderYaw?.(alpha) ?? 0,
+      };
+    }
+    return null;
+  }
+
+  /** Cycle to the next living teammate. Bound to the fire key while dead (M7's verb). */
+  cycleSpectatorTarget(): void {
+    if (!this.playerDead) return;
+    this.spectatorTarget = nextSpectatorTarget(
+      this.localId,
+      this.localTeam,
+      this.spectatorCandidates(),
+      this.spectatorTarget,
+    );
+  }
+
+  /**
+   * Everything this client could watch.
+   *
+   * The **remote actors** in a networked match and the bot roster in single-player — the same
+   * split `actors` makes for rendering, and for the same reason: a networked client has no
+   * roster, only bodies rebuilt from snapshots.
+   */
+  private *spectatorCandidates(): Generator<SpectatorCandidate> {
+    if (this.isNetworked) {
+      for (const actor of this.deps.actors?.() ?? []) {
+        const remote = actor as { entityId?: number; team?: BotTeam; participating?: boolean };
+        if (typeof remote.entityId !== 'number' || remote.team === undefined) continue;
+        yield { entityId: remote.entityId, team: remote.team, alive: remote.participating === true };
+      }
+      return;
+    }
+    for (const bot of this.bots.bots) {
+      yield { entityId: bot.entityId, team: bot.team, alive: bot.participating };
+    }
   }
 
   /** Adopt one `Projectiles` frame (§8.24). Own grenades are skipped — they are predicted. */
