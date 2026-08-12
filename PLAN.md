@@ -4840,7 +4840,8 @@ match was already present (state X)`.
 `gate-b/objective-replication` beyond the objective-replication groundwork:
 `2064b32` mode state · `0b8a4b7` bot replacement · `1740c6c` streaks server-side ·
 `f33d7d1` streaks on the wire and Ghost · `65c8adb` Chopper case 4 · `9ac32a6` server-side
-equipment. Everything below is measured, not asserted; where
+equipment · `b778e76` grenades on the wire · `a596ed7` the divergence checker ·
+`b38202c` the cosmetic audit · `7546671` the networked spectator. Everything below is measured, not asserted; where
 something is unverified it says so.
 
 ## The one root cause behind most of it
@@ -5025,38 +5026,145 @@ Worth recording, because all three would have shipped as false greens:
 The standing lesson — *watch every probe go red before believing it green* — earned its place
 three more times in one sitting.
 
+## Grenades on the wire (protocol v7)
+
+`MsgS.Projectiles` — grenades in flight and smoke on the ground. **Broadcast**, unlike the streak
+view: a grenade has no secrets. But consumed **two different ways**, which is what §6.8's one
+sentence about prediction actually requires:
+
+| Whose | How | Why |
+|---|---|---|
+| Somebody else's | Replicated, drawn from the record | Never simulated locally; nothing to reconcile. §4.12 applied to a thrown object |
+| Your own | Predicted, already in the local pool | The authoritative record is a **correction**, and it is excluded from render adoption — drawing it beside the predicted one is the double-render |
+
+Replicated **into** the pool `EquipmentFx` already walks, so the renderer is untouched by the
+whole feature. `Projectile.replicated` marks an adopted slot and `EquipmentSystem` steps none of
+them — no flight, no fuse, no trigger, no detonation. A client integrating a decided trajectory
+parts company with the server the first time one of them clips a corner the other missed.
+
+Smoke is replicated rather than left to the client's own field, and not for symmetry: **smoke
+occludes bot LOS on the server**, so where the cloud is decides who can see whom. A client
+drawing one a metre off is showing cover that does not exist.
+
+### The double-damage was real
+
+`BotDirector` pushes the local player onto its roster and `EquipmentSystem.detonate` walks that
+roster, so a networked client's own blast applied damage to its own player through its own
+`DamageSystem` while the server applied the authoritative copy. Health is overwritten by the next
+snapshot, so the symptom was never a lastingly wrong bar — it was a flicker, a false low-health
+vignette, and a heartbeat for a wound nobody inflicted. `EquipmentDeps.authoritative` is the fix,
+the same shape as `MatchFlow`'s and for the same reason.
+
+## The divergence checker (protocol v8), and what it caught
+
+§7 asks literally for a hash. `MsgS.StateHash` carries one, `hashModeState` is the single function
+both sides run, and `DivergenceChecker` moved to `shared/debug` so the browser and the harness
+cannot drift apart about what agreement means.
+
+**Sent last in the tick, and that is the whole correctness argument.** Every other channel
+describes tick N; the hash asks what tick N looked like, and a client can only answer once it has
+applied all of them.
+
+### It failed on its first real run
+
+Domination and Kill Confirmed: **3 confirmed divergences each, identically on all three clients,
+first at tick 4281.** The return migration was tick 4270 — eleven ticks, the first snapshot after
+it.
+
+**Replicated mode state was never discarded on migration.** §4.18's list is flush, discard,
+resync, clear; it had been applied to the streaks and projectiles when those were built and not to
+the three mode-state channels that came before them. The failure is silent in the worst way: the
+arena has no zones and no tags, so it **sends neither channel at all**, and a stale Domination flag
+list or KC tag list is never overwritten. It persists, entirely plausible-looking, for the session.
+
+TDM and FFA passed throughout — they have no such state to go stale, which is exactly why this
+survived every earlier run.
+
+### Results, all five modes, one full match each
+
+| Mode | Divergences / samples |
+|---|---|
+| TDM | **0 / 1155** |
+| Domination | **0 / 1155** |
+| Kill Confirmed | **0 / 1157** |
+| FFA | **0 / 1155** |
+| S&D | **0 / 2502** (full best-of-5, B 2-3, summaries to all three) |
+
+Red control: corrupting the server's hash by one produced **239 confirmed divergences per client,
+first at tick 12**, and failed the run.
+
+**Limits, stated rather than assumed.** This compares the server's view against what a client
+ended up holding, so it catches dropped channels, truncation, mis-quantisation, a frame applied to
+the wrong mode, and two channels describing different ticks. It does **not** catch the server being
+wrong about its own game: if `Domination.onTick` miscounts a zone, both sides agree on the wrong
+number and this stays silent. That is what `DivergenceChecker`'s score-versus-events comparison is
+for; the two are complementary.
+
+## The cosmetic audit, as a check that fails
+
+`scripts/check-cosmetics.mjs`, wired into `npm run check`. An **allowlist, not a banned-word
+search** — a keyword scan only catches a cosmetic somebody was honest enough to name `decal`, and
+the failure that happens is a field called `impactX` or `shakeAmount`. The snapshot's field set is
+pinned; adding one fails until it is listed with the §4.15 row it belongs to.
+
+**Result: 19 snapshot fields, all §4.15 gameplay state.** Watched red — adding
+`muzzleFlashIntensity` fails by name.
+
+Two judgement calls, both written down rather than glossed:
+
+- **`FiredEvent.tracer`** rides an *event*, which is the channel §4.15 says cosmetics are driven
+  by, and carries one bit meaning "this shot was a tracer round" — which round in the magazine
+  this was, a fact the firing side knows and a receiving client cannot recover across loss without
+  counting shots it never saw. §8.25's requirement is about **snapshots**, and the snapshot is
+  clean. `Messages.ts` previously *claimed* there was no tracer anywhere in it, which was simply
+  false; the comment is corrected.
+- **The four visual serials** carry no position, lifetime, count or material. A serial means "this
+  entity died for the Nth time"; an angle means "the round came from there". They ride the snapshot
+  because an event can be dropped and a dropped death leaves a body standing for ever, where a
+  counter that jumps by three still plays exactly one death.
+
+## The networked S&D spectator
+
+M7's reached into a `BotDirector`; a networked client has no roster. **The rule is a pure
+function** (`shared/modes/SpectatorTarget.ts`) because that is the half that can be wrong
+invisibly: never yourself, never an enemy, only the living, lowest id, sticky on the current
+target. Only in a one-life mode — in TDM a corpse waits four seconds and moving the camera is
+worse than the wait.
+
+Cleared on `EV.RoundStarted`: §4.18's discard rule at a round boundary. Without it a spectator
+returns from the round they died in still pointed at a body that has respawned elsewhere.
+
+Measured over an S&D best-of-5: **292 selections while dead — 0 self, 0 enemy, 0 dead.**
+
+Red control, and the first attempt was not good enough: merely *removing* the team rule still
+reported 0 enemy picks, because the lowest-id candidate was often a teammate anyway. **Inverting**
+it to enemies-only produced 280 enemy picks and failed the run.
+
 ## What Gate B still needs
 
 In rough dependency order. The first item unblocks the most.
 
-1. **The grenade projectile channel.** The authoritative half landed in `9ac32a6`:
-   `EquipmentSystem`, `BotThrower` and a `ThrowController` **per connected human** all run on
-   the server, driven from the command the player's body just consumed, and
-   `bots.perception.occluder` gives §6.8's smoke occlusion. Measured at 4 thrown / 4 detonated
-   in a live match, against zero before.
-
-   What is missing is replication. A client predicts and draws its **own** grenade correctly —
-   same command, same tick, same trajectory both sides — but one thrown by a bot or another
-   player exists on the server, damages people and is **invisible**. Needs `MsgS.Projectiles`
-   plus the smoke field, and then §8.24's reconciliation claim: blend the predicted arc onto the
-   authoritative one rather than snapping, and measure that there is no visible teleport.
-
-   **Check while building it:** the networked client still simulates its own `MatchEquipment`
-   unguarded — pre-existing since M10, not introduced here — so confirm a client-side blast
-   cannot apply damage a second time to its own player.
-2. **Networked S&D spectator** for one-life rounds; M7's was local. Note that with the round
-   reset fixed, a dead player now has a real wait to fill.
-3. **Divergence checker headless.** It exists client-only (`client/debug/DivergenceChecker.ts`);
-   `HeadlessClient` needs it before §8.21's "zero mismatches across all five modes" can be
-   claimed at all.
-4. **Cosmetic audit** (§8.25) and **per-listener audio on Depot** (§8.26).
-5. **The verification battery**: every mode on every map to completion, a full S&D best-of-5
+1. **Per-listener audio on Depot** (§8.26) — occlusion and the per-map reverb IR. Needs a
+   browser; grouped with the other browser-only claims below.
+2. **The verification battery**: every mode on every map to completion, a full S&D best-of-5
    with the round-3 swap, the 100-cycle leak, hardening probes against `Tags` and `Bomb`, the
    12-hour soak, and every §7-conditions claim against a **deployed** server rather than
    loopback.
 
-## Still open from Gate A, unchanged
+## Open, and all of one kind: they need a real browser
 
-Client background build time per map (needs a real browser — the preview pane never fires
-`requestAnimationFrame`), and the arena-return residual of 1-3 sub-25 cm mispredictions. Neither
-was touched by this work.
+The preview pane never fires `requestAnimationFrame`, so none of these can be measured here.
+Grouped deliberately — this is now the whole of what Gate B has not verified, and it is a single
+session at a keyboard rather than a list of unrelated gaps.
+
+- **Client background build time per map** (§8.7), which is what validates the 5 ms / 20 s pair.
+- **A single click landing on a vote button** (§8.18).
+- **Grenade reconciliation is visually seamless** (§8.24). The easing rate is sized against the
+  snapshot interval — about 78% of the gap closed per 50 ms — and own-grenade exclusion from
+  render adoption is one `continue`, but "no visible teleport" is a claim about pixels.
+- **The spectator camera framing** (§6.8). The *rule* is measured at 292 selections, 0 invalid;
+  what it looks like through a teammate's eyes is not.
+- **Per-listener audio with occlusion on Depot** (§8.26).
+
+Unchanged from Gate A: the arena-return residual of 1-3 sub-25 cm mispredictions. Not touched by
+any of this work, and still distinguished from the into-live number rather than summed with it.
