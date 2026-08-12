@@ -76,8 +76,27 @@ import { ByteReader, ByteWriter } from './Wire';
  *
  * The table in S4.15 is explicit that cosmetics are **driven by replicated events, not
  * replicated state**: the server says `damage.dealt` and the client decides what that looks
- * and sounds like. So this list is events, and there is deliberately no tracer, decal or
- * particle anywhere in it.
+ * and sounds like.
+ *
+ * ## One judgement call, named rather than glossed (M11 Gate B, S8.25)
+ *
+ * This comment used to claim there was *"deliberately no tracer, decal or particle anywhere in
+ * it"*, and `FiredEvent.tracer` is a few lines below — the comment was simply wrong, and a
+ * comment that lies about the audit it describes is worse than no comment. The audit is now
+ * `scripts/check-cosmetics.mjs`, which is a check that fails rather than a sentence that
+ * asserts.
+ *
+ * The tracer bit stays, and here is the actual argument for it. S8.25's requirement is that no
+ * cosmetic state appears in a **snapshot**, and it does not: the entity snapshot is nineteen
+ * fields of position, velocity, stance, health, weapon and event counters, pinned by that check.
+ * `tracer` rides an *event*, which is the channel S4.15 says cosmetics are supposed to be driven
+ * by. It is one bit meaning "this shot was a tracer round" — a fact about which round in the
+ * magazine this was, which the firing side knows and a receiving client cannot recover across
+ * packet loss without counting shots it may not have seen. The client still owns what a tracer
+ * looks like, how long it lives and whether to draw one at all.
+ *
+ * What would be a violation, and is not present: a position for the tracer, a particle count, a
+ * decal id, a muzzle-flash intensity, a viewmodel pose, a camera-shake magnitude.
  */
 export const Ev = {
   /** Somebody fired. Carries the terminus, so the client can draw the whole shot. */

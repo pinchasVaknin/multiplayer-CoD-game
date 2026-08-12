@@ -14,25 +14,23 @@
     "harness": "npm run build:server && node --expose-gc dist-server/main.js --matches 5 --asap --json",
     "//serve": "S6.6. The dedicated server. Everything operational comes from the environment - see src/server/Config.ts.",
     "serve": "npm run build:server && node dist-server/serve.js",
-
     "//netharness": "S7. Headless clients running the real NetClient against a real server. Every S8 client-side number comes out of this.",
     "netharness": "npm run build:server && node dist-server/netHarness.js",
-
     "//skirmish": "M11 S7. The full flow: N headless clients connect, play warmup, vote, migrate, play a match and return. Every Gate A number comes out of this.",
     "skirmish": "npm run build:server && node --expose-gc dist-server/skirmishHarness.js",
     "//leak": "M11 S8.13. 100 allocate/destroy cycles, logging heap and live EventBus subscriptions at each. Both must be flat.",
     "leak": "npm run build:server && node --expose-gc dist-server/skirmishHarness.js --leak 100",
-
     "//hashes": "S6.6. Node writes the per-tick hashes; the browser writes its own from the debug console; the differ reports the first divergent tick.",
     "hashes": "npm run build:server && node dist-server/hashRun.js",
-    "//check": "The gate. Boundaries first: a partition violation makes the type errors that follow meaningless noise, so it is the thing that speaks.",
-    "check": "npm run check:boundaries && npm run typecheck",
+    "//check": "The gate. Boundaries first: a partition violation makes the type errors that follow meaningless noise, so it is the thing that speaks. Then the S8.25 cosmetic audit, which is cheap and catches a whole class of replication mistake.",
+    "check": "npm run check:boundaries && npm run check:cosmetics && npm run typecheck",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "//typecheck": "Three targets, not one. shared/ compiles without the DOM lib, which is what makes a stray `document` a compile error instead of a crash in Node.",
     "typecheck": "npm run typecheck:shared && npm run typecheck:client && npm run typecheck:server",
     "typecheck:shared": "tsc -p tsconfig.shared.json --noEmit",
     "typecheck:client": "tsc -p tsconfig.client.json --noEmit",
-    "typecheck:server": "tsc -p tsconfig.server.json --noEmit"
+    "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
+    "check:cosmetics": "node scripts/check-cosmetics.mjs"
   },
   "dependencies": {
     "three": "^0.185.1",
