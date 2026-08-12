@@ -1,6 +1,6 @@
-import { logger } from '../../shared/core/Log';
-import type { MatchFlow } from '../../shared/modes/MatchFlow';
-import { phaseAt, type SnapshotHeader } from '../../shared/net/Messages';
+import { logger } from '../core/Log';
+import type { MatchFlow } from '../modes/MatchFlow';
+import { phaseAt, type SnapshotHeader } from '../net/Messages';
 
 const log = logger('divergence');
 
@@ -53,6 +53,13 @@ const log = logger('divergence');
  * Without the confirm step this reports a mismatch on essentially every kill, which is the
  * flaky-probe failure standing lesson 6 warns about — a check that cries wolf teaches its
  * reader to ignore it, and then it is worse than not existing.
+ *
+ * ## Shared, so the browser and the harness run the same checker (M11 Gate B)
+ *
+ * It moved out of `client/debug` for §8.21, which asks for zero mismatches *across a full match
+ * in each of the five modes* — five matches nobody is going to sit through by hand. Nothing in
+ * here was ever client-only: it reads a snapshot header and a `MatchFlow`, both shared. Two
+ * copies of a comparator is two comparators that can disagree about what agreement means.
  */
 
 export interface DivergenceRecord {

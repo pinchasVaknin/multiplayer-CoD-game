@@ -540,7 +540,13 @@ export function writeBomb(w: ByteWriter, info: BombInfo): Uint8Array {
   return w.bytes();
 }
 
-function bombStateCode(state: BombInfo['state']): number {
+/**
+ * Exported so the §7 hash encodes a bomb state the same way the wire does.
+ *
+ * Two spellings of "PLANTED is 1" is two places to get it wrong, and the resulting mismatch
+ * would look like a replication bug rather than a comparator bug.
+ */
+export function bombStateCode(state: BombInfo['state']): number {
   if (state === 'PLANTED') return BOMB_PLANTED;
   if (state === 'DEFUSED') return BOMB_DEFUSED;
   if (state === 'EXPLODED') return BOMB_EXPLODED;
@@ -665,6 +671,14 @@ export function writeProjectiles(
     w.u8v(Math.max(0, Math.min(255, Math.round(s.radius * 10))));
     w.u16(Math.max(0, Math.min(0xffff, s.remainingDs)));
   }
+  return w.bytes();
+}
+
+/** The §7 mode-state hash, and the tick it describes. */
+export function writeStateHash(w: ByteWriter, tick: number, hash: number): Uint8Array {
+  head(w, MsgS.StateHash);
+  w.i32(tick);
+  w.u32(hash);
   return w.bytes();
 }
 
@@ -985,6 +999,7 @@ export type Decoded =
   | { kind: 'objectives'; states: readonly ObjectiveState[] }
   | { kind: 'tags'; tags: readonly TagInfo[] }
   | { kind: 'streaks'; view: StreakView }
+  | { kind: 'stateHash'; tick: number; hash: number }
   | {
       kind: 'projectiles';
       projectiles: readonly ProjectileState[];
@@ -1326,6 +1341,11 @@ export function decodeHeader(r: ByteReader): Decoded {
         smoke.push({ x, y, z, radius, remainingDs });
       }
       return r.overran ? BAD : { kind: 'projectiles', projectiles, smoke };
+    }
+    case MsgS.StateHash: {
+      const tick = r.i32();
+      const hash = r.u32();
+      return r.overran ? BAD : { kind: 'stateHash', tick, hash };
     }
     case MsgS.Reject: {
       const code = r.u8v();

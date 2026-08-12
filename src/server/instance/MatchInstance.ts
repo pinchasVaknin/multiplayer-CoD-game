@@ -2,13 +2,22 @@ import type { Bot } from '../../shared/ai/Bot';
 import { nowMs } from '../../shared/core/Clock';
 import { Btn, isDown } from '../../shared/core/InputCommand';
 import { logger } from '../../shared/core/Log';
-import { makeSnapshotHeader, phaseIndex, SFlag, type SnapshotHeader } from '../../shared/net/Messages';
+import {
+  bombStateCode,
+  makeSnapshotHeader,
+  phaseIndex,
+  SFlag,
+  type SnapshotHeader,
+} from '../../shared/net/Messages';
 import {
   InstanceState,
   MAX_PROJECTILES,
   MAX_SMOKE,
   MAX_STREAK_ENTITIES,
+  MAX_TAGS,
   MAX_UAV_CONTACTS,
+  OBJ_TEAM_A,
+  OBJ_TEAM_B,
   PEFlag,
   ownerCode,
   SEFlag,
@@ -21,6 +30,7 @@ import {
   type UavContactState,
 } from '../../shared/net/Skirmish';
 import { ALL_EQUIPMENT, type EquipmentId } from '../../shared/equipment/EquipmentDefs';
+import { hashModeState, type ModeStateFacts } from '../../shared/debug/ModeStateHash';
 import { CarePackage } from '../../shared/streaks/CarePackage';
 import { ChopperGunner } from '../../shared/streaks/ChopperGunner';
 import type { Killstreak } from '../../shared/streaks/KillstreakBase';
@@ -112,6 +122,15 @@ export abstract class MatchInstance {
   private readonly smokeScratch: SmokeState[] = [];
   /** Whether the last projectile frame was empty. See `sendProjectiles`. */
   private projectilesWereEmpty = false;
+  /** Scratch for the §7 hash. Nothing on the per-tick send path allocates (S4.7). */
+  private readonly hashZones: {
+    owner: number;
+    capturing: number;
+    progress: number;
+    countA: number;
+    countB: number;
+  }[] = [];
+  private readonly hashTagIds: number[] = [];
   private entityCount = 0;
 
   /** Milliseconds the last step took. Per-instance half of the §7 instance panel. */
@@ -276,6 +295,15 @@ export abstract class MatchInstance {
       this.sendBomb();
       this.sendStreaks();
       this.sendProjectiles();
+      /**
+       * Last, deliberately (§7).
+       *
+       * Every channel above describes tick N. The hash says "this is what tick N looked like",
+       * and a client can only answer it honestly once it has applied all of them. Sent earlier,
+       * it would be compared against a client still holding tick N-1 and would report a
+       * mismatch on every single sample.
+       */
+      this.sendStateHash(absoluteTick);
     }
     this.sendEvents();
 
@@ -561,6 +589,73 @@ export abstract class MatchInstance {
         seat.session.sendProjectiles(this.projectileScratch, this.smokeScratch);
       }
     }
+  }
+
+  /**
+   * Hash this tick's mode state and send it (§7, §8.21).
+   *
+   * Built from the **same quantisation the wire uses**, not from the raw simulation values: the
+   * server holds a capture progress of 0.4372 and the client holds 111/255, and hashing the raw
+   * number would report a divergence on every objective in the game. That is a units bug
+   * dressed as a finding, and it is the first thing a comparator like this gets wrong.
+   */
+  private sendStateHash(tick: number): void {
+    if (this.seats.size === 0) return;
+    const hash = hashModeState(this.modeStateFacts());
+    for (const seat of this.seats.values()) {
+      if (!seat.session.closed) seat.session.sendStateHash(tick, hash);
+    }
+  }
+
+  /** The authoritative mode state, flattened exactly as the channels above send it. */
+  private modeStateFacts(): ModeStateFacts {
+    const mode = this.match.mode;
+    const flow = this.match.flow;
+
+    this.hashZones.length = 0;
+    for (const zone of mode.objectiveZones) {
+      this.hashZones.push({
+        owner: ownerCode(zone.owner),
+        capturing: ownerCode(zone.capturingTeam),
+        progress: Math.max(0, Math.min(255, Math.round(zone.progress * 255))),
+        countA: Math.min(255, zone.countA),
+        countB: Math.min(255, zone.countB),
+      });
+    }
+
+    this.hashTagIds.length = 0;
+    const tags = mode.dogTags;
+    if (tags !== null) {
+      // The same truncation `writeTags` applies — the newest win — so a match with more than
+      // the cap on the floor hashes what was actually sent rather than what was held.
+      const skip = Math.max(0, tags.length - MAX_TAGS);
+      for (let i = skip; i < tags.length; i++) {
+        const t = tags[i];
+        if (t !== undefined) this.hashTagIds.push(t.id & 0xffff);
+      }
+    }
+
+    const info = mode.bombInfo;
+    return {
+      scoreA: mode.teamScore('A'),
+      scoreB: mode.teamScore('B'),
+      round: flow.round,
+      phase: phaseIndex(flow.currentPhase),
+      zones: this.hashZones,
+      tagIds: this.hashTagIds,
+      bomb:
+        info === null
+          ? null
+          : {
+              state: bombStateCode(info.state),
+              carrierId: info.carrierId,
+              attackers: info.attackers === 'B' ? OBJ_TEAM_B : OBJ_TEAM_A,
+              plantedSite: info.plantedSiteIndex,
+              timerCs: Math.max(0, Math.min(0xffff, Math.round(info.secondsLeft * 100))),
+              interactProgress: Math.max(0, Math.min(255, Math.round(info.interactFraction * 255))),
+              interactEntity: info.interactEntity,
+            },
+    };
   }
 
   private sendEvents(): void {

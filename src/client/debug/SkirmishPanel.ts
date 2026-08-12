@@ -8,7 +8,7 @@ import {
 } from '../../shared/net/Skirmish';
 import type { NetSession } from '../net/NetSession';
 import type { BuildReport } from '../world/MapBuildQueue';
-import type { DivergenceChecker } from './DivergenceChecker';
+import type { DivergenceChecker } from '../../shared/debug/DivergenceChecker';
 import type { FrameStats } from './FrameStats';
 import { setField, type DebugOverlay } from './DebugOverlay';
 

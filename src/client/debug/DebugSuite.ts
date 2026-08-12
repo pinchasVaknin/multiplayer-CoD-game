@@ -24,7 +24,7 @@ import { ArsenalHarness } from './ArsenalHarness';
 import { ArsenalPanel } from './ArsenalPanel';
 import { CollisionDebug } from './CollisionDebug';
 import { EquipmentPanel } from './EquipmentPanel';
-import type { DivergenceChecker } from './DivergenceChecker';
+import type { DivergenceChecker } from '../../shared/debug/DivergenceChecker';
 import type { BuildReport } from '../world/MapBuildQueue';
 import { NetPanel } from './NetPanel';
 import { SkirmishPanel } from './SkirmishPanel';

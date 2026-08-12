@@ -23,6 +23,8 @@
  * the whole match.
  */
 /**
+ * v8 (M11 Gate B): `MsgS.StateHash` — the §7 divergence checker's wire.
+ *
  * v7 (M11 Gate B): grenades cross the wire — `MsgS.Projectiles`.
  *
  * The server has thrown and detonated equipment since the previous commit and no client could
@@ -47,7 +49,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
@@ -166,6 +168,14 @@ export const MsgS = {
    * is the only copy you have.
    */
   Projectiles: 143,
+  /**
+   * A hash of this tick's mode state, for the §7 divergence checker.
+   *
+   * Sent **last** in the tick's send order, after every channel that describes mode state, so a
+   * client has applied all of tick N before being asked what it thinks tick N looked like. Sent
+   * any earlier it would compare against a client holding tick N-1 and cry wolf on every sample.
+   */
+  StateHash: 144,
 } as const;
 
 export type MsgCId = (typeof MsgC)[keyof typeof MsgC];

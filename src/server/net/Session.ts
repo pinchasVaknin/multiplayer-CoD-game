@@ -13,6 +13,7 @@ import {
   writeTags,
   writeStreaks,
   writeProjectiles,
+  writeStateHash,
   writePrepare,
   writeReject,
   writeSummary,
@@ -575,6 +576,10 @@ export class Session {
 
   sendProjectiles(projectiles: readonly ProjectileState[], smoke: readonly SmokeState[]): void {
     this.send(writeProjectiles(this.out, projectiles, smoke));
+  }
+
+  sendStateHash(tick: number, hash: number): void {
+    this.send(writeStateHash(this.out, tick, hash));
   }
 
   /**

@@ -26,6 +26,20 @@ import { PlayerController } from '../../shared/player/PlayerController';
 import { findMap } from '../../shared/modes/ModeRegistry';
 import { loadMapCollision } from '../../shared/world/MapLoader';
 import { STREAK_DEFS } from '../../shared/streaks/StreakDefs';
+import { hashModeState, type ModeStateFacts } from '../../shared/debug/ModeStateHash';
+import { bombStateCode } from '../../shared/net/Messages';
+import { OBJ_TEAM_A, OBJ_TEAM_B, type ObjectiveState } from '../../shared/net/Skirmish';
+import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
+
+/**
+ * Consecutive disagreeing hash samples before a divergence is believed (§7).
+ *
+ * The same reasoning and the same number as `DivergenceChecker.CONFIRM_SAMPLES`: a client is
+ * always a snapshot behind on something, and a comparator that reports its first disagreement
+ * reports one on every kill. Four consecutive samples is a quarter of a second of sustained
+ * disagreement at 20 Hz, which no amount of in-flight latency explains.
+ */
+const HASH_CONFIRM_SAMPLES = 4;
 import { NodeLink } from './NodeLink';
 
 /** The Chopper Gunner's index in `STREAK_DEFS`, resolved once rather than hardcoded. */
@@ -200,6 +214,10 @@ export interface HeadlessClientReport {
   readonly peakStreakEntities: number;
   /** Frames carrying a friendly UAV sweep, and how many activations were asked for. */
   readonly sweepFrames: number;
+  /** §7/§8.21: mode-state hash samples, confirmed mismatches, and the first mismatching tick. */
+  readonly hashSamples: number;
+  readonly hashMismatches: number;
+  readonly firstMismatchTick: number;
   /** Projectile frames, distinct grenades thrown by others, and echoes of this client's own. */
   readonly projectileFrames: number;
   readonly remoteProjectiles: number;
@@ -330,6 +348,16 @@ export class HeadlessClient {
   private readonly streakInstanceIds = new Set<number>();
   private peakStreakEntities = 0;
   private sweepFrames = 0;
+  /** The §7 hash: samples taken, confirmed mismatches, and where the first one landed. */
+  private hashSamples = 0;
+  private hashMismatches = 0;
+  private hashMismatchStreak = 0;
+  private firstMismatchTick = -1;
+  /** The replicated mode state, exactly as decoded. Hashed against the server's own. */
+  private repZones: readonly ObjectiveState[] = [];
+  private repTags: readonly TagInfo[] = [];
+  private repBomb: BombInfo | null = null;
+  private readonly factTagIds: number[] = [];
   private projectileFrames = 0;
   private readonly remoteSerials = new Set<number>();
   private ownProjectileSeen = 0;
@@ -429,6 +457,8 @@ export class HeadlessClient {
         onObjectives: (states) => {
           this.objectiveUpdates++;
           for (const s of states) if (s.owner !== 0) this.objectivesOwned++;
+          // Kept verbatim for the §7 hash — the values as decoded, not re-derived.
+          this.repZones = states;
         },
         /**
          * Killstreaks (Gate B, §8.22).
@@ -461,6 +491,32 @@ export class HeadlessClient {
           }
           if (projectiles.length > this.peakProjectiles) this.peakProjectiles = projectiles.length;
           if (smoke.length > 0) this.smokeFrames++;
+        },
+        /**
+         * The §7 divergence check.
+         *
+         * The server's hash of tick N arrives **after** every channel describing tick N, so by
+         * the time this runs the replicated copies below are the client's complete answer to
+         * "what did tick N look like". Hashing them with the same function the server used and
+         * comparing is the whole check.
+         *
+         * A mismatch is confirmed across consecutive samples before it is believed, for the
+         * reason `DivergenceChecker` documents at length: a client is always one snapshot
+         * behind on *something*, and a comparator that reports the first disagreement it sees
+         * reports one on every kill and teaches its reader to ignore it.
+         */
+        onStateHash: (tick, hash) => {
+          this.hashSamples++;
+          const mine = hashModeState(this.localModeFacts());
+          if (mine === hash) {
+            this.hashMismatchStreak = 0;
+            return;
+          }
+          this.hashMismatchStreak++;
+          if (this.hashMismatchStreak < HASH_CONFIRM_SAMPLES) return;
+          this.hashMismatchStreak = 0;
+          this.hashMismatches++;
+          if (this.firstMismatchTick < 0) this.firstMismatchTick = tick;
         },
         onStreaks: (view) => {
           this.streakFrames++;
@@ -518,6 +574,7 @@ export class HeadlessClient {
          * bug produced — so the number that matters is how many tags ever actually existed.
          */
         onTags: (tags) => {
+          this.repTags = tags;
           this.tagUpdates++;
           for (const t of tags) this.tagIds.add(t.id);
           if (tags.length > this.peakTags) this.peakTags = tags.length;
@@ -531,6 +588,7 @@ export class HeadlessClient {
          * only observation that distinguishes a replicated countdown from a constant.
          */
         onBomb: (info) => {
+          this.repBomb = info;
           this.bombUpdates++;
           if (info.state === 'PLANTED') {
             this.bombPlanted = true;
@@ -688,6 +746,25 @@ export class HeadlessClient {
     }
     this.currentMapId = welcome.mapId;
 
+    /**
+     * Discard every replicated mode-state channel (§4.18) — found by the §7 checker.
+     *
+     * The obligation list on a migration is flush, discard, resync, clear, and it applies to
+     * **every** channel the instance being left was feeding. This was applied to the streaks and
+     * the projectiles when those were built and not to the three mode-state channels that came
+     * before them, and the failure is silent in the worst way: the arena has no zones and no
+     * tags, so it **sends neither channel at all**, and a stale Domination flag list or Kill
+     * Confirmed tag list is never overwritten. It simply persists, correct-looking, for the rest
+     * of the session.
+     *
+     * Measured before the fix: return migration on tick 4270, first confirmed divergence on
+     * tick 4281 — the first snapshot after it — in Domination and Kill Confirmed and in neither
+     * of the two modes that have no such state.
+     */
+    this.repZones = [];
+    this.repTags = [];
+    this.repBomb = null;
+
     // Open the window. `mispredictionsAtMigration` is the baseline the count is taken against
     // 60 ticks later, so the number reported is what happened *in* the window rather than the
     // running total.
@@ -829,6 +906,9 @@ export class HeadlessClient {
       streakEntitiesSeen: this.streakInstanceIds.size,
       peakStreakEntities: this.peakStreakEntities,
       sweepFrames: this.sweepFrames,
+      hashSamples: this.hashSamples,
+      hashMismatches: this.hashMismatches,
+      firstMismatchTick: this.firstMismatchTick,
       projectileFrames: this.projectileFrames,
       remoteProjectiles: this.remoteSerials.size,
       ownProjectileSeen: this.ownProjectileSeen,
@@ -864,6 +944,47 @@ export class HeadlessClient {
       summaries: this.summaries,
       notices: [...this.notices],
       votesCast: this.votesCast,
+    };
+  }
+
+  /**
+   * What this client believes tick N looked like (§7).
+   *
+   * Assembled from the channels **as decoded** — the zone records, the tag list and the bomb are
+   * held verbatim rather than re-derived, because the point of the comparison is to catch a
+   * value that arrived wrong, and re-deriving it here would be inventing a second chance to get
+   * it right.
+   *
+   * Score, round and phase come from the snapshot header, which is the client's only source for
+   * them. That half therefore agrees by construction and is included for the reason
+   * `DivergenceChecker` includes the same fields: it costs one comparison, and the day anything
+   * gives a client its own opinion about the round number, this is already watching.
+   */
+  private localModeFacts(): ModeStateFacts {
+    const h = this.net.header;
+    this.factTagIds.length = 0;
+    for (const t of this.repTags) this.factTagIds.push(t.id & 0xffff);
+
+    const bomb = this.repBomb;
+    return {
+      scoreA: h.scoreA,
+      scoreB: h.scoreB,
+      round: h.round,
+      phase: h.phase,
+      zones: this.repZones,
+      tagIds: this.factTagIds,
+      bomb:
+        bomb === null
+          ? null
+          : {
+              state: bombStateCode(bomb.state),
+              carrierId: bomb.carrierId,
+              attackers: bomb.attackers === 'B' ? OBJ_TEAM_B : OBJ_TEAM_A,
+              plantedSite: bomb.plantedSiteIndex,
+              timerCs: Math.max(0, Math.min(0xffff, Math.round(bomb.secondsLeft * 100))),
+              interactProgress: Math.max(0, Math.min(255, Math.round(bomb.interactFraction * 255))),
+              interactEntity: bomb.interactEntity,
+            },
     };
   }
 

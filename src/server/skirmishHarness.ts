@@ -611,6 +611,9 @@ function reportFlow(input: FlowReportInput): number {
         modeStateLine(r) +
         streakLine(r) +
         projectileLine(r) +
+        `divergence ${r.hashMismatches}/${r.hashSamples}` +
+        (r.firstMismatchTick >= 0 ? ` (first @${r.firstMismatchTick})` : '') +
+        ', ' +
         `post-migration windows [${r.postMigrationWindows.join(",")}] at ticks [${r.migrationMispredictionTicks.join(",")}], ` +
         `${r.buildsCompleted} build(s) worst ${r.worstBuildMs}ms, ` +
         `${r.votesCast} vote(s), ${r.summaries} summary(s), ` +
@@ -720,6 +723,23 @@ function reportFlow(input: FlowReportInput): number {
    */
   if (opts.ghost && !checkGhost(reports)) {
     problems.push('a Ghost player appeared as a UAV contact on an enemy client');
+  }
+
+  /**
+   * §8.21: *"Divergence checker reports zero mismatches across a full match in each of the five
+   * modes. Any mismatch is this milestone's blocking bug — report it, do not explain it away."*
+   *
+   * So it blocks. A checker whose failures are warnings is a checker that gets ignored, and this
+   * one exists precisely to catch the faults that are otherwise silent.
+   */
+  const mismatches = reports.reduce((sum, r) => sum + r.hashMismatches, 0);
+  const hashSamples = reports.reduce((sum, r) => sum + r.hashSamples, 0);
+  if (mismatches > 0) {
+    problems.push(`${mismatches} confirmed mode-state divergence(s) across ${hashSamples} samples`);
+  } else if (hashSamples === 0) {
+    // A zero that means "never looked" reads identically to a zero that means "never differed",
+    // and only one of them is a pass.
+    problems.push('the divergence checker took no samples — it is not running');
   }
 
   /** §8.23 case 4. Blocking: an orphaned gunship shoots people. */

@@ -157,6 +157,8 @@ export interface SkirmishSink {
    */
   readonly onStreaks?: ((view: StreakView) => void) | undefined;
   /** Grenades in flight and smoke on the ground (M11 Gate B, §8.24). Broadcast, not filtered. */
+  /** The §7 mode-state hash for `tick`. Compare against your own; see `ModeStateHash`. */
+  readonly onStateHash?: ((tick: number, hash: number) => void) | undefined;
   readonly onProjectiles?:
     | ((projectiles: readonly ProjectileState[], smoke: readonly SmokeState[]) => void)
     | undefined;
@@ -567,6 +569,9 @@ export class NetClient {
         return;
       case 'projectiles':
         this.deps.skirmish?.onProjectiles?.(msg.projectiles, msg.smoke);
+        return;
+      case 'stateHash':
+        this.deps.skirmish?.onStateHash?.(msg.tick, msg.hash);
         return;
       case 'reject':
         this.state = 'rejected';

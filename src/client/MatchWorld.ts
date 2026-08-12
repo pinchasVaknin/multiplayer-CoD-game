@@ -11,7 +11,7 @@ import type { ProceduralTextures } from './engine/ProceduralTextures';
 import type { Renderer } from './engine/Renderer';
 import { BotHarness, type BotHarnessOptions } from './debug/BotHarness';
 import { DebugSuite } from './debug/DebugSuite';
-import { DivergenceChecker } from './debug/DivergenceChecker';
+import { DivergenceChecker } from '../shared/debug/DivergenceChecker';
 import type { BuildReport } from './world/MapBuildQueue';
 import type { FrameStats } from './debug/FrameStats';
 import type { MatchHarness } from './debug/MatchHarness';
