@@ -18,7 +18,29 @@ import type { BotTeam, Combatant } from './Combatant';
  * and no spawn is scored against it.
  */
 export class PlayerCombatant implements Combatant {
-  readonly entityId = PLAYER_ENTITY_ID;
+  /**
+   * Which entity this body **is** (M11 Gate B playtest).
+   *
+   * `PLAYER_ENTITY_ID` — zero — was hard-coded here, and over the network that is not merely
+   * a cosmetic mismatch: it is the id `Ballistics.nearestTarget` compares its `excludeId`
+   * against. A connected human shoots as entity 1 or above, so their **own rig was a legal
+   * target for their own bullets**, and `raySlab` starts its interval at `tmin = 0` — a ray
+   * that begins inside a box hits it at t = 0. Every shot therefore terminated on the
+   * shooter, at point-blank range, before it had travelled a millimetre.
+   *
+   * Three separately reported faults were that one line:
+   *
+   *  - a hitmarker (and, on the head box, a *kill* marker) on the first shot of a life,
+   *    aimed at nothing;
+   *  - the local health bar driven to zero and stuck there, red, because a networked client
+   *    does not step its own `Health` and `setReplicated` only ran when the **server's**
+   *    value changed — which it does not while the server thinks you are unhurt;
+   *  - target dummies and lobby bots that could not be shot, because the round never got
+   *    past the shooter's own chest.
+   *
+   * Defaulted so every single-player call site keeps the identity it has had since M2.
+   */
+  readonly entityId: number;
   readonly displayName = 'OPERATOR';
   readonly rig = new HitboxRig(HUMANOID_RIG);
 
@@ -47,7 +69,10 @@ export class PlayerCombatant implements Combatant {
     readonly team: BotTeam,
     private readonly player: PlayerController,
     private readonly movement: MovementConfig,
-  ) {}
+    entityId: number = PLAYER_ENTITY_ID,
+  ) {
+    this.entityId = entityId;
+  }
 
   get px(): number {
     return this.player.sim.x;

@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { BotDirector } from '../shared/ai/BotDirector';
 import type { BotTeam, Combatant } from '../shared/ai/Combatant';
 import type { TierTable } from '../shared/ai/DifficultyTiers';
-import { PLAYER_ENTITY_ID } from '../shared/combat/DamageSystem';
 import type { DamageSystem } from '../shared/combat/DamageSystem';
 import { EV, type GameBus } from '../shared/core/Events';
 import type { InputCommand } from '../shared/core/InputCommand';
@@ -64,6 +63,16 @@ export interface MatchEquipmentDeps {
   readonly cfg: EquipmentConfig;
   readonly tiers: TierTable;
   readonly localTeam: BotTeam;
+  /**
+   * Which entity this client's own hand belongs to (M11 Gate B playtest).
+   *
+   * `PLAYER_ENTITY_ID` was used as a literal in three places here and every one of them was
+   * wrong the moment a server assigned a seat: the grenade left the hand stamped as entity 0
+   * (so the server's authoritative copy of *your own* grenade did not match it and was adopted
+   * as somebody else's — the double-render §8.24 excludes by owner), a flashbang addressed to
+   * you was ignored, and the per-life refill never ran.
+   */
+  readonly localId: number;
   readonly seed: number;
   /** False on a networked client: predict and draw, resolve nothing. See `EquipmentDeps`. */
   readonly authoritative?: boolean;
@@ -169,7 +178,7 @@ export class MatchEquipment {
     const t0 = performance.now();
     this.elapsed += DT;
 
-    this.thrower.step(cmd, sim, PLAYER_ENTITY_ID, this.inventory, this.deps.localTeam, playerAlive);
+    this.thrower.step(cmd, sim, this.deps.localId, this.inventory, this.deps.localTeam, playerAlive);
     this.system.simulate(sim.x, sim.y + sim.eyeHeight, sim.z, this.deps.localTeam);
     this.stepBotThrows();
     this.stepFlash();
@@ -449,7 +458,7 @@ export class MatchEquipment {
   }
 
   private onFlashed(targetId: number, intensity: number): void {
-    if (targetId !== PLAYER_ENTITY_ID) return;
+    if (targetId !== this.deps.localId) return;
     const seconds = PLAYER_FLASH_SECONDS * intensity;
     if (seconds <= this.flashRemaining) return;
     this.flashRemaining = seconds;
@@ -457,13 +466,31 @@ export class MatchEquipment {
   }
 
   private onSpawned(entityId: number): void {
-    if (entityId === PLAYER_ENTITY_ID) {
-      EquipmentSystem.refill(this.inventory);
-      this.thrower.reset();
-      this.flashRemaining = 0;
+    if (entityId === this.deps.localId) {
+      this.refillForLife();
       return;
     }
     this.botThrower.respawn(entityId);
+  }
+
+  /**
+   * A fresh life's grenades (S6.3: equipment is per life).
+   *
+   * Split out of `onSpawned` because a **networked** respawn emits no `player.spawned` at all:
+   * `ClientMatch.respawnNetworked` deliberately does not call `PlayerController.spawn` — the
+   * server chose the position and prediction has already adopted it — so the event this used to
+   * hang off never fires. The counts stayed at whatever the previous life ended on, which is
+   * the reported "grenades do not refill after respawn", and it is the same authority-migration
+   * hole as the entity id above: the fact moved to the server and the local reader kept
+   * listening for a local event.
+   *
+   * Deliberately **not** `reset()`: that also clears live projectiles and smoke out of the
+   * world, and one player coming back to life must not delete a cloud somebody else is using.
+   */
+  refillForLife(): void {
+    EquipmentSystem.refill(this.inventory);
+    this.thrower.reset();
+    this.flashRemaining = 0;
   }
 
   /** Every combatant, for the debug panel's smoke visualisation. */

@@ -7,7 +7,7 @@ import type { BotTeam } from '../shared/ai/Combatant';
 import type { PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
 import { PlayerCombatant } from '../shared/ai/PlayerCombatant';
 import { makeSpawnChoice, type SpawnChoice } from '../shared/ai/SpawnSelector';
-import { DamageSystem, makeDamageRequest, PLAYER_ENTITY_ID, type DamageRequest } from '../shared/combat/DamageSystem';
+import { DamageSystem, makeDamageRequest, type DamageRequest } from '../shared/combat/DamageSystem';
 import { LocalIdentity } from '../shared/combat/LocalIdentity';
 import { ScoreSystem } from '../shared/combat/ScoreSystem';
 import { Rng } from '../shared/core/Rng';
@@ -379,6 +379,15 @@ export class Match {
   mortarMarkZ = 0;
   /** The player's three equipped streaks, refreshed whenever the class changes. */
   private equippedStreakIds: readonly StreakId[] = [];
+  /**
+   * The three equipped streaks **in key order**, nulls kept (M11 Gate B playtest).
+   *
+   * `equippedStreakIds` drops the empty slots because `StreakSystem` wants a set to decide what
+   * this player may earn. The keys want the opposite: position is the whole meaning, because key
+   * 3 is slot 0 and key 5 is slot 2 whatever is or is not in between. Packing the two together
+   * is what made key 5 dead for a player carrying one streak.
+   */
+  private streakSlots: readonly (StreakId | null)[] = [null, null, null];
   /** Look angles when the overlay opened, so the mark is steered by the delta. */
   private overlayYaw = 0;
   private overlayPitch = 0;
@@ -398,11 +407,23 @@ export class Match {
       deps.localTeam ?? PLAYER_TEAM,
       deps.player,
       deps.movementConfig,
+      /**
+       * The server's seat, not the constant (M11 Gate B playtest).
+       *
+       * The same eighth-argument fix `WeaponSystem` documents below, applied to the body the
+       * weapon shoots *past*. `Ballistics.nearestTarget` excludes the shooter by id, so a rig
+       * registered as entity 0 while the weapon fires as entity 3 is a rig the shooter's own
+       * rounds are entitled to hit — and they hit it at t = 0, because the muzzle ray starts
+       * inside it. See `PlayerCombatant.entityId` for the three faults that produced.
+       */
+      this.identity.entityId,
     );
     this.damage.register(this.playerCombatant);
     this.selfDamage = makeDamageRequest(deps.weaponDef);
-    this.selfDamage.targetId = PLAYER_ENTITY_ID;
-    this.selfDamage.sourceId = PLAYER_ENTITY_ID;
+    // Both ends are this client's own seat: `applySelfDamage` is the debug lever that runs
+    // real damage at the player, and a request addressed to entity 0 would land on nobody.
+    this.selfDamage.targetId = this.identity.entityId;
+    this.selfDamage.sourceId = this.identity.entityId;
 
     // The player holds the *resolved* loadout — base plus attachments plus perks — which
     // `Game` has already copied into `weaponDef` so the tuning panel keeps its reference.
@@ -433,7 +454,9 @@ export class Match {
       world: deps.world,
       damage: this.damage,
       bus: deps.bus,
-      sourceId: PLAYER_ENTITY_ID,
+      // The knife swings as whoever this client is, for the same reason the rifle fires as
+      // them: the swing excludes its own source, and a mismatch stabs the swinger.
+      sourceId: this.identity.entityId,
     });
 
     // The world is handed over so each dummy is dropped onto the geometry actually beneath
@@ -469,6 +492,10 @@ export class Match {
 
     // ---- the mode ---------------------------------------------------------
     this.score = new ScoreSystem(deps.bus, this.identity);
+    // See `ScoreSystem.freeForAll`. The replicated path records kills here too, so a client
+    // that dropped same-side kills showed a personal counter that stalled while the server's
+    // ladder moved — which is the FFA scoreboard the playtest reported as "not working".
+    this.score.freeForAll = deps.mode.freeForAll === true;
     this.mode = deps.mode.create({
       bus: deps.bus,
       score: this.score,
@@ -626,6 +653,7 @@ export class Match {
       cfg: deps.equipmentConfig,
       tiers: deps.tiers,
       localTeam: this.localTeam,
+      localId: this.identity.entityId,
       seed: deps.seed,
       // The server resolves every blast in a networked match (S4.15). This system stays for
       // the prediction and the drawing of the player's own throw.
@@ -653,6 +681,7 @@ export class Match {
       equipment: this.equipment.system,
       equipmentInventory: this.equipment.inventory,
       localTeam: this.localTeam,
+      localId: this.identity.entityId,
       banksProgress: deps.banksProgress,
     });
 
@@ -703,7 +732,7 @@ export class Match {
     // Care packages are contestable in every mode, so they ride the second provider slot
     // rather than the mode's (see `BotDirector.streakObjectives`).
     this.bots.streakObjectives = this.streaks;
-    this.equippedStreakIds = deps.loadout.streaks.filter((id): id is StreakId => id !== null);
+    this.setStreakLoadout(deps.loadout.streaks);
 
     this.objectives = new MatchObjectives({
       bus: deps.bus,
@@ -717,7 +746,15 @@ export class Match {
       onConfirm: (x, z) => {
         this.mortarMarkX = x;
         this.mortarMarkZ = z;
-        this.streaks.activate(PLAYER_ENTITY_ID, 'mortar', x, 0, z, 0);
+        /**
+         * Through `spendStreak`, not straight into the local system (M11 Gate B playtest).
+         *
+         * This called `streaks.activate` directly, which on a networked client fires a streak
+         * into the copy of `StreakSystem` that is deliberately never simulated — so the mark
+         * was confirmed, the streak left the pending list, and no shell ever fell. The server
+         * was never asked. `spendStreak` is the one door that knows which of the two a match is.
+         */
+        this.spendStreak('mortar', x, z);
       },
       onCancel: () => {
         /* The streak stays pending: cancelling a mark must not spend it. */
@@ -916,6 +953,26 @@ export class Match {
     return phase === 'WARMUP' || phase === 'ROUND_END';
   }
 
+  /**
+   * A front-end surface has the keyboard and the cursor (M11 Gate B).
+   *
+   * The loadout overlay and the quick class selector are opened **over a running match** —
+   * there is no pausing a dedicated server — so the player's body has to stand still while
+   * they are reading a menu, without the match stopping around them.
+   *
+   * Deliberately separate from `inputFrozen`. That flag also drives `bots.inputFrozen`, and a
+   * player opening their class list should not stop the bots; and over the network it is the
+   * *server's* answer, which this client is in no position to overrule. This one is local,
+   * affects only which sampler `Game` and `MatchWorld` choose, and is cleared by the same call
+   * that closes the surface.
+   */
+  uiFocus = false;
+
+  /** Whether the player's command should be neutered this tick. Read by both samplers. */
+  get inputSuppressed(): boolean {
+    return this.uiFocus || this.inputFrozen;
+  }
+
   /** True when this match is driven by a server. See `MatchDeps.networked`. */
   get isNetworked(): boolean {
     return this.deps.networked === true;
@@ -958,8 +1015,22 @@ export class Match {
    * reloaded weapon on the right slot, the sights down, the knife put away.
    */
   private respawnNetworked(): void {
+    // Before the weapon reset, so the reset puts the *new* class's primary in hand rather than
+    // the old one's and then having it swapped out from under the animation.
+    this.applyPendingLoadout();
     this.playerHealth.reset();
     this.weapons.reset();
+    /**
+     * The grenades, explicitly (M11 Gate B playtest).
+     *
+     * `MatchEquipment` refills on `player.spawned`, and this path deliberately never emits one
+     * — the server chose the position, so `PlayerController.spawn` is not called. So the one
+     * event the refill hangs off does not exist over the network, and a networked player came
+     * back with whatever the previous life had left: the reported "grenade counts do not reset
+     * after respawn". The server refilled its own copy on the same spawn all along, which is
+     * why nothing desynced and nothing logged — only the HUD and the local hand were wrong.
+     */
+    this.equipment.refillForLife();
     // A reset is not a swap and emits no `weapon.swapped`, so the visible model has to be
     // told separately or it keeps whatever was in frame when the player died.
     this.showSlot(this.weapons.inventory.activeSlotIndex);
@@ -1054,7 +1125,39 @@ export class Match {
    * behaviour: you did not keep the magazine, you picked up a different gun.
    */
   applyLoadout(loadout: ResolvedLoadout): void {
-    this.equippedStreakIds = loadout.streaks.filter((id): id is StreakId => id !== null);
+    /**
+     * **On the next spawn, unless there is not going to be one to wait for** (M11 Gate B).
+     *
+     * This used to apply unconditionally, which is Tier 1 #20 arriving from the client's side:
+     * `meta.setLoadout` re-runs the perk hooks and one of them writes `PlayerController
+     * .speedScale`, so a class swapped on a *standing* body changed how fast this client
+     * predicted itself moving while the server — which defers to the next spawn by rule
+     * (`ServerMatch.setPendingLoadout`) — kept simulating the old figure. A constant per-tick
+     * disagreement about speed, which is what rubberbanding is.
+     *
+     * It mattered little when the editor was a screen you had to pause to reach. The quick
+     * selector puts it one keypress away, so the two sides now follow the same rule: deferred
+     * for a living player mid-match, immediate when the player is dead (their next spawn is the
+     * one being waited for) or during the pre-match freeze (where the server applies it at once
+     * too — see `ServerMatch.applyPendingLoadoutNow` — and nobody can move regardless).
+     */
+    if (this.canApplyLoadoutNow()) {
+      this.pendingLoadout = null;
+      this.applyLoadoutNow(loadout);
+      return;
+    }
+    this.pendingLoadout = loadout;
+  }
+
+  /** Whether a class change lands immediately rather than waiting for a body. */
+  private canApplyLoadoutNow(): boolean {
+    if (this.playerDead) return true;
+    return this.flow.currentPhase === 'WARMUP' && this.flow.round <= 1;
+  }
+
+  /** The actual swap. Both weapons rebuilt, grenades replaced and refilled, perks re-derived. */
+  private applyLoadoutNow(loadout: ResolvedLoadout): void {
+    this.setStreakLoadout(loadout.streaks);
     this.equip(0, loadout.primary, loadout.primaryCamo);
     this.equip(1, loadout.secondary, loadout.secondaryCamo);
     this.equipment.inventory.lethal = loadout.lethal;
@@ -1062,6 +1165,22 @@ export class Match {
     EquipmentSystem.refill(this.equipment.inventory);
     this.meta.setLoadout(loadout);
   }
+
+  /**
+   * Cash a deferred class change, on the spawn it was waiting for.
+   *
+   * Called from both respawn paths, so the local and networked halves cannot develop different
+   * ideas about when a class takes effect.
+   */
+  private applyPendingLoadout(): void {
+    const pending = this.pendingLoadout;
+    if (pending === null) return;
+    this.pendingLoadout = null;
+    this.applyLoadoutNow(pending);
+  }
+
+  /** A class change waiting for this player's next body. See `applyLoadout`. */
+  private pendingLoadout: ResolvedLoadout | null = null;
 
   private showSlot(slotIndex: number): void {
     const model = this.models[slotIndex];
@@ -1365,15 +1484,28 @@ export class Match {
     return true;
   }
 
+  /**
+   * Keys 3, 4 and 5 spend **the class's** first, second and third streak (M11 Gate B playtest).
+   *
+   * They used to index the *earned* list, packed from zero, so which key fired a given streak
+   * depended on how many others happened to be in hand at that moment: a player who had earned
+   * only their Chopper Gunner found it on key 3, and key 5 — the key the loadout editor labels
+   * "Killstreak · key 5", the key it is bound to — did nothing at all. Reported as the chopper
+   * not responding to 5, and it is really the mapping moving underneath the player.
+   *
+   * Position is now fixed by the class and the earned list only decides whether the press is
+   * *honoured*, which is the same rule the HUD paints.
+   */
   private stepStreakInput(cmd: InputCommand): void {
     const bits = [Btn.Streak1, Btn.Streak2, Btn.Streak3] as const;
     for (let i = 0; i < bits.length; i++) {
       const bit = bits[i];
       if (bit === undefined) continue;
       if (!justPressed(cmd.buttons, this.prevButtons, bit)) continue;
-      const held = this.heldStreaks();
-      const id = held[i];
-      if (id === undefined) continue;
+      const id = this.streakSlots[i];
+      if (id === undefined || id === null) continue;
+      // Earned and unspent, or the press is simply not honoured. The HUD has already said so.
+      if (!this.heldStreaks().includes(id)) continue;
 
       const sim = this.deps.player.sim;
       // A mortar is *marked* before it is spent: the overlay opens, and the streak is only
@@ -1430,6 +1562,12 @@ export class Match {
    * accessor rather than branched at each of the three call sites, because the failure when one
    * of them is missed is a HUD that offers a streak the server will refuse.
    */
+  /** Record the class's streaks, in both the shapes the rest of the match asks for. */
+  private setStreakLoadout(streaks: ReadonlyArray<StreakId | null>): void {
+    this.streakSlots = [streaks[0] ?? null, streaks[1] ?? null, streaks[2] ?? null];
+    this.equippedStreakIds = this.streakSlots.filter((id): id is StreakId => id !== null);
+  }
+
   private heldStreaks(): readonly StreakId[] {
     return this.isNetworked ? this.replicatedStreaks.pending : this.streaks.pendingFor(this.localId);
   }
@@ -1604,10 +1742,14 @@ export class Match {
 
   private respawnPlayer(): void {
     const choice = this.spawnChoice;
-    if (this.bots.selectSpawn(PLAYER_TEAM, PLAYER_ENTITY_ID, choice)) {
+    // This path is single-player only — a networked respawn is `respawnNetworked`, where the
+    // server chose the point — but the side and the id are read from the match rather than
+    // from the two constants, so the local-only claim is not also a hidden assumption.
+    if (this.bots.selectSpawn(this.localTeam, this.localId, choice)) {
       this.deps.player.spawn(choice.x, choice.y + 0.05, choice.z, choice.yaw);
       this.deps.input.setView(choice.yaw, 0);
     }
+    this.applyPendingLoadout();
     this.playerHealth.reset();
     this.weapons.reset();
     /**
@@ -1792,8 +1934,9 @@ export class Match {
     for (let i = 0; i < hud.slots.length; i++) {
       const slot = hud.slots[i];
       if (slot === undefined) continue;
-      const id = held[i];
-      slot.name = id === undefined ? '' : streakDef(id).name;
+      const id = this.streakSlots[i] ?? null;
+      slot.name = id === null ? '' : streakDef(id).name;
+      slot.ready = id !== null && held.includes(id);
     }
     // The streak count is the server's too when there is one: it is the number the earn
     // threshold is measured against, and two opinions about it is two opinions about whether
@@ -1821,12 +1964,26 @@ export class Match {
     banner.ffa = this.deps.mode.freeForAll === true;
     if (!banner.ffa) return;
 
+    /**
+     * **Kills, not points** (M11 Gate B playtest).
+     *
+     * This read `row.score`, and over the network that column is zero for everybody, for ever:
+     * `MatchFlow`'s replicated branch records kills with **zero points** on purpose — what a
+     * kill is worth is a mode decision and the mode is not running on a client. So the banner
+     * showed `0` against a leader of `0` for the whole match, which is the reported "the kill
+     * counter isn't working in FFA over the network".
+     *
+     * Kills are the right number anyway, and not merely the available one: `checkWinCondition`
+     * decides Free-for-All on `row.kills` and the bar counts toward `scoreLimit`, which is a
+     * kill count. Showing points beside a limit measured in kills was a bar that could not
+     * reach its own end.
+     */
     let leader: { name: string; score: number } | null = null;
     let self = 0;
     for (const row of this.score.rows) {
-      if (row.entityId === this.localId) self = row.score;
-      if (leader === null || row.score > leader.score) {
-        leader = { name: row.displayName, score: row.score };
+      if (row.entityId === this.localId) self = row.kills;
+      if (leader === null || row.kills > leader.score) {
+        leader = { name: row.displayName, score: row.kills };
       }
     }
     banner.leaderName = leader?.name ?? '';

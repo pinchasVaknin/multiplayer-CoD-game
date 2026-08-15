@@ -5168,3 +5168,240 @@ session at a keyboard rather than a list of unrelated gaps.
 
 Unchanged from Gate A: the arena-return residual of 1-3 sub-25 cm mispredictions. Not touched by
 any of this work, and still distinguished from the into-live number rather than summed with it.
+
+---
+
+# M11 Gate B — playtest round 2
+
+A browser session against a deployed server produced eleven reports and one feature request.
+Everything below is what they turned out to be; where a number is quoted it was measured, and
+where something is reasoned rather than measured it says so.
+
+## One entity id was behind three of them
+
+`PlayerCombatant.entityId` was `PLAYER_ENTITY_ID` — the constant zero — hard-coded, since M2.
+Over the network the local player is entity 1 or above, and that id is what
+`Ballistics.nearestTarget` compares its `excludeId` against. So **the shooter's own rig was a
+legal target for the shooter's own bullets**, and `raySlab` opens its interval at `tmin = 0`: a
+ray that starts inside a box hits it at zero distance. Every shot fired on a networked client
+terminated on the player who fired it, before it had travelled a millimetre.
+
+Three reports, one line:
+
+| Reported as | What it was |
+|---|---|
+| "the very first shot registers a hit/kill marker on nothing" | The self-hit. A head-box hit at 0 m is lethal, so it produced a *kill* marker |
+| "screen stays red at 0 HP, no regen until damaged again" | Self-damage drove the local `Health` to zero. A networked client does not step its own health, and `setReplicated` only ran when the **server's** value changed — which it does not while the server thinks you are unhurt |
+| "bullets pass through lobby bots and dummies" | The round never got past the shooter's own chest |
+
+The reason it stopped after the first burst rather than continuing is the same mechanism: once
+the local health reached zero, `health.alive` went false, `DamageSystem.apply` began returning 0
+for a dead target, and the self-hits stopped — leaving the bar at zero.
+
+The `PLAYER_ENTITY_ID` audit that followed found **seven more** in client code, all the same
+shape and all silently wrong the moment a server assigned a seat:
+
+- `Melee.sourceId` — the knife stabbed its own swinger.
+- `ThrowController.step`'s thrower id — your own grenade crossed the wire stamped as entity 0,
+  so the server's authoritative copy of it did not match and was adopted as somebody else's:
+  §8.24's own-grenade exclusion could not fire.
+- `MatchEquipment.onFlashed` — a flashbang addressed to you was ignored.
+- `MatchEquipment.onSpawned` — the per-life grenade refill.
+- `MatchMeta`'s two perk predicates — Dead Silence made nobody quiet, Battle Hardened protected
+  nobody.
+- `MatchMeta.isMvp`'s score lookup — always undefined, so nobody was ever MVP.
+- `Game`'s chopper camera lookup — **the Chopper Gunner never took the camera over the network**.
+  The gunship flew and its owner watched it from the ground.
+
+This is the standing authority-migration failure again, and the useful generalisation is
+narrower than "audit the constant": *a constant that names an entity is a constant that was
+right when there was only one of them.*
+
+## The dummies had a second, independent cause
+
+`DUMMY_IDS` were 1..12, chosen in M2 when the id space held the player at 0 and bots from 100.
+**1..99 is the connected-human range.** The warmup arena is the greybox room, so the moment it
+seated a human beside the dummies the two collided in `DamageSystem`, whose table is keyed by
+entity id and whose `register` evicts whatever is already at one. The third player to connect
+*was* the 25 m dummy: one silently replaced the other, and shots at the survivor were then
+rejected as self-hits.
+
+Both causes had to be fixed for the range to work in the arena, and either alone is enough to
+break it. Dummies now sit at 10_000+, clear of humans (1-99), bots (100+) and streak entities
+(900+).
+
+## FFA scored roughly three kills in seven
+
+`ScoreSystem.recordKill` drops a kill whose victim shares the killer's `ScoreTeam`. Free-for-All
+keeps the two-team substrate — that is deliberate and documented — so half of every FFA lobby
+shares a side with any given player. `FreeForAll.onKill`'s own comment says *"every kill counts,
+including one on somebody who happens to share your substrate side"*; it was the only half of
+that sentence the code did not implement.
+
+**Measured, same seed, same match**: the 30-kill limit was reached at **476.9 s** before and
+**242.8 s** after. The ladder was running at roughly half speed, which is why a match nominally
+decided on kills was in practice always decided by the clock.
+
+`ScoreSystem.freeForAll` is set beside `DamageSystem.friendlyFire`, from the same registry flag,
+in both runtimes. They are the same fact — *there are no teammates here* — and setting one
+without the other is what produced a mode where you could shoot someone but not score them.
+
+The HUD half was separate and worse: the FFA banner read `row.score`, and the replicated path
+records kills with **zero points on purpose** (what a kill is worth is a mode decision, and the
+mode is not running on a client). So the banner showed `0` against a leader of `0` for the whole
+match. It reads `row.kills` now, which is also what `checkWinCondition` decides on — the bar and
+the limit it counts toward are finally the same quantity.
+
+## The bomb existed and was never visible
+
+Two facts, and neither is a rendering bug:
+
+1. `bombX/Y/Z` was written in exactly two places — the round reset and the carrier's death — so
+   while the bomb was **held** it reported the point where it was last dropped. Stale everywhere
+   it is read: the renderer hid the mesh rather than draw a lie, bots were sent to a place the
+   bomb had left, and `BombInfo` replicated the same lie to every client.
+2. The bomb spawns **inside the attackers' central spawn zone** (Foundry authors it at
+   `z = -21.17`; the spawn there has radius 3). Bots take it by walking over it, humans must
+   press Use — the post-M8 playtest's rule — so on the first tick of every round an attacking
+   bot was already standing on it and took it before a human saw the round start.
+
+Together: a carried bomb was not an object in the world at all, it was a boolean on an entity,
+and the human never held it. `followCarrier` keeps the position true every tick, the renderer
+draws it at hip height on its carrier, and a four-second `pickupGraceSeconds` at round start
+gives the key press first refusal. S&D still completes on three seeds (65.2 s, 86.2 s, 97.8 s),
+so the grace does not strand a round nobody claims.
+
+## Empty matches held the only live slot
+
+§4.20 refuses to *start* a match for zero humans in two places. Nothing covered the case after
+`RUNNING`, so a match whose last player disconnected kept simulating ten bots to a win condition
+and held the process's single live-match slot for the whole of it. Every ballot that resolved
+meanwhile hit the one-match cap and sent the arena back to free play with a notice — **one
+disconnect could cost the next lobby its match.**
+
+`--abandon` is the probe: every client leaves a running match, and the harness reports how long
+the server took to release the slot.
+
+| | Slot released after |
+|---|---|
+| Red control (`RUNNING` case removed) | **132 978 ms** — the match ran to its win condition |
+| Fixed | **30 ms** |
+
+`LiveMatch.everSeated` latches on the first seat, which is what separates *emptied* from *not
+yet filled* — the second is also true between allocation and migration, and of the instance the
+leak harness builds deliberately empty.
+
+## The summary screen was a dead end with a stuck clock
+
+Three complaints, three causes:
+
+- The timer sat at 14 because the number was written once from `holdSeconds` and never touched
+  again. It ticks from the render pass now. Display only — the server still migrates everybody
+  back on its own clock, and a client that decided for itself would leave early and stand in a
+  torn-down world.
+- The button read "Continue" and went to `MENU`, whose exit handler tears the world down and
+  clears `this.server` — so pressing it **left the server**. It returns to the game now when
+  connected: the seat, the socket and the world all survive, and the migration to the arena
+  lands normally. Single-player is unchanged.
+- The SUMMARY exit handler tore the world down unconditionally; it now returns early for
+  `to === 'MATCH'`, which also removes a double teardown on the rotation path.
+
+## Create-a-Class was a state where it should have been an overlay
+
+The editor is two different things sharing one screen. From the front end it is a state: no
+world, nothing running, `LOADOUT` is honest. From inside a match it is an overlay — and it was
+the state in both cases, so every route out went somewhere costly. Back went to `loadoutReturn`;
+Escape went to `PAUSED`; and the editor's own **"Start match"** button calls `onLaunch`, which
+clears `multiplayerJoin` and starts a solo game. That is the reported *"kicks the player out to
+a Solo game"*, exactly.
+
+Opened over a live world it is now an overlay: the state never leaves `MATCH` or `PAUSED`, the
+socket is untouched, the match runs underneath (there is no pausing a dedicated server), the
+body stands still through `ClientMatch.uiFocus`, and "Start match" is not offered because there
+is no match to start from inside one.
+
+**The class change itself had to be deferred locally as well**, and this is Tier 1 #20 arriving
+from the client's side: `meta.setLoadout` re-runs the perk hooks and one of them writes
+`PlayerController.speedScale`, so a class swapped on a standing body changed how fast this client
+predicted itself moving while the server deferred to the next spawn. A constant per-tick
+disagreement about speed, which is what rubberbanding is. It mattered little when the editor was
+behind a pause screen; the quick selector puts it one keypress away. Both sides now follow the
+same rule.
+
+## Killstreak keys followed the wrong list
+
+Keys 3/4/5 indexed the *earned* streaks, packed from zero — so which key fired a given streak
+depended on how many others happened to be in hand. A player holding only their Chopper Gunner
+found it on key 3, and key 5, the key the loadout editor labels "Killstreak · key 5", did
+nothing. They index the class's three slots now, and the earned list only decides whether the
+press is honoured. The HUD paints the same rule in three states: empty, owned-but-unearned (the
+name is worth reading — it says what key 5 is *for*), and ready.
+
+The mortar had a separate hole: its overlay's confirm called `streaks.activate` directly, which
+on a networked client fires into the copy of `StreakSystem` that is deliberately never
+simulated. The mark was confirmed, the streak left the pending list, and no shell ever fell. It
+goes through `spendStreak` now, which is the one door that knows which kind of match this is.
+
+## Smoke: the mechanic worked, the picture did not
+
+Measured on the server over a 45 s match: **6 clouds at peak, 31 sight lines blocked**. §6.8's
+requirement was being met all along.
+
+What was wrong was that the player could see through a cloud the bots could not — eleven
+billboards at a peak alpha of 0.42, which is worse than no smoke at all, because the two sides
+of the same cloud disagreed about what it was for. Eighteen puffs, peak alpha 0.72, a third of
+them clustered near the middle so the cloud has a core, and a texture that stays solid to 55% of
+its radius instead of 45%.
+
+`equipmentStats` now reports `smokeLive` and `smokeBlocked`, and the harness prints them. The
+claim had been wired since the equipment commit and never measured, and a wired occluder that is
+never consulted is indistinguishable from a working one.
+
+## The quick class selector (the feature)
+
+Five classes, five keys, no menu. A HUD panel down the left, `pointer-events: none`, bound to
+the digits — offered in exactly two windows and nowhere else:
+
+- **The pre-match freeze**, lengthened from 3 s to **10 s**. Round one only: a ten-second hold
+  between every S&D round would add a minute to a best-of-five for a decision nobody is making
+  at that point. `MatchFlow.warmupSeconds` is one accessor read by the countdown, the phase
+  machine and the replicated path, so the three cannot disagree about which limit applies.
+- **The respawn wait**, where the next body is seconds away.
+
+Deliberately not offered while alive and playing: there the answer is Create-a-Class and the
+change lands on the next death, which is CoD's rule.
+
+The digit listener is registered *after* the vote overlay's, so a ballot keeps first refusal,
+and it consumes the key — picking class 2 does not also pull out the pistol, and picking class 5
+does not call in a Chopper Gunner.
+
+**The server applies a pre-match pick immediately** rather than on the next spawn
+(`ServerMatch.applyPendingLoadoutNow`), because otherwise "the class you press during the
+countdown" would arrive after the player's first death. The freeze is the one window where that
+is free: the movement axes are stripped before they reach the controller, so a `speedScale` that
+changes there cannot produce a misprediction, and the spawn-serial bump is the same
+discontinuity a death already produces — which is exactly how the client is told to adopt the
+new pose without charging itself for the difference.
+
+## What is measured, and what is not
+
+Measured headlessly, this session:
+
+| Probe | Result |
+|---|---|
+| FFA kill limit, same seed | 476.9 s → **242.8 s** |
+| Empty-match teardown | **132 978 ms → 30 ms**, red control watched first |
+| Smoke on the server | **6 clouds peak / 31 LOS rejections** |
+| S&D completion, 3 seeds, with the pickup grace | 65.2 s / 86.2 s / 97.8 s, all complete |
+| `npm run check` | boundaries, cosmetic audit and all three typecheck targets pass |
+
+**Not measured here, and it needs a browser.** Every client-side fix above is reasoned from the
+code and compiles, but the preview pane never fires `requestAnimationFrame`, so none of it has
+been *seen*: the self-hit's absence, the bomb on its carrier, the summary countdown, the loadout
+overlay staying connected, the streak keys, the grenade refill, the smoke's new density and the
+quick selector itself. That is one session at a keyboard, and it is the same list §8's
+browser-only claims were already waiting on.
+
+The `HeadlessClient` cannot stand in for it: it drives `NetClient` and `Prediction` directly and
+builds no `ClientMatch`, which is precisely why a bug that made every networked client shoot
+itself survived every harness run in the milestone.

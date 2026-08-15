@@ -77,6 +77,14 @@ interface TagVisual {
   active: boolean;
 }
 
+/**
+ * How high a carried bomb rides above its carrier's feet, metres.
+ *
+ * Hip height on a standing body: high enough to read as carried rather than dropped, low
+ * enough that it does not float over cover the carrier is crouched behind.
+ */
+const CARRY_HEIGHT = 0.95;
+
 export class MatchObjectives {
   readonly group = new THREE.Group();
 
@@ -393,16 +401,30 @@ export class MatchObjectives {
     const planted = mode.bomb === 'PLANTED' && site !== null;
     this.updateInteractRing(mode);
 
-    // Before the plant the same mesh is the *loose* bomb, lying wherever it was dropped
-    // (M7 playtest): the attacking side has to walk to it and pick it up, so it has to be
-    // findable. Hidden while somebody is carrying it — it is in their hands, not on the floor.
+    /**
+     * Before the plant the same mesh is the bomb itself — on the floor **or on its carrier**
+     * (M11 Gate B playtest).
+     *
+     * It used to be hidden the moment anybody picked it up, on the reasoning that it was "in
+     * their hands, not on the floor". Nothing ever drew those hands, so the bomb simply ceased
+     * to exist for as long as it was held — and because it spawns inside the attackers' spawn
+     * cluster, a bot took it on the first tick of every round. The result was a mode whose
+     * objective was never visible to anybody: reported as *"there is no physical bomb entity
+     * to plant on the map"*, which was an accurate description of what was on screen.
+     *
+     * Carried, it rides at hip height on the carrier's position — which `followCarrier` now
+     * keeps true every tick, so this works identically for a local bot and for a replicated
+     * body a client knows nothing else about.
+     */
     if (!planted) {
-      const loose = mode.bomb === 'CARRIED' && mode.carrierId < 0;
-      this.bomb.visible = loose;
-      if (loose) {
-        this.bomb.position.set(mode.bombX, mode.bombY, mode.bombZ);
-        // Slowly turning, so it reads as a pickup rather than as scenery.
-        this.bomb.rotation.y = this.spin * 0.7;
+      const carried = mode.bomb === 'CARRIED';
+      this.bomb.visible = carried;
+      if (carried) {
+        const held = mode.carrierId >= 0;
+        this.bomb.position.set(mode.bombX, mode.bombY + (held ? CARRY_HEIGHT : 0), mode.bombZ);
+        // Slowly turning on the floor so it reads as a pickup; steady in a carrier's hands.
+        this.bomb.rotation.y = held ? this.spin * 2.2 : this.spin * 0.7;
+        // The light keeps blinking either way: across a site it is how both sides find it.
         this.bombLight.visible = Math.sin(this.spin * 5) > -0.3;
       }
       return;

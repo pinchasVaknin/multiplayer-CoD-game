@@ -810,6 +810,15 @@
   transition: opacity 120ms linear, border-color 120ms linear;
 }
 
+/*
+ * Three states rather than two, because the slots are the class's keys rather than a list of
+ * what has been earned: empty (nothing bound to this key), owned-but-not-yet-earned (the name
+ * is worth reading — it says what key 5 is for), and ready to spend.
+ */
+.hud-streaks__slot.is-owned {
+  opacity: 0.62;
+}
+
 /* An earned streak lights up. Nothing else in this widget moves. */
 .hud-streaks__slot.is-ready {
   opacity: 1;
@@ -1031,4 +1040,79 @@
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--c-text-faint);
+}
+
+/* ---- quick class selector (M11 Gate B) ---------------------------------- */
+
+/*
+ * The side panel bound to keys 1-5, shown during the pre-match freeze and the respawn wait.
+ *
+ * `pointer-events: none` like every other HUD surface: it is read and answered with the
+ * keyboard, and a panel that could swallow a click would be a panel that can steal the shot
+ * the player takes the moment the countdown ends.
+ */
+.ql {
+  position: absolute;
+  left: var(--s-4);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 168px;
+  padding: var(--s-3);
+  border: 1px solid var(--c-line);
+  background: rgba(12, 14, 17, 0.72);
+  pointer-events: none;
+}
+
+.ql__title {
+  color: var(--c-text-dim);
+}
+
+.ql__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ql__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 3px var(--s-2);
+  border: 1px solid transparent;
+  opacity: 0.62;
+  transition: opacity 120ms linear, border-color 120ms linear;
+}
+
+.ql__row.is-selected {
+  opacity: 1;
+  border-color: var(--c-accent);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ql__key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--c-line-hi);
+  color: var(--c-text-dim);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ql__row.is-selected .ql__key {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+.ql__name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-text);
 }

@@ -84,6 +84,16 @@ interface HarnessOptions {
    * so the gunship kept flying with an owner that no longer existed.
    */
   readonly dropGunner: boolean;
+  /**
+   * Disconnect **every** client once the live match is running (§4.9, M11 Gate B).
+   *
+   * The probe for empty-instance teardown. §4.20 refuses to *start* a match for zero humans in
+   * two places; nothing covered the case after `RUNNING`, so a match whose last player left
+   * kept simulating ten bots to a win condition while holding the process's only live-match
+   * slot. Distinct from `--drop-gunner`, which drops one client to test a streak's owner
+   * vanishing: this one empties the match.
+   */
+  readonly abandon: boolean;
   /** Have every client throw a lethal every N ticks, or 0 never (§8.24). */
   readonly throwEveryTicks: number;
 }
@@ -278,10 +288,15 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let observedBots = 0;
   let observedThrown = 0;
   let observedDetonated = 0;
+  let observedSmokePeak = 0;
+  let observedSmokeBlocked = 0;
   /** Which match the streak grant has already been applied to, so it happens once each. */
   let grantedTo = -1;
   let gunnerDropped = false;
   let droppedAtMs = 0;
+  /** When `--abandon` emptied the live match, and whether the server then released it. */
+  let abandonedAtMs = 0;
+  let abandonedFreedMs = 0;
   let lastCycle = 0;
   let lastPhase = -1;
   const phaseBoundaries: { cycle: number; phase: string; atMs: number }[] = [];
@@ -318,8 +333,13 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     if (running !== undefined && running.running) {
       observedHumans = running.playerCount;
       observedBots = running.botCount;
-      observedThrown = running.match.equipmentStats.thrown;
-      observedDetonated = running.match.equipmentStats.detonated;
+      const eq = running.match.equipmentStats;
+      observedThrown = eq.thrown;
+      observedDetonated = eq.detonated;
+      // Peak rather than current: clouds last 12 s and the sampler runs every 8 ms, so the
+      // instantaneous count is zero for most of a match that had smoke in it throughout.
+      observedSmokePeak = Math.max(observedSmokePeak, eq.smokeLive);
+      observedSmokeBlocked = eq.smokeBlocked;
 
       /**
        * Put a streak in every seated player's hand, once per match (§8.22).
@@ -335,6 +355,20 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
        * tested is a chopper in flight losing its owner, and a client dropped a tick before the
        * grant landed would test nothing while looking identical in the log.
        */
+      /**
+       * Empty the running match, once (§4.9).
+       *
+       * Every client leaves at the same moment, which is the case the fix is about: not a
+       * player leaving a match that still has people in it, but the last one leaving. What is
+       * asserted afterwards is that the instance is gone — `server.liveMatch` back to null —
+       * rather than still stepping bots into a win condition nobody will see.
+       */
+      if (opts.abandon && !abandonedAtMs) {
+        abandonedAtMs = nowMs();
+        log.info(`abandoning match ${running.id}: dropping all ${clients.length} client(s).`);
+        for (const c of clients) c.disconnect(false);
+      }
+
       if (opts.dropGunner && !gunnerDropped && gunnerFlying(clients)) {
         const victim = clients[clients.length - 1];
         if (victim !== undefined) {
@@ -354,6 +388,12 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       }
     }
 
+    // The other half of the `--abandon` probe: how long the server took to release the slot.
+    if (abandonedAtMs > 0 && abandonedFreedMs === 0 && server.liveMatch === null) {
+      abandonedFreedMs = nowMs();
+      log.info(`live match released ${Math.round(abandonedFreedMs - abandonedAtMs)}ms after the last human left.`);
+    }
+
     const vote = server.vote;
     if (vote.phase !== lastPhase) {
       lastPhase = vote.phase;
@@ -370,12 +410,15 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
         cycleReports.push(
           snapshotCycle(
             server, clients, lastCycle, observedHumans, observedBots, observedThrown, observedDetonated,
+            observedSmokePeak, observedSmokeBlocked,
           ),
         );
         observedHumans = 0;
         observedBots = 0;
         observedThrown = 0;
         observedDetonated = 0;
+        observedSmokePeak = 0;
+        observedSmokeBlocked = 0;
       }
       lastCycle = vote.cycle;
       if (cycleReports.length >= opts.cycles) break;
@@ -386,6 +429,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     cycleReports.push(
       snapshotCycle(
         server, clients, lastCycle, observedHumans, observedBots, observedThrown, observedDetonated,
+        observedSmokePeak, observedSmokeBlocked,
       ),
     );
   }
@@ -447,6 +491,17 @@ interface CycleReport {
    */
   readonly thrown: number;
   readonly detonated: number;
+  /**
+   * Smoke, as the two numbers §6.8's claim rests on (M11 Gate B playtest).
+   *
+   * *"Smoke occludes bot LOS on the server"* had been wired since the equipment commit and never
+   * measured, and a wired occluder that is never consulted is indistinguishable from a working
+   * one. `smokePeak` is the largest number of clouds alive at once — without it a zero below
+   * says "nothing was thrown" rather than "smoke does nothing" — and `smokeBlocked` is sight
+   * lines `Perception` discarded because a cloud was across them.
+   */
+  readonly smokePeak: number;
+  readonly smokeBlocked: number;
 }
 
 function snapshotCycle(
@@ -457,6 +512,8 @@ function snapshotCycle(
   liveBots: number,
   thrown: number,
   detonated: number,
+  smokePeak: number,
+  smokeBlocked: number,
 ): CycleReport {
   const instances = server.instances;
   const warmup = instances[0];
@@ -473,6 +530,8 @@ function snapshotCycle(
     liveBots,
     thrown,
     detonated,
+    smokePeak,
+    smokeBlocked,
   };
 }
 
@@ -598,6 +657,7 @@ function reportFlow(input: FlowReportInput): number {
         `(warmup ${c.warmupStepMs}, live ${c.liveStepMs}), ` +
         `live roster ${c.liveHumans}H+${c.liveBots}B=${c.liveHumans + c.liveBots}, ` +
         `equipment ${c.thrown} thrown/${c.detonated} detonated, ` +
+        `smoke ${c.smokePeak} peak/${c.smokeBlocked} LOS blocked, ` +
         `${c.subscriptions} subs, heap ${c.heapMb} MiB`,
     );
   }
@@ -1023,6 +1083,7 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     grantStreak: get('--grant-streak'),
     ghost: argv.includes('--ghost'),
     dropGunner: argv.includes('--drop-gunner'),
+    abandon: argv.includes('--abandon'),
     throwEveryTicks: Math.max(0, num('--throw', 0)),
   };
 }

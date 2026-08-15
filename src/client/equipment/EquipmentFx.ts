@@ -26,7 +26,21 @@ import type { SmokeField, SmokeVolume } from '../../shared/equipment/SmokeField'
  * between sim ticks like everything else.
  */
 
-const SMOKE_PUFFS = 11;
+/**
+ * Billboards per cloud (M11 Gate B playtest: *"the visual smoke is too thin"*).
+ *
+ * Eleven quads at a peak alpha of 0.42 left a cloud you could read a name plate through, which
+ * is worse than no smoke at all: `SmokeField.blocksSight` was denying the bots a sight line the
+ * player could still see straight down, so the two sides of the same cloud disagreed about what
+ * it was for. Eighteen puffs and a higher peak give it a core.
+ *
+ * The overdraw this trades against is real and was measured once already — see
+ * `SMOKE_DRAW_DISTANCE`, which is the cull that pays for it. Eight clouds is now 144 quads at
+ * worst, and the distance cull means the full count only ever applies to clouds close enough to
+ * matter. If a frame-time run finds this expensive, the cull distance is the knob, not the
+ * density: a thin cloud is a broken mechanic and a culled one is not.
+ */
+const SMOKE_PUFFS = 18;
 const BLAST_POOL = 6;
 
 /**
@@ -127,10 +141,13 @@ export class EquipmentFx {
         mesh.renderOrder = 3;
         cloudGroup.add(mesh);
         puffs.push(mesh);
-        offsets[p * 4] = this.rng.range(-0.75, 0.75);
-        offsets[p * 4 + 1] = this.rng.range(-0.55, 0.7);
-        offsets[p * 4 + 2] = this.rng.range(-0.75, 0.75);
-        offsets[p * 4 + 3] = this.rng.range(0.7, 1.35);
+        // The first third sit near the middle, so the cloud has a core rather than being a
+        // hollow shell of billboards with a hole to shoot through.
+        const spread = p < SMOKE_PUFFS / 3 ? 0.32 : 0.82;
+        offsets[p * 4] = this.rng.range(-spread, spread);
+        offsets[p * 4 + 1] = this.rng.range(-0.5, 0.62);
+        offsets[p * 4 + 2] = this.rng.range(-spread, spread);
+        offsets[p * 4 + 3] = this.rng.range(0.85, 1.5);
       }
       this.group.add(cloudGroup);
       this.clouds.push({ group: cloudGroup, puffs, offsets, volume: null });
@@ -272,7 +289,9 @@ export class EquipmentFx {
         puff.scale.setScalar(radius * scale);
         puff.quaternion.copy(camera.quaternion);
         const mat = puff.material;
-        if (mat instanceof THREE.MeshBasicMaterial) mat.opacity = clamp01(density * 0.42);
+        // 0.42 was the thin cloud. Individually still translucent — a puff you cannot see
+        // through at all reads as a wall — but eighteen of them now stack to opaque.
+        if (mat instanceof THREE.MeshBasicMaterial) mat.opacity = clamp01(density * 0.72);
       }
     }
   }
@@ -337,8 +356,11 @@ function buildPuffTexture(): THREE.Texture {
   const ctx = canvas.getContext('2d');
   if (ctx === null) throw new Error('2D canvas context unavailable; cannot build smoke texture.');
   const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  // Solid well past the middle, then a soft rim. The old stop at 0.45/0.62 meant more than
+  // half of every quad was nearly transparent, which is where the thinness came from.
   gradient.addColorStop(0, 'rgba(255,255,255,1)');
-  gradient.addColorStop(0.45, 'rgba(255,255,255,0.62)');
+  gradient.addColorStop(0.55, 'rgba(255,255,255,0.88)');
+  gradient.addColorStop(0.8, 'rgba(255,255,255,0.4)');
   gradient.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, 64, 64);

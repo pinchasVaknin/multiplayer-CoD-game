@@ -102,6 +102,23 @@ interface DamageRecord {
 }
 
 export class ScoreSystem {
+  /**
+   * Whether this match has teams at all (M11 Gate B playtest).
+   *
+   * Free-for-All keeps the two-team substrate — see `modes/FreeForAll.ts` — so half of every
+   * lobby shares a `ScoreTeam` with everybody else, and `recordKill`'s "a teammate's death is
+   * not a kill" rule silently threw those away. `FreeForAll.onKill`'s own comment says *"every
+   * kill counts, including one on somebody who happens to share your substrate side"*, and it
+   * was the only half of that sentence the code did not implement: roughly three kills in seven
+   * were credited to nobody, so the ladder crawled and the 30-kill limit was effectively
+   * unreachable inside the clock.
+   *
+   * Set beside `DamageSystem.friendlyFire`, from the same registry flag, in both runtimes —
+   * the two facts are the same fact ("there are no teammates here") and setting one without
+   * the other is what produced a mode where you could shoot someone but not score them.
+   */
+  freeForAll = false;
+
   private readonly rowsById = new Map<number, PlayerScore>();
   /** Flat array as well as a map: the scoreboard sorts this every time it opens. */
   private readonly all: PlayerScore[] = [];
@@ -229,7 +246,9 @@ export class ScoreSystem {
     if (killer === undefined || killerId === victimId) return;
     // A teammate's death is not a kill. Friendly fire is off in M4 so this cannot happen
     // through ballistics, but the score has to be right for whatever comes next.
-    if (victim !== undefined && victim.team === killer.team) return;
+    //
+    // Unless there are no teammates: in FFA the side is substrate rather than allegiance.
+    if (!this.freeForAll && victim !== undefined && victim.team === killer.team) return;
     killer.kills++;
     killer.score += points;
     killer.streak++;
@@ -256,7 +275,9 @@ export class ScoreSystem {
     }
     for (const id of scratch) {
       const row = this.rowsById.get(id);
-      if (row === undefined || row.team === victimTeam) continue;
+      if (row === undefined) continue;
+      // Same rule as the kill itself: in FFA the victim's "side" is not a side.
+      if (!this.freeForAll && row.team === victimTeam) continue;
       row.assists++;
     }
   }

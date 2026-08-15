@@ -74,16 +74,54 @@ export class EndOfMatch {
   /** Bind the mode's scoreboard columns. Same call the in-match board gets. */
 
   /**
-   * Say who decides when this screen ends (M11, §6.9).
+   * Say who decides when this screen ends, and **count it down** (M11 Gate B playtest).
    *
    * Single-player: the player does, and the button reads "Continue". Over the network the
    * server does — it migrates everybody back to the arena on its own clock — so the button says
-   * so rather than implying a choice the player does not have. Pressing it early is still
-   * allowed and simply leaves to the menu; what it cannot do is keep them here.
+   * so rather than implying a choice the player does not have.
+   *
+   * The number used to be written once, from the `holdSeconds` the summary carried, and never
+   * touched again: it sat at 14 for the whole hold, which reads as a hung screen rather than a
+   * wait. `tick` runs it down from the render pass now, so the one thing on screen that claims
+   * to be a timer behaves like one.
+   *
+   * Pressing it early is allowed and takes the player **back to the game**, not out of it —
+   * see `GameScreens`'s `onLeaveSummary`.
    */
   setReturnSeconds(seconds: number): void {
+    this.returnSeconds = Math.max(0, seconds);
+    this.paintButton();
+  }
+
+  /**
+   * One render frame of the return countdown.
+   *
+   * Display only: the server migrates everybody back on its own clock and this screen has no
+   * say in when that happens (`Game.summaryHoldSeconds` documents why a client that decided for
+   * itself would leave early and stand in a torn-down world). Reaching zero here therefore
+   * changes the label and nothing else — the arena arrives when the server sends it.
+   */
+  tick(dt: number): void {
+    if (this.returnSeconds <= 0) return;
+    const before = Math.ceil(this.returnSeconds);
+    this.returnSeconds = Math.max(0, this.returnSeconds - dt);
+    if (Math.ceil(this.returnSeconds) === before) return;
+    this.paintButton();
+  }
+
+  private paintButton(): void {
+    const left = Math.ceil(this.returnSeconds);
     this.continueButton.textContent =
-      seconds > 0 ? `Continue — back to the arena in ${Math.round(seconds)}s` : 'Continue';
+      this.returnSeconds > 0 ? `Return to lobby — ${left}s` : this.networked ? 'Return to lobby' : 'Continue';
+  }
+
+  /** Whether a server is holding this screen. Decides the wording once the clock runs out. */
+  private networked = false;
+  private returnSeconds = 0;
+
+  setNetworked(on: boolean): void {
+    this.networked = on;
+    this.paintButton();
   }
 
   setColumns(columns: ColumnDef[], modeName: string, mapName: string): void {

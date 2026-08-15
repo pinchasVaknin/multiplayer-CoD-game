@@ -80,6 +80,23 @@ export class LiveMatch extends MatchInstance {
   /** The tick the match went live. `RUNNING` starts here, so mode clocks start here. */
   runningSinceTick = -1;
 
+  /**
+   * Whether a human has ever been seated here (§4.9, capacity).
+   *
+   * The teardown rule below is *"a match that has lost all its humans is a match nobody is
+   * playing"*, and that is a different statement from *"a match with no humans in it"* — the
+   * second is also true of an instance in the seconds between allocation and migration, and of
+   * the one `allocateAndDestroyForLeakTest` builds deliberately empty. Latching on the first
+   * seat is what separates *emptied* from *not yet filled*, without a timer that would have to
+   * be tuned against migration latency.
+   */
+  private everSeated = false;
+
+  /** True once every human who was here has gone. See `Server.stepFlow`. */
+  get abandoned(): boolean {
+    return this.everSeated && this.playerCount === 0;
+  }
+
   constructor(options: LiveMatchOptions) {
     super(buildDeps(options));
     this.options = options;
@@ -281,6 +298,7 @@ export class LiveMatch extends MatchInstance {
   override seat(session: Parameters<MatchInstance['seat']>[0], loadout: Parameters<MatchInstance['seat']>[1]) {
     const player = super.seat(session, loadout);
     if (player === null) return null;
+    this.everSeated = true;
     if (!this.match.removeBotForSeat(player.team)) {
       // Not an error: a mode may have fewer bots than seats, and a match filled entirely with
       // humans has none left to displace. Worth saying, because it is also what a bot-fill

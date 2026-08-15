@@ -35,6 +35,13 @@ export interface LoadoutEditorDeps {
   readonly profile: Profile;
   readonly onBack: () => void;
   readonly onLaunch: () => void;
+  /**
+   * Whether "Start match" belongs on this screen right now.
+   *
+   * False while the editor is an overlay over a live world — see `Game.openLoadout`. Optional
+   * so the two harness call sites that build an editor keep working unchanged.
+   */
+  readonly canLaunch?: () => boolean;
   /** True in the Shooting Range, where every gate is lifted. */
   readonly unrestricted: () => boolean;
 }
@@ -124,11 +131,22 @@ export class LoadoutEditor {
 
     const actions = document.createElement('div');
     actions.className = 'op-actions';
-    const back = button('Back', () => this.deps.onBack());
+    const back = button(this.deps.canLaunch?.() === false ? 'Done' : 'Back', () => this.deps.onBack());
     back.classList.add('op-btn--quiet');
-    const launch = button('Start match', () => this.deps.onLaunch());
-    launch.classList.add('op-btn--primary');
-    actions.append(back, launch);
+    actions.append(back);
+    /**
+     * "Start match" only exists where starting one makes sense (M11 Gate B playtest).
+     *
+     * Opened over a live world this button called `onLaunch`, which clears the multiplayer join
+     * and launches a **solo** match — so a player who edited their class mid-game and pressed
+     * the primary action was quietly moved off the server. There is no match to start from
+     * inside one, so the button is simply not offered and Back becomes Done.
+     */
+    if (this.deps.canLaunch?.() !== false) {
+      const launch = button('Start match', () => this.deps.onLaunch());
+      launch.classList.add('op-btn--primary');
+      actions.append(launch);
+    }
 
     this.screen.replaceChildren(this.paintHeader(), columns, actions);
     this.refreshStats();

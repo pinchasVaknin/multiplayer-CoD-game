@@ -72,8 +72,28 @@ export function makeReplicatedMatchState(): ReplicatedMatchState {
   };
 }
 
-/** Seconds of "get ready" before the first tick of a round counts. */
+/**
+ * Seconds of "get ready" before the first tick of a **round** counts.
+ *
+ * Three, unchanged, for every round after the first: the players are already kitted, already
+ * where they want to be, and the hold is only there to stop the round starting under somebody
+ * still reading the last one's result.
+ */
 const WARMUP_SECONDS = 3;
+
+/**
+ * Seconds of "get ready" before the first tick of a **match** (M11 Gate B).
+ *
+ * Ten rather than three, because this is the window the quick class selector lives in: the
+ * player has just been migrated into a map they may not have chosen, holding a class they
+ * picked before they knew what mode it was, and three seconds is not long enough to read five
+ * options and press a key. It is the only pre-match moment where changing class costs nothing —
+ * nobody has fired, so nobody is being denied a fight by the freeze.
+ *
+ * Round one only. A ten-second hold between every Search & Destroy round would add a minute to
+ * a best-of-five for a decision nobody is making at that point.
+ */
+const MATCH_START_SECONDS = 10;
 
 /** Remaining-time announcer cues, in seconds. Fired once each, highest first. */
 const TIME_CUES: readonly Readonly<{ at: number; cue: AnnouncerCue }>[] = [
@@ -187,9 +207,22 @@ export class MatchFlow {
     return this.deps.mode.roundEndSeconds;
   }
 
+  /**
+   * How long *this* warm-up is, seconds.
+   *
+   * One accessor rather than the ternary repeated at each use, for the reason `roundSeconds`
+   * gives right above: two independent reads of the same rule is how the countdown ends up
+   * being ten seconds long and three seconds' worth of banner, or the other way round. It is
+   * keyed on `roundIndex`, which the replicated path assigns *before* it back-computes
+   * `phaseTicks` — so a client and the server always agree about which of the two applies.
+   */
+  private get warmupSeconds(): number {
+    return this.roundIndex <= 1 ? MATCH_START_SECONDS : WARMUP_SECONDS;
+  }
+
   /** Seconds left of the warm-up or the round-end hold, whichever is running. */
   get phaseSecondsRemaining(): number {
-    const limit = this.phase === 'WARMUP' ? WARMUP_SECONDS : this.roundEndSeconds;
+    const limit = this.phase === 'WARMUP' ? this.warmupSeconds : this.roundEndSeconds;
     return Math.max(0, limit - this.phaseTicks * DT);
   }
 
@@ -217,7 +250,7 @@ export class MatchFlow {
     this.roundIndex = round;
     this.tick = state.serverTick;
     this.ticksRemaining = Math.max(0, Math.round(state.secondsRemaining / DT));
-    const limit = phase === 'WARMUP' ? WARMUP_SECONDS : this.roundEndSeconds;
+    const limit = phase === 'WARMUP' ? this.warmupSeconds : this.roundEndSeconds;
     this.phaseTicks = Math.max(0, Math.round((limit - state.phaseSeconds) / DT));
     this.replicatedScoreA = scoreA;
     this.replicatedScoreB = scoreB;
@@ -365,7 +398,7 @@ export class MatchFlow {
 
     switch (this.phase) {
       case 'WARMUP':
-        if (this.phaseTicks * DT >= WARMUP_SECONDS) this.goLive();
+        if (this.phaseTicks * DT >= this.warmupSeconds) this.goLive();
         return;
       case 'ROUND_END':
         if (this.phaseTicks * DT >= this.roundEndSeconds) this.advanceRound();

@@ -519,7 +519,7 @@ export class MatchWorld {
   private sampleForNet(tick: number): InputCommand {
     const input = this.deps.input;
     const nowMsValue = performance.now();
-    if (this.match.isPlayerDead || this.match.inputFrozen) {
+    if (this.match.isPlayerDead || this.match.inputSuppressed) {
       return input.sampleSpectating(tick, nowMsValue);
     }
     return input.sample(tick, nowMsValue);

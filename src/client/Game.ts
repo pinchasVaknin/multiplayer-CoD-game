@@ -25,6 +25,7 @@ import type { SkirmishSink } from '../shared/net/NetClient';
 import { toNetLoadout, type NetLoadout } from '../shared/net/Skirmish';
 import { LoadingScreen } from './ui/LoadingScreen';
 import { VoteOverlay } from './ui/VoteOverlay';
+import { QuickLoadout } from './ui/QuickLoadout';
 import { MapBuildQueue, type BuildReport } from './world/MapBuildQueue';
 import type { NetworkedMatchOptions } from './MatchWorld';
 import { CameraRig, type CameraDrive } from './engine/CameraRig';
@@ -43,7 +44,6 @@ import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStat
 import type { Match } from './ClientMatch';
 import type { MatchResult } from '../shared/modes/GameMode';
 import type { XpReport } from '../shared/meta/XpRules';
-import { PLAYER_ENTITY_ID } from '../shared/combat/DamageSystem';
 import { MatchWorld } from './MatchWorld';
 import { GameScreens } from './GameScreens';
 import { applyEquippedLoadout, asModeId } from './GameLoadout';
@@ -230,6 +230,15 @@ export class Game {
   /** The non-blocking vote overlay (§4.20). Built at boot, shown only while balloting. */
   private readonly voteOverlay: VoteOverlay;
 
+  /**
+   * The quick class selector (M11 Gate B), on keys 1-5.
+   *
+   * Process-wide like every other front-end surface, and for the same reason: it outlives the
+   * world it is drawn over, so a migration cannot dispose the panel out from under the player
+   * mid-countdown.
+   */
+  private readonly quickLoadout: QuickLoadout;
+
   /** The chunked background map build (§6.5). Pumped from the render pass. */
   private readonly buildQueue: MapBuildQueue;
 
@@ -371,6 +380,13 @@ export class Game {
   private settingsReturn: GameStateId = 'MENU';
   /** Where Back from the loadout editor goes. Captured on entry. See the LOADOUT state. */
   private loadoutReturn: GameStateId = 'MENU';
+  /**
+   * True while Create-a-Class is open **over a live world** rather than as a state.
+   *
+   * See `openLoadout`. The distinction is the whole of the fix for "opening the class screen
+   * drops me out of the server": as an overlay there is no transition to route wrongly.
+   */
+  private loadoutOverlay = false;
 
   constructor(canvas: HTMLCanvasElement, uiHost: HTMLElement, debugHost: HTMLElement) {
     // M6: one save object for everything (S6.6). Settings used to live in their own store;
@@ -431,13 +447,17 @@ export class Game {
       serverConfigured: () => isServerConfigured(window.location.search),
       displayName: () => this.profile.settings.callsign,
       onDisplayName: (name) => this.profile.patchSettings({ callsign: name }),
-      onLoadout: () => this.transitionTo('LOADOUT'),
+      onLoadout: () => this.openLoadout(),
       onSettings: () => this.transitionTo('SETTINGS'),
-      onLoadoutBack: () => this.transitionTo(this.loadoutReturn),
+      onLoadoutBack: () => this.closeLoadout(),
+      // The editor's "Start match" button only means anything from the front end. Inside a
+      // live world it is the button that used to drop the player out of the server — see
+      // `openLoadout` — so the editor is told not to offer it.
+      canLaunch: () => this.world === null,
       onQuitToMenu: () => this.transitionTo('MENU'),
       onResume: () => this.resumeFromPause(),
       onToggleOverlay: () => this.toggleOverlayFromPause(),
-      onLeaveSummary: () => this.transitionTo('MENU'),
+      onLeaveSummary: () => this.leaveSummary(),
       statusLine: () => this.statusLine(),
       pauseStatusLine: () => this.pauseStatusLine(),
       unrestricted: () => findMode(this.selection.modeId).unrestricted,
@@ -459,6 +479,18 @@ export class Game {
      * open, which is every other moment of the game.
      */
     this.input.onDigit((digit) => this.voteOverlay.handleDigit(digit));
+    /**
+     * Then the quick class selector, second (M11 Gate B).
+     *
+     * Order is the rule: a ballot is up for twenty seconds and takes the digits while it is,
+     * and the selector only ever appears in the pre-match freeze or on the death screen —
+     * moments a ballot cannot be open. Registering it after the overlay makes that ordering
+     * explicit rather than relying on the two windows never overlapping.
+     *
+     * Returning true consumes the key, so picking class 2 does not also pull out the pistol and
+     * picking class 5 does not call in a Chopper Gunner.
+     */
+    this.input.onDigit((digit) => this.quickLoadout.handleDigit(digit));
 
     this.fpsCounter = new FpsCounter(uiHost, this.stats);
 
@@ -471,6 +503,13 @@ export class Game {
      * disposed by the transition it exists to make seamless.
      */
     this.loadingScreen = new LoadingScreen(uiHost);
+
+    this.quickLoadout = new QuickLoadout({
+      host: uiHost,
+      slots: () => this.profile.loadouts,
+      equipped: () => this.profile.equippedIndex,
+      onPick: (index) => this.pickQuickClass(index),
+    });
 
     this.voteOverlay = new VoteOverlay({
       host: uiHost,
@@ -709,12 +748,7 @@ export class Game {
          * The same ids are then locked into the `MatchRequest` at migration, which is what
          * carries the edit into the live match.
          */
-        const client = this.world?.net?.client;
-        const loadout = this.netLoadout();
-        if (client !== undefined && loadout !== null) {
-          client.sendLoadout(loadout);
-          netLog.info(`sent class "${loadout.name}" to the server; applies on next spawn.`);
-        }
+        this.sendLoadoutToServer();
       },
     });
 
@@ -850,11 +884,175 @@ export class Game {
           this.summaryHoldSeconds,
         );
       },
-      exit: () => {
+      exit: (to) => {
         this.screens.hideSummary();
+        /**
+         * Back into the game keeps the game (M11 Gate B playtest).
+         *
+         * The only two ways out of SUMMARY used to be "the server rotated us" and "tear
+         * everything down", and the Continue button took the second one — so a player who
+         * pressed it while connected did not go back to the lobby, they left the server: the
+         * world was disposed, `teardownWorld` cleared `this.server`, the socket closed, and
+         * they landed on the main menu. Reported as *"extra clicks throw the player completely
+         * out to the Main Menu instead of the lobby"*, which is exactly what it did.
+         *
+         * `to === 'MATCH'` covers both remaining routes — the button, and the rotation that
+         * `applyRotation` has already prepared a world for — and neither of them wants this
+         * world dropped here.
+         */
+        if (to === 'MATCH') return;
         this.teardownWorld();
       },
     });
+  }
+
+  /**
+   * Open Create-a-Class (§6.6, M11 Gate B playtest).
+   *
+   * **Two different things share one screen**, and conflating them is what took players out of
+   * the server. From the front end it is a *state*: there is no world, nothing is running, and
+   * `LOADOUT` is the honest description. From inside a match it is an **overlay**: the world
+   * stays built, the socket stays open, the seat stays ours, and the state never leaves `MATCH`
+   * or `PAUSED`.
+   *
+   * It used to be the state in both cases, and every route out of it went somewhere costly:
+   * Back went to `loadoutReturn`, which was `MENU` for anybody who had reached it from the menu
+   * at any point in the session; Escape went to `PAUSED`; and the editor's own "Start match"
+   * button called `onLaunch`, which **clears `multiplayerJoin`** and starts a solo game. That
+   * last one is the reported *"kicks the player out to a Solo game"*, exactly.
+   *
+   * The match keeps running underneath, because there is no pausing a dedicated server. The
+   * body stands still — `ClientMatch.uiFocus` neuters the command at the sampler — and the
+   * class change lands on the next respawn, which is what §6.6 asks for and what the server
+   * does with it anyway.
+   */
+  private openLoadout(): void {
+    if (this.world === null) {
+      // No world to protect: the front-end screen, exactly as M6 built it.
+      this.transitionTo('LOADOUT');
+      return;
+    }
+    if (this.loadoutOverlay) return;
+    this.loadoutOverlay = true;
+    this.world.match.uiFocus = true;
+    // The cursor belongs to the editor's buttons now. Disarmed as well as released, or the
+    // first click on a perk row would be swallowed by a pointer-lock request.
+    this.input.clearHeld();
+    this.input.armPointerLock(false);
+    this.input.exitPointerLock();
+    this.screens.loadoutEditor.show();
+  }
+
+  /**
+   * Close it, and hand the new class to both halves of the simulation.
+   *
+   * The same two calls the `LOADOUT` state's exit handler makes, for the same reasons: the
+   * local copy so this client predicts with what it is holding, and `sendLoadout` so the server
+   * simulates with it. The server defers to the next spawn (`ServerMatch.setPendingLoadout`),
+   * and so does a living local player, so the two land on the same tick.
+   */
+  private closeLoadout(): void {
+    if (!this.loadoutOverlay) {
+      // The front-end state, not the overlay.
+      this.transitionTo(this.loadoutReturn);
+      return;
+    }
+    this.loadoutOverlay = false;
+    this.screens.loadoutEditor.hide();
+    const world = this.world;
+    if (world !== null) {
+      world.match.uiFocus = false;
+      world.match.applyLoadout(this.applyLoadout());
+    }
+    this.sendLoadoutToServer();
+    if (this.state === 'MATCH') {
+      // Back in the fight; the next click takes the cursor again.
+      this.input.clearHeld();
+      this.input.armPointerLock(true);
+    }
+  }
+
+  /**
+   * Show or hide the quick class selector (M11 Gate B).
+   *
+   * Driven from state every frame rather than opened and closed by events, for the reason
+   * `syncChopperBody` gives about the chopper: the two windows can each end four ways — the
+   * countdown expires, the player respawns, the match ends, the world is torn down — and a
+   * latch would have to be cleared correctly on all of them. Asked every frame, there is
+   * nothing to get stuck, and a panel stuck on screen would be one eating the digit keys for
+   * the rest of the match.
+   */
+  private updateQuickLoadout(): void {
+    const match = this.world?.match;
+    if (match === undefined || this.state !== 'MATCH' || this.loadoutOverlay) {
+      this.quickLoadout.hide();
+      return;
+    }
+
+    // Dead and waiting: the class arrives with the next body, which is seconds away.
+    if (match.isPlayerDead) {
+      this.quickLoadout.show('Select next class');
+      this.quickLoadout.update();
+      return;
+    }
+    /**
+     * The pre-match freeze — round one's ten seconds, and only that.
+     *
+     * `flow.currentPhase` rather than `inputFrozen`, which is also true during the round-end
+     * hold: offering a class change over a decided round would be offering one for a body that
+     * is about to be reset anyway, and in Search & Destroy it would be up during the summary of
+     * the round that just killed you.
+     */
+    if (match.flow.currentPhase === 'WARMUP' && match.flow.round <= 1) {
+      this.quickLoadout.show('Select class');
+      this.quickLoadout.update();
+      return;
+    }
+    this.quickLoadout.hide();
+  }
+
+  /**
+   * The player pressed 1-5.
+   *
+   * Equips the class, hands it to the local simulation and tells the server. Over the network
+   * the server applies it immediately during the pre-match countdown and on the next spawn
+   * otherwise — see `ServerMatch.applyPendingLoadoutNow` — which is the same rule the panel's
+   * own caption states.
+   */
+  private pickQuickClass(index: number): void {
+    const world = this.world;
+    if (world === null) return;
+    if (index === this.profile.equippedIndex) return;
+    this.profile.equipLoadout(index);
+    world.match.applyLoadout(this.applyLoadout());
+    this.sendLoadoutToServer();
+  }
+
+  /** Tell the server about the equipped class. It applies on this player's next spawn (§6.6). */
+  private sendLoadoutToServer(): void {
+    const client = this.world?.net?.client;
+    const loadout = this.netLoadout();
+    if (client === undefined || loadout === null) return;
+    client.sendLoadout(loadout);
+    netLog.info(`sent class "${loadout.name}" to the server; applies on next spawn.`);
+  }
+
+  /**
+   * The summary's Continue button (§6.9).
+   *
+   * Single-player is unchanged: the match is over, the player has read the board, and the menu
+   * is where they were going. **Over the network it is a return to the game**, not a departure
+   * from it — the server is still holding this seat and will migrate everybody back to the arena
+   * on its own clock, so all this does is take the board off the screen and put the player back
+   * behind their eyes until that lands. The connection, the world and the seat all survive.
+   */
+  private leaveSummary(): void {
+    if (this.state !== 'SUMMARY') return;
+    if (this.server !== null && this.world !== null) {
+      this.transitionTo('MATCH');
+      return;
+    }
+    this.transitionTo('MENU');
   }
 
   private enterState(id: GameStateId): void {
@@ -975,6 +1173,12 @@ export class Game {
    * closes the link, which is what frees the seat on the server without waiting for a timeout.
    */
   private teardownWorld(options: { keepConnection?: boolean } = {}): void {
+    // A world going away takes any surface that was drawn over it. Without this, quitting from
+    // the pause screen with the class overlay open leaves the editor on top of the main menu.
+    if (this.loadoutOverlay) {
+      this.loadoutOverlay = false;
+      this.screens.loadoutEditor.hide();
+    }
     this.pendingSummary = false;
     this.pendingRotation = null;
     // A rotation keeps the socket no matter which teardown runs. The SUMMARY state tears the
@@ -1605,7 +1809,7 @@ export class Game {
       return;
     }
 
-    const frozen = world.match.inputFrozen;
+    const frozen = world.match.inputSuppressed;
     const cmd = !inMatch
       ? this.input.sampleNeutral(tick, now)
       : dead || frozen
@@ -1643,6 +1847,11 @@ export class Game {
      * chunk fewer. See `MapBuildQueue`.
      */
     this.voteOverlay.tick();
+    this.updateQuickLoadout();
+    // The post-match return clock. Ticked here rather than by the screen's own timer so it
+    // stops with the frame loop and cannot run on in a hidden tab against a server that has
+    // long since migrated everybody home.
+    if (this.state === 'SUMMARY') this.screens.summary.tick(dt);
     this.pumpMigrationWindow();
     const buildMs = this.buildQueue.pump();
     if (buildMs > 0) this.stats.noteBackgroundBuildMs(buildMs);
@@ -1749,7 +1958,10 @@ export class Game {
      * criterion 2 — "returns control cleanly, including if the player is killed or the match
      * ends" — a property of one method rather than of four call sites.
      */
-    const chopper = match.streaks.activeChopperFor(PLAYER_ENTITY_ID);
+    // This client's seat, not the single-player constant: over the network the local player is
+    // entity 1 or above, so asking for entity 0's gunship found nobody's and the camera never
+    // took over — the streak flew and the player watched it from the ground.
+    const chopper = match.streaks.activeChopperFor(match.localId);
     // M9: the streak reports a pose and a lens; `ChopperCamera` keeps the actual camera.
     const takeover = this.chopperCamera.cameraFor(chopper, this.renderer.aspect);
     if (takeover !== null) {
@@ -1817,6 +2029,9 @@ export class Game {
     // The browser has taken the cursor either way; the match stays armed, so the next click
     // recaptures it. See `Input.armPointerLock`.
     if (this.cancelMortarOverlay()) return;
+    // Create-a-Class released the cursor on purpose. Dropping the player onto the pause screen
+    // for it would put a modal over a modal, which is the clash the pause menu was reported for.
+    if (this.loadoutOverlay) return;
     if (this.state === 'MATCH') this.transitionTo('PAUSED');
   }
 
@@ -1854,6 +2069,11 @@ export class Game {
     // panel must not be thrown back into a firefight, and one cancelling a mortar mark must
     // not be dropped onto the pause screen.
     if (this.cancelMortarOverlay()) return;
+    // Same rule for the class overlay: Escape closes it and stops there.
+    if (this.loadoutOverlay) {
+      this.closeLoadout();
+      return;
+    }
     if (this.state === 'SETTINGS') {
       // A binding row that is waiting for a key eats Escape as "cancel the capture"; only
       // once nothing is armed does Escape leave the screen.

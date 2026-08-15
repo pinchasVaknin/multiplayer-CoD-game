@@ -1,7 +1,6 @@
 import type * as THREE from 'three';
 import type { BotDirector } from '../shared/ai/BotDirector';
 import type { BotTeam } from '../shared/ai/Combatant';
-import { PLAYER_ENTITY_ID } from '../shared/combat/DamageSystem';
 import type { ScoreSystem } from '../shared/combat/ScoreSystem';
 import type { GameBus } from '../shared/core/Events';
 import type { InputCommand } from '../shared/core/InputCommand';
@@ -57,6 +56,8 @@ export interface MatchMetaDeps {
   readonly equipment: EquipmentSystem;
   readonly equipmentInventory: EquipmentInventory;
   readonly localTeam: BotTeam;
+  /** Which entity this client is. See `MatchEquipmentDeps.localId` for what the constant cost. */
+  readonly localId: number;
   /** False in the Shooting Range: a testbed must not bank progress (see `Range.ts`). */
   readonly banksProgress: boolean;
 }
@@ -179,28 +180,32 @@ export class MatchMeta {
    * Put the non-weapon perks into the systems that carry them out.
    *
    * Each one is a single assignment, and each is cleared in `dispose`. The predicates
-   * close over `PLAYER_ENTITY_ID` rather than over a roster lookup: only the local player
-   * has a loadout in this build, and a bot asking "am I silent" should get the cheapest
-   * possible no.
+   * close over **this client's own entity id** rather than over a roster lookup: only the
+   * local player has a loadout in this build, and a bot asking "am I silent" should get the
+   * cheapest possible no.
+   *
+   * It was `PLAYER_ENTITY_ID` — zero — which over the network is the server's empty spectator
+   * seat, so Dead Silence made nobody quiet and flash resistance protected nobody.
    */
   private applyPerkHooks(): void {
     const state = this.perkState;
+    const me = this.deps.localId;
 
     this.deps.player.speedScale = state.moveSpeedMult;
 
     this.deps.bots.silentFootsteps = state.audibleFootsteps
       ? null
-      : (entityId) => entityId === PLAYER_ENTITY_ID;
+      : (entityId) => entityId === me;
 
     this.deps.equipment.flash.resistance =
       state.flashResistMult === 1
         ? null
-        : (entityId) => (entityId === PLAYER_ENTITY_ID ? state.flashResistMult : 1);
+        : (entityId) => (entityId === me ? state.flashResistMult : 1);
   }
 
   private isMvp(): boolean {
     const rows = this.deps.score.rows;
-    const mine = this.deps.score.row(PLAYER_ENTITY_ID);
+    const mine = this.deps.score.row(this.deps.localId);
     if (mine === undefined || mine.score <= 0) return false;
     for (const row of rows) {
       if (row === mine) continue;

@@ -170,8 +170,6 @@ export class NetSession {
 
   private lastScoreA = -1;
   private lastScoreB = -1;
-  private lastLocalHealth = -1;
-  private lastLocalAlive = true;
 
   private readonly deps: NetSessionDeps;
   private readonly interpolationDelayMs: number;
@@ -479,16 +477,31 @@ export class NetSession {
       this.deps.bus.emit(EV.ScoreChanged, evScore);
     }
 
-    // The local player's own health and liveness, from our own entity in the snapshot.
+    /**
+     * The local player's own health and liveness, from our own entity in the snapshot.
+     *
+     * Applied on **every** snapshot rather than only when the replicated value changes (M11
+     * Gate B playtest). The change guard was an optimisation with a sharp edge: it made the
+     * server's answer authoritative over *its own previous answer* rather than over the client,
+     * so anything that moved the local `Health` behind the server's back was never corrected —
+     * a networked client does not step its own health, so nothing else would put it back.
+     *
+     * That is precisely how the self-inflicted damage from the entity-id bug (see
+     * `PlayerCombatant.entityId`) turned into a bar stuck at zero and a permanently red screen:
+     * the server thought the player was on 100 and kept saying 100, which is not a change, so
+     * the client's 0 stood until somebody actually shot them. The id bug is fixed; this is the
+     * property that should have contained it, and it is worth having on its own merits — S4.15
+     * puts health on the replicated side of the table, and "the server's value wins" should not
+     * be conditional on the server having changed its mind.
+     *
+     * Cheap: three field reads and one call at the snapshot rate. `applyReplicatedSelf` is
+     * idempotent — the death and respawn branches are edge-guarded on `playerDead`.
+     */
     const own = this.client.remotes.get(this.client.entityId);
     if (own !== undefined) {
       const alive = (own.latest.flags & EFlag.Alive) !== 0;
       const health = own.latest.health;
-      if (health !== this.lastLocalHealth || alive !== this.lastLocalAlive) {
-        this.lastLocalHealth = health;
-        this.lastLocalAlive = alive;
-        this.onLocalState?.(health, alive);
-      }
+      this.onLocalState?.(health, alive);
     }
 
     this.syncActors();

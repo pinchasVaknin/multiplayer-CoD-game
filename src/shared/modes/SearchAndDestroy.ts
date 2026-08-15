@@ -71,6 +71,24 @@ export interface SearchDestroyConfig {
   readonly interactRadius: number;
   /** How close an attacker must be to pick the bomb up, metres. */
   readonly pickupRadius: number;
+  /**
+   * Seconds at the start of a round during which only an entity that asks may take the bomb.
+   *
+   * The post-M8 playtest turned auto-pickup off *for the human* — "the player must press the
+   * key" — and left bots taking it by walking over it, which is the only interaction verb a bot
+   * has. Those two rules met at the one place they collide: the bomb spawns **inside the
+   * attackers' central spawn zone** (Foundry authors it at `z = -21.17`, and the spawn there
+   * has radius 3), so on the first tick of every round an attacking bot is already standing on
+   * it and takes it before a human has seen the round start. Over a whole match the player
+   * never once held the bomb, and with nothing drawn on the carrier there was no bomb visible
+   * anywhere either — reported, reasonably, as *"there is no bomb"*.
+   *
+   * A short grace rather than a rule about who deserves it: for these few seconds the bomb is
+   * only picked up by pressing the key, which every human can do and no bot will. After it,
+   * the mode behaves exactly as it did — if nobody claimed it, the nearest bot takes it and the
+   * round goes ahead.
+   */
+  readonly pickupGraceSeconds: number;
   readonly pointsPerKill: number;
   readonly pointsHeadshotBonus: number;
   readonly pointsPerPlant: number;
@@ -93,6 +111,9 @@ export const SND_CONFIG: SearchDestroyConfig = {
   defuseSeconds: 7.5,
   interactRadius: 2.6,
   pickupRadius: 1.8,
+  // Long enough to react to "the round has started" and press the key; short enough that a
+  // lobby of bots is not standing around a bomb nobody is going to pick up.
+  pickupGraceSeconds: 4,
   pointsPerKill: 100,
   pointsHeadshotBonus: 50,
   pointsPerPlant: 250,
@@ -196,6 +217,8 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
   private interactIsDefuse = false;
 
   private ticksLeft = 0;
+  /** Ticks left of the opening window in which only a key press takes the bomb. */
+  private graceTicks = 0;
   private roundOutcome: RoundResult | null = null;
   private roundIndex = 1;
   private readonly scratch: MutableObjectiveTarget = makeObjectiveTarget();
@@ -266,7 +289,13 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
 
   override onTick(_tick: number): void {
     if (this.ticksLeft > 0) this.ticksLeft--;
+    if (this.graceTicks > 0) this.graceTicks--;
     if (this.roundOutcome !== null) return;
+
+    // The bomb is an object in the world whether it is on the floor or in somebody's hands.
+    // Kept before every other bomb step so a plant that starts this tick reads a position
+    // that is this tick's.
+    this.followCarrier();
 
     if (this.bomb === 'CARRIED') this.stepPickup();
 
@@ -396,6 +425,7 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
     this.plantedSite = null;
     this.bombTimer = 0;
     this.roundOutcome = null;
+    this.graceTicks = Math.round(this.config.pickupGraceSeconds / DT);
     this.cancelInteract();
     for (const site of this.sites) site.reset('NONE');
     /**
@@ -555,10 +585,39 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
    */
   private stepPickup(): void {
     if (this.carrierId >= 0) return;
+    // The opening seconds belong to whoever presses the key. See `pickupGraceSeconds`.
+    if (this.graceTicks > 0) return;
     for (const c of this.deps.roster) {
       if (this.manualPickup(c.entityId)) continue;
       if (this.tryPickup(c)) return;
     }
+  }
+
+  /**
+   * Keep the bomb's position on whoever is carrying it (M11 Gate B playtest).
+   *
+   * `bombX/Y/Z` used to be written in exactly two places — the round reset and the carrier's
+   * death — so while the bomb was *held* it reported the point where it was last dropped. That
+   * is a stale answer everywhere it is read: `MatchObjectives` hid the mesh rather than draw it
+   * at a lie, `objectiveTarget` sent bots to a place the bomb had left, and `BombInfo.x/y/z`
+   * replicated the same lie to every client. With the mesh hidden and the position wrong, a
+   * carried bomb was not an object in the world at all — it was a boolean on an entity.
+   *
+   * Cheap: one roster scan per tick, only while somebody is carrying, and it makes the single
+   * replicated position true in all three states rather than in two of them.
+   */
+  private followCarrier(): void {
+    if (this.bomb !== 'CARRIED' || this.carrierId < 0) return;
+    const carrier = this.combatant(this.carrierId);
+    if (carrier === undefined) {
+      // The carrier stopped existing without dying — a disconnect, or a bot removed to make
+      // room for a human. The bomb stays where it was rather than following a ghost.
+      this.carrierId = -1;
+      return;
+    }
+    this.bombX = carrier.px;
+    this.bombY = carrier.py;
+    this.bombZ = carrier.pz;
   }
 
   /**

@@ -18,21 +18,41 @@ import { buildDummyMaterials, TargetDummy, type DummyMaterials, type DummySpec }
  * other and half the range becomes unusable.
  */
 
-/** Entity ids. 0 is the player (see DamageSystem.PLAYER_ENTITY_ID). */
+/**
+ * Where the range's entity ids live (M11 Gate B playtest).
+ *
+ * They were 1..12, chosen in M2 when the id space had exactly two inhabitants: the player at 0
+ * and bots from 100. **1..99 is the connected-human range** (`Match.HUMAN_ID_BASE`), and the
+ * warmup arena is the greybox room — so the moment the arena put a human next to the dummies,
+ * the two collided in `DamageSystem`, whose table is keyed by entity id and whose `register`
+ * evicts whatever is already at one. Third player to connect, and the 25 m dummy and that
+ * player were the same entity: one of them silently replaced the other, and shots at the
+ * survivor were rejected as self-hits, because `Ballistics` excludes the shooter by id.
+ *
+ * That is the second half of *"target dummies lack hitboxes; bullets pass through them"*, and
+ * it is entirely independent of the first — see `PlayerCombatant.entityId`. Both had to be
+ * true for the range to work in the arena, and each on its own is enough to break it.
+ *
+ * 10_000 is clear of everything: humans (1-99), bots (100+, `BOT_ID_BASE`) and streak entities
+ * (900+, `STREAK_ENTITY_BASE`, which increments for the life of a match). The names are what
+ * every call site uses, so the numbers moving costs nothing.
+ */
+const DUMMY_ID_BASE = 10_000;
+
 export const DUMMY_IDS = {
-  r5: 1,
-  r15: 2,
-  r25: 3,
-  r40: 4,
-  popup: 5,
-  strafe: 6,
-  penThin: 7,
-  penThick: 8,
+  r5: DUMMY_ID_BASE + 1,
+  r15: DUMMY_ID_BASE + 2,
+  r25: DUMMY_ID_BASE + 3,
+  r40: DUMMY_ID_BASE + 4,
+  popup: DUMMY_ID_BASE + 5,
+  strafe: DUMMY_ID_BASE + 6,
+  penThin: DUMMY_ID_BASE + 7,
+  penThick: DUMMY_ID_BASE + 8,
   // M7, from the M6 playtest notes.
-  infinite: 9,
-  fallerNear: 10,
-  fallerFar: 11,
-  strafeFar: 12,
+  infinite: DUMMY_ID_BASE + 9,
+  fallerNear: DUMMY_ID_BASE + 10,
+  fallerFar: DUMMY_ID_BASE + 11,
+  strafeFar: DUMMY_ID_BASE + 12,
 } as const;
 
 const FACING_WEST = Math.PI / 2;

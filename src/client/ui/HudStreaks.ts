@@ -23,6 +23,17 @@ export interface StreakSlotState {
   name: string;
   /** '3', '4' or '5'. */
   key: string;
+  /**
+   * Whether this slot's streak is earned and can be spent right now (M11 Gate B playtest).
+   *
+   * The slots used to hold whatever the player had *earned*, packed from index 0 — so the one
+   * streak a player was holding always appeared on key 3, whichever key their class actually
+   * bound it to, and pressing 5 for the Chopper Gunner they had just earned did nothing. The
+   * slots are the **class's** three keys now, always in the same order, and this is what says
+   * which of them is live. A named but unready slot is the useful half of that: it tells the
+   * player what key 5 is *for* before they have earned it.
+   */
+  ready: boolean;
 }
 
 export interface StreakHudState {
@@ -55,9 +66,9 @@ export interface StreakHudState {
 export function makeStreakHudState(): StreakHudState {
   return {
     slots: [
-      { name: '', key: '3' },
-      { name: '', key: '4' },
-      { name: '', key: '5' },
+      { name: '', key: '3', ready: false },
+      { name: '', key: '4', ready: false },
+      { name: '', key: '5', ready: false },
     ],
     streak: 0,
     nextName: '',
@@ -193,13 +204,21 @@ export class HudStreaks {
     }
 
     for (let i = 0; i < this.slotEls.length; i++) {
-      const name = state.slots[i]?.name ?? '';
-      if (name !== this.lastSlotNames[i]) {
-        this.lastSlotNames[i] = name;
+      const entry = state.slots[i];
+      const name = entry?.name ?? '';
+      const ready = entry?.ready === true;
+      // The cache key carries both facts, so a slot that becomes spendable without changing
+      // its name still repaints. Two guards would have needed two caches.
+      const stamp = ready ? `+${name}` : name;
+      if (stamp !== this.lastSlotNames[i]) {
+        this.lastSlotNames[i] = stamp;
         const el = this.slotNameEls[i];
         const slot = this.slotEls[i];
         if (el !== undefined) el.textContent = name;
-        if (slot !== undefined) slot.classList.toggle('is-ready', name.length > 0);
+        if (slot !== undefined) {
+          slot.classList.toggle('is-ready', ready);
+          slot.classList.toggle('is-owned', name.length > 0);
+        }
       }
     }
 

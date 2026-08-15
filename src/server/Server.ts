@@ -376,12 +376,28 @@ export class Server {
       instance !== null && player !== null
         ? instance.match.setPendingLoadout(player.entityId, clean)
         : false;
+    /**
+     * During the pre-match countdown it applies **now** rather than on the next spawn.
+     *
+     * That is what makes the quick class selector mean what it says — see
+     * `ServerMatch.applyPendingLoadoutNow` for why the freeze is the one window where an
+     * immediate change cannot cost a misprediction. Everywhere else this returns false and the
+     * ordinary §6.6 deferral stands.
+     */
+    const immediate =
+      queued && player !== null && instance !== null
+        ? instance.match.applyPendingLoadoutNow(player.entityId)
+        : false;
 
     log.info(
       `${session.displayName} set class "${clean.name}" — ` +
         `${clean.primary.weaponId}/${clean.secondary.weaponId}, ` +
         `perks [${clean.perks.filter((p) => p !== null).join(', ')}]. ` +
-        (queued ? 'Applies on next spawn.' : 'Applies when they next exist in a world.'),
+        (immediate
+          ? 'Applied now (pre-match countdown).'
+          : queued
+            ? 'Applies on next spawn.'
+            : 'Applies when they next exist in a world.'),
     );
   }
 
@@ -610,12 +626,48 @@ export class Server {
       case InstanceState.READY_WAIT:
         this.maybeStartLive(instance, tickIndex);
         return;
+      case InstanceState.RUNNING:
+        this.maybeAbandonLive(instance, tickIndex);
+        return;
       case InstanceState.ENDED:
         this.finishLive(instance, tickIndex);
         return;
       default:
         return;
     }
+  }
+
+  /**
+   * Every human left a running match: shut it down (§4.9, §4.20).
+   *
+   * §4.20 already refuses to *start* a match for zero humans, in two places — the vote cycle
+   * cancels when the last human disconnects, and `maybeStartLive` destroys an instance nobody
+   * is left to migrate into. Neither of them covers the case after `RUNNING`, and until now
+   * nothing did: a match whose last player pulled their cable kept simulating ten bots to a
+   * win condition, held the process's single live-match slot for the whole of it, and only
+   * then released it. Every ballot that resolved in the meantime hit the one-match cap and
+   * sent the arena back to free play with a notice — so one disconnect could cost the *next*
+   * lobby its match.
+   *
+   * The bots are not asked whether they mind. There is nobody to watch them, no summary to
+   * deliver — `finishLive` sends one to `instance.sessions`, which is empty — and no XP to
+   * bank, so the ordinary end-of-match path would do nothing but wait.
+   *
+   * `abandoned` rather than `playerCount === 0` on purpose: see `LiveMatch.everSeated`.
+   */
+  private maybeAbandonLive(instance: LiveMatch, tickIndex: number): void {
+    if (!instance.abandoned) return;
+    log.info(
+      `match ${instance.id}: every human has left a running match. ` +
+        `Destroying it and freeing the slot (${instance.botCount} bot(s) discarded).`,
+    );
+    metric('allocator', 'abandoned', {
+      matchId: instance.id,
+      tick: tickIndex,
+      bots: instance.botCount,
+    });
+    void this.destroyLive();
+    this.voteCycle.resume(tickIndex);
   }
 
   /**

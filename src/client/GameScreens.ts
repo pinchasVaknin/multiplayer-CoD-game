@@ -48,6 +48,8 @@ export interface GameScreensDeps {
   /** M8. Open the settings screen from the menu or the pause screen. */
   readonly onSettings: () => void;
   readonly onLoadoutBack: () => void;
+  /** Whether the editor may offer "Start match". See `LoadoutEditorDeps.canLaunch`. */
+  readonly canLaunch: () => boolean;
   readonly onQuitToMenu: () => void;
   readonly onResume: () => void;
   readonly onToggleOverlay: () => void;
@@ -88,6 +90,7 @@ export class GameScreens {
       profile: deps.profile,
       onBack: deps.onLoadoutBack,
       onLaunch: deps.onLaunch,
+      canLaunch: deps.canLaunch,
       unrestricted: deps.unrestricted,
     });
 
@@ -144,6 +147,7 @@ export class GameScreens {
      */
     returnSeconds = 0,
   ): void {
+    this.summary.setNetworked(returnSeconds > 0);
     this.summary.setReturnSeconds(returnSeconds);
     this.summary.setColumns(match.mode.getScoreboardColumns(), match.mode.name, mapName);
     this.summary.show(

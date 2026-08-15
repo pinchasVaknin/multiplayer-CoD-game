@@ -310,6 +310,10 @@ export class ServerMatch {
 
     // ---- the match ---------------------------------------------------------
     this.score = new ScoreSystem(this.bus);
+    // The other half of `freeForAll`, and it has to be set here as well as on the director:
+    // one flag decides who can be *shot*, the other decides whose death **counts**. See
+    // `ScoreSystem.freeForAll` for the FFA ladder that crawled without it.
+    this.score.freeForAll = this.modeEntry.freeForAll === true;
     this.mode = this.modeEntry.create({
       bus: this.bus,
       score: this.score,
@@ -956,6 +960,34 @@ export class ServerMatch {
   }
 
   /**
+   * Cash a queued class change **now**, if this is the pre-match freeze (M11 Gate B).
+   *
+   * The quick selector's whole promise is that the class you press during the ten-second
+   * countdown is the class you start the match with. "Next spawn" does not deliver that on its
+   * own — the player is already standing, so their next spawn is after their first death, and
+   * they would spend the opening life holding the class they were migrated in with.
+   *
+   * Respawning them is what makes it immediate, and the pre-match freeze is the one window
+   * where that is free: nobody has moved, nobody has fired, and the movement axes are stripped
+   * before they reach the controller, so a `speedScale` that changes here cannot be the source
+   * of a misprediction. The spawn serial bump is the same discontinuity a death already
+   * produces, which is exactly how the client is told to adopt the new pose without charging
+   * itself for the difference (see `NetClient.respawned`).
+   *
+   * Round one only, and alive only. A round-two S&D freeze is three seconds and the player is
+   * about to be spawned by the round reset anyway, so the ordinary deferral is both correct
+   * and cheaper.
+   */
+  applyPendingLoadoutNow(entityId: number): boolean {
+    if (!this.pendingLoadouts.has(entityId)) return false;
+    if (this.flow.currentPhase !== 'WARMUP' || this.flow.round > 1) return false;
+    const player = this.getPlayer(entityId);
+    if (player === undefined || !player.alive) return false;
+    this.spawnPlayer(player);
+    return true;
+  }
+
+  /**
    * Remove a disconnected client (S6.1, S8.11).
    *
    * *"A dropped client must not stall the server tick or leave a ghost entity in the world."*
@@ -1166,8 +1198,27 @@ export class ServerMatch {
   }
 
   /** Equipment thrown and detonated this match. Read by the harness (§8.24). */
-  get equipmentStats(): { thrown: number; detonated: number } {
-    return { thrown: this.equipment.thrownTotal, detonated: this.equipment.detonatedTotal };
+  get equipmentStats(): {
+    thrown: number;
+    detonated: number;
+    smokeLive: number;
+    smokeBlocked: number;
+  } {
+    return {
+      thrown: this.equipment.thrownTotal,
+      detonated: this.equipment.detonatedTotal,
+      /**
+       * The two numbers §6.8's smoke claim actually rests on (M11 Gate B playtest).
+       *
+       * *"Smoke occludes bot LOS on the server"* was wired and never measured, and a wired
+       * occluder that is never consulted looks exactly like a working one from outside. These
+       * make the difference reportable: `smokeLive` says a cloud existed at all — without it a
+       * zero below means "nothing was thrown", not "smoke does nothing — and `smokeBlocked` is
+       * the count of sight lines `Perception` threw away because a cloud was in the way.
+       */
+      smokeLive: this.equipment.smoke.liveCount,
+      smokeBlocked: this.bots.perception.smokeBlocked,
+    };
   }
 
   /** The outcome, or null while the match is still running. */
