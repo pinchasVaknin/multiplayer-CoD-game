@@ -242,8 +242,23 @@ export class VoteOverlay {
    */
   handleDigit(digit: number): boolean {
     const info = this.info;
-    // `root.hidden` is not the test: the overlay is also visible during PLAY, showing the
-    // countdown, and 1-5 must behave normally then. The ballot being *open* is the test.
+    /**
+     * A surface that is not on screen never eats a key (M11 Gate B playtest round 3).
+     *
+     * `root.hidden` is not the *whole* test — the overlay is also visible during PLAY, showing
+     * the countdown, and 1-5 must behave normally then, which the phase check below handles.
+     * But the converse is absolute, and it was missing: while this is hidden it is not asking
+     * the player anything, so it has no business consuming their input.
+     *
+     * That mattered because `apply` is the only writer of `info`, and the server broadcasts the
+     * vote state **to the arena only**. A player migrated into a live match stops being told
+     * anything, so whatever phase they last heard is what they keep — and if the migration beat
+     * the 4 Hz broadcast that would have said `ALLOCATING`, they carried a live `MAP_VOTE` into
+     * the match. Keys 1-3 then went to a ballot nobody could see instead of to the class
+     * selector, which is the reported *"sometimes I can't switch class"* — sometimes, because it
+     * is a race, and it is won or lost on whether this client had already built that map.
+     */
+    if (this.root.hidden) return false;
     if (info === null) return false;
     if (info.phase !== VotePhase.MODE_VOTE && info.phase !== VotePhase.MAP_VOTE) return false;
     const option = digit - 1;
@@ -272,9 +287,20 @@ export class VoteOverlay {
     this.banner.textContent = text;
   }
 
+  /**
+   * Take the surface down and forget the ballot.
+   *
+   * Called on migration as well as on teardown: the vote cycle belongs to the arena, and a
+   * client that has been moved into a live match is no longer being told about it. Dropping
+   * `info` is the half that matters — it is what stops `handleDigit` answering for a ballot
+   * that has since resolved.
+   */
   hide(): void {
     this.root.hidden = true;
     this.info = null;
+    this.noticeFramesLeft = 0;
+    this.noticeText = '';
+    this.banner.hidden = true;
   }
 
   dispose(): void {

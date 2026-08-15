@@ -5405,3 +5405,53 @@ browser-only claims were already waiting on.
 The `HeadlessClient` cannot stand in for it: it drives `NetClient` and `Prediction` directly and
 builds no `ClientMatch`, which is precisely why a bug that made every networked client shoot
 itself survived every harness run in the milestone.
+
+## Playtest round 3 — the ballot that followed you into the match
+
+Three reports, and two of them were the same bug wearing different hats.
+
+**The vote overlay is the arena's, and nothing told it when you left.** `Server.broadcastVoteState`
+sends to `warmup.sessions` only — correct, the cycle belongs to the arena — so a migrated player
+simply stops being told anything. `VoteOverlay.apply` is the only writer of `root.hidden` and of
+`info`, so whatever phase that client last heard is what it keeps, on screen, for the whole match.
+
+It is a **race**, which is why it was "sometimes": the ballot resolves, the server broadcasts
+`ALLOCATING` at 4 Hz, and the migration happens once every client reports its background build
+ready. A client that had already built that map reports in milliseconds and can be migrated
+before the broadcast that would have taken the overlay down.
+
+The second hat is the one that reads as a different bug entirely. `handleDigit` consumes 1-5
+whenever `info.phase` is a ballot — so a stale `MAP_VOTE` ate keys 1-3 and a stale `MODE_VOTE`
+ate all five, *before* they reached the quick class selector. Reported as **"sometimes I can't
+switch class"**, and the two symptoms never looked related because one is a panel and the other
+is a keypress.
+
+Two changes, and the second is the one that generalises:
+
+- `Game.skirmishSink().onMigrated` calls `voteOverlay.hide()`, beside the streak and projectile
+  discards that were already there. Same §4.18 rule, applied to the channel that had been missed:
+  state from an instance you have left.
+- **A hidden surface never consumes a key.** `handleDigit` returns false on `root.hidden` before
+  it looks at anything else. `root.hidden` was explicitly rejected as the test when this was
+  written — correctly, because the overlay is also visible during `PLAY` and 1-5 must behave
+  normally then — but the converse is absolute and was missing.
+
+Verified in a browser against a real server: with the ballot genuinely open, `handleDigit(1)`
+still returns true and the vote is cast (the harness reports 2 votes per client, unchanged);
+after `hide()`, digits 1 and 3 both fall through.
+
+### The class panel's own window, measured
+
+The round-2 fix — track the respawn countdown rather than `isPlayerDead` — was already correct.
+Traced end to end over a real connection, one line per transition:
+
+| t | where | phase | dead | panel |
+|---|---|---|---|---|
+| 25 | arena | LIVE | no | hidden |
+| 39 | arena | LIVE | yes, 4.4 s left | **shown** |
+| 44 | arena | LIVE | no | hidden |
+| 47 | dunes | WARMUP | no | **shown** |
+| 57 | dunes | LIVE | no | hidden |
+
+Which is the requested behaviour exactly: the ten-second pre-match window and the 4.5 s respawn
+window, and nothing in between.

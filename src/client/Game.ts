@@ -1348,6 +1348,16 @@ export class Game {
          */
         this.world?.match.clearReplicatedStreaks();
         this.world?.match.clearReplicatedProjectiles();
+        /**
+         * And the ballot, for the same §4.18 reason (playtest round 3).
+         *
+         * The vote cycle is the **arena's**, and the server broadcasts its state to arena
+         * sessions only. A migrated player is therefore never told the ballot closed: the
+         * overlay kept the last phase it heard and stayed on screen through the whole match,
+         * still answering for keys 1-5. Discard on migration, exactly like the streaks and the
+         * projectiles above — it is the same rule about state from an instance you have left.
+         */
+        this.voteOverlay.hide();
         this.pendingMigration = welcome;
         this.openMigrationWindow(welcome.matchId);
       },
