@@ -1,6 +1,11 @@
-import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import {
+  createServer as createHttpServer,
+  type Server as HttpServer,
+  type ServerResponse,
+} from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import { readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
+import { extname, join, normalize, resolve, sep } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { nowMs } from '../../shared/core/Clock';
 import { logger } from '../../shared/core/Log';
@@ -57,6 +62,24 @@ export interface WsServerOptions {
    * It stays a cap in every case — only *which* cap is configurable.
    */
   readonly maxConnectionsPerIp?: number | undefined;
+  /**
+   * Directory of built client files to serve over the same port, or undefined for none.
+   *
+   * **This is what makes the game one deployable unit** (M11, deployment). Until now the
+   * process answered a plain HTTP request with a flat 426 — correct for a machine that sits
+   * behind a reverse proxy serving the client from somewhere else, which is the documented
+   * bare-metal deployment. A managed host like Render gives you *one* service on *one* port,
+   * and standing up a second one to serve four megabytes of static files is both a cost and a
+   * second origin to keep in step.
+   *
+   * Serving them here collapses that: the page and the socket share a scheme, a host and a
+   * port, so `resolveServerUrl` needs no configuration, the browser's mixed-content rule is
+   * satisfied by construction, and there is no cross-origin request to allow in the first
+   * place.
+   *
+   * Undefined keeps the old behaviour exactly, so the proxy deployment is unchanged.
+   */
+  readonly staticDir?: string | undefined;
   readonly onConnection: (link: WsLink) => void;
 }
 
@@ -217,6 +240,8 @@ export class WsServer {
   private readonly wss: WebSocketServer;
   private readonly http: HttpServer;
   private readonly perIp = new Map<string, number>();
+  /** Absolute path of the built client, or null when this port serves only the socket. */
+  private staticRoot: string | null = null;
   readonly secure: boolean;
 
   constructor(private readonly opts: WsServerOptions) {
@@ -231,11 +256,42 @@ export class WsServer {
         }) as unknown as HttpServer)
       : createHttpServer();
 
-    // A plain HTTP request to this port gets a flat 426 and nothing else. It is not a web
-    // server and saying so in four words is the whole correct response.
-    this.http.on('request', (_req, res) => {
-      res.writeHead(426, { 'content-type': 'text/plain' });
-      res.end('upgrade required\n');
+    /**
+     * The static root, resolved once and verified once.
+     *
+     * Resolved to an absolute path at construction so the traversal guard below can be a
+     * cheap prefix test rather than a filesystem question per request, and checked for
+     * existence here so a mistyped `STATIC_DIR` is one line in the boot log rather than a
+     * 404 on every request with nothing to explain it.
+     */
+    const wanted = opts.staticDir;
+    if (wanted !== undefined && wanted !== '') {
+      const root = resolve(wanted);
+      if (existsSync(join(root, 'index.html'))) {
+        this.staticRoot = root;
+        log.info(`serving the client from ${root}`);
+      } else {
+        log.warn(`STATIC_DIR "${root}" has no index.html — serving no client from this port.`);
+      }
+    }
+
+    this.http.on('request', (req, res) => {
+      // Liveness, for a managed host's health check. Answered before anything touches the
+      // disk so it stays true even if the static root is missing.
+      if (req.url === '/healthz') {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('ok\n');
+        return;
+      }
+      const root = this.staticRoot;
+      // No client to serve: a flat 426 and nothing else. It is not a web server and saying
+      // so in four words is the whole correct response.
+      if (root === null) {
+        res.writeHead(426, { 'content-type': 'text/plain' });
+        res.end('upgrade required\n');
+        return;
+      }
+      this.serveStatic(root, req.method ?? 'GET', req.url ?? '/', res);
     });
 
     this.wss = new WebSocketServer({
@@ -275,6 +331,88 @@ export class WsServer {
     this.wss.on('error', (err: Error) => {
       log.error(`listener error: ${err.message}`);
     });
+  }
+
+  /**
+   * Serve one file out of the built client.
+   *
+   * Deliberately small: this exists to put the game on one origin, not to be a web server.
+   * No caching policy beyond a long max-age on hashed assets, no compression (Vite's output is
+   * already minified and a managed host's edge will gzip it), no directory listing.
+   *
+   * **The traversal guard is the part that matters.** The path comes off the wire, so it is
+   * decoded, normalised and then checked to still sit under the root — a prefix test on the
+   * resolved absolute path, which `..` cannot survive. Anything that fails is a 403 rather
+   * than a 404: the two are different facts and only one of them is worth looking at in a log.
+   */
+  private serveStatic(root: string, method: string, url: string, res: ServerResponse): void {
+    if (method !== 'GET' && method !== 'HEAD') {
+      res.writeHead(405, { allow: 'GET, HEAD' });
+      res.end();
+      return;
+    }
+
+    // Query and hash are not part of the path. `decodeURIComponent` can throw on a malformed
+    // escape, which is exactly the sort of input S4.16 says must not reach anything else.
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(url.split('?')[0]?.split('#')[0] ?? '/');
+    } catch {
+      res.writeHead(400);
+      res.end();
+      return;
+    }
+
+    // A bare path, or one with no extension, is the app itself: this is a single-page client
+    // and every route it has is served by the same document.
+    const wantsIndex = pathname === '/' || pathname.endsWith('/') || extname(pathname) === '';
+    const relative = wantsIndex ? 'index.html' : normalize(pathname).replace(/^[/\\]+/, '');
+    const file = resolve(root, relative);
+    if (file !== root && !file.startsWith(root + sep)) {
+      log.warn(`refused a request that escaped the static root: ${pathname}`);
+      res.writeHead(403);
+      res.end();
+      return;
+    }
+
+    let size = 0;
+    try {
+      const stat = statSync(file);
+      if (!stat.isFile()) throw new Error('not a file');
+      size = stat.size;
+    } catch {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('not found\n');
+      return;
+    }
+
+    /**
+     * `Access-Control-Allow-Origin: *` on a same-origin deployment is redundant, and it is
+     * here anyway (deployment item 4).
+     *
+     * It costs one header and it removes a whole class of confusing failure for anyone who
+     * later splits the client onto a CDN or a second hostname: the socket has no CORS to
+     * satisfy — WebSocket is exempt from the same-origin policy and `ws` performs no origin
+     * check — but the *assets* would, and discovering that at deploy time is the avoidable
+     * afternoon S4.9 talks about.
+     */
+    res.writeHead(200, {
+      'content-type': contentTypeFor(file),
+      'content-length': String(size),
+      'access-control-allow-origin': '*',
+      // Vite fingerprints everything under /assets/, so those are immutable. The entry
+      // document must not be, or a deploy would never reach anybody's browser.
+      'cache-control': file.includes(`${sep}assets${sep}`)
+        ? 'public, max-age=31536000, immutable'
+        : 'no-cache',
+    });
+    if (method === 'HEAD') {
+      res.end();
+      return;
+    }
+    const stream = createReadStream(file);
+    stream.on('error', () => res.end());
+    stream.pipe(res);
   }
 
   listen(): Promise<void> {
@@ -338,4 +476,33 @@ function toBytes(data: unknown): Uint8Array | null {
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Content type by extension, for the handful the client actually ships.
+ *
+ * A table rather than a dependency: the built client is HTML, JS, CSS, a source map and
+ * whatever `public/` holds. Anything unrecognised is served as a byte stream, which is the
+ * honest answer and lets the browser decide — the one thing that must never happen is a
+ * script served as `text/plain`, and every extension that could be a script is listed.
+ */
+const CONTENT_TYPES: Readonly<Record<string, string>> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+function contentTypeFor(file: string): string {
+  return CONTENT_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream';
 }

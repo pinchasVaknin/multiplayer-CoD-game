@@ -59,6 +59,17 @@ export interface ServerConfig {
   readonly interpolationDelayMs: number;
   readonly tlsCertPath: string | undefined;
   readonly tlsKeyPath: string | undefined;
+  /**
+   * Directory of built client files to serve over the same port (`STATIC_DIR`).
+   *
+   * Defaults to `dist`, which is where `vite build` puts the client — so a managed host that
+   * runs `npm run build && npm start` gets the page and the socket on one origin with no
+   * configuration at all. See `WsServerOptions.staticDir` for why that matters.
+   *
+   * Set it to an empty string to serve nothing, which is the right answer behind a reverse
+   * proxy that is already serving the client itself.
+   */
+  readonly staticDir: string;
   /** Server-side condition simulation, applied to every outbound link (S7). */
   readonly conditions: NetConditions;
   /** Emit one metrics record every this many seconds. Zero disables it. */
@@ -160,6 +171,9 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     interpolationDelayMs: intOr(env['INTERP_MS'], 100, 0, 500),
     tlsCertPath: blankToUndefined(env['TLS_CERT']),
     tlsKeyPath: blankToUndefined(env['TLS_KEY']),
+    // `??` rather than `||`: an explicitly empty STATIC_DIR means "serve nothing", and that
+    // is a different instruction from "not set".
+    staticDir: env['STATIC_DIR'] ?? 'dist',
     conditions: parsed ?? NET_PERFECT,
     metricsSeconds: intOr(env['METRICS_SECONDS'], 30, 0, 3600),
     rewindDisabled: (env['REWIND_DISABLED'] ?? '') === '1',

@@ -1,0 +1,36 @@
+# Render blueprint — one web service, serving the page and the socket on one origin.
+#
+# Render can read this file directly ("New > Blueprint"), or you can type the same four
+# values into the dashboard by hand; see DEPLOY.md, which does not assume this file exists.
+#
+# The whole game is one service on purpose. Render gives a free web service one port, and
+# `serve.js` serves the built client from `dist/` on that same port alongside the WebSocket —
+# so the page and the socket share a scheme, a host and a port. That is what makes the client
+# need no address at all (`VITE_SERVER_URL: "1"` means "my own origin"), keeps the browser's
+# mixed-content rule satisfied on Render's HTTPS, and leaves no cross-origin request to allow.
+services:
+  - type: web
+    name: operator
+    runtime: node
+    plan: free
+    # `npm run build` is the gate, then the client into dist/, then the server into
+    # dist-server/. Render installs devDependencies for the build automatically.
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    # Render pings this to decide the service is up. `serve.js` answers it before it touches
+    # the disk, so it stays true even if the client build is missing.
+    healthCheckPath: /healthz
+    envVars:
+      # The build targets node22 and the code uses APIs that assume it.
+      - key: NODE_VERSION
+        value: "22"
+      # Read at BUILD time by Vite and baked into the client. "1" means "connect to the origin
+      # this page was served from", which is the only answer that survives Render assigning
+      # the hostname after the fact.
+      - key: VITE_SERVER_URL
+        value: "1"
+      # Bots in the permanent warmup arena. Three is the shipped default; the free instance
+      # has 512 MB and half a CPU, so this is not the knob to raise first.
+      - key: WARMUP_BOTS
+        value: "3"
+      # PORT is set by Render itself and read by src/server/Config.ts. Do not set it here.

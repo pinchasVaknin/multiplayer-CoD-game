@@ -72,11 +72,20 @@ export function parseJoinOptions(search: string): HandshakeOptions | null {
   // No `?server` and no build-time address: single-player, as before.
   if (serverParam === null && buildDefault === '') return null;
 
-  // `?server=1` and `?server` with no value both mean "this origin".
-  const explicit =
-    serverParam === null ? buildDefault : serverParam === '1' || serverParam === '' ? '' : serverParam;
-
-  const url = resolveServerUrl(explicit === '' ? null : explicit);
+  /**
+   * `1`, an empty value and `/ws` all mean **this page's own origin**.
+   *
+   * The runtime half (`?server=1`) has meant that since M10. The build-time half did not: a
+   * `VITE_SERVER_URL` of `1` went to `resolveServerUrl` as if it were a hostname, and the
+   * client would have tried to open `wss://1/ws`. Nobody hit it because the documented
+   * deployment baked a full `wss://host/ws` in — but it is the value a *managed* host wants,
+   * where the page and the socket are the same service and the hostname is not known until
+   * the first deploy has already happened.
+   *
+   * One predicate for both halves, so the two cannot mean different things by the same string.
+   */
+  const raw = serverParam === null ? buildDefault : serverParam;
+  const url = resolveServerUrl(meansThisOrigin(raw) ? null : raw);
 
   const conditions = parseNetFlag(params.get('net'));
 
@@ -92,6 +101,12 @@ export function parseJoinOptions(search: string): HandshakeOptions | null {
       (conditions === NET_PERFECT ? '' : ` with simulated conditions: ${describeConditions(conditions)}`),
   );
   return options;
+}
+
+/** See `parseJoinOptions`. The one place the "same origin" spellings are listed. */
+function meansThisOrigin(raw: string): boolean {
+  const v = raw.trim();
+  return v === '' || v === '1' || v === '/ws';
 }
 
 /**

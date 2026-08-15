@@ -170,6 +170,8 @@ export class Server {
       tlsCertPath: cfg.tlsCertPath,
       tlsKeyPath: cfg.tlsKeyPath,
       conditions: cfg.conditions,
+      // One origin for the page and the socket. See `WsServerOptions.staticDir`.
+      staticDir: cfg.staticDir,
       onConnection: (link) => this.accept(link),
     });
   }

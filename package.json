@@ -6,7 +6,11 @@
   "description": "OPERATOR - arena FPS. Milestone 9: the simulation leaves the browser.",
   "scripts": {
     "dev": "vite",
-    "build": "npm run check && vite build",
+    "//build": "The deployable artefact: the gate, then the client into dist/, then the server into dist-server/. A managed host runs this as its build command and `npm start` afterwards, so both halves have to come out of one script.",
+    "build": "npm run check && vite build && npm run build:server",
+    "//start": "What a managed host runs. `serve.js` listens and does not stop, and with STATIC_DIR (default `dist`) it serves the built client on the same port — one origin for the page and the socket.",
+    "start": "node dist-server/serve.js",
+    "build:client": "vite build",
     "preview": "vite preview",
     "//server": "Bundled for Node with the bundler already in the stack. See vite.server.config.ts for why it is not run from source.",
     "build:server": "vite build --config vite.server.config.ts",
@@ -31,6 +35,9 @@
     "typecheck:client": "tsc -p tsconfig.client.json --noEmit",
     "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
     "check:cosmetics": "node scripts/check-cosmetics.mjs"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "three": "^0.185.1",
