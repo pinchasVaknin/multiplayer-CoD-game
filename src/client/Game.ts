@@ -989,8 +989,19 @@ export class Game {
       return;
     }
 
-    // Dead and waiting: the class arrives with the next body, which is seconds away.
-    if (match.isPlayerDead) {
+    /**
+     * Dead, **and a respawn is actually counting down** (M11 Gate B playtest round 2).
+     *
+     * The test was `isPlayerDead` alone, and "dead" is not the same window as "about to come
+     * back". In Search & Destroy a corpse waits out the whole round; in any mode a player who
+     * dies as the match ends is dead until the summary. The panel sat on screen through all of
+     * it, eating the digit keys, which is the reported *"it is just stuck on the screen"*.
+     *
+     * The respawn timer is the honest window: it is set on death, it runs down, and when it
+     * reaches zero the player is either back on their feet or waiting for something a class
+     * change cannot help with. Either way the panel's job is done.
+     */
+    if (match.isPlayerDead && match.playerRespawnSeconds > 0) {
       this.quickLoadout.show('Select next class');
       this.quickLoadout.update();
       return;

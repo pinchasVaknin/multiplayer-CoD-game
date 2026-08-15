@@ -27,20 +27,21 @@ import type { SmokeField, SmokeVolume } from '../../shared/equipment/SmokeField'
  */
 
 /**
- * Billboards per cloud (M11 Gate B playtest: *"the visual smoke is too thin"*).
+ * Billboards per cloud.
  *
- * Eleven quads at a peak alpha of 0.42 left a cloud you could read a name plate through, which
- * is worse than no smoke at all: `SmokeField.blocksSight` was denying the bots a sight line the
- * player could still see straight down, so the two sides of the same cloud disagreed about what
- * it was for. Eighteen puffs and a higher peak give it a core.
+ * **Eleven, and this number is a frame-time decision rather than a look decision.** Each puff is
+ * a camera-facing quad scaled to the cloud's full radius, so standing beside one it covers the
+ * screen: eleven of them is eleven full-screen blended layers, and the first frame-time run of
+ * this milestone measured p99 climbing 29 -> 40 ms with the pool full.
  *
- * The overdraw this trades against is real and was measured once already — see
- * `SMOKE_DRAW_DISTANCE`, which is the cull that pays for it. Eight clouds is now 144 quads at
- * worst, and the distance cull means the full count only ever applies to clouds close enough to
- * matter. If a frame-time run finds this expensive, the cull distance is the knob, not the
- * density: a thin cloud is a broken mechanic and a culled one is not.
+ * The Gate B playtest reported smoke as *"too thin"* and this was raised to 18 in response —
+ * which was the wrong lever twice over. It doubled the fill cost of the most expensive effect in
+ * the game, and it was treating a symptom whose cause was elsewhere: replicated clouds were
+ * having their age reset on every snapshot, so over the network they never bloomed past about
+ * 5% density however many quads were drawn. See `SmokeField.adopt`. With that fixed a cloud
+ * reaches full density on eleven, as it always did in single-player.
  */
-const SMOKE_PUFFS = 18;
+const SMOKE_PUFFS = 11;
 const BLAST_POOL = 6;
 
 /**
@@ -141,13 +142,14 @@ export class EquipmentFx {
         mesh.renderOrder = 3;
         cloudGroup.add(mesh);
         puffs.push(mesh);
-        // The first third sit near the middle, so the cloud has a core rather than being a
-        // hollow shell of billboards with a hole to shoot through.
-        const spread = p < SMOKE_PUFFS / 3 ? 0.32 : 0.82;
+        // The first third sit near the middle, so the cloud has a core rather than a hollow
+        // shell of billboards with a hole to shoot through. Costs nothing: the same quads,
+        // redistributed.
+        const spread = p < SMOKE_PUFFS / 3 ? 0.34 : 0.75;
         offsets[p * 4] = this.rng.range(-spread, spread);
-        offsets[p * 4 + 1] = this.rng.range(-0.5, 0.62);
+        offsets[p * 4 + 1] = this.rng.range(-0.55, 0.7);
         offsets[p * 4 + 2] = this.rng.range(-spread, spread);
-        offsets[p * 4 + 3] = this.rng.range(0.85, 1.5);
+        offsets[p * 4 + 3] = this.rng.range(0.7, 1.35);
       }
       this.group.add(cloudGroup);
       this.clouds.push({ group: cloudGroup, puffs, offsets, volume: null });
@@ -289,9 +291,7 @@ export class EquipmentFx {
         puff.scale.setScalar(radius * scale);
         puff.quaternion.copy(camera.quaternion);
         const mat = puff.material;
-        // 0.42 was the thin cloud. Individually still translucent — a puff you cannot see
-        // through at all reads as a wall — but eighteen of them now stack to opaque.
-        if (mat instanceof THREE.MeshBasicMaterial) mat.opacity = clamp01(density * 0.72);
+        if (mat instanceof THREE.MeshBasicMaterial) mat.opacity = clamp01(density * 0.5);
       }
     }
   }

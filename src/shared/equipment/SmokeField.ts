@@ -89,6 +89,40 @@ export class SmokeField implements SightOccluder {
     return null;
   }
 
+  /**
+   * Adopt a replicated cloud, **preserving where it is on its own curves** (M11 Gate B).
+   *
+   * `spawn` is for a cloud that has just been thrown: it starts the clock at zero. A replicated
+   * cloud has usually been burning for seconds, and rebuilding it with `spawn` every snapshot —
+   * which is what `MatchEquipment.applyReplicatedSmoke` did — resets `age` to 0 twenty times a
+   * second. `density` is `age / bloom`, so it never got past about 0.05, and `currentRadius`
+   * never past 36% of the authored figure.
+   *
+   * That is the whole of the reported *"the visual smoke is too thin"*, and it was only ever
+   * true over the network: a locally simulated cloud ages normally. It also made the picture
+   * disagree with the mechanic in the worst possible direction — the server was rejecting sight
+   * lines through a cloud the player could see straight through.
+   *
+   * `total` and `bloom` come from the authored def rather than the wire, because smoke is the
+   * only thing that makes a cloud and its numbers are the same on both sides. Age is then
+   * derived from what *is* on the wire, which is the remaining life.
+   */
+  adopt(
+    x: number,
+    y: number,
+    z: number,
+    radius: number,
+    remainingSeconds: number,
+    totalSeconds: number,
+    bloomSeconds: number,
+  ): SmokeVolume | null {
+    const v = this.spawn(x, y, z, radius, remainingSeconds, bloomSeconds);
+    if (v === null) return null;
+    v.total = Math.max(totalSeconds, remainingSeconds);
+    v.age = Math.max(0, v.total - remainingSeconds);
+    return v;
+  }
+
   clear(): void {
     for (const v of this.volumes) v.active = false;
   }

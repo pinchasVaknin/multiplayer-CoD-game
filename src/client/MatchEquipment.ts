@@ -11,7 +11,7 @@ import { Rng } from '../shared/core/Rng';
 import type { CameraRig } from './engine/CameraRig';
 import type { ProceduralAudio } from './engine/ProceduralAudio';
 import { BotThrower, type MutableThrowIntent } from '../shared/equipment/BotThrower';
-import { ALL_EQUIPMENT } from '../shared/equipment/EquipmentDefs';
+import { ALL_EQUIPMENT, SMOKE } from '../shared/equipment/EquipmentDefs';
 import { PEFlag, type ProjectileState, type SmokeState } from '../shared/net/Skirmish';
 import type { Projectile } from '../shared/equipment/Projectile';
 
@@ -306,7 +306,15 @@ export class MatchEquipment {
     field.clear();
     for (const s of smoke) {
       if (s.remainingDs <= 0) continue;
-      field.spawn(s.x, s.y, s.z, s.radius, s.remainingDs / 10, 1);
+      /**
+       * `adopt`, not `spawn` (M11 Gate B playtest).
+       *
+       * `spawn` starts a cloud's clock at zero, and this runs on every snapshot — so a
+       * replicated cloud was permanently one tick old: density stuck near 0.02 and radius at
+       * 36% of the authored size. See `SmokeField.adopt`. The authored life and bloom come from
+       * the def because smoke is the only equipment that makes a cloud.
+       */
+      field.adopt(s.x, s.y, s.z, s.radius, s.remainingDs / 10, SMOKE.smokeSeconds, SMOKE.smokeBloom);
     }
   }
 
