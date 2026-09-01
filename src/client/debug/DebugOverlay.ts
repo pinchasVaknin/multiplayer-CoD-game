@@ -163,6 +163,17 @@ export class DebugOverlay {
   private fSustained: Field;
   private fPeaks: Field;
 
+  /**
+   * The × was pressed. Set by `Game` after the world is built (playtest round 4, B1).
+   *
+   * The button used to call `setVisible(false)` on itself, which is why the report said
+   * *"clicking closes it, but coming back to the game reopens it"*: `Game` held a second copy
+   * of "is this open" for the pause bookkeeping, the × never touched it, and the resume put
+   * back an intent the player had already cancelled. **The surface does not decide whether it
+   * is shown.** It asks, and the one owner of that fact answers on the next frame.
+   */
+  onDismiss: (() => void) | null = null;
+
   constructor(host: HTMLElement, ctx: DebugContext) {
     this.ctx = ctx;
     this.stats = ctx.stats;
@@ -186,7 +197,7 @@ export class DebugOverlay {
     close.className = 'dbg-close';
     close.setAttribute('aria-label', 'Close the debug overlay');
     close.textContent = '×';
-    close.addEventListener('click', () => this.setVisible(false));
+    close.addEventListener('click', () => this.onDismiss?.());
     header.append(headTitle, headHint, close);
     this.root.appendChild(header);
 
@@ -382,7 +393,15 @@ export class DebugOverlay {
     return this.visible;
   }
 
+  /**
+   * The only writer of `root.hidden`, and now called **every frame** from one place.
+   *
+   * Idempotent, which is what makes that affordable: showing refreshes every panel, and doing
+   * that sixty times a second would put the overlay squarely in the frame times it exists to
+   * report. The same shape `Scoreboard.setOpen` and `QuickLoadout.hide` already have.
+   */
   setVisible(on: boolean): void {
+    if (on === this.visible) return;
     this.visible = on;
     this.root.hidden = !on;
     if (on) this.for(this.panels, (p) => p.refresh());

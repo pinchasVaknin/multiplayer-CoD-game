@@ -5395,6 +5395,15 @@ Measured headlessly, this session:
 | S&D completion, 3 seeds, with the pickup grace | 65.2 s / 86.2 s / 97.8 s, all complete |
 | `npm run check` | boundaries, cosmetic audit and all three typecheck targets pass |
 
+Repeated twice more on the same tree, because this harness is wall-clock paced and one run of it
+is a sample rather than a fact:
+
+| Run | Quick loadout | Alive (must be 0) | Tab while dead | Into live |
+|---|---|---|---|---|
+| 1 | 10 851 tk / 34 win | **0** | 3 639 / 7 278 | 1 |
+| 2 | 10 634 tk / 32 win | **0** | 3 432 / 7 057 | 0 |
+| 3 | 10 848 tk / 33 win | **0** | 3 697 / 7 274 | 0 |
+
 **Not measured here, and it needs a browser.** Every client-side fix above is reasoned from the
 code and compiles, but the preview pane never fires `requestAnimationFrame`, so none of it has
 been *seen*: the self-hit's absence, the bomb on its carrier, the summary countdown, the loadout
@@ -5445,13 +5454,248 @@ after `hide()`, digits 1 and 3 both fall through.
 The round-2 fix — track the respawn countdown rather than `isPlayerDead` — was already correct.
 Traced end to end over a real connection, one line per transition:
 
-| t | where | phase | dead | panel |
+| t | where | phase | dead | window |
 |---|---|---|---|---|
-| 25 | arena | LIVE | no | hidden |
-| 39 | arena | LIVE | yes, 4.4 s left | **shown** |
-| 44 | arena | LIVE | no | hidden |
-| 47 | dunes | WARMUP | no | **shown** |
-| 57 | dunes | LIVE | no | hidden |
+| 25 | arena | LIVE | no | closed |
+| 39 | arena | LIVE | yes, 4.4 s left | **open** |
+| 44 | arena | LIVE | no | closed |
+| 47 | dunes | WARMUP | no | **open** |
+| 57 | dunes | LIVE | no | closed |
 
 Which is the requested behaviour exactly: the ten-second pre-match window and the 4.5 s respawn
 window, and nothing in between.
+
+**Corrected at round 4.** The last column originally read "panel", and it did not describe a
+panel — it described the *window*, which is what `updateQuickLoadout` computes. The two were the
+same thing everywhere except on screen: `.ql` sets `display: flex` and had no `[hidden]`
+companion rule, so the attribute this table was reading went on and off all match without hiding
+anything. Every row above is still true of the derivation and none of them was ever true of the
+pixels. See "Three surfaces, and the panel that was never hidden" below; the reading to take from
+it is that a trace of a predicate is not a trace of a picture, and the column heading should say
+which one it is.
+
+## Playtest round 4 — three surfaces, and the panel that was never hidden
+
+B1, B6 and B13. The brief's hypothesis was that all three are one shape — *a visible surface
+whose visibility is written in two different places, or is not written at all at the moment it
+needed to change* — and two of the three are exactly that. The third turned out to be a shape
+one layer further down, and it is the interesting one, because every measurement anybody has
+ever taken of it was green.
+
+### The invariant, first, because it is what the three fixes have in common
+
+**Every HUD surface has exactly one writer, and its visibility is a pure function of state that
+outlives the surface, evaluated once per frame from one place.**
+
+`shared/ui/HudSurfaces.ts` holds the rules — `scoreboardOpen`, `quickLoadoutWindow`,
+`debugOverlayVisible` and the death-screen countdown they read — and `Game.updateHudSurfaces` is
+the one place that evaluates them, beside the vote overlay's tick in the render pass. They are in
+`shared/` for the reason `pickSpectatorTarget` is: this process can run them, and a claim about a
+panel is otherwise a browser claim for ever.
+
+Round three established half a rule — *a hidden surface never consumes a key*. This is the other
+half, and the sharper statement of it is that **a tick is not a frame**. Anything written from
+`simulate` stops being written the moment the screen leaves `MATCH`, and a surface drawn every
+frame from a value updated only on ticks is a latch waiting for somebody to pause.
+
+### B13 — the derivation was right, the panel was never hidden
+
+*"The class-select square does not disappear after respawn."*
+
+Round two fixed this by tracking the respawn countdown rather than `isPlayerDead`. Round three
+traced it over a real connection and published the transitions. This session ran the extracted
+predicate against three headless clients over a full cycle: **0 violations across 34 windows and
+10 851 ticks**, where a violation is the window open while the client is alive and outside the
+pre-match freeze. Every one of those greens is honest. None of them was about the screen.
+
+`.ql` sets `display: flex` and had **no `.ql[hidden]` companion rule.** The `hidden` attribute
+hides an element only because the UA stylesheet says `[hidden] { display: none }`, at the lowest
+specificity there is, and any author-level `display` outranks it. So `QuickLoadout.hide()` set the
+attribute, `shown` went false, `handleDigit` correctly stopped consuming digits — and the panel
+stayed painted from the first `show()` of the session to the end of it. What the player reported
+is not really that it failed to disappear after a respawn; it is that a respawn is the first time
+most players see it appear at all.
+
+The trap is documented twice in this codebase already — `.op-screen[hidden]` in `app.css`, and
+`.hud-mortar[hidden]` ninety lines above `.ql` in the same file, whose comment says *"Required,
+not defensive"* and names the exact failure. The quick selector's block was written afterwards
+without it. `.ql__row` had the same hole, which would have painted the rows of class slots nobody
+has authored.
+
+Every surface that hides through the attribute was audited in the same pass. Two gaps, both in
+that block; `.hud`, `.dbg-root`, `.op-screen`, `.op-vote`, `.op-loading`, `.eom`, `.eom__xp`,
+`.hud-mortar`, `.dbg-botlabels` and `.sb__row` all carry theirs, and the scoreboard hides through
+an explicit `.sb--on` class rather than the attribute at all.
+
+**The lesson is about the measurement, not the CSS.** Round three's table has a column headed
+"panel" that was really the window, and no probe in this project can tell those apart, because
+none of them renders. That is what the "needs a browser" list is for, and it is why round three's
+section has been amended rather than left standing.
+
+### B1 — two copies of "is the debug overlay open", and the × wrote one of them
+
+*"The × closes it, but coming back to the game reopens it."*
+
+`Game.overlayWasOpenBeforePause` was a second copy of `DebugOverlay.visible`, kept so that
+resuming from a pause could put the panel back where it was. The × called `setVisible(false)` on
+the overlay itself and never touched the copy, so opening the overlay from the pause menu, closing
+it with the ×, and resuming ran `restoreOverlayAfterPause()` against a `true` the player had
+already cancelled. The panel came back on the way into the game, exactly as reported.
+
+The fix is one value instead of two booleans, and it is a **tri-state** rather than a flag because
+the two booleans were carrying more than one bit between them:
+
+| `debugRequest` | Written by | Visible in `MATCH` | Visible in `PAUSED` |
+|---|---|---|---|
+| `'none'` | the ×, Escape, the pause button when it is up | no | no |
+| `'inMatch'` | the demotion on resume | yes | **no** — M5's rule about two modal panels |
+| `'onPause'` | the pause menu's button | yes | yes — the tuning sliders need a cursor |
+
+Every documented behaviour survives, including the two that pull in opposite directions: the
+overlay goes off screen for the duration of a pause it did not ask for, and it stays up over one
+it did. `hideOverlayForPause` and `restoreOverlayAfterPause` are gone, and nothing is written on
+entering `PAUSED` at all, because the predicate already answers differently there. The request
+lives on `Game` rather than on the overlay because it has to **outlive the surface** — the panel
+belongs to the world and a rotation throws the world away — so `buildWorld` re-binds `onDismiss`
+and seeds the new overlay from the predicate, and a request survives a map change.
+
+`DebugOverlay.setVisible` is idempotent now, which is what makes calling it every frame
+affordable: showing refreshes every tuning panel, and doing that sixty times a second would put
+the overlay squarely inside the frame times it exists to report.
+
+### B6 — a rule moved to the netcode and left its exception behind
+
+*"Tab sticks in multiplayer while you are dead."*
+
+`Input.sampleSpectating` keeps `Btn.Scoreboard` through a death **on purpose**, and has since M4:
+*"the death screen is exactly when you want to look at the board."* `NetClient.neutralise` is the
+netcode's restatement of that same rule, written so both halves of a networked match read it from
+one place — and it zeroed the whole bitfield. The standing authority-migration failure in
+miniature: the rule crossed to the wire and the exception did not. Over the network the one fact
+the scoreboard is derived from was forced to nothing the moment the server said you were dead.
+
+Measured through the browser's own seam — `applyNonReplayed`, where `MatchWorld` hands the
+neutralised command to `ClientMatch`, and therefore the only place the loss is visible. Red first:
+the "before" column is a run of this tree with the one line reverted and everything else, the
+probe included, left alone.
+
+| Probe | Red (the bug restored) | Green |
+|---|---|---|
+| Tab held on commands reaching the sim | 28 415 ticks | 33 231 ticks |
+| ...of them **while dead** | **0** of 5 296 dead ticks | **3 639** of 7 278 dead ticks |
+| Scoreboard open while dead | **0** ticks | **3 639** ticks |
+| The run | **FLOW CHECK FAILED** | passed |
+
+Half, because the harness holds Tab on a 50% duty cycle — two seconds down, two up, so the probe
+sees both edges either side of a 4.5 s death rather than sampling one level. The hold sits
+**outside** the `alive` gate in `HeadlessClient.sample`, deliberately: a client that only pressed
+Tab while alive could never have found a bug whose whole content is that the bit is discarded
+while dead.
+
+Keeping it costs no divergence and cannot. Nothing in `PlayerController.step` or `Weapons.step`
+reads bit 6; `NetPlayer.step` does not consume a dead player's command at all; and the frozen
+path's `lastButtons` is only ever asked whether the trigger was down.
+
+**The second half of B6 is the latch, and it is why the write moved.** The scoreboard's only
+writer was the last line of `ClientMatch.simulate`, and `simulate` is reached from `net.update()`,
+which `Game.simulate` calls only while the screen is `MATCH`. Pausing stops the tick;
+`Input.clearHeld` then drops the Tab bit into a loop that is no longer running; the board stays up
+over the pause screen holding a key nobody is pressing. It is derived once per frame now, from
+`scoreboardHeld` — itself derived from the `prevButtons` the match already keeps for edge
+detection, not a new copy of it — and from the screen, which outlives the tick.
+
+### The HUD surface table
+
+The artefact, and the thing that is meant to stop this class of bug coming back. Read the last
+column with B13 in mind: it is where the failure was.
+
+| Surface | Single writer | Derived from | Consumes from input | Hides by |
+|---|---|---|---|---|
+| Scoreboard | `Game.updateHudSurfaces` → `Match.setScoreboardOpen` | `scoreboardOpen` — screen, editor, held Tab | `Btn.Scoreboard`, a level read from the command (S4.2). Consumes nothing | `.sb--on` class |
+| Quick loadout | `Game.updateHudSurfaces` → `show`/`hide` | `quickLoadoutWindow` — respawn countdown, or round-one `WARMUP` | digits 1-5; **consumed** while shown, refused while hidden | `[hidden]` + `.ql[hidden]` |
+| Debug overlay | `Game.updateHudSurfaces` → `setVisible` | `debugOverlayVisible` — `debugRequest` and the screen | Escape closes it and stops there. The × asks through `onDismiss` | `[hidden]` + `.dbg-root[hidden]` |
+| Vote overlay | `VoteOverlay.apply`; `hide()` on migration (round 3) | the server's broadcast vote phase | digits 1-5, first refusal, only while not hidden | `[hidden]` + `.op-vote[hidden]` |
+| Pause | the `PAUSED` state's enter/exit | `Game.state` | Escape; its buttons take DOM focus, which is why `hide()` blurs | `[hidden]` + `.op-screen[hidden]` |
+| Summary | the `SUMMARY` state's enter/exit | `Game.state` | its own buttons | `[hidden]` + `.eom[hidden]` |
+| Mortar overlay | `MortarOverlay.open`/`cancel`/`confirm` | whether a mortar mark is being placed | Fire confirms, Escape cancels above the pause branches | `[hidden]` + `.hud-mortar[hidden]` |
+
+One honest footnote on the first row: `MatchHud.setVisible(false)` and `resetForMatch()` also
+force the board shut. They are teardown rather than a second opinion — both only ever write
+`false`, and only in states where the predicate already answers `false` — but they are the shape
+that becomes a second writer the day somebody makes one of them write `true`.
+
+Three of the seven moved into the one per-frame pass this session. The other four are each already
+a single writer driven by an event that cannot stop arriving, and moving them would be churn; what
+the table buys is that the next surface has somewhere to be added and a last column somebody has
+to fill in.
+
+### Measured, and what a probe now blocks on
+
+`npm run skirmish`, three headless clients, full timings, one complete cycle through a vote, a
+migration and a TDM to the clock.
+
+| Probe | Result |
+|---|---|
+| Quick loadout window | 10 851 ticks over **34 windows** (7 269 respawn / 3 582 pre-match) |
+| ...open while alive and out of the freeze | **0** — the B13 assertion, and it blocks |
+| Tab surviving `neutralise` while dead | **3 639** of 7 278 dead ticks — the B6 assertion, and it blocks |
+| Spectator invariants (unchanged) | 7 806 selections while dead, 0 self / 0 enemy / 0 dead |
+| Divergence checker (unchanged) | 0 / 7 372 per client |
+| `npm run check` | boundaries, cosmetic audit and all three typecheck targets pass |
+
+Both new assertions are written to go **red against the bug rather than green against the
+feature**, and the B6 one was watched red: reverting the single line in `neutralise` and changing
+nothing else drops it to 0 of 5 296 dead ticks and fails the run. Both carry their denominators,
+so a zero that means *"never looked"* fails as loudly as a zero that means *"never violated"* —
+the same property the divergence checker's `hashSamples === 0` branch exists for.
+
+The B13 assertion has **not** been watched red, and that is the honest statement of its limits
+rather than an omission: the bug was in a stylesheet, and no red control available to this process
+can make a predicate fail that was never failing. Its value is prospective — it is the thing that
+will notice the day somebody makes the window itself wrong.
+
+**One number moved, and was isolated before it was believed.** The first run with the probe in
+reported 1 misprediction entering a live match, against a documented 0, which fails §8.9. Isolated
+one variable at a time rather than rebaselined: clean tree **0**; this tree with Tab held **1**;
+this tree with the hold removed **0**; then the same tree with the hold back in, twice, **0** and
+**0**. So it is neither the fixes nor the probe's input — it is noise, which is also what the code
+says it must be, because `Btn.Scoreboard` reaches no branch in `PlayerController.step`. This
+harness is wall-clock paced rather than seeded and no two runs agree about anything else either:
+deaths and spectator picks move ten per cent between runs of the same tree. The earlier
+*"mispredictions into live: 0, every run"* should be read as 0 on four runs in five, not as a
+constant.
+
+### Needs a browser
+
+Nothing above was seen. `HeadlessClient` drives `NetClient` and `Prediction` and builds no
+`ClientMatch`, and the preview pane never fires `requestAnimationFrame`, so every claim here is
+about a rule and none is about a pixel — which is precisely the gap B13 lived in for two rounds.
+
+- **B13.** Start a match, die, wait out the respawn. The class panel must **go away** when the body
+  comes back, and again when the pre-match ten seconds expire. Then press 3, 4 and 5 while alive: a
+  killstreak must fire, which is the panel proving it is not merely invisible.
+- **B1.** Pause, open the debug overlay from the pause menu, click the ×, resume — it must stay
+  closed. Then: pause, open it, resume with it up (it should follow you in), pause again (it should
+  go off screen), resume (it should come back). Then press Escape with it open in a match: it
+  closes, and you are **not** dropped onto the pause screen.
+- **B6.** In multiplayer, hold Tab across the moment of death: the board must stay up through the
+  death screen and close on release. Press Tab while dead: it must open. Then pause while holding
+  Tab and let go — the board must not be up behind the pause menu.
+- **The `.ql[hidden]` fix, and one pass over the surfaces that share the trap's shape.** Cycle the
+  class panel and the mortar map both up and down, because the audit was a grep and a grep cannot
+  see specificity.
+
+Unchanged from the earlier list: the arena-return residual of 1-3 sub-25 cm mispredictions, and
+everything in "Open, and all of one kind" above.
+
+### Found while here
+
+- `PLAYER_RESPAWN_SECONDS` in `ClientMatch` was a literal `4.5` beside `BotDirector`'s
+  `RESPAWN_SECONDS`, also `4.5` — the same fact written twice, and the death-screen countdown is
+  what the class panel's window is derived from, so the day the two drifted the panel would have
+  closed early or late with nothing to point at. It reads the shared one now, which is also what
+  lets the harness step the same display timer the client does.
+- `Game.updateHudSurfaces` briefly declared a local named `window`. `scripts/check-boundaries.mjs`
+  catches that in `server/` and cannot catch it in `client/`, where this very file legitimately
+  names the global in `onResize`. Renamed. Not a defect; recorded because the check found it in one
+  partition and could not have found it in the other.

@@ -41,6 +41,13 @@ import { Harness } from './debug/Harness';
 import { MatchHarness } from './debug/MatchHarness';
 import { Speedometer } from './debug/Speedometer';
 import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStates';
+import {
+  debugOverlayVisible,
+  quickLoadoutWindow,
+  scoreboardOpen,
+  type DebugOverlayRequest,
+  type HudSurfaceState,
+} from '../shared/ui/HudSurfaces';
 import type { Match } from './ClientMatch';
 import type { MatchResult } from '../shared/modes/GameMode';
 import type { XpReport } from '../shared/meta/XpRules';
@@ -374,8 +381,21 @@ export class Game {
   private lastRenderMs = performance.now();
   /** Set when the mode declares the match over; SUMMARY is entered from the render pass. */
   private pendingSummary = false;
-  /** Whether F1 was open when the match was paused, so resuming can put it back. */
-  private overlayWasOpenBeforePause = false;
+  /**
+   * The player's standing request for the debug overlay (playtest round 4, B1).
+   *
+   * **The only copy of "is the overlay wanted" there is.** It replaces
+   * `overlayWasOpenBeforePause`, which was a second copy of `DebugOverlay.visible` that the ×
+   * did not write — so the pause bookkeeping restored an intent the player had cancelled and
+   * the panel came back on the way into the game. It lives here rather than on the overlay
+   * because it has to outlive the surface: the overlay belongs to the world and a rotation
+   * throws the world away.
+   *
+   * Written from exactly four inputs — the pause menu's button, the overlay's ×, Escape, and
+   * the demotion on resume — and read by `updateHudSurfaces`, which is the one caller of
+   * `setVisible`. See `shared/ui/HudSurfaces.ts`.
+   */
+  private debugRequest: DebugOverlayRequest = 'none';
   /** Where the settings screen's Back button goes. Captured on entry (M8). */
   private settingsReturn: GameStateId = 'MENU';
   /** Where Back from the loadout editor goes. Captured on entry. See the LOADOUT state. */
@@ -819,10 +839,12 @@ export class Game {
         // recapturing the cursor the player just released.
         this.input.armPointerLock(false);
         this.input.exitPointerLock();
-        // Everything else on screen goes away. The overlay is interactive DOM over a
-        // modal screen, which is exactly the clash the pause menu was reported for; the
-        // pause menu has a button to bring it back deliberately.
-        this.hideOverlayForPause();
+        // The overlay is interactive DOM over a modal screen, which is exactly the clash the
+        // pause menu was reported for, so it goes off for the pause — and the pause menu has
+        // a button to bring it back deliberately. Nothing is written here to arrange that:
+        // `debugOverlayVisible` returns false for an `'inMatch'` request on this screen, and
+        // true again the moment the player resumes. The request is never touched, so there is
+        // nothing for the resume to have to remember.
         this.screens.pauseMenu.show();
       },
       exit: (to) => {
@@ -973,53 +995,67 @@ export class Game {
   }
 
   /**
-   * Show or hide the quick class selector (M11 Gate B).
+   * Every HUD surface this class owns, decided once per frame from one place.
+   *
+   * This is the invariant playtest round 4 asked for, and the three reports it answers were
+   * all the same defect in different costumes: a surface whose visibility was written from
+   * **two** places (the debug overlay, where the × wrote one copy and the pause bookkeeping
+   * the other), or from a place that **stops running** at the moment the answer had to change
+   * (the scoreboard, written from the sim tick, which does not tick while paused).
+   *
+   * The rules themselves are pure functions in `shared/ui/HudSurfaces.ts`, which is what makes
+   * them measurable: `HeadlessClient` builds no `ClientMatch` and has no DOM, so a claim about
+   * a panel is a browser claim — but the rule behind it is an ordinary function the harness can
+   * run over a real connection across death, respawn, round end and migration. Same reasoning,
+   * and the same shape, as `pickSpectatorTarget`.
    *
    * Driven from state every frame rather than opened and closed by events, for the reason
-   * `syncChopperBody` gives about the chopper: the two windows can each end four ways — the
-   * countdown expires, the player respawns, the match ends, the world is torn down — and a
-   * latch would have to be cleared correctly on all of them. Asked every frame, there is
-   * nothing to get stuck, and a panel stuck on screen would be one eating the digit keys for
-   * the rest of the match.
+   * `syncChopperBody` gives about the chopper: each window can end four ways — the countdown
+   * expires, the player respawns, the match ends, the world is torn down — and a latch would
+   * have to be cleared correctly on all of them. Asked every frame, there is nothing to get
+   * stuck, and a panel stuck on screen is one eating the digit keys for the rest of the match.
    */
-  private updateQuickLoadout(): void {
-    const match = this.world?.match;
-    if (match === undefined || this.state !== 'MATCH' || this.loadoutOverlay) {
+  private updateHudSurfaces(): void {
+    const state = this.hudSurfaceState();
+
+    // `classWindow`, not `window`: this file legitimately names the browser global in
+    // `onResize`, and shadowing it here would be a trap for the next person to add a line.
+    const classWindow = quickLoadoutWindow(state);
+    if (classWindow === 'none') {
       this.quickLoadout.hide();
-      return;
+    } else {
+      // The caption is not decoration: "SELECT CLASS" during the pre-match freeze and "SELECT
+      // NEXT CLASS" while dead are different promises about when the rifle arrives.
+      this.quickLoadout.show(classWindow === 'respawn' ? 'Select next class' : 'Select class');
+      this.quickLoadout.update();
     }
 
-    /**
-     * Dead, **and a respawn is actually counting down** (M11 Gate B playtest round 2).
-     *
-     * The test was `isPlayerDead` alone, and "dead" is not the same window as "about to come
-     * back". In Search & Destroy a corpse waits out the whole round; in any mode a player who
-     * dies as the match ends is dead until the summary. The panel sat on screen through all of
-     * it, eating the digit keys, which is the reported *"it is just stuck on the screen"*.
-     *
-     * The respawn timer is the honest window: it is set on death, it runs down, and when it
-     * reaches zero the player is either back on their feet or waiting for something a class
-     * change cannot help with. Either way the panel's job is done.
-     */
-    if (match.isPlayerDead && match.playerRespawnSeconds > 0) {
-      this.quickLoadout.show('Select next class');
-      this.quickLoadout.update();
-      return;
-    }
-    /**
-     * The pre-match freeze — round one's ten seconds, and only that.
-     *
-     * `flow.currentPhase` rather than `inputFrozen`, which is also true during the round-end
-     * hold: offering a class change over a decided round would be offering one for a body that
-     * is about to be reset anyway, and in Search & Destroy it would be up during the summary of
-     * the round that just killed you.
-     */
-    if (match.flow.currentPhase === 'WARMUP' && match.flow.round <= 1) {
-      this.quickLoadout.show('Select class');
-      this.quickLoadout.update();
-      return;
-    }
-    this.quickLoadout.hide();
+    const match = this.world?.match;
+    if (match !== undefined) match.setScoreboardOpen(scoreboardOpen(state));
+
+    const overlay = this.world?.debug.overlay;
+    if (overlay !== undefined) overlay.setVisible(debugOverlayVisible(state));
+  }
+
+  /**
+   * This frame's answer to everything `shared/ui/HudSurfaces.ts` asks about.
+   *
+   * Rebuilt per frame rather than kept as a field, because every value in it is already owned
+   * somewhere else and a retained copy would be exactly the second writer this removed.
+   */
+  private hudSurfaceState(): HudSurfaceState {
+    const match = this.world?.match;
+    return {
+      screen: this.state,
+      hasWorld: match !== undefined,
+      editorOpen: this.loadoutOverlay,
+      playerDead: match?.isPlayerDead ?? false,
+      respawnSeconds: match?.playerRespawnSeconds ?? 0,
+      phase: match?.flow.currentPhase ?? 'WARMUP',
+      round: match?.flow.round ?? 1,
+      scoreboardHeld: match?.scoreboardHeld ?? false,
+      debugRequest: this.debugRequest,
+    };
   }
 
   /**
@@ -1173,6 +1209,23 @@ export class Game {
       buildProgress: () => this.buildQueue.progress,
       migrationWindows: () => this.migrationWindows,
     });
+
+    /**
+     * The × asks; it does not decide (playtest round 4, B1).
+     *
+     * Bound after construction, like `PauseMenu.setOnLoadout` and `NetSession.onMatchState`,
+     * and for the same reason: the panel is built by the world and the fact it is asking about
+     * outlives the world. Re-bound on every build because the overlay is a new object each
+     * time and `debugRequest` is not.
+     */
+    const overlay = this.world.debug.overlay;
+    overlay.onDismiss = () => {
+      this.debugRequest = 'none';
+    };
+    // A fresh surface starts hidden; the frame pass puts it back up if the request survived a
+    // rotation. Without this the new overlay would show a frame late, which is harmless, and
+    // would also be a second place deciding — which is not.
+    overlay.setVisible(debugOverlayVisible(this.hudSurfaceState()));
   }
 
   /**
@@ -1868,7 +1921,7 @@ export class Game {
      * chunk fewer. See `MapBuildQueue`.
      */
     this.voteOverlay.tick();
-    this.updateQuickLoadout();
+    this.updateHudSurfaces();
     // The post-match return clock. Ticked here rather than by the screen's own timer so it
     // stops with the frame loop and cannot run on in a hidden tab against a server that has
     // long since migrated everybody home.
@@ -2080,10 +2133,11 @@ export class Game {
     // The Esc stack, from the M5 playtest notes: with the overlay open, Esc closes the
     // overlay and stops. It used to fall straight through to "resume", which meant a
     // player closing a panel was thrown back into a firefight.
-    const overlay = this.world?.debug.overlay;
-    if (overlay !== undefined && overlay.isVisible) {
-      overlay.setVisible(false);
-      this.overlayWasOpenBeforePause = false;
+    //
+    // Asked of the predicate rather than of the panel, so "is it on screen" has one answer
+    // here and in `updateHudSurfaces`. Escape writes the request, exactly as the × does.
+    if (debugOverlayVisible(this.hudSurfaceState())) {
+      this.debugRequest = 'none';
       return;
     }
     // Above the pause branches for the same reason the F1 overlay is: a player closing a
@@ -2114,39 +2168,24 @@ export class Game {
   }
 
   /**
-   * The pause screen's debug button. Once the overlay has been opened on purpose it stays
-   * open through the resume, rather than being closed again by the pause book-keeping.
+   * The pause screen's debug button. Toggles the request; the frame pass does the showing.
+   *
+   * A request made here is `'onPause'`, which is what buys the overlay the one screen where
+   * the cursor is free — the tuning sliders are unusable anywhere else, and that is the whole
+   * reason M5 put this button on the pause menu. On resume it demotes to `'inMatch'`, which
+   * is how *"once the overlay has been opened on purpose it stays open through the resume"*
+   * survives without a second flag remembering it.
    */
   private toggleOverlayFromPause(): void {
-    const overlay = this.world?.debug.overlay;
-    if (overlay === undefined) return;
-    overlay.setVisible(!overlay.isVisible);
-    this.overlayWasOpenBeforePause = overlay.isVisible;
+    this.debugRequest = debugOverlayVisible(this.hudSurfaceState()) ? 'none' : 'onPause';
   }
 
   private resumeFromPause(): void {
     if (this.state !== 'PAUSED') return;
+    // Before the transition, so the request describes where the player is going rather than
+    // where they were. See `DebugOverlayRequest`.
+    if (this.debugRequest === 'onPause') this.debugRequest = 'inMatch';
     this.transitionTo('MATCH');
-    this.restoreOverlayAfterPause();
-  }
-
-  /**
-   * Take the F1 overlay off screen for the duration of the pause.
-   *
-   * It is a large, interactive, full-screen panel and the pause screen is modal; two of
-   * those on top of each other is the "UI bugs" the pause menu was reported for. Whether
-   * it was open is remembered so resuming puts the player back where they were.
-   */
-  private hideOverlayForPause(): void {
-    const overlay = this.world?.debug.overlay;
-    if (overlay === undefined) return;
-    this.overlayWasOpenBeforePause = overlay.isVisible;
-    overlay.setVisible(false);
-  }
-
-  private restoreOverlayAfterPause(): void {
-    if (!this.overlayWasOpenBeforePause) return;
-    this.world?.debug.overlay.setVisible(true);
   }
 
   private pauseStatusLine(): string {

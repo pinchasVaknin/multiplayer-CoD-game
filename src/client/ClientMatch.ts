@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { SchedulerConfig } from '../shared/ai/AiScheduler';
-import { BotDirector } from '../shared/ai/BotDirector';
+import { BotDirector, RESPAWN_SECONDS } from '../shared/ai/BotDirector';
 import { BotRenderer } from './ai/BotRenderer';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
 import type { BotTeam } from '../shared/ai/Combatant';
@@ -237,8 +237,17 @@ const bodyScratch: BodyPose = { x: 0, y: 0, z: 0, eyeHeight: DEFAULT_EYE_HEIGHT 
 
 export const PLAYER_NAME = 'OPERATOR';
 
-/** Seconds the player spends dead. Matches the bots' timer, because it is the same rule. */
-const PLAYER_RESPAWN_SECONDS = 4.5;
+/**
+ * Seconds the player spends dead.
+ *
+ * **The server's number, not a copy of it** (playtest round 4). It was a local `4.5` beside
+ * `BotDirector.RESPAWN_SECONDS`'s `4.5` — the same fact written twice, and the death screen's
+ * countdown is what the quick class selector's window is derived from, so the day the two
+ * drifted the panel would have closed early or late with nothing to point at. Reading the one
+ * the server actually respawns on is also what lets `HeadlessClient` step the same display
+ * timer and measure the same window.
+ */
+const PLAYER_RESPAWN_SECONDS = RESPAWN_SECONDS;
 
 /** Heartbeat rate at the low-health threshold and at zero, beats per minute (S6.4). */
 const HEARTBEAT_BPM_CALM = 74;
@@ -1063,6 +1072,23 @@ export class Match {
     return this.playerRespawnTimer;
   }
 
+  /**
+   * Held Tab, as of the last command this match consumed (S4.2, playtest round 4).
+   *
+   * Derived from `prevButtons` rather than latched into a field of its own: the bit is already
+   * kept for edge detection, and a second copy of it would be the second writer this session
+   * exists to remove. The scoreboard's visibility is a pure function of this and the screen —
+   * see `shared/ui/HudSurfaces.ts`.
+   */
+  get scoreboardHeld(): boolean {
+    return isDown(this.prevButtons, Btn.Scoreboard);
+  }
+
+  /** The scoreboard's one writer, called once per frame from `Game.updateHudSurfaces`. */
+  setScoreboardOpen(on: boolean): void {
+    this.ui.setScoreboardOpen(on);
+  }
+
   get isActive(): boolean {
     return this.active;
   }
@@ -1346,9 +1372,15 @@ export class Match {
     if (!this.isNetworked) this.flow.simulate(cmd.tickIndex);
     this.lastModeMs = performance.now() - t0;
 
-    // Held Tab, read from the command rather than from the DOM (S4.2).
-    this.ui.setScoreboardOpen(isDown(cmd.buttons, Btn.Scoreboard));
-
+    /**
+     * The scoreboard used to be written from here, and that was the whole of B6.
+     *
+     * A tick is not a frame. `Game.simulate` stops calling this the moment the screen leaves
+     * `MATCH`, so the board kept whatever the last tick had put there — up, over the pause
+     * screen, holding a key `Input.clearHeld` had already dropped into a loop that was no
+     * longer running. It is derived once per frame in `Game.updateHudSurfaces` now, from
+     * `scoreboardHeld` below and from state that outlives the tick.
+     */
     this.prevButtons = cmd.buttons;
     this.latency.expire(performance.now());
   }

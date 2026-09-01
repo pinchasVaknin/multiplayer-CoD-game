@@ -1,5 +1,5 @@
 import { nowMs } from '../core/Clock';
-import { copyCommand, type InputCommand, type MutableInputCommand } from '../core/InputCommand';
+import { Btn, copyCommand, type InputCommand, type MutableInputCommand } from '../core/InputCommand';
 import { DT } from '../core/Loop';
 import { logger } from '../core/Log';
 import type { PlayerController } from '../player/PlayerController';
@@ -897,6 +897,19 @@ export class NetClient {
    * This is the netcode-side statement of a rule the single-player build already had
    * (`Input.sampleSpectating`). Neither side owns it alone: it lives here so both halves of
    * a networked match read it from one place.
+   *
+   * **Except that it restated the rule and lost its exception** (playtest round 4, B6).
+   * `Input.sampleSpectating` keeps `Btn.Scoreboard` through a death on purpose — the M4 note
+   * that the death screen is exactly when you want to look at the board — and this zeroed the
+   * whole bitfield, so on a networked client the one fact the scoreboard is derived from was
+   * forced to nothing the moment the server said you were dead. The standing
+   * authority-migration failure in miniature: the rule moved here, the exception did not.
+   *
+   * Keeping it costs no divergence and cannot. `Btn.Scoreboard` is presentation: nothing in
+   * `PlayerController.step` or `Weapons.step` reads it, `NetPlayer.step` does not consume a
+   * dead player's command at all, and the frozen path's `lastButtons` is only ever asked
+   * whether the trigger was down. The bit rides the same bitfield as everything else because
+   * S4.2 allows exactly one input path, not because the simulation wants it.
    */
   private neutralise(cmd: InputCommand): InputCommand {
     const frozen = (this.header.flags & SFlag.InputFrozen) !== 0;
@@ -909,7 +922,7 @@ export class NetClient {
     out.moveZ = suppress ? 0 : cmd.moveZ;
     out.yaw = cmd.yaw;
     out.pitch = cmd.pitch;
-    out.buttons = suppress ? 0 : cmd.buttons;
+    out.buttons = suppress ? cmd.buttons & Btn.Scoreboard : cmd.buttons;
     out.sampledAtMs = cmd.sampledAtMs;
 
     // Predict with exactly what the wire will carry. See `quantiseCommandInPlace` — without

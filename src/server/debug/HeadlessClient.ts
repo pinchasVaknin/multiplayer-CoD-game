@@ -33,6 +33,17 @@ import {
   type SpectatorCandidate,
 } from '../../shared/modes/SpectatorTarget';
 import { bombStateCode } from '../../shared/net/Messages';
+import { phaseAt } from '../../shared/net/Messages';
+import { RESPAWN_SECONDS } from '../../shared/ai/BotDirector';
+import {
+  // `debugOverlayVisible` is deliberately absent: it reads only the front-end screen and the
+  // request, and this process has neither. It is on the browser list rather than measured
+  // here under a state sequence it does not depend on.
+  quickLoadoutWindow,
+  scoreboardOpen,
+  stepRespawnDisplay,
+  type HudSurfaceState,
+} from '../../shared/ui/HudSurfaces';
 import { OBJ_TEAM_A, OBJ_TEAM_B, type ObjectiveState } from '../../shared/net/Skirmish';
 import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
 
@@ -220,6 +231,32 @@ export interface HeadlessClientReport {
   /** Frames carrying a friendly UAV sweep, and how many activations were asked for. */
   readonly sweepFrames: number;
   /** §7/§8.21: mode-state hash samples, confirmed mismatches, and the first mismatching tick. */
+  /**
+   * The HUD-surface invariant (playtest round 4, §P1). See `shared/ui/HudSurfaces.ts`.
+   *
+   * Every one of these is a count of ticks over which the *rule* was evaluated against real
+   * replicated state. Nothing here claims a pixel was drawn — this process has no DOM — but
+   * the rule is the half that can be wrong invisibly, and it is the half the three reports
+   * were actually about.
+   *
+   * `quickLoadoutAlive` is the B13 assertion and it is written to go red rather than green:
+   * a panel that outlived the respawn it belongs to is a panel up while the player is alive
+   * and outside the pre-match freeze, which is exactly one comparison.
+   */
+  readonly deadTicks: number;
+  readonly quickLoadoutTicks: number;
+  readonly quickLoadoutRespawnTicks: number;
+  readonly quickLoadoutPrematchTicks: number;
+  readonly quickLoadoutAlive: number;
+  readonly quickLoadoutWindows: number;
+  /**
+   * B6. `scoreboardHeldTicks` is the bit as it survived `NetClient.neutralise` and reached the
+   * sim; `...WhileDead` is the same count restricted to the ticks the server says we are dead,
+   * which is the number that was zero before this session and is the whole of the report.
+   */
+  readonly scoreboardHeldTicks: number;
+  readonly scoreboardHeldWhileDeadTicks: number;
+  readonly scoreboardOpenWhileDeadTicks: number;
   /** §6.8 spectator picks, and the three invariant violations. All three must be zero. */
   readonly spectatePicks: number;
   readonly spectateSelfPicks: number;
@@ -374,6 +411,28 @@ export class HeadlessClient {
   private spectateSelfPicks = 0;
   private spectateEnemyPicks = 0;
   private spectateDeadPicks = 0;
+
+  /**
+   * The HUD-surface probe (playtest round 4, §P1).
+   *
+   * `respawnDisplay` is the death screen's countdown, stepped by the **same shared function**
+   * `ClientMatch` steps — set on the death edge, decremented while dead, zeroed on the respawn
+   * edge. It is modelled rather than replicated because it is a client-side display value: the
+   * server owns *when* the body comes back, and this owns the number describing the wait. The
+   * quick class selector's window is derived from it, so a harness that could not step it could
+   * not evaluate the rule at all.
+   */
+  private respawnDisplay = 0;
+  private deadTicks = 0;
+  private quickLoadoutTicks = 0;
+  private quickLoadoutRespawnTicks = 0;
+  private quickLoadoutPrematchTicks = 0;
+  private quickLoadoutAlive = 0;
+  private quickLoadoutWindows = 0;
+  private lastQuickWindow: 'none' | 'prematch' | 'respawn' = 'none';
+  private scoreboardHeldTicks = 0;
+  private scoreboardHeldWhileDeadTicks = 0;
+  private scoreboardOpenWhileDeadTicks = 0;
   private projectileFrames = 0;
   private readonly remoteSerials = new Set<number>();
   private ownProjectileSeen = 0;
@@ -438,6 +497,16 @@ export class HeadlessClient {
       link: this.link,
       controller: this.controller,
       sample: (tick) => this.sample(tick),
+      /**
+       * The HUD-surface probe rides the browser's own seam (playtest round 4, §P1).
+       *
+       * `applyNonReplayed` is where `MatchWorld` hands the command to `ClientMatch`, and the
+       * command it receives is the **neutralised** one — which is the entire point. B6 was
+       * `neutralise` zeroing `Btn.Scoreboard` along with everything else while dead, so the
+       * only place that can see the bug is the far side of that call. Run once per real tick
+       * and never on a replay, which is also what makes the tick counts honest.
+       */
+      applyNonReplayed: (cmd) => this.observeSurfaces(cmd),
       events: {
         onDamage: (e) => {
           if (e.sourceId === this.net.entityId) {
@@ -954,6 +1023,15 @@ export class HeadlessClient {
       streakEntitiesSeen: this.streakInstanceIds.size,
       peakStreakEntities: this.peakStreakEntities,
       sweepFrames: this.sweepFrames,
+      deadTicks: this.deadTicks,
+      quickLoadoutTicks: this.quickLoadoutTicks,
+      quickLoadoutRespawnTicks: this.quickLoadoutRespawnTicks,
+      quickLoadoutPrematchTicks: this.quickLoadoutPrematchTicks,
+      quickLoadoutAlive: this.quickLoadoutAlive,
+      quickLoadoutWindows: this.quickLoadoutWindows,
+      scoreboardHeldTicks: this.scoreboardHeldTicks,
+      scoreboardHeldWhileDeadTicks: this.scoreboardHeldWhileDeadTicks,
+      scoreboardOpenWhileDeadTicks: this.scoreboardOpenWhileDeadTicks,
       spectatePicks: this.spectatePicks,
       spectateSelfPicks: this.spectateSelfPicks,
       spectateEnemyPicks: this.spectateEnemyPicks,
@@ -1175,6 +1253,19 @@ export class HeadlessClient {
       }
     }
 
+    /**
+     * Hold Tab on a duty cycle, **outside the `alive` gate above** (playtest round 4, B6).
+     *
+     * Deliberately not part of a behaviour: every run should measure this, and a client that
+     * only pressed it while alive could never have found the bug, which was that the bit is
+     * discarded while dead. Two seconds down, two up, so the probe sees both edges either side
+     * of a 4.5 s death rather than sampling one level.
+     *
+     * It perturbs nothing. `Btn.Scoreboard` drives no simulation on either side — see
+     * `NetClient.neutralise` — so holding it changes no prediction, no hit and no score.
+     */
+    if (tick % 240 < 120) buttons |= Btn.Scoreboard;
+
     cmd.moveX = moveX;
     cmd.moveZ = moveZ;
     cmd.yaw = wrap(this.yaw);
@@ -1227,6 +1318,69 @@ export class HeadlessClient {
     this.yaw = Math.atan2(-dx, -dz);
     this.pitch = Math.atan2(dy, Math.hypot(dx, dz));
   }
+
+  /**
+   * Evaluate every extracted HUD-surface rule against this tick's real state (§P1).
+   *
+   * `screen` is `'MATCH'` throughout and that is stated rather than assumed: this process has
+   * no front end, so what is measured here is the rule's behaviour *inside* a match, across
+   * death, respawn, round end and migration. The `PAUSED` and `SUMMARY` arms of the same
+   * predicates are the browser's to confirm, and they are on the list.
+   *
+   * The respawn display is stepped **before** the edges are read, in the order `ClientMatch`
+   * does it: a tick decrements the wait it is already in, and a respawn arriving on the same
+   * tick zeroes it afterwards.
+   */
+  private observeSurfaces(cmd: InputCommand): void {
+    const alive = this.net.localAlive;
+    this.respawnDisplay = stepRespawnDisplay(this.respawnDisplay, !alive, DT);
+    if (!alive && this.aliveLastTick) this.respawnDisplay = RESPAWN_SECONDS;
+    if (alive && !this.aliveLastTick) this.respawnDisplay = 0;
+    this.aliveLastTick = alive;
+
+    const h = this.net.header;
+    const state: HudSurfaceState = {
+      screen: 'MATCH',
+      hasWorld: true,
+      editorOpen: false,
+      playerDead: !alive,
+      respawnSeconds: this.respawnDisplay,
+      phase: phaseAt(h.phase),
+      round: h.round,
+      scoreboardHeld: (cmd.buttons & Btn.Scoreboard) !== 0,
+      debugRequest: 'none',
+    };
+
+    if (!alive) this.deadTicks++;
+    if (state.scoreboardHeld) {
+      this.scoreboardHeldTicks++;
+      if (!alive) this.scoreboardHeldWhileDeadTicks++;
+    }
+    if (scoreboardOpen(state) && !alive) this.scoreboardOpenWhileDeadTicks++;
+
+    // Named `qlWindow` rather than `window`: `scripts/check-boundaries.mjs` bans the bare
+    // identifier in `server/`, and it is right to — a headless process has no such object.
+    const qlWindow = quickLoadoutWindow(state);
+    if (qlWindow !== 'none') {
+      this.quickLoadoutTicks++;
+      if (qlWindow === 'respawn') this.quickLoadoutRespawnTicks++;
+      else this.quickLoadoutPrematchTicks++;
+      /**
+       * B13, and it is written to fail rather than to pass.
+       *
+       * *"The panel does not disappear after respawn"* is, stated as a rule violation, "the
+       * panel is up while this client is alive and outside the pre-match freeze". A frame
+       * counter would have gone green on a panel that was up for the whole match.
+       */
+      if (alive && qlWindow !== 'prematch') this.quickLoadoutAlive++;
+    }
+    if (qlWindow !== this.lastQuickWindow) {
+      if (qlWindow !== 'none') this.quickLoadoutWindows++;
+      this.lastQuickWindow = qlWindow;
+    }
+  }
+
+  private aliveLastTick = true;
 
   /**
    * Track our own liveness, and how far we have moved since coming back.

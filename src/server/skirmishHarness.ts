@@ -823,6 +823,46 @@ function reportFlow(input: FlowReportInput): number {
     );
   }
 
+  /**
+   * The HUD-surface invariant (playtest round 4, §P1). See `shared/ui/HudSurfaces.ts`.
+   *
+   * Two blocking assertions and their denominators, because a zero that means *"never looked"*
+   * reads identically to a zero that means *"never violated"* and only one of them is a pass:
+   *
+   * - **B13** — the quick class selector up while alive and outside the pre-match freeze is
+   *   the panel outliving the respawn it belongs to. Blocking, because a panel that stays up
+   *   eats the digit keys for the rest of the match, which is round three's other half.
+   * - **B6** — Tab surviving `NetClient.neutralise` while dead. Asserted as a *presence*
+   *   rather than an absence: it was zero before this session, and the death screen is exactly
+   *   when the board is wanted.
+   */
+  const surfaceAlive = reports.reduce((n, r) => n + r.quickLoadoutAlive, 0);
+  const surfaceTicks = reports.reduce((n, r) => n + r.quickLoadoutTicks, 0);
+  const surfaceWindows = reports.reduce((n, r) => n + r.quickLoadoutWindows, 0);
+  const surfaceRespawn = reports.reduce((n, r) => n + r.quickLoadoutRespawnTicks, 0);
+  const surfacePrematch = reports.reduce((n, r) => n + r.quickLoadoutPrematchTicks, 0);
+  const deadTicks = reports.reduce((n, r) => n + r.deadTicks, 0);
+  const tabHeld = reports.reduce((n, r) => n + r.scoreboardHeldTicks, 0);
+  const tabHeldDead = reports.reduce((n, r) => n + r.scoreboardHeldWhileDeadTicks, 0);
+  const boardOpenDead = reports.reduce((n, r) => n + r.scoreboardOpenWhileDeadTicks, 0);
+
+  if (surfaceAlive > 0) {
+    problems.push(
+      `${surfaceAlive} tick(s) with the quick class selector up while alive and out of the freeze (B13)`,
+    );
+  }
+  if (deadTicks > 0 && tabHeldDead === 0) {
+    problems.push(
+      `the scoreboard key was discarded on all ${deadTicks} dead tick(s) — neutralise dropped it (B6)`,
+    );
+  }
+  log.info(
+    `hud surfaces: quick loadout ${surfaceTicks} tick(s) over ${surfaceWindows} window(s) ` +
+      `(${surfaceRespawn} respawn / ${surfacePrematch} pre-match), ${surfaceAlive} while alive (must be 0); ` +
+      `Tab held ${tabHeld} tick(s), ${tabHeldDead} of them across ${deadTicks} dead tick(s), ` +
+      `board open ${boardOpenDead} tick(s) while dead.`,
+  );
+
   /** §8.23 case 4. Blocking: an orphaned gunship shoots people. */
   if (opts.dropGunner) {
     if (droppedAtMs === 0) {

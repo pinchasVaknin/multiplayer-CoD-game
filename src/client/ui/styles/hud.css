@@ -1066,6 +1066,24 @@
   pointer-events: none;
 }
 
+/*
+ * **This is playtest round 4's B13**, and the whole of it.
+ *
+ * *"The class panel does not disappear after respawn."* `QuickLoadout.hide()` was correct,
+ * `Game`'s window derivation was correct, and round three measured that derivation end to end
+ * over a real connection — the panel was simply never taken off the screen. `hidden` hides an
+ * element only because the UA stylesheet says `[hidden] { display: none }`, and the
+ * `display: flex` directly above outranks it, so the attribute went on and off all match with
+ * no effect on a single pixel. The first `show()` of a session painted it permanently.
+ *
+ * The identical trap is documented for `.hud-mortar` ninety lines above and for `.op-screen`
+ * in app.css; this block was added afterwards without it. Every other surface that hides
+ * through the attribute was audited in the same pass — see the HUD surface table in PLAN.md.
+ */
+.ql[hidden] {
+  display: none;
+}
+
 .ql__title {
   color: var(--c-text-dim);
 }
@@ -1084,6 +1102,11 @@
   border: 1px solid transparent;
   opacity: 0.62;
   transition: opacity 120ms linear, border-color 120ms linear;
+}
+
+/* Same rule, same reason: `paint()` hides the rows of unauthored class slots. */
+.ql__row[hidden] {
+  display: none;
 }
 
 .ql__row.is-selected {
