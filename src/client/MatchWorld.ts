@@ -358,8 +358,8 @@ export class MatchWorld {
       net.onMatchState = (state) => {
         this.match.flow.applyReplicated(state);
       };
-      net.onLocalState = (health, alive) => {
-        this.match.applyReplicatedSelf(health, alive);
+      net.onLocalState = (health, alive, spawnSerial) => {
+        this.match.applyReplicatedSelf(health, alive, spawnSerial);
       };
 
       /**

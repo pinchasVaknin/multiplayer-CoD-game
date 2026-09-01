@@ -328,9 +328,29 @@ export class NetClient {
    */
   localAlive = true;
 
+  /** See `ownSpawnSerial`. `-1` until our own entity has been seen at all. */
+  get localSpawnSerial(): number {
+    return this.ownSpawnSerial;
+  }
+
   /** Set when this client's own entity reports a new spawn serial. */
   private respawned = false;
-  /** The spawn serial last seen for our own entity. */
+  /**
+   * The spawn serial last seen for our own entity — **the client's whole knowledge of a new
+   * life** (playtest round 4, B3).
+   *
+   * Public, and `respawned` above stays private, because the two are a state and an edge and
+   * only one of them can be shared. `respawned` is consumed and cleared by the reconciler on
+   * the very next owner block, so a second reader would race it and one of the two would
+   * silently see nothing. The serial is the state underneath it: monotone, replicated, and
+   * still true on the tenth snapshot after the spawn, so a reader compares it against its own
+   * last-seen value and cannot miss an edge by being late.
+   *
+   * It matters because `alive` is *not* the same signal. A life that begins without a death —
+   * a Search & Destroy survivor at a round start, a class change cashed during the pre-match
+   * freeze — never moves the alive bit, and everything the client hangs off that transition
+   * simply does not happen. `NetPlayer.spawn` bumps this on every one of them.
+   */
   private ownSpawnSerial = -1;
   private snapshotBytesTotal = 0;
 

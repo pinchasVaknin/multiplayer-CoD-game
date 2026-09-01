@@ -80,10 +80,28 @@ export interface StreakEconomyReport {
    *
    * The reset hangs off death and this is measured off the **spawn**, so a new life that
    * reached the world through some other door shows up here instead of silently inheriting a
-   * wallet. In a respawn mode it is zero; a round-based mode starts a survivor's next life
-   * without killing them, and those are the rows P5's per-life table has to decide about.
+   * wallet. In a respawn mode it must be **0**.
+   *
+   * In a round-based mode it must equal `roundCarryOvers` instead, and that is a decision
+   * rather than a defect: playtest round 4 settled that a Search & Destroy survivor keeps the
+   * kills they banked and stays blocked from re-buying what they already spent, so surviving a
+   * round is worth something. Read the two together — see `roundCarryOvers`.
    */
   dirtyLifeStarts: number;
+  /**
+   * Wallets that were legitimately still full when a round started (round 4, B3/P5).
+   *
+   * Counted at the round boundary itself, from the other side of the same fact: how many rows
+   * were holding a balance or a used set at the moment the round turned over. Every one of them
+   * is about to produce a `dirtyLifeStarts` when its owner is spawned into the new round, so
+   * **`dirtyLifeStarts === roundCarryOvers` is the invariant**, and it fails in both directions
+   * — a wallet that survived a death shows up on the left with nothing to match it, and a
+   * survivor whose wallet was wrongly cleared shows up on the right.
+   *
+   * Deliberately not a flag that suppresses the count. A measurement that silences its own
+   * failure case is a measurement that cannot fail.
+   */
+  roundCarryOvers: number;
   killsBanked: number;
   credited: number;
   spent: number;
@@ -308,6 +326,22 @@ export class StreakLedger {
   }
 
   /**
+   * A round turned over. Count the wallets that are about to survive it, and change nothing.
+   *
+   * The other end of `dirtyLifeStarts`: this is what those carry-overs *should* be, counted
+   * from the round boundary rather than from the spawns it causes. Ordering against those
+   * spawns does not matter, because spawning does not touch a row — `noteLifeStart` only
+   * observes — so the same rows are counted whichever runs first.
+   */
+  noteRoundBoundary(): void {
+    for (const row of this.rows.values()) {
+      if (row.kills + row.credits - row.spent !== 0 || row.used.length > 0) {
+        this.totals.roundCarryOvers++;
+      }
+    }
+  }
+
+  /**
    * A new life reached the world. **An observation, not a write.**
    *
    * Driven from the spawn events, which is a different signal from the death that resets — so
@@ -402,6 +436,7 @@ function blankReport(): StreakEconomyReport {
     lives: 0,
     lifeStarts: 0,
     dirtyLifeStarts: 0,
+    roundCarryOvers: 0,
     killsBanked: 0,
     credited: 0,
     spent: 0,

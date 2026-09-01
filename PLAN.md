@@ -6411,5 +6411,327 @@ pane never fires `requestAnimationFrame`, so it cannot stand in for one either.
   measured here because every TDM life starts with a death. A Search & Destroy survivor's next
   round starts without one, and will carry both the balance and the used set across. That is a
   policy question rather than a bug under B10's literal wording ("until death resets it"), and it
-  is P5's row to decide: `StreakLedger.resetLife` is the single door P5 should hang the
-  spawn-serial signal on, and `dirtyLifeStarts` is the number that will say whether it worked.
+  is P5's row to decide. **Decided in P5, below: the carry-over stays** — surviving a round keeps
+  the wallet and keeps the used set — and `dirtyLifeStarts` gained a second number to be checked
+  against rather than an assertion it could no longer make.
+
+*Two numbers in this section were overtaken by the session below and are left as they were
+measured. The five `npm run harness` scores are no longer a byte-identical control against the
+pre-change baseline, because P5 armed the bots with grenades for the whole match instead of one
+each, which changes the fight; and `postMortemKills`, `thresholdGrants` and `balancePurchases`
+all move with it. The model numbers — 0 negative balances, 0 dirty life-starts, 1 streak bought
+per life at most — are unchanged.*
+
+## Playtest round 4 — a life can start without a death, and only one signal knows it
+
+Covers **B3** ("grenade stock is not refilled after death or elimination; it happens in certain
+modes").
+
+### Why round two's fix was right and still did not reach them
+
+Round two already found this once and fixed it: `MatchEquipment.refillForLife` exists, and its
+comment explains that a networked respawn emits no `player.spawned`, so the refill was split out
+of the event handler and called explicitly. That call is correct. What was wrong was **what
+reaches it** — the trigger, not the fix.
+
+The client asked *"has a dead player stopped being dead"*: `applyReplicatedSelf` ran the per-life
+reset on `alive && this.playerDead`. That is true of a respawn and of nothing else. The server's
+life boundary is not the alive bit at all — it is `PlayerController.spawn` — and there are new
+lives that go through it without the alive bit ever moving:
+
+- **A Search & Destroy survivor at a round start.** The server's `RoundStarted` handler spawns
+  *every* player, living ones included, because a survivor left standing where the last round
+  ended is a free plant. It refills its own copy of their hand, picks them a new spawn point and
+  bumps their spawn serial. The client sees a player who was alive and is still alive, decides
+  nothing has happened, and leaves the hand at whatever the last round ended on.
+- **A class change cashed during the pre-match freeze**, `applyPendingLoadoutNow`, which
+  respawns a standing player on purpose so the class they pressed is the class they start with.
+
+That is the report's *"in certain modes"*, exactly: the modes where a life can begin without a
+death. Round two's own note that *"the spawn-serial bump is the same discontinuity a death
+already produces"* had already named the right signal; nothing outside prediction could see it.
+
+### The bots had it worse, and nobody could have reported it
+
+`BotThrower.respawn` — the function that gives a bot its grenades back — had **exactly one caller
+in the project, and it was on the client**: `MatchEquipment.onSpawned`. `ServerMatch` constructs a
+`BotThrower`, calls `consider` on it every tick, and never once called `respawn`. `stateFor`
+hands a bot that has never thrown a lazily-created `{lethal: 1, tactical: 1}`; `consider`
+decrements it; `pickEquipment` skips a slot at zero. So over a dedicated server **every bot threw
+one lethal and one tactical per match and was unarmed for the rest of it**, in every mode, from
+M9 onward.
+
+Nobody reported it because there is no way to see it. A bot that stops throwing grenades looks
+like a bot that decided not to. This is the standing authority-migration failure in its purest
+form — the simulation moved to the server and the reset stayed behind on the client — and it is
+why B3's fix had to be measured across the whole roster rather than on the reporter's own hand.
+
+### One signal, and what it actually is
+
+The brief asked for one signal rather than a third call site. The honest answer is that it is one
+fact with two transports, because the client that needs it is not running the simulation that
+produces it:
+
+| Where the sim runs | The signal | Why it is the only one |
+|---|---|---|
+| Server, and a single-player client | `EV.PlayerSpawned` | `PlayerController.spawn` emits it, and `NetPlayer.spawn` and `Bot.spawn` are the only two places in the project that put a body back to `alive` — both call it. One door **by construction**, not by inspection |
+| A networked client | the replicated `spawnSerial` | `NetPlayer.spawn` bumps it on the same line, and it crosses the wire already, in the snapshot delta |
+
+`EV.BotSpawned` is deliberately not also subscribed anywhere: round four's streak audit measured
+what happens when it is — 304 life-starts against 154 real ones — because it is a second
+announcement of the same spawn carrying tier detail for the director, not a second spawn.
+
+So `ServerMatch.beginLife` is one `EV.PlayerSpawned` subscription that refills a human's hand or
+a bot's thrower, replacing the refill that used to sit inside `spawnPlayer` — a door that was the
+only one *by inspection*, which is to say a door a second caller would have had to remember to
+copy. On the client, `NetClient` exposes `localSpawnSerial`, `NetSession` sends it beside health
+and liveness, and `ClientMatch.applyReplicatedSelf` compares it against the last one it acted on.
+`respawnNetworked` was renamed `beginLife` for the reason the bug happened: naming it after the
+death it no longer needs is what let the round start be forgotten.
+
+The serial is deliberately read as **state, not as an edge**. `NetClient.respawned` is the edge
+and stays private — the reconciler consumes and clears it on the very next owner block, so a
+second reader would race it and one of the two would silently see nothing. A serial is still true
+on the tenth snapshot after the spawn, so a reader comparing it with its own last-seen value
+cannot miss a life by being late.
+
+No protocol bump. The serial has been on the wire since M10 and nothing about its encoding
+changed; what changed is that something other than the reconciler is allowed to look at it.
+
+### The client was also re-spawning itself over the network, and it hid this bug
+
+`ClientMatch`'s `RoundStarted` subscription ran in both runtimes, and `hardResetRound` calls
+`respawnPlayer`, which runs `selectSpawn` and teleports the local controller to a point **the
+client chose** while the server was putting the body somewhere else. A guaranteed misprediction
+of up to the width of the map, every round, corrected a snapshot later by a camera lurch.
+
+It also concealed B3 by accident: that local `player.spawn` emits `player.spawned`, so a
+networked S&D survivor's grenades *did* sometimes come back — as a side effect of an illegal
+teleport rather than because anything had decided a life had started. Removing the second writer
+without the serial would have turned an intermittent bug into a certain one, which is why the two
+are one change. `hardResetRound` is single-player only now.
+
+### Every per-life fact, and the signal it resets from
+
+The table the brief asked for. "The spawn" means `EV.PlayerSpawned` where the simulation is local
+and the replicated spawn serial where it is not — one fact, two transports, as above.
+
+| Per-life fact | Who resets it | From which signal |
+|---|---|---|
+| Grenades, lethal + tactical (human) | `ServerMatch.beginLife` · `MatchEquipment.refillForLife` | the spawn |
+| Grenades (bot) | `ServerMatch.beginLife` → `BotThrower.respawn` · `MatchEquipment.onSpawned` | the spawn |
+| Cook timer / throw state | `ThrowController.reset`, from those same callers | the spawn |
+| Bot throw cooldown | `BotThrower.respawn`, with the stock | the spawn |
+| Flash blindness | `MatchEquipment.refillForLife` | the spawn |
+| Health | `NetPlayer.spawn` · `Bot.spawn` · `ClientMatch.beginLife` | the spawn |
+| Weapons, magazines, reserve, sights | `NetPlayer.spawn` · `ClientMatch.beginLife` | the spawn |
+| Knife | `ClientMatch.beginLife` | the spawn |
+| Viewmodel slot | `ClientMatch.beginLife` → `showSlot` | the spawn |
+| Queued class change | `ServerMatch.spawnPlayer` · `ClientMatch.applyPendingLoadout` | the spawn |
+| Prediction history | `NetClient.applyOwnerBlock` → `prediction.reset` | the spawn serial |
+| Rewind history | `ServerMatch.spawnPlayer` → `rewind.resetAt` | the spawn |
+| Death screen, respawn clock | `ClientMatch.beginLife` | the spawn |
+| **Streak balance, spent, used set** | `StreakLedger.resetLife` | **death only** — decided below |
+| Streak "already announced" set | `StreakLedger.resetLife`, with the balance | death only |
+| Field-upgrade charge | — | **not per life, by design** |
+| `MatchProgression.killsThisMag` | `EV.PlayerSpawned`, filtered on `PLAYER_ENTITY_ID` | the spawn — **but see "Found while here"** |
+| `PerksRenderer` footstep trail | `EV.PlayerSpawned`, filtered on `PLAYER_ENTITY_ID` | the spawn — **same** |
+
+Two rows deserve their own sentence. The **field-upgrade charge** is not a per-life fact and
+never was: `FieldUpgradeRuntime` charges on sim ticks and pauses while dead, precisely so dying
+does not hand you a free activation. Its `reset()` has no caller anywhere in the project, which
+reads like an oversight and is the opposite of one — but a method with no caller is
+indistinguishable from a signal somebody forgot to wire, which is how this session started, so it
+is written down rather than left to be rediscovered.
+
+The **streak balance** is the row P4 handed over, and it is now a decision rather than a default.
+
+### A round start is not a death, and that is the decision
+
+A Search & Destroy survivor keeps the kills they banked and stays blocked from re-buying a streak
+they already spent. Only dying clears either. That is B10's wording taken literally — *"until
+death resets it"* — and it makes surviving a round worth something, which is what a
+one-life-per-round mode is for.
+
+The consequence is that `dirtyLifeStarts` could no longer be asserted at zero, and a counter
+whose failure case has been quietly excused is a counter that cannot fail. So the ledger counts
+the same thing from the other end: `noteRoundBoundary` counts, at each round turn, the wallets
+that are about to survive it, and **`dirtyLifeStarts === roundCarryOvers`** is the invariant. It
+fails in both directions — a wallet that survived a *death* appears on the left with nothing to
+match it, and a survivor whose wallet was wrongly cleared appears on the right — and the skirmish
+harness blocks on it. Ordering against the spawns the round causes does not matter, because
+spawning does not touch a ledger row.
+
+### The probe, and why it samples at the end of the tick
+
+`LifeStockAudit` counts, for every life that starts, whether it started holding a full slot.
+`ServerMatch.equipmentAudit` is the reading; both harnesses take it.
+
+It samples at the **end of the tick the spawn happened on**, not inside the spawn event, and that
+is what makes it honest: the refill is another subscriber to the same event, so a probe reading
+during the emit would be measuring subscription order rather than the game. At the end of the
+tick the life has been through every system that could have handed it anything, which is the
+state the player actually wakes up in.
+
+`partialStock` is the number, and `lifeStarts` is reported beside it every time, because "0
+partial" out of no lives at all is what a probe that never fired looks like — and this milestone
+has already shipped three of those.
+
+### Measured
+
+Every number below came out of a run in this session. The red control is the probe with the fix
+removed — `beginLife` restored to the pre-fix body, which refilled a human's hand if one had been
+created and did nothing at all for a bot — rebuilt and run against the same seeds, then reverted.
+
+**All five modes, `--matches 2 --asap`, seeds 1-2 on Foundry, bots only.** The claim the brief
+asked for, with its control:
+
+| Mode | Life-starts | Partial stock — **red** | Partial stock — **green** | Empty — red | Grenades held / expected — red |
+|---|---|---|---|---|---|
+| TDM | 291 → 288 | 169 | **0** | 123 | 290 / 582 |
+| Domination | 619 → 660 | 409 | **0** | 323 | 506 / 1238 |
+| Kill Confirmed | 310 → 322 | 202 | **0** | 138 | 280 / 620 |
+| Free-for-All | 228 → 246 | 96 | **0** | 62 | 298 / 456 |
+| Search & Destroy | 80 → 80 | 12 | **0** | 3 | 145 / 160 |
+| **All five** | **1528 → 1596** | **888** | **0** | **649** | **1519 / 3056** |
+
+**888 of 1528 life-starts began holding less than a full slot, and 649 began holding nothing at
+all. After: 0 of 1596**, and `observedStock` equals `expectedStock` exactly in every one of the
+ten runs — 3192 grenades against 3192, which is the stronger statement, because a fix that
+refilled the wrong slot would clear `partialStock` and not that.
+
+The life-start counts are close but not identical on either side, and that is the change reaching
+the simulation rather than a probe wobbling: armed bots kill differently, so the same seed is a
+different fight. It is also why P4's byte-identical score control no longer holds — see below.
+
+**`npm run harness` — 5 matches, seeds 1-5, TDM on Foundry.**
+
+| | |
+|---|---|
+| Life-starts examined / with partial stock | 722 / **0** |
+| Grenades held against expected | 1444 / 1444 |
+| Streak life-starts inheriting a balance / round carry-overs | 0 / 0 |
+| Negative balances / kill-anchor resyncs | **0 / 0** |
+| Kills banked, against 683 scored | 683 |
+
+Scores: **75-59, 75-66, 62-75, 75-66, 60-75**, against P4's 75-61, 66-75, 44-75, 69-75, 75-64 on
+the same seeds. **The regression control is deliberately broken and that is the result.** P4 could
+claim byte-identical scores because nothing it changed touched the simulation; this session put
+grenades back in ten bots' hands for the whole match instead of one each, and a fight in which
+grenades keep arriving is a different fight. Every match still completes, still reaches a score
+limit, and the four model invariants above are unchanged. `postMortemKills` moved 1 → 5 and
+entitlement per life 75 → 93 threshold / 38 → 43 balance, all in the direction more lethal bots
+predict.
+
+**`npm run server -- --mode SND --matches 5`, for the decision.** `dirtyLifeStarts` against
+`roundCarryOvers`, per match: **5/5, 3/3, 1/1, 3/3, 4/4** — equal in all five, over 190
+life-starts, with 0 partial stock. Every wallet that survived into a new life survived a *round
+boundary*; none survived a death. That is the S&D policy measured rather than asserted, and it is
+the invariant the skirmish harness now blocks on.
+
+**`npm run skirmish` — 3 headless clients, real server, real wire, TDM.** This is the only place a
+**connected human's** grenades are measured, because the local harness seats no humans.
+
+| | Red | Green |
+|---|---|---|
+| Life-starts examined | 100 (22 human, 78 bot) | 110 (23 human, 87 bot) |
+| With partial stock | **48** | **0** |
+| Started empty | 33 | **0** |
+| Grenades held / expected | 163 / 244 | **266 / 266** |
+| Flow check | **FAILED** on the new assertion | PASSED |
+| Streak life-starts inheriting a balance / round carry-overs | 0 / 0 | 0 / 0 |
+
+**`npm run skirmish -- --vote 4` — the same three clients, in Search & Destroy.** The mode the
+report named, over a real wire, with humans in it:
+
+| | |
+|---|---|
+| Life-starts examined | **53** (12 human, 41 bot) |
+| With partial stock / empty | **0 / 0** |
+| Grenades held / expected | **130 / 130** |
+| Streak life-starts inheriting a balance | **4** |
+| Round-boundary carry-overs | **4** |
+| Flow check | PASSED |
+
+Those last three rows are the decision, and this is the only run in the session where the
+invariant is exercised at a value other than zero: four wallets crossed a round boundary, and
+four wallets were counted crossing it — two different signals, one read at the spawn and one at
+the round turn, agreeing. Every other run has both at 0 because a Team Deathmatch life always
+begins with a death. A wallet that had crossed a *death* would have moved the first number and
+not the second, and the harness would have failed.
+
+The red run's 48 failures are not split by owner, and the split was not measured. What can be
+said: 48 out of 78 bot life-starts is 62%, against the 58% the bot-only harness measured on the
+same code, and the pre-fix server refilled a human's hand on every spawn after the first — so the
+red is consistent with the human half of it being zero **on the server**. The human's own hand
+lives in `ClientMatch`, which no headless run builds at all. See "Needs a browser".
+
+**`npm run leak` — 100 allocate/destroy cycles.** Subscriptions **29 → 29 (+0)**, heap 12.73 →
+13.41 MiB. The baseline is two higher than P4's 27 because this session adds exactly two
+subscriptions — `ServerMatch`'s spawn door and the ledger's round-boundary count — and both are
+released by the `dispose` they were registered through. Flat is the property; the level is not.
+
+**`npm run check` and `npm run build`** green.
+
+### What was not verified
+
+The **local player's own hand** is not measured anywhere in this session, and cannot be.
+`HeadlessClient` drives `NetClient` and `Prediction` and builds no `ClientMatch`, so there is no
+`MatchEquipment`, no inventory and no HUD counter to read; every number above that concerns a
+human is the *server's* copy of their hand. The client change — the spawn serial driving
+`beginLife` — is therefore verified by reading and by the server agreeing with itself, not by a
+run. It is the whole of the "needs a browser" list below.
+
+The **misprediction the round reset was causing** is likewise unmeasured. `npm run skirmish`
+votes TDM by default and the `--vote 4` run exercises Search & Destroy over the wire, but the
+harness's mispredict counters are reported per migration window rather than per round boundary,
+so a round-start teleport would not have shown up as a number even before it was removed.
+
+### Needs a browser
+
+Every item is a networked match. Single-player is unaffected by the client half of this change —
+`hardResetRound` still runs there, unchanged.
+
+- **B3, the report itself.** Join a networked Team Deathmatch, throw both grenades, die. On
+  respawn the HUD's lethal and tactical counters must both be back to the class's full count.
+  This is the case round two fixed and it must still work.
+- **B3 in the mode it was reported from.** A networked Search & Destroy. **Survive a round**
+  after throwing a grenade — do not die. When the next round starts the counters must be full.
+  Before this session they stayed at whatever the last round ended on, unless the client's own
+  illegal round-reset happened to fire first.
+- **The round start no longer teleports you.** Same S&D match, watch the moment the round turns
+  over: the camera must arrive at the server's spawn point once, cleanly. Before this there was
+  a second placement a snapshot later — the client's guess being corrected — which reads as a
+  lurch or a brief double-take at round start.
+- **The pre-match class change.** Press a class key during the ten-second freeze of round one.
+  The grenades that arrive must be the ones the *new* class carries, at its count.
+- **The S&D wallet, which is the decision.** Reach four kills in round one with a UAV in the
+  class and spend it. Survive the round. In round two the UAV must still read `USED` and its key
+  must still do nothing, and any balance left over must still be there. Then die: on the next
+  spawn it must clear back to its price with the balance at 0.
+- **The bots throwing.** Not a HUD check — play a full networked match and notice that grenades
+  keep coming in after the first minute. Before this every bot threw one lethal and one tactical
+  in the whole match, which is the difference between an opponent who uses equipment and one who
+  ran out of it before you met them. This is a **feel** change and the largest one in the
+  session; if the match now feels grenade-heavy, that is the number to bring back.
+
+### Found while here
+
+- **Two more per-life resets are still filtered on `PLAYER_ENTITY_ID`**, which is entity 0 — the
+  server's empty spectator seat — so neither fires for a connected human. `MatchProgression`'s
+  `killsThisMag` never resets on a new life, and `PerksRenderer`'s footstep trail is never
+  cleared, so the ghost of a previous life's path stays drawn. Both are the round-2 entity-id
+  class of bug and both were missed by that audit, which walked client code looking for combat
+  and cosmetic uses and did not treat a per-life reset as one. Not this session's mechanism —
+  their *signal* is right and their *filter* is wrong — and neither was reported. Left.
+- **`ServerMatch`'s hand keeps the grenades of the class it was created with.** `handOf` reads
+  the loadout once, and `NetPlayer.applyLoadout` sets the weapons and the perks and never touches
+  `hand.inventory.lethal`/`tactical`. So after a class change the server refills the *previous*
+  class's grenade, at the previous class's count, for the rest of the match — while the client's
+  `swapClass` sets the new one. It is the same family as B3 (a per-life reset restoring the wrong
+  thing) but a different mechanism (the payload, not the signal), and it belongs with the loadout
+  doctrine P3 owns rather than here. **This is the next bug**, and it is the row the table above
+  would have caught if the table had a "what does it reset it *to*" column.
+- **`FieldUpgradeRuntime.reset()` has no caller.** Deliberate — the charge is not per life — but
+  a method with no caller looks exactly like a wire somebody forgot, which is how this session
+  started. Recorded in the table so the next reader does not have to re-derive it.

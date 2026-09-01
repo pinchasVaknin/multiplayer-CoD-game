@@ -176,6 +176,13 @@ function reportMatch(
      * ever had a call site that spends a streak. See PLAN.md, "Found while here".
      */
     streaks: match.streakEconomy,
+    /**
+     * What every life started holding (playtest round 4, B3).
+     *
+     * `partialStock` is the number the session is about and must be 0; `lifeStarts` is the
+     * denominator that stops a probe which never fired from reading as a pass.
+     */
+    equipment: match.equipmentAudit,
     hitRateByTier: Object.fromEntries(
       Object.entries(report.perTier).map(([tier, r]) => [
         tier,

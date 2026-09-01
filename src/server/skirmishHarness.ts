@@ -6,6 +6,7 @@ import { CLIENT_TIMEOUT_MS } from '../shared/net/Protocol';
 import { votePhaseName, type NetLoadout } from '../shared/net/Skirmish';
 import type { StreakId } from '../shared/streaks/StreakDefs';
 import type { StreakEconomyReport } from '../shared/streaks/StreakLedger';
+import type { LifeStockReport } from '../shared/equipment/LifeStockAudit';
 import { loadConfig, usesShortenedTimings, type ServerConfig } from './Config';
 import { HeadlessClient, type HeadlessClientReport } from './debug/HeadlessClient';
 import { installServerLogging, metric } from './log';
@@ -307,6 +308,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let observedSmokeBlocked = 0;
   /** The live match's streak economy, sampled while it is running. See below. */
   let observedEconomy: StreakEconomyReport | null = null;
+  /** What every life in the live match started holding (round 4, B3). Sampled beside the economy. */
+  let observedStock: LifeStockReport | null = null;
   /** When the streak wallet was last topped up, and how many times. See the grant below. */
   let grantedAtMs = 0;
   let grants = 0;
@@ -369,6 +372,9 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
        * every field zero, and every field zero passes every check below.
        */
       observedEconomy = running.match.streakEconomy;
+      // Same reason, same instant: the audit is folded out of the running match and reads as
+      // a clean zero once it is gone.
+      observedStock = running.match.equipmentAudit;
 
       /**
        * Put a streak in every seated player's hand, once per match (§8.22).
@@ -503,6 +509,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     firstInputMs,
     droppedAtMs,
     economy: observedEconomy,
+    stock: observedStock,
     grants,
   });
 }
@@ -673,6 +680,15 @@ interface FlowReportInput {
    * field would be zero — and every field zero passes every check.
    */
   readonly economy: StreakEconomyReport | null;
+  /**
+   * What every life in the live match started holding (playtest round 4, B3).
+   *
+   * Null for the same reason `economy` is, and blocking for a stronger one: this is the only
+   * measurement in the project that watches a **connected human's** grenades come back, because
+   * `HeadlessClient` has no `ClientMatch` and therefore no local hand to look at. The server's
+   * copy is the one both halves are supposed to agree with.
+   */
+  readonly stock: LifeStockReport | null;
   /** How many times `--grant-streak` topped the wallets up. Zero without the flag. */
   readonly grants: number;
 }
@@ -681,6 +697,7 @@ function reportFlow(input: FlowReportInput): number {
   const { opts, cfg, server, reports, cycleReports, phaseBoundaries, firstInputMs, droppedAtMs } =
     input;
   const economy = input.economy;
+  const stock = input.stock;
 
   const migrations = server.migrationLog.log;
   const failedMigrations = migrations.filter((m) => !m.ok);
@@ -985,8 +1002,9 @@ function reportFlow(input: FlowReportInput): number {
    *   against `PlayerScore.kills`, and a count that resets under it would silently starve every
    *   balance for the rest of the run while looking like nothing at all.
    *
-   * `dirtyLifeStarts` is reported rather than asserted: a life that begins without a death
-   * before it is a round-based mode's business, and it is P5's row to decide.
+   * `dirtyLifeStarts` is asserted against `roundCarryOvers` since P5 decided the row: a wallet
+   * survives a round boundary on purpose and survives nothing else, so the two counts — one
+   * taken at the spawn, one at the round turn — have to be the same number.
    */
   if (economy === null) {
     log.warn('streak economy: NOT SAMPLED — no live match was observed running in this run.');
@@ -997,6 +1015,12 @@ function reportFlow(input: FlowReportInput): number {
     if (economy.resyncs > 0) {
       problems.push(`${economy.resyncs} kill-anchor resync(s) inside a live match — the balance was starved (B9)`);
     }
+    if (economy.dirtyLifeStarts !== economy.roundCarryOvers) {
+      problems.push(
+        `${economy.dirtyLifeStarts} life-start(s) inherited a balance against ` +
+          `${economy.roundCarryOvers} round boundary carry-over(s) — a wallet crossed a death (B10)`,
+      );
+    }
     log.info(
       `streak economy: ${economy.lives} life/lives, ${economy.lifeStarts} life-start(s) ` +
         `(${economy.dirtyLifeStarts} inheriting a balance); banked ${economy.killsBanked} + ` +
@@ -1006,6 +1030,29 @@ function reportFlow(input: FlowReportInput): number {
         `life ${economy.maxUsedInOneLife}; refused ${economy.refusedUnaffordable} unaffordable / ` +
         `${economy.refusedUsed} already used; entitlement per life ${economy.thresholdGrants} under the ` +
         `threshold model vs ${economy.balancePurchases} under the balance.`,
+    );
+  }
+
+  /**
+   * Every life's opening grenade stock, over a real connection (playtest round 4, B3).
+   *
+   * Blocking, and the denominator is reported beside it: "0 partial" out of no lives at all is
+   * what a probe that never fired looks like, and this milestone has shipped three of those.
+   */
+  if (stock === null) {
+    log.warn('per-life stock: NOT SAMPLED — no live match was observed running in this run.');
+  } else {
+    if (stock.partialStock > 0) {
+      problems.push(
+        `${stock.partialStock} of ${stock.lifeStarts} life-start(s) began with partial ` +
+          `equipment — the per-life refill did not reach them (B3)`,
+      );
+    }
+    log.info(
+      `per-life stock: ${stock.lifeStarts} life-start(s) examined ` +
+        `(${stock.humanLifeStarts} human, ${stock.botLifeStarts} bot), ` +
+        `${stock.partialStock} with partial stock, ${stock.emptyStock} empty; ` +
+        `${stock.observedStock} grenades held against ${stock.expectedStock} expected.`,
     );
   }
 

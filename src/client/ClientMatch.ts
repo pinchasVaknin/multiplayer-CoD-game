@@ -350,6 +350,13 @@ export class Match {
 
   private active = false;
   private playerDead = false;
+  /**
+   * The last replicated spawn serial this client acted on. `-1` before the first snapshot.
+   *
+   * The networked half of "a new life started" (playtest round 4, B3). See
+   * `applyReplicatedSelf`.
+   */
+  private lastSpawnSerial = -1;
   /** Previous tick's buttons, for edge detection in the sim (S4.2). */
   private prevButtons = 0;
   /**
@@ -643,8 +650,24 @@ export class Match {
      */
     this.roundResetSubscription = deps.bus.on(EV.RoundStarted, () => {
       if (this.deps.mode.usesRoundReset !== true) return;
-      // No state leaks across a round boundary, the camera's included.
+      // No state leaks across a round boundary, the camera's included. True in both runtimes:
+      // where the player is put is the server's business, where the camera looks is not.
       this.spectatorTarget = NO_SPECTATOR_TARGET;
+      /**
+       * The **server** puts everybody back in a networked match (playtest round 4, B3).
+       *
+       * This ran in both runtimes, and over the network it was a second writer against the one
+       * fact a client may not decide: `hardResetRound` calls `respawnPlayer`, which runs
+       * `selectSpawn` and teleports the local controller to a point the client chose while the
+       * server was putting the body somewhere else — a guaranteed misprediction of up to the
+       * width of the map, every round, corrected a snapshot later by a camera lurch.
+       *
+       * It also concealed B3 by accident: the local `player.spawn` emits `player.spawned`, so
+       * the grenades did come back, as a side effect of the teleport rather than because
+       * anything had decided a life had started. Removing the teleport without the serial above
+       * would have turned an intermittent bug into a certain one.
+       */
+      if (this.isNetworked) return;
       this.hardResetRound();
     });
 
@@ -995,20 +1018,44 @@ export class Match {
    *
    * Now there is one: this. Called on every change to the replicated health or alive bit.
    */
-  applyReplicatedSelf(health: number, alive: boolean): void {
+  applyReplicatedSelf(health: number, alive: boolean, spawnSerial: number): void {
     if (!this.isNetworked) return;
 
+    /**
+     * The life boundary is the **spawn serial**, and it is not the alive bit (round 4, B3).
+     *
+     * This used to read `alive && this.playerDead` — a life starts when a dead player stops
+     * being dead — and that is true of a respawn and of nothing else. A Search & Destroy
+     * survivor's next round is a new life the server spawns without ever having killed them,
+     * and so is a class change cashed during the pre-match freeze (`applyPendingLoadoutNow`):
+     * in both the server picks a spawn point, refills its own copy of the hand and bumps the
+     * serial, while the client's alive bit never moves and its own per-life reset never runs.
+     * The report's *"in certain modes"* is exactly that set — the modes where a life can begin
+     * without a death.
+     *
+     * The serial covers both, because it is what `PlayerController.spawn` moves and every new
+     * life on the server goes through that one door. It is also strictly stronger than what it
+     * replaces: a respawn bumps it too, so the ordinary case is the same event seen through a
+     * signal that does not have a hole in it.
+     *
+     * Derived by comparison rather than by a flag on the wire: the serial is state, it stays
+     * true after the snapshot that carried it, and comparing it with the last one acted on
+     * cannot miss an edge by arriving late.
+     */
+    if (spawnSerial !== this.lastSpawnSerial) {
+      this.lastSpawnSerial = spawnSerial;
+      this.beginLife();
+    }
+
+    // After the reset, deliberately: `beginLife` puts the local `Health` back to full, and the
+    // server's answer has to be the last word on this even in the frame a life starts.
     this.playerHealth.setReplicated(health, alive);
 
-    if (!alive && !this.playerDead) {
-      this.onPlayerKilled();
-      return;
-    }
-    if (alive && this.playerDead) this.respawnNetworked();
+    if (!alive && !this.playerDead) this.onPlayerKilled();
   }
 
   /**
-   * Come back to life where the server already put us.
+   * A new life, where the server already put us. The networked per-life reset, entire.
    *
    * Everything `respawnPlayer` does **except choose a position**: no `selectSpawn`, no
    * `player.spawn`, no `setView`. The server picked the spawn point, the snapshot carried it,
@@ -1016,23 +1063,31 @@ export class Match {
    * position and yank the camera somewhere the server disagrees with.
    *
    * What it does do is the per-life reset the rest of the client depends on: full health, a
-   * reloaded weapon on the right slot, the sights down, the knife put away.
+   * reloaded weapon on the right slot, the sights down, the knife put away, grenades back.
+   *
+   * Called from one place, off one signal — see `applyReplicatedSelf`. It was named
+   * `respawnNetworked` while a respawn was the only way it could be reached; a round start is
+   * the other way, and naming it after the death it no longer needs is what let the round start
+   * be forgotten.
    */
-  private respawnNetworked(): void {
+  private beginLife(): void {
     // Before the weapon reset, so the reset puts the *new* class's primary in hand rather than
     // the old one's and then having it swapped out from under the animation.
     this.applyPendingLoadout();
     this.playerHealth.reset();
     this.weapons.reset();
     /**
-     * The grenades, explicitly (M11 Gate B playtest).
+     * The grenades, explicitly (M11 Gate B playtest, and round 4's B3).
      *
      * `MatchEquipment` refills on `player.spawned`, and this path deliberately never emits one
      * — the server chose the position, so `PlayerController.spawn` is not called. So the one
      * event the refill hangs off does not exist over the network, and a networked player came
-     * back with whatever the previous life had left: the reported "grenade counts do not reset
-     * after respawn". The server refilled its own copy on the same spawn all along, which is
-     * why nothing desynced and nothing logged — only the HUD and the local hand were wrong.
+     * back with whatever the previous life had left. The server refilled its own copy on the
+     * same spawn all along, which is why nothing desynced and nothing logged — only the HUD and
+     * the local hand were wrong.
+     *
+     * Round two's fix was this call; round four's is *what reaches it*. The call was right and
+     * the trigger was half a signal.
      */
     this.equipment.refillForLife();
     // A reset is not a swap and emits no `weapon.swapped`, so the visible model has to be
@@ -1775,6 +1830,9 @@ export class Match {
    * The player is reset through the same `respawnPlayer` a death uses, so a round start and a
    * respawn cannot disagree about what a fresh life is: full health, full magazines, primary
    * in hand, sights down, equipment refilled.
+   *
+   * **Single-player only** since round 4. Over the network the server owns the round reset and
+   * announces it by bumping the spawn serial; see the subscription that calls this.
    */
   private hardResetRound(): void {
     this.bots.respawnAll();

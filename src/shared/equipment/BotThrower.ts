@@ -50,6 +50,21 @@ interface ThrowerState {
   tactical: number;
 }
 
+/**
+ * What a bot carries at the start of a life, and the four seconds before it may throw.
+ *
+ * Named rather than repeated, because the per-life audit (playtest round 4, B3) has to ask
+ * *"is this bot's stock full"* and a full stock spelled out in a second place is a full stock
+ * that can disagree with the one `respawn` hands out.
+ */
+const BOT_LOADOUT: Readonly<ThrowerState> = { cooldown: 4, lethal: 1, tactical: 1 };
+
+/** What a bot is holding right now. Read by the per-life audit; never mutated through this. */
+export interface BotStock {
+  readonly lethal: number;
+  readonly tactical: number;
+}
+
 export interface ThrowIntent {
   /** Last known enemy position. Not necessarily visible right now. */
   readonly targetX: number;
@@ -91,7 +106,23 @@ export class BotThrower {
 
   /** Refill a bot's equipment. Called on spawn, exactly as the player's is. */
   respawn(entityId: number): void {
-    this.states.set(entityId, { cooldown: 4, lethal: 1, tactical: 1 });
+    this.states.set(entityId, { ...BOT_LOADOUT });
+  }
+
+  /**
+   * What this bot is holding, without creating a state for one that has never thrown.
+   *
+   * A bot with no row has not been asked for a grenade yet and would be handed a full loadout
+   * the moment it was, so an absent row reads as full. Deliberately not `stateFor`: a probe
+   * that allocates the thing it is measuring measures itself.
+   */
+  stockOf(entityId: number): BotStock {
+    return this.states.get(entityId) ?? BOT_LOADOUT;
+  }
+
+  /** A full life's worth, for a caller asking whether a stock is partial. */
+  static get fullStock(): BotStock {
+    return BOT_LOADOUT;
   }
 
   /**
@@ -265,7 +296,7 @@ export class BotThrower {
   private stateFor(entityId: number): ThrowerState {
     let state = this.states.get(entityId);
     if (state === undefined) {
-      state = { cooldown: 4, lethal: 1, tactical: 1 };
+      state = { ...BOT_LOADOUT };
       this.states.set(entityId, state);
     }
     return state;

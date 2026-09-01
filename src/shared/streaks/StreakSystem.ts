@@ -490,6 +490,20 @@ export class StreakSystem implements ObjectiveProvider {
      */
     this.unsubscribe.push(bus.on(EV.PlayerSpawned, (p) => this.ledger.noteLifeStart(p.entityId)));
 
+    /**
+     * A round boundary, which under this economy is **not** a life boundary (round 4, P5).
+     *
+     * The decision, made explicitly rather than defaulted: a Search & Destroy survivor carries
+     * their banked kills into the next round and stays blocked from re-buying a streak they
+     * already spent. Only dying clears either, which is B10's wording taken literally —
+     * *"until death resets it"* — and it means surviving a round is worth something.
+     *
+     * So the ledger is not reset here. It is only **counted**, so that the carry-overs the next
+     * round's spawns will report have a number to be checked against. See
+     * `StreakEconomyReport.roundCarryOvers`.
+     */
+    this.unsubscribe.push(bus.on(EV.RoundStarted, () => this.ledger.noteRoundBoundary()));
+
     // Nothing survives the end of a match — see the chopper's single-exit rule.
     this.unsubscribe.push(bus.on(EV.MatchEnded, () => this.endAll()));
     this.unsubscribe.push(bus.on(EV.RoundEnded, () => this.endAll()));

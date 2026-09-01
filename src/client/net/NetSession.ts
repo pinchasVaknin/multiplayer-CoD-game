@@ -130,7 +130,7 @@ export class NetSession {
    * that stopped their movement and the state that would have lifted it were different facts.
    * This makes the server's answer the only one.
    */
-  onLocalState: ((health: number, alive: boolean) => void) | null = null;
+  onLocalState: ((health: number, alive: boolean, spawnSerial: number) => void) | null = null;
 
   /**
    * The raw authoritative header, once per applied snapshot (M11, §7).
@@ -501,7 +501,15 @@ export class NetSession {
     if (own !== undefined) {
       const alive = (own.latest.flags & EFlag.Alive) !== 0;
       const health = own.latest.health;
-      this.onLocalState?.(health, alive);
+      /**
+       * The spawn serial rides along, because it is the other half of "what am I now".
+       *
+       * Health and liveness say what state the body is in; the serial says whether it is the
+       * *same body*. A life that starts without a death moves the serial and nothing else, so
+       * sending only the first two describes such a life as no event at all — which is the
+       * grenade refill that never ran (playtest round 4, B3).
+       */
+      this.onLocalState?.(health, alive, this.client.localSpawnSerial);
     }
 
     this.syncActors();

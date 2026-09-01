@@ -15,6 +15,8 @@ import {
 } from '../shared/streaks/StreakDefs';
 import { Rng } from '../shared/core/Rng';
 import { EquipmentSystem, makeEquipmentInventory, type EquipmentInventory } from '../shared/equipment/EquipmentSystem';
+import { equipmentDef } from '../shared/equipment/EquipmentDefs';
+import { LifeStockAudit, type LifeStockReport } from '../shared/equipment/LifeStockAudit';
 import { BotThrower, type MutableThrowIntent } from '../shared/equipment/BotThrower';
 import { ThrowController } from '../shared/equipment/ThrowController';
 import { DEFAULT_EQUIPMENT_CONFIG, type EquipmentConfig } from '../shared/equipment/EquipmentConfig';
@@ -188,6 +190,10 @@ export class ServerMatch {
   private throwCursor = 0;
   /** One grenade hand per connected human. See `handOf`. */
   private readonly hands = new Map<number, PlayerHand>();
+  /** What every life started holding (round 4, B3). See `sampleLifeStarts`. */
+  private readonly lifeStock = new LifeStockAudit();
+  /** Entities spawned this tick, sampled at the end of it. See `sampleLifeStarts`. */
+  private readonly pendingLifeStarts: number[] = [];
   private readonly throwIntent: MutableThrowIntent = {
     hasTarget: false,
     targetX: 0,
@@ -506,6 +512,22 @@ export class ServerMatch {
     );
 
     /**
+     * A new life started (playtest round 4, B3).
+     *
+     * **The one door.** `PlayerController.spawn` emits this and every combatant in the game
+     * goes through it — `Bot.spawn` calls it and so does `NetPlayer.spawn` — so one
+     * subscription covers the humans and the bots, a death respawn and a Search & Destroy
+     * round start alike. It replaces a refill that sat inside `spawnPlayer`, which was the
+     * server's only new-life door *by inspection* rather than by construction: a second one
+     * would have had to remember to copy the line.
+     *
+     * `EV.BotSpawned` is deliberately not also subscribed. It is a second announcement of the
+     * same spawn carrying tier detail for the director, and listening to both counts every bot
+     * life twice — measured in round 4's streak audit at 304 life-starts against 154 real ones.
+     */
+    this.unsubscribe.push(this.bus.on(EV.PlayerSpawned, (p) => this.beginLife(p.entityId)));
+
+    /**
      * Death and flinch for connected humans (M10).
      *
      * `BotDirector` already does this for bots, keyed off its own `byId` map, and a human is
@@ -627,6 +649,10 @@ export class ServerMatch {
     // there is no route by which an entity is stepped and not recorded — a hole in the
     // history is a rewind that silently resolves against the present.
     this.rewind.record(tickIndex);
+
+    // Last, because a life that started this tick has now been through every system that
+    // could have handed it something.
+    this.sampleLifeStarts();
 
     this.ticks++;
   }
@@ -1165,20 +1191,7 @@ export class ServerMatch {
       );
     }
 
-    /**
-     * Equipment is per life (§6.3), refilled on the spawn rather than on a timer.
-     *
-     * `ClientMatch` gets this free — `MatchEquipment` refills on the `player.spawned` event
-     * that `PlayerController.spawn` emits. The server's hands are keyed by entity id in a map
-     * this class owns, so it refills them itself rather than subscribing to an event it would
-     * then have to filter by entity.
-     */
-    const hand = this.hands.get(player.entityId);
-    if (hand !== undefined) {
-      hand.thrower.reset();
-      EquipmentSystem.refill(hand.inventory);
-    }
-
+    // Equipment is per life (§6.3) and is refilled by `beginLife`, off the spawn below.
     const c = this.spawnChoice;
     player.spawn(c.x, c.y, c.z, c.yaw);
     // Backfill the whole history with the spawn pose, so a shot rewound into the window
@@ -1207,6 +1220,81 @@ export class ServerMatch {
    */
   get streakEconomy(): StreakEconomyReport {
     return this.streaks.economyReport();
+  }
+
+  /**
+   * What every life in this match started holding (playtest round 4, B3).
+   *
+   * `partialStock` must be 0. Read by both harnesses; safe to take mid-match, because the
+   * audit is a running total rather than a walk of the roster.
+   */
+  get equipmentAudit(): LifeStockReport {
+    return this.lifeStock.report();
+  }
+
+  /**
+   * The per-life equipment reset, for whoever just spawned.
+   *
+   * The branch is the same one `MatchEquipment.onSpawned` makes on the client — a hand for the
+   * body you own, a thrower state for everybody else — and not an `if (networked)`: it asks
+   * *which kind of combatant this is*, which is a question the server has to answer anyway
+   * because humans and bots hold their grenades in different places.
+   *
+   * `handOf` rather than a lookup: the hand is created on demand, and a life that starts before
+   * its owner has ever thrown is exactly the life a lookup would skip.
+   */
+  private beginLife(entityId: number): void {
+    this.pendingLifeStarts.push(entityId);
+
+    if (this.getPlayer(entityId) !== undefined) {
+      const hand = this.handOf(entityId);
+      hand.thrower.reset();
+      EquipmentSystem.refill(hand.inventory);
+      return;
+    }
+
+    /**
+     * A bot's grenades, which over the network nothing gave back (round 4, B3).
+     *
+     * `BotThrower.respawn` had exactly one caller in the project and it was on the client, so
+     * a bot in a dedicated-server match threw the one lethal and the one tactical it starts
+     * with and was unarmed for the rest of the match — `pickEquipment` skips a slot at zero,
+     * silently, and a bot that stops throwing looks like a bot that decided not to. The same
+     * authority migration as the entity id: the simulation moved to the server and the reset
+     * stayed behind on the client.
+     */
+    this.botThrower.respawn(entityId);
+  }
+
+  /**
+   * Sample the stock of every life that started this tick.
+   *
+   * Deferred to the end of the tick rather than read inside the spawn event, and that is the
+   * whole reason it is honest: the refill above is another subscriber to the same event, so a
+   * probe reading during the emit would be measuring subscription order. At the end of the tick
+   * the life has been through every system that could have handed it anything, which is the
+   * state the player actually wakes up in.
+   */
+  private sampleLifeStarts(): void {
+    if (this.pendingLifeStarts.length === 0) return;
+
+    for (const entityId of this.pendingLifeStarts) {
+      if (this.getPlayer(entityId) !== undefined) {
+        const inv = this.handOf(entityId).inventory;
+        this.lifeStock.note(
+          'human',
+          inv.lethalCount,
+          equipmentDef(inv.lethal).count,
+          inv.tacticalCount,
+          equipmentDef(inv.tactical).count,
+        );
+        continue;
+      }
+      const stock = this.botThrower.stockOf(entityId);
+      const full = BotThrower.fullStock;
+      this.lifeStock.note('bot', stock.lethal, full.lethal, stock.tactical, full.tactical);
+    }
+    this.pendingLifeStarts.length = 0;
   }
 
   /** Equipment thrown and detonated this match. Read by the harness (§8.24). */
