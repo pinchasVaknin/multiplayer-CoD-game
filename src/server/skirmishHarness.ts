@@ -2,6 +2,7 @@ import { installClock, nowMs } from '../shared/core/Clock';
 import { logger } from '../shared/core/Log';
 import { EventBus } from '../shared/core/EventBus';
 import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } from '../shared/net/NetSim';
+import { CLIENT_TIMEOUT_MS } from '../shared/net/Protocol';
 import { votePhaseName, type NetLoadout } from '../shared/net/Skirmish';
 import type { StreakId } from '../shared/streaks/StreakDefs';
 import { loadConfig, usesShortenedTimings, type ServerConfig } from './Config';
@@ -30,6 +31,7 @@ const log = logger('skirmish');
  *   npm run skirmish -- --leak 100         # 100 allocate/destroy cycles, heap and subs
  *   npm run skirmish -- --net bad          # 100ms +/-30ms, 2% loss on every link
  *   npm run skirmish -- --fault latency    # FaultyMatchAllocator: latency|failure|capacity
+ *   npm run skirmish -- --summary-gate     # RED CONTROL: go silent for the post-match hold
  * ```
  *
  * ## Loopback proves the flow, not the netcode
@@ -96,6 +98,16 @@ interface HarnessOptions {
   readonly abandon: boolean;
   /** Have every client throw a lethal every N ticks, or 0 never (§8.24). */
   readonly throwEveryTicks: number;
+  /**
+   * Go silent for the summary hold, the way the browser used to (playtest round 4, B4).
+   *
+   * **The red control for the post-match hold probe.** `Game.simulate` serviced the socket only
+   * while the screen was `MATCH`, so the post-match board stopped the pings, the reads and the
+   * link check for the whole 14 s hold — against a 10 s `CLIENT_TIMEOUT_MS`. A `HeadlessClient`
+   * has no screen and pumps unconditionally, which is exactly why every harness run in this
+   * milestone was green about a bug that disconnected every player of every match.
+   */
+  readonly summaryGate: boolean;
 }
 
 /**
@@ -266,6 +278,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
        */
       editClass: opts.editClass && i === 0 ? NO_PERK_CLASS : undefined,
       editAfterTicks: 240,
+      // The red control. Every client, because the bug was every client. See `--summary-gate`.
+      gateOnSummary: opts.summaryGate,
     });
     clients.push(client);
   }
@@ -863,6 +877,61 @@ function reportFlow(input: FlowReportInput): number {
       `board open ${boardOpenDead} tick(s) while dead.`,
   );
 
+  /**
+   * The post-match hold, end to end (playtest round 4, B4).
+   *
+   * Two blocking assertions, and both carry their denominator:
+   *
+   * - **Nobody may be dropped while the summary is up.** This is the whole of B4. The server
+   *   holds the board for `summaryHoldSeconds` and reaps a session silent for
+   *   `CLIENT_TIMEOUT_MS`, and the shipped client stopped talking for the first the moment it
+   *   drew the second's deadline — so it was closed four seconds before it would have been
+   *   migrated home, and every symptom the report lists follows from that one gate.
+   * - **Every summary must be followed by a return to the arena**, or the countdown on screen
+   *   is counting toward something that never arrives.
+   *
+   * `--summary-gate` restores the old behaviour and is how both were watched red.
+   */
+  const held = reports.filter((r) => r.summaries > 0);
+  const returned = held.filter((r) => r.summaryHoldMs >= 0);
+  const droppedOnSummary = reports.filter((r) => r.droppedOnSummary);
+  if (droppedOnSummary.length > 0) {
+    problems.push(
+      `${droppedOnSummary.length} client(s) were disconnected while the summary was up — ` +
+        `the ${cfg.summaryHoldSeconds}s hold outlasts the ${CLIENT_TIMEOUT_MS}ms client timeout (B4)`,
+    );
+  }
+  if (held.length > 0 && returned.length < held.length) {
+    problems.push(
+      `${held.length - returned.length} of ${held.length} client(s) saw a summary and were ` +
+        'never migrated back to the arena (B4)',
+    );
+  }
+  if (held.length === 0) {
+    /**
+     * Say when the leg did not run, rather than passing quietly (§7).
+     *
+     * The same shape as the divergence checker's `hashSamples === 0` branch. A run in which no
+     * match ever ended proves nothing about the summary, the hold or the return — and this
+     * harness is named for a flow that includes all three. It is a warning rather than a
+     * failure because at shipped timings it is the *normal* outcome: the budget allows
+     * `matchRoundSeconds || 90` seconds for a match whose authored round is far longer, so the
+     * run is cut off mid-match. That is why nothing here ever caught B4. See PLAN.md.
+     */
+    log.warn(
+      'post-match hold: NOT EXERCISED — no match ended in this run, so the summary, the hold ' +
+        'and the return migration were not tested. Shorten MATCH_ROUND_SECONDS to reach them.',
+    );
+  } else {
+    log.info(
+      `post-match hold: ${held.length} client(s) held, ${returned.length} migrated back; ` +
+        `screen said ${held.map((r) => r.summarySaidSeconds.toFixed(1)).join('/')}s, ` +
+        `actual summary→arena ${returned.map((r) => r.summaryHoldMs).join('/')}ms ` +
+        `(server hold ${cfg.summaryHoldSeconds}s, client timeout ${CLIENT_TIMEOUT_MS}ms, ` +
+        `${droppedOnSummary.length} dropped).`,
+    );
+  }
+
   /** §8.23 case 4. Blocking: an orphaned gunship shoots people. */
   if (opts.dropGunner) {
     if (droppedAtMs === 0) {
@@ -1123,6 +1192,7 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     grantStreak: get('--grant-streak'),
     ghost: argv.includes('--ghost'),
     dropGunner: argv.includes('--drop-gunner'),
+    summaryGate: argv.includes('--summary-gate'),
     abandon: argv.includes('--abandon'),
     throwEveryTicks: Math.max(0, num('--throw', 0)),
   };

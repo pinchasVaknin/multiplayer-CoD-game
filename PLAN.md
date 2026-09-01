@@ -5306,6 +5306,18 @@ Three complaints, three causes:
 - The SUMMARY exit handler tore the world down unconditionally; it now returns early for
   `to === 'MATCH'`, which also removes a double teardown on the rotation path.
 
+**Corrected at round 4, and the correction is about all three of them.** Every fix above is in the
+tree and every one of them is right about the thing it names. None of them ever ran, because the
+client stopped servicing its socket the moment this screen appeared and the server closed the
+connection ten seconds into a fourteen-second hold. So: the button did go back to the game, and
+the game it went back to had no connection left, which put the player on the main menu one frame
+later — indistinguishable from the bug this bullet claims to have fixed. The countdown did tick,
+against a migration the client could no longer receive, and was cut off before it reached zero.
+The local `dt` is gone entirely now; the number is the server's own deadline. See "the summary
+screen was a screen that stopped listening" below. The reading to take from it is that a fix to
+the thing that was reported can be complete, correct and still never execute — and that this
+section's confidence came from reading the code rather than from watching the path run.
+
 ## Create-a-Class was a state where it should have been an overlay
 
 The editor is two different things sharing one screen. From the front end it is a state: no
@@ -5699,3 +5711,179 @@ everything in "Open, and all of one kind" above.
   catches that in `server/` and cannot catch it in `client/`, where this very file legitimately
   names the global in `onResize`. Renamed. Not a defect; recorded because the check found it in one
   partition and could not have found it in the other.
+
+## Playtest round 4 — the summary screen was a screen that stopped listening
+
+B4, and it is one mechanism wearing three hats. The brief's first instruction was not to fix but
+to explain why round two's fix does not arrive, and the answer is that all of round two's fix is
+present, correct, and unreachable: by the time the player presses the button they have already
+been disconnected.
+
+### The mechanism, in one line
+
+`Game.simulate` serviced the socket only while the screen was `MATCH` — `if (inMatch)
+net.update()` — so from the frame the post-match board went up the client stopped pinging,
+stopped reading, and stopped noticing anything. `SUMMARY_HOLD_SECONDS` is **14** and
+`CLIENT_TIMEOUT_MS` is **10 000**, so the server reaped every player who watched the board **four
+seconds before it would have migrated them home**, with the return `Welcome` sitting unread in a
+queue nobody was draining.
+
+That one gate produces every symptom in the report:
+
+| Reported | What it was |
+|---|---|
+| "the button throws you to the main menu instead of the lobby" | `leaveSummary` does transition to `MATCH` — round two's fix, intact. `MATCH` is the first screen that pumps the socket again, so the very next tick runs `net.update()`, which is the **only** place `NetClient.state` becomes `'disconnected'`, and the disconnect branch sends the player to `MENU`. The fix and the bug are one frame apart |
+| "you have to click twice" | Not a focus guard and not pointer lock. `GameScreens`' `onContinue` swallowed the first press to finish the XP animation and left only on the second — a deliberate M6 decision, and one a button labelled "Return to lobby" cannot honestly keep |
+| "the timer is stuck at 14" | The render pass does reach `EndOfMatch.tick`; what was wrong is upstream of the arithmetic. The number was seeded once, from a **duration** sent at match end, and integrated locally against a clock the client had stopped reading — so it counted toward a migration it could not receive, and never once reached zero in a real session, because the screen it was on was torn down at ten seconds |
+
+The shape is the milestone's own recurring one, arriving from a new direction. Two decisions had
+been fused into one `if`: *what the player's command contains* — nothing, off the match screen —
+and *whether this client is still talking to the server at all*. **Going silent is not a neutral
+command.** The neutral command is now `MatchWorld.sampleCommand`'s first branch, where it says
+what it means, and `net.update()` runs on every screen that still holds a world.
+
+The comment above that line had claimed for a milestone that `sampleForNet` *"applies the same
+three-way choice made below"*. It applied two of the three. The missing branch was being
+implemented by not calling the netcode at all.
+
+### Why no harness run could ever have seen it, and the probe that now can
+
+`HeadlessClient` has no screen, so it pumps unconditionally — the one difference from the browser
+that mattered. `--summary-gate` gives it the browser's gate: silent from `MsgS.Summary` until the
+deadline that message carries. It is a red control and nothing else, and it was watched red
+first.
+
+The gate's deadline is wall-clock rather than ticks, deliberately: a gated client is not calling
+`NetClient.update`, so `stats.clientTick` is frozen for exactly as long as the gate lasts, and a
+gate waiting for a tick it was itself preventing would never lift. That is the same frozen-clock
+trap `LiveMatch.summaryElapsed` documents on the server side, met a second time from the client's.
+
+| Probe | Red (`--summary-gate`) | Green |
+|---|---|---|
+| Server closed the session | **all 3, `timeout`, 10.02 s after the summary** | none |
+| Clients migrated back to the arena | **0 of 3** | **3 of 3** |
+| Migrations over the run | 3 (into the match only) | **6** — the return leg finally happens |
+| What the screen said the hold was | 13.9 s | **14.0 s** |
+| Actual summary to arena | never arrived | **13 997 ms** |
+| The run | **FLOW CHECK FAILED**, three ways | passed |
+
+Both numbers are printed side by side on purpose. They are two independent answers to one
+question — what the screen claims and what the server does — and the whole of B4's timer is that
+the first was a guess.
+
+### The countdown is the server's remainder now (protocol v9)
+
+`MsgS.Summary` carries `endsTick`, the master tick the hold expires on, instead of `holdSeconds`.
+A **deadline, not a duration**, and the same shape as `VoteInfo.phaseEndsTick`: the client derives
+`(endsTick - currentTick) * DT` against the synced server clock, which is the expression
+`VoteOverlay.tick` has used for the ballot since M11. The two countdowns on this client can no
+longer mean different things.
+
+A duration is only true at the instant it is sent. It could not be right for a player who reached
+the screen a frame after the message that opened it, or reconnected into it, and it kept counting
+perfectly happily on a link that had gone away. The new number cannot: it is a pure function of a
+tick the server sent and a tick the clock sync maintains, so **a client that stops hearing the
+server stops counting** — which is the honest failure, and the one a local `dt` could not produce.
+
+`LiveMatch.summaryEndsTick` is the same expression `summaryElapsed` decides on rather than a
+second copy of it, so the screen and the migration cannot disagree about when the hold ends.
+Measured agreement: **14.0 s displayed against 13 997 ms actual.**
+
+`EndOfMatch.setNetworked` is derived from the connection now rather than from `holdSeconds > 0`.
+Those are different facts, and taking the second for the first made this screen describe itself
+as single-player whenever the number was missing — the brief's third candidate. It cost only the
+wording before, because `leaveSummary` reads `this.server` and always did; it would have cost the
+exit button too, now that the same flag decides whether there is one.
+
+### Two buttons, and the one that could not honestly be a rematch
+
+The report asked for an exit and a rematch. Against a dedicated server there is no client-side
+rematch to give: the server migrates everybody back to the arena on its own clock and **the vote
+cycle running there is the rematch**. So the honest pair is:
+
+- **Return to lobby — Ns** (primary): the seat, the socket and the world all survive. This is
+  what round two built; what it needed was a connection still alive when it ran.
+- **Exit to main menu** (secondary): transitions to `MENU`, which tears the world down, clears
+  `this.server` and closes the socket — freeing the seat immediately rather than after a
+  ten-second timeout.
+
+**Single-player gets one button, not two.** There the two collapse into the same action, and two
+buttons that do the same thing are worse than one: the exit is hidden and the primary reads
+"Continue", exactly as before.
+
+The first press acts. XP is banked when `SUMMARY` is *entered*, not when the bar finishes, so
+skipping the animation costs nothing but the animation — pressing either button finishes it and
+goes. Single-player loses the press-once-to-skip behaviour too, deliberately: it is the same lie
+with only one button to tell it.
+
+### Measured
+
+Shortened round (`MATCH_ROUND_SECONDS=25`, `PLAY_SECONDS=8`, votes 4 s), because at shipped
+timings no match ends inside the harness budget — see below. **The two constants under test are
+untouched by those knobs**: the hold is the shipped 14 s and the timeout the shipped 10 s, and the
+gap between them is the entire finding. Shortening a round moves when the summary happens, not
+what happens during it.
+
+Three green runs, because this harness is wall-clock paced and one run of it is a sample rather
+than a fact:
+
+| Run | Screen said | Actual summary to arena | Migrated back | Dropped |
+|---|---|---|---|---|
+| 1 | 14.0 s | **13 997 / 13 997 / 13 997 ms** | 3 of 3 | 0 |
+| 2 | 13.9 s | **14 015 / 14 014 / 14 014 ms** | 3 of 3 | 0 |
+| 3 | 14.0 s | **14 021 / 14 020 / 14 020 ms** | 3 of 3 | 0 |
+| Red control | 13.9 s | —, never arrived | **0 of 3** | **3 of 3, at 10.02 s** |
+
+The screen's number and the hold it describes agree to within about 25 ms across all three, which
+is the point of printing them side by side: they are computed from different things and now say
+the same thing.
+
+And the rest of the gate, unchanged by any of this:
+
+| Probe | Result |
+|---|---|
+| Standing `npm run skirmish`, shipped timings | FLOW CHECK PASSED — divergence **0 / 7373** per client, spectator **0 self / 0 enemy / 0 dead** over 8007 picks, quick loadout **0** while alive over 11 041 ticks, Tab **3595** of 7465 dead ticks |
+| Mispredictions entering a live match | **0**, every run |
+| `npm run leak`, 100 cycles | subscriptions **26 → 26 (+0)**, heap 12.64 → 13.28 MiB (+0.64). LEAK CHECK PASSED |
+| `npm run netharness` at v9 | 2 clients, 30 s, **1800 ticks each, 0 snapshots lost, both still `joined`** — the handshake accepts the bumped version on both sides, which is the half of a protocol bump that can silently reject everybody |
+| `npm run check` | boundaries, cosmetic audit and all three typecheck targets pass |
+
+### Needs a browser
+
+Nothing here was seen, and the split is sharper in this session than usual: the harness proves the
+*connection* survives the summary screen, and every claim about the screen itself is a browser
+claim. `HeadlessClient` builds no `ClientMatch` and no `Game`, so it has no summary screen at all —
+what it has is the socket behaviour the screen was breaking.
+
+- **The two buttons.** Finish a networked match. The board must offer **two**. Press "Return to
+  lobby" **once**: it must act on that press — you land back in the world, and the NetPanel must
+  show the *same* socket with no reconnect. Wait the hold out instead and the server must migrate
+  you to the arena on its own, with the board coming down as it lands.
+- **The countdown.** It must run 14 to 0 and reach zero *before* anything happens, rather than
+  being cut off part-way. Kill the network at 7 s: the number must **stop** rather than keep
+  counting, which is the visible form of the new derivation.
+- **The exit.** "Exit to main menu" must close the socket — the server log should free the seat
+  immediately rather than ten seconds later.
+- **Single-player.** Finish an offline match: **one** button, reading "Continue", no number, and
+  one press leaves.
+- **The pause screen.** Pause a networked match for more than fifteen seconds and resume. You must
+  still be connected; before this session you were not.
+
+### Found while here
+
+- **`npm run skirmish` has never reached the last leg of the flow it is named for.** The budget
+  allows `matchRoundSeconds || 90` seconds for the match, and TDM's authored `timeLimitSeconds` is
+  **600**. At shipped timings the run is therefore cut off mid-match: `summaries received: 0`, no
+  hold, no return migration — and FLOW CHECK PASSED. That is why nothing in this milestone caught
+  B4, and it is a probe that could not go red for the whole of §6.9. The budget is not changed
+  here, because a correct one makes every default run several times longer; what changed is that
+  the silence is no longer silent. A run in which no match ended now says **"post-match hold: NOT
+  EXERCISED"**, the same shape as the divergence checker's `hashSamples === 0` branch.
+- **The pause screen had the same hole**, with no fixed clock to make it fire reliably:
+  `simulate` returned on `PAUSED` before it reached the network at all, so a networked client
+  paused for ten seconds was reaped exactly like one watching a summary. Same cause, so fixed
+  here: the `PAUSED` early return now sits *below* the networked branch, where it belongs — a
+  pause is a local decision about a local simulation, and there is no pausing a dedicated server.
+- A **backgrounded** tab survived the summary screen that a visible one did not.
+  `pumpNetworkWhileHidden` has always called `net.update()` unconditionally, which is both the
+  shape this fix follows and a small proof that it is safe.

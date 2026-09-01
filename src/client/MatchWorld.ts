@@ -131,6 +131,19 @@ export interface MatchWorldDeps {
   readonly onConfigChanged: () => void;
   readonly onWeaponConfigChanged: () => void;
 
+  /**
+   * Whether the game screen is `MATCH` (playtest round 4, B4).
+   *
+   * A supplier rather than a flag, and read at the moment the command is built rather than
+   * pushed in when the screen changes: the screen outlives every surface drawn over it and
+   * there is exactly one writer of it, the state machine. It decides what a command *contains*
+   * — nothing, while a front-end screen owns the page — and deliberately not whether the
+   * socket is serviced. Those were one decision until B4, and the summary screen paid for it:
+   * a client that stopped reading the socket for a 14 s hold was closed by the server's 10 s
+   * timeout four seconds before it would have been migrated home.
+   */
+  readonly inMatch: () => boolean;
+
   // ---- M11 (§7): instrumentation owned by `Game`, shown by this world's panel ----
   readonly lastBuild: () => BuildReport | null;
   readonly buildProgress: () => { done: number; total: number; label: string } | null;
@@ -281,7 +294,7 @@ export class MatchWorld {
             // Both of these are filled in properly the moment the match exists — see below.
             // They are indirected through `this.match` rather than captured, because the
             // match cannot exist before the session it is being handed to.
-            sample: (tick) => this.sampleForNet(tick),
+            sample: (tick) => this.sampleCommand(tick),
             applyWeapon: (cmd) => this.applyWeaponForNet(cmd),
           });
 
@@ -509,16 +522,33 @@ export class MatchWorld {
   }
 
   /**
-   * Sample the local command for a networked tick.
+   * The command this client sends, or steps locally, this tick. Both runtimes, one rule.
    *
-   * The same three-way choice `Game.simulate` makes in single-player — neutral outside a
-   * match, spectating while dead or frozen, live otherwise — because it is the same rule.
    * `NetClient` applies the authoritative half of it again from the replicated flags, and the
    * two agreeing is what keeps prediction from fighting the server through a countdown.
+   *
+   * The three-way choice `Game.simulate` has always described, in one place instead of two.
+   * The networked half of it used to have only the last two branches, and the first one was
+   * implemented by not calling `NetClient.update` at all off the `MATCH` screen — which is not
+   * the same statement: it neutralises the input by going silent, and a silent client is a
+   * client the server reaps. See `MatchWorldDeps.inMatch`.
+   *
+   * - Not in a match — a front-end screen owns the page: nothing at all, so the body stands
+   *   where it was left (S6.2's repeat-last-command covers the gap the same way).
+   * - Dead, or a UI surface has focus, or the pre-match freeze is on: view angles only.
+   *   `sampleSpectating` keeps `Btn.Scoreboard` through a death on purpose (M4), which is what
+   *   makes the board reachable from the death screen. The freeze is applied here rather than
+   *   inside `Match` because movement is integrated before the match ever sees the command, so
+   *   a check one layer in would arrive a frame after the player had already moved.
+   * - Otherwise the real thing.
+   *
+   * The camera is untouched by all of it: yaw and pitch are integrated in the mousemove handler
+   * and stamped onto whatever command comes out, so looking around still works.
    */
-  private sampleForNet(tick: number): InputCommand {
+  sampleCommand(tick: number): InputCommand {
     const input = this.deps.input;
     const nowMsValue = performance.now();
+    if (!this.deps.inMatch()) return input.sampleNeutral(tick, nowMsValue);
     if (this.match.isPlayerDead || this.match.inputSuppressed) {
       return input.sampleSpectating(tick, nowMsValue);
     }

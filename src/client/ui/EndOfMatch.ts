@@ -19,7 +19,13 @@ import { Scoreboard } from './Scoreboard';
 
 export interface SummaryDeps {
   readonly rowsPerTeam: number;
+  /**
+   * The primary: back to the game. Connected, that is the lobby and the seat survives; in
+   * single-player it is the menu, because there is nothing else there.
+   */
   readonly onContinue: () => void;
+  /** The secondary: leave the server for the main menu. Offered only when there is a server. */
+  readonly onExit: () => void;
 }
 
 export class EndOfMatch {
@@ -32,6 +38,8 @@ export class EndOfMatch {
   private readonly personal: HTMLElement;
   private readonly board: Scoreboard;
   private readonly continueButton: HTMLButtonElement;
+  private readonly exitButton: HTMLButtonElement;
+  private readonly actions: HTMLElement;
 
   constructor(deps: SummaryDeps) {
     this.element = document.createElement('div');
@@ -55,11 +63,44 @@ export class EndOfMatch {
     // The same component, shown flat rather than as a hold-to-view overlay.
     this.board.element.classList.add('sb--embedded', 'sb--on');
 
+    /**
+     * Two buttons, and only where they mean two different things (playtest round 4, B4).
+     *
+     * The report asked for an exit and a rematch. Against a dedicated server there is no
+     * client-side rematch to give: the server migrates everybody back to the arena on its own
+     * clock and the vote cycle running there *is* the next match, so the honest pair is
+     * **return to the lobby** — keeping the seat, the socket and the world — and **exit to the
+     * main menu**, which drops all three.
+     *
+     * In single-player the two collapse into the same action, and shipping two buttons that do
+     * the same thing is worse than shipping one: `setNetworked` hides the exit there and the
+     * primary goes back to reading "Continue".
+     */
     this.continueButton = document.createElement('button');
     this.continueButton.type = 'button';
     this.continueButton.className = 'op-btn';
     this.continueButton.textContent = 'Continue';
     this.continueButton.addEventListener('click', () => deps.onContinue());
+
+    this.exitButton = document.createElement('button');
+    this.exitButton.type = 'button';
+    this.exitButton.className = 'op-btn op-btn--quiet';
+    this.exitButton.textContent = 'Exit to main menu';
+    this.exitButton.hidden = true;
+    this.exitButton.addEventListener('click', () => deps.onExit());
+
+    /**
+     * `op-actions`, not a new block, and `op-btn--quiet` for the secondary.
+     *
+     * Both already exist and both are already correct about the trap round 4's B13 was: a class
+     * that sets its own `display` needs an explicit `[hidden]` companion, because the UA rule
+     * that makes the attribute work is the lowest-specificity rule there is. `.op-btn` sets no
+     * `display`, so `exitButton.hidden` genuinely hides it. Inventing `.eom__actions` here
+     * would have been a fresh block with the same hole to forget.
+     */
+    this.actions = document.createElement('div');
+    this.actions.className = 'op-actions';
+    this.actions.append(this.continueButton, this.exitButton);
 
     this.element.append(
       this.outcome,
@@ -67,60 +108,57 @@ export class EndOfMatch {
       this.personal,
       this.xpSlot,
       this.board.element,
-      this.continueButton,
+      this.actions,
     );
   }
 
   /** Bind the mode's scoreboard columns. Same call the in-match board gets. */
 
   /**
-   * Say who decides when this screen ends, and **count it down** (M11 Gate B playtest).
+   * How long the **server** is still holding this screen, seconds. `null` when nobody is.
    *
-   * Single-player: the player does, and the button reads "Continue". Over the network the
-   * server does — it migrates everybody back to the arena on its own clock — so the button says
-   * so rather than implying a choice the player does not have.
+   * Written once per frame by `Game.draw`, from `(endsTick - currentTick) * DT` against the
+   * synced server clock — the same derivation the vote overlay's clock has always used. It is
+   * not integrated here and there is no local `dt` any more, which is the round-4 fix for B4's
+   * timer: a client counting for itself is a second clock for a fact the server owns, and it
+   * kept counting through a connection that had gone away.
    *
-   * The number used to be written once, from the `holdSeconds` the summary carried, and never
-   * touched again: it sat at 14 for the whole hold, which reads as a hung screen rather than a
-   * wait. `tick` runs it down from the render pass now, so the one thing on screen that claims
-   * to be a timer behaves like one.
-   *
-   * Pressing it early is allowed and takes the player **back to the game**, not out of it —
-   * see `GameScreens`'s `onLeaveSummary`.
+   * Display only. Reaching zero changes the label and nothing else: the arena arrives when the
+   * server migrates everybody, and a client that decided for itself would leave early and stand
+   * in a world that has been torn down.
    */
-  setReturnSeconds(seconds: number): void {
-    this.returnSeconds = Math.max(0, seconds);
-    this.paintButton();
-  }
-
-  /**
-   * One render frame of the return countdown.
-   *
-   * Display only: the server migrates everybody back on its own clock and this screen has no
-   * say in when that happens (`Game.summaryHoldSeconds` documents why a client that decided for
-   * itself would leave early and stand in a torn-down world). Reaching zero here therefore
-   * changes the label and nothing else — the arena arrives when the server sends it.
-   */
-  tick(dt: number): void {
-    if (this.returnSeconds <= 0) return;
-    const before = Math.ceil(this.returnSeconds);
-    this.returnSeconds = Math.max(0, this.returnSeconds - dt);
-    if (Math.ceil(this.returnSeconds) === before) return;
+  setRemainingSeconds(seconds: number | null): void {
+    const next = seconds === null ? -1 : Math.max(0, Math.ceil(seconds));
+    if (next === this.remainingSeconds) return;
+    this.remainingSeconds = next;
     this.paintButton();
   }
 
   private paintButton(): void {
-    const left = Math.ceil(this.returnSeconds);
-    this.continueButton.textContent =
-      this.returnSeconds > 0 ? `Return to lobby — ${left}s` : this.networked ? 'Return to lobby' : 'Continue';
+    const left = this.remainingSeconds;
+    if (!this.networked) {
+      this.continueButton.textContent = 'Continue';
+      return;
+    }
+    this.continueButton.textContent = left > 0 ? `Return to lobby — ${left}s` : 'Return to lobby';
   }
 
-  /** Whether a server is holding this screen. Decides the wording once the clock runs out. */
+  /**
+   * Whether a server is holding this screen.
+   *
+   * Derived from the connection rather than from the hold it happened to send. They are
+   * different facts, and taking `holdSeconds > 0` for the second meant this screen described
+   * itself as single-player whenever that number was missing — which now decides a button as
+   * well as a label, so a summary that lost its hold would have lost the way off the server
+   * with it.
+   */
   private networked = false;
-  private returnSeconds = 0;
+  /** Whole seconds left on the server's hold, or -1 for "nobody is holding this". */
+  private remainingSeconds = -1;
 
   setNetworked(on: boolean): void {
     this.networked = on;
+    this.exitButton.hidden = !on;
     this.paintButton();
   }
 

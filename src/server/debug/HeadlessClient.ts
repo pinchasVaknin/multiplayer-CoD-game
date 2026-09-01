@@ -164,6 +164,21 @@ export interface HeadlessClientOptions {
    * server's `ThrowController` reading the same command the client predicted from.
    */
   readonly throwEveryTicks?: number;
+  /**
+   * Reproduce the browser's summary-screen gate (playtest round 4, B4). **A red control.**
+   *
+   * `Game.simulate` used to call `NetClient.update` only while the screen was `MATCH`, so from
+   * the frame the post-match board went up the client stopped pinging, stopped reading and
+   * stopped noticing its own link. The hold is 14 s and `CLIENT_TIMEOUT_MS` is 10 000, so the
+   * server reaped every player who watched the board four seconds before it would have migrated
+   * them home — and no harness run could ever see it, because a `HeadlessClient` pumps
+   * unconditionally and has no screen to gate on.
+   *
+   * With this set the client goes silent from `MsgS.Summary` until the deadline that message
+   * carries, which is exactly what the shipped client did. It exists so the probe below can be
+   * watched red.
+   */
+  readonly gateOnSummary?: boolean;
 }
 
 export interface HeadlessClientReport {
@@ -319,6 +334,21 @@ export interface HeadlessClientReport {
   readonly worstBuildMs: number;
   /** Summaries received. One per match played (§6.9). */
   readonly summaries: number;
+  /**
+   * The post-match hold, end to end (playtest round 4, B4).
+   *
+   * `summaryHoldMs` is wall time from `MsgS.Summary` to the return migration actually landing —
+   * what the player spends on the summary screen. `summarySaidSeconds` is what the screen was
+   * told to display for the same interval, from the deadline on the wire. Printing both is the
+   * point: they are two independent answers to one question, and the screen's number was a
+   * guess against a clock it had stopped reading.
+   *
+   * `droppedOnSummary` is the assertion. A client that watched the board out and was closed
+   * rather than migrated is the whole of B4, and it must be false.
+   */
+  readonly summaryHoldMs: number;
+  readonly summarySaidSeconds: number;
+  readonly droppedOnSummary: boolean;
   readonly notices: readonly string[];
   /** Vote phases this client cast a vote in. */
   readonly votesCast: number;
@@ -364,6 +394,27 @@ export class HeadlessClient {
   private voteTally: readonly number[] = [];
   private decidedMode = -1;
   private summaries = 0;
+  /**
+   * The post-match hold, as this client experienced it (playtest round 4, B4).
+   *
+   * `awaitingReturn` latches at the summary and clears on the migration back to the arena, so
+   * a client that never comes home is distinguishable from one that came home instantly —
+   * a zero that means "never looked" has to fail as loudly as a zero that means "no wait".
+   */
+  private summaryAtMs = 0;
+  private summarySaidSeconds = 0;
+  private summaryHoldMs = -1;
+  private awaitingReturn = false;
+  private droppedOnSummary = false;
+  /**
+   * Wall-clock deadline while the summary gate holds this client silent, or -1.
+   *
+   * Wall clock rather than ticks, and that is not a shortcut: a gated client is not calling
+   * `NetClient.update`, so `stats.clientTick` is frozen for exactly as long as the gate lasts.
+   * A gate that waited for a tick it was itself preventing would never lift — which is the same
+   * frozen-clock trap `LiveMatch.summaryElapsed` documents on the server side.
+   */
+  private gatedUntilMs = -1;
   private readonly notices: string[] = [];
   private currentMapId = '';
   private controllerInUse: PlayerController;
@@ -526,8 +577,16 @@ export class HeadlessClient {
         onVoteState: (info) => this.onVoteState(info),
         onPrepare: (matchId, mapId) => this.onPrepare(matchId, mapId),
         onMigrated: (welcome) => this.onMigrated(welcome),
-        onSummary: () => {
+        onSummary: (info) => {
           this.summaries++;
+          this.summaryAtMs = nowMs();
+          // What the screen is told to show for this hold, from the deadline the server sent
+          // and the tick this client believes it is on — the browser's own arithmetic.
+          this.summarySaidSeconds = Math.max(0, (info.endsTick - this.net.stats.clientTick) * DT);
+          this.awaitingReturn = true;
+          if (this.opts.gateOnSummary === true) {
+            this.gatedUntilMs = nowMs() + this.summarySaidSeconds * 1000;
+          }
         },
         onNotice: (text) => {
           this.notices.push(text);
@@ -832,6 +891,20 @@ export class HeadlessClient {
     this.currentMapId = welcome.mapId;
 
     /**
+     * Close the post-match hold (playtest round 4, B4).
+     *
+     * The return to the arena is what the summary screen's countdown is counting toward, so the
+     * interval between the two is the only honest measure of how long that screen is up. A
+     * migration into a *live* match does not close it — that would report the next match's
+     * start as the previous match's return.
+     */
+    if (this.awaitingReturn && welcome.matchId === WARMUP_MATCH_ID) {
+      this.summaryHoldMs = Math.round(nowMs() - this.summaryAtMs);
+      this.awaitingReturn = false;
+      this.gatedUntilMs = -1;
+    }
+
+    /**
      * Discard every replicated mode-state channel (§4.18) — found by the §7 checker.
      *
      * The obligation list on a migration is flush, discard, resync, clear, and it applies to
@@ -910,6 +983,18 @@ export class HeadlessClient {
   /** One update. Call at roughly frame rate. */
   update(): void {
     /**
+     * The summary gate, when it is armed (playtest round 4, B4).
+     *
+     * Everything below — including `NetClient.update`, and therefore the ping, the read and the
+     * link check — is skipped, which is precisely what the browser did on the post-match screen.
+     * Returning before the counters means a gated run does not also lose ticks from the numbers
+     * every other probe is reading.
+     */
+    if (this.gatedUntilMs >= 0) {
+      if (nowMs() < this.gatedUntilMs) return;
+      this.gatedUntilMs = -1;
+    }
+    /**
      * The mid-session class change (§6.6).
      *
      * Sent once, from the same `sendLoadout` the browser's loadout editor calls on close. The
@@ -987,6 +1072,17 @@ export class HeadlessClient {
     this.readOwnEntity();
     this.pumpBuild();
     this.pumpMigrationWindow();
+
+    /**
+     * Reaped while waiting out the summary (playtest round 4, B4).
+     *
+     * Recorded here rather than at the end of the run because `state` is where `NetClient`
+     * finally notices a closed link, and the whole shape of the bug is that nothing was calling
+     * this often enough to notice. Latched: a run that then reconnects has still failed.
+     */
+    if (this.awaitingReturn && (this.net.state === 'disconnected' || this.link.state === 'closed')) {
+      this.droppedOnSummary = true;
+    }
   }
 
   disconnect(clean: boolean): void {
@@ -1072,6 +1168,9 @@ export class HeadlessClient {
       buildsCompleted: this.buildsCompleted,
       worstBuildMs: Math.round(this.worstBuildMs),
       summaries: this.summaries,
+      summaryHoldMs: this.summaryHoldMs,
+      summarySaidSeconds: this.summarySaidSeconds,
+      droppedOnSummary: this.droppedOnSummary,
       notices: [...this.notices],
       votesCast: this.votesCast,
     };

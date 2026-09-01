@@ -11,7 +11,7 @@ import { EV, createGameBus, type GameBus } from '../shared/core/Events';
 import { Input } from './input/Input';
 import { defaultBindings } from '../shared/core/Keybinds';
 import type { InputCommand } from '../shared/core/InputCommand';
-import { MAX_STEPS_PER_FRAME, type FrameSample } from '../shared/core/Loop';
+import { DT, MAX_STEPS_PER_FRAME, type FrameSample } from '../shared/core/Loop';
 import { Loop } from './engine/FrameLoop';
 import { ChopperCamera } from './streaks/ChopperCamera';
 import { makeSnapshot, type PlayerSnapshot } from '../shared/player/PlayerState';
@@ -284,14 +284,19 @@ export class Game {
   private pendingMatchId = -1;
 
   /**
-   * How long the server said to hold the summary, seconds (§6.9: 12-15 s).
+   * The server tick the summary hold expires on (§6.9, playtest round 4).
    *
-   * Held rather than counted down here: the server migrates everybody back on its own clock,
-   * and a client that decided for itself when the summary was over would leave early and sit
-   * in a torn-down world. This exists so the screen can *say* how long is left, not so it can
-   * act on it. Zero in single-player, where the player leaves when they press Continue.
+   * A deadline rather than a duration, and -1 for "nobody is holding this screen". The screen
+   * uses it to *say* how long is left, never to act: the server migrates everybody back on its
+   * own clock, and a client that decided for itself when the summary was over would leave early
+   * and sit in a world that has been torn down.
+   *
+   * It used to be `holdSeconds`, integrated frame by frame by `EndOfMatch`. Two things were
+   * wrong with that and only one of them was the arithmetic: the count started when the *client*
+   * reached the screen rather than when the *server* started holding it, and it kept running
+   * perfectly happily on a connection that had already been closed.
    */
-  private summaryHoldSeconds = 0;
+  private summaryEndsTick = -1;
 
   /**
    * Set when the server rotates to a new match while we are in one.
@@ -478,6 +483,7 @@ export class Game {
       onResume: () => this.resumeFromPause(),
       onToggleOverlay: () => this.toggleOverlayFromPause(),
       onLeaveSummary: () => this.leaveSummary(),
+      onExitSummary: () => this.exitSummary(),
       statusLine: () => this.statusLine(),
       pauseStatusLine: () => this.pauseStatusLine(),
       unrestricted: () => findMode(this.selection.modeId).unrestricted,
@@ -534,7 +540,7 @@ export class Game {
     this.voteOverlay = new VoteOverlay({
       host: uiHost,
       onVote: (phase, option) => this.world?.net?.client.sendVote(phase, option),
-      currentTick: () => this.world?.net?.client.stats.clientTick ?? 0,
+      currentTick: () => this.syncedServerTick(),
     });
 
     this.buildQueue = new MapBuildQueue({
@@ -873,7 +879,7 @@ export class Game {
         const net = this.pendingNetSummary;
         this.pendingNetSummary = null;
         const result = net !== null ? netMatchResult(net) : (match?.flow.result ?? null);
-        this.summaryHoldSeconds = net?.holdSeconds ?? 0;
+        this.summaryEndsTick = net?.endsTick ?? -1;
         if (match === null || result === null) {
           // Nothing to summarise: this can only happen if SUMMARY is entered by hand.
           this.transitionTo('MENU');
@@ -903,8 +909,10 @@ export class Game {
           this.mapEntry().name,
           banks ? report : null,
           this.profile.prestige,
-          this.summaryHoldSeconds,
+          // The connection decides this, not the hold. See `GameScreens.showSummary`.
+          this.server !== null,
         );
+        this.screens.summary.setRemainingSeconds(this.summaryRemainingSeconds());
       },
       exit: (to) => {
         this.screens.hideSummary();
@@ -1102,6 +1110,43 @@ export class Game {
     this.transitionTo('MENU');
   }
 
+  /**
+   * The summary's secondary button: leave the server (playtest round 4, B4).
+   *
+   * The genuine opposite of the primary, which is the only reason there are two of them. MENU's
+   * arrival tears the world down through the SUMMARY exit handler, `teardownWorld` clears
+   * `this.server`, and the socket closes — which frees the seat on the server immediately
+   * rather than after a ten-second timeout.
+   *
+   * Offered only when connected: in single-player it would be the same button twice.
+   */
+  private exitSummary(): void {
+    if (this.state !== 'SUMMARY') return;
+    this.transitionTo('MENU');
+  }
+
+  /**
+   * Seconds left on the server's summary hold, or null when nobody is holding it.
+   *
+   * `(endsTick - currentTick) * DT` against the synced server clock — the same expression
+   * `VoteOverlay.tick` uses for the ballot, deliberately, so the two countdowns on this client
+   * cannot mean different things. Null in single-player and null while `stats.clientTick` is
+   * still zero, which is a client that has not been told what tick it is rather than one whose
+   * hold has expired.
+   */
+  private summaryRemainingSeconds(): number | null {
+    const endsTick = this.summaryEndsTick;
+    if (endsTick < 0) return null;
+    const now = this.syncedServerTick();
+    if (now <= 0) return null;
+    return Math.max(0, (endsTick - now) * DT);
+  }
+
+  /** The tick this client is simulating, from the synced server clock. Zero with no session. */
+  private syncedServerTick(): number {
+    return this.world?.net?.client.stats.clientTick ?? 0;
+  }
+
   private enterState(id: GameStateId): void {
     this.state = id;
     this.input.setBindingsActive(id === 'MATCH');
@@ -1201,6 +1246,8 @@ export class Game {
       onMatchEnded: () => {
         this.pendingSummary = true;
       },
+      // The screen, read at the moment a command is built. See `MatchWorldDeps.inMatch`.
+      inMatch: () => this.state === 'MATCH',
       onConfigChanged: () => this.onConfigChanged(),
       onWeaponConfigChanged: () => this.onWeaponConfigChanged(),
       // M11 (§7). Suppliers rather than values: all three outlive this world, which is the
@@ -1823,49 +1870,40 @@ export class Game {
   private simulate(tick: number): void {
     const world = this.world;
     if (world === null) return;
-    // A paused match does not advance. The render pass still runs, so the pause screen is
-    // composited over a live scene and the frame histogram keeps sampling.
-    if (this.state === 'PAUSED') return;
 
     // Input crosses the netcode boundary even in single player: the sim only ever
-    // sees command data, which is what keeps the command seam real (S4.2).
-    //
-    // A dead player submits neutral commands rather than being skipped: the sim still
-    // runs for them, the corpse still collides, and the seam stays honest — which is
-    // exactly what a real server would send while waiting on a respawn. Tab is the one
-    // exception, so the scoreboard is reachable from the death screen (M5).
-    const now = performance.now();
-    const inMatch = this.state === 'MATCH';
-    const dead = world.match.isPlayerDead;
-    /**
-     * The pre-match freeze (post-M8 playtest).
-     *
-     * Applied at the *sampler*, which is the only place it can be: movement is integrated by
-     * `player.step` below, before the match ever sees the command, so a check inside `Match`
-     * would arrive a frame late and after the player had already moved. `sampleSpectating`
-     * is exactly the command a frozen player should send — zeroed axes, zeroed buttons, live
-     * view angles — so the countdown reuses it rather than growing a fourth sampler that
-     * would have to be kept in step with it.
-     *
-     * The camera is untouched by any of this: yaw and pitch are integrated in the mousemove
-     * handler and stamped onto whatever command is produced, so looking around still works.
-     */
+    // sees command data, which is what keeps the command seam real (S4.2). Which command
+    // this tick is worth is `MatchWorld.sampleCommand`'s decision, for both runtimes.
     /**
      * Networked (M10): the session owns the tick.
      *
      * `NetClient` decides *which* tick to simulate from the synced server clock rather than
      * from this frame's accumulator — S4.11's rule that a client never increments its own
      * tick number — so the whole local step loop is skipped rather than adapted. It samples
-     * through `MatchWorld.sampleForNet`, which applies the same three-way choice made below.
+     * through `MatchWorld.sampleCommand`, which applies the same three-way choice made below.
      *
-     * The `inMatch` guard still applies: a paused or menu-bound client stops sending input,
-     * and the server fills the gap by repeating the last command (S6.2), which is exactly
-     * right — a player who alt-tabbed keeps standing where they were.
+     * **Serviced on every screen, and that is the round-4 fix for B4.** This call used to be
+     * `if (inMatch) net.update()`, which conflated two decisions: *what the player's command
+     * contains* — nothing, off the match screen — and *whether this client is still talking to
+     * the server at all*. Going silent is not a neutral command. It stops the pings, stops the
+     * reads, and stops `NetClient` noticing that the link has closed, because the check at the
+     * top of `update` is the only place `state` becomes `'disconnected'`.
+     *
+     * The summary screen is held for `SUMMARY_HOLD_SECONDS` (14) and `CLIENT_TIMEOUT_MS` is
+     * 10 000, so **every player who watched the post-match board was reaped four seconds before
+     * the server would have migrated them home**, with the return `Welcome` sitting unread in a
+     * queue nobody was draining. The pause screen had the same hole and no clock to make it
+     * fire reliably. The neutral command is now `sampleCommand`'s first branch, where it says
+     * what it means.
+     *
+     * `pumpNetworkWhileHidden` has always called this unconditionally, which is the shape this
+     * follows — and is why a backgrounded tab survived the summary screen that a visible one
+     * did not.
      */
     const net = world.net;
     if (net !== null) {
       world.match.netFrozen = net.frozen;
-      if (inMatch) net.update();
+      net.update();
       world.debug.simulate(world.player, this.movementConfig);
 
       /**
@@ -1883,13 +1921,15 @@ export class Game {
       return;
     }
 
-    const frozen = world.match.inputSuppressed;
-    const cmd = !inMatch
-      ? this.input.sampleNeutral(tick, now)
-      : dead || frozen
-        ? this.input.sampleSpectating(tick, now)
-        : this.input.sample(tick, now);
-    this.transport.submit(cmd);
+    // A paused match does not advance. The render pass still runs, so the pause screen is
+    // composited over a live scene and the frame histogram keeps sampling.
+    //
+    // Below the networked branch on purpose: a pause is a local decision about a local
+    // simulation, and there is no pausing a dedicated server. A networked client that stopped
+    // here stopped talking, which is B4's mechanism arriving through the other door.
+    if (this.state === 'PAUSED') return;
+
+    this.transport.submit(world.sampleCommand(tick));
     const count = this.transport.drain(this.drainBuffer, MAX_STEPS_PER_FRAME);
     for (let i = 0; i < count; i++) {
       const drained = this.drainBuffer[i];
@@ -1922,10 +1962,18 @@ export class Game {
      */
     this.voteOverlay.tick();
     this.updateHudSurfaces();
-    // The post-match return clock. Ticked here rather than by the screen's own timer so it
-    // stops with the frame loop and cannot run on in a hidden tab against a server that has
-    // long since migrated everybody home.
-    if (this.state === 'SUMMARY') this.screens.summary.tick(dt);
+    /**
+     * The post-match return clock, once per frame, from the server's own deadline.
+     *
+     * Pushed rather than integrated: `summaryRemainingSeconds` is a pure function of a tick the
+     * server sent and a tick the clock sync maintains, so a client that stops hearing from the
+     * server stops counting — which is the honest failure, and the one the old local `dt` could
+     * not produce. Ticked from here rather than from a timer of the screen's own so it stops
+     * with the frame loop rather than running on in a background tab.
+     */
+    if (this.state === 'SUMMARY') {
+      this.screens.summary.setRemainingSeconds(this.summaryRemainingSeconds());
+    }
     this.pumpMigrationWindow();
     const buildMs = this.buildQueue.pump();
     if (buildMs > 0) this.stats.noteBackgroundBuildMs(buildMs);

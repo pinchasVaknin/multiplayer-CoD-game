@@ -455,7 +455,7 @@ export function writeSummary(w: ByteWriter, info: SummaryInfo): Uint8Array {
   w.str(info.reason);
   w.u16(info.scoreA);
   w.u16(info.scoreB);
-  w.u8v(info.holdSeconds);
+  w.i32(info.endsTick);
   w.u8v(Math.min(info.rows.length, MAX_SUMMARY_ROWS));
   for (let i = 0; i < Math.min(info.rows.length, MAX_SUMMARY_ROWS); i++) {
     const row = info.rows[i];
@@ -981,8 +981,18 @@ export interface SummaryInfo {
   readonly scoreB: number;
   readonly rows: readonly SummaryRow[];
   readonly xp: readonly SummaryXpLine[];
-  /** Seconds the summary is held before everybody is migrated back (§6.9: 12-15 s). */
-  readonly holdSeconds: number;
+  /**
+   * The master tick the summary hold expires on, and everybody is migrated back (§6.9).
+   *
+   * A **deadline**, not a duration, and that is the whole of the playtest round 4 fix for B4.
+   * A duration is only true at the instant it is sent: a client that entered the screen late,
+   * or reconnected into it, or simply read the message a frame after the one that put the
+   * screen up, would count from a number that was never about its own clock. The same shape as
+   * `VoteInfo.phaseEndsTick`, derived the same way — `(endsTick - currentTick) * DT` against
+   * the synced server clock — so the summary and the ballot cannot disagree about what a
+   * countdown is.
+   */
+  readonly endsTick: number;
 }
 
 /** The vote cycle as the server sees it. The client renders this and computes nothing. */
@@ -1153,7 +1163,7 @@ export function decodeHeader(r: ByteReader): Decoded {
       const reason = r.str();
       const scoreA = r.u16();
       const scoreB = r.u16();
-      const holdSeconds = r.u8v();
+      const endsTick = r.i32();
       const rowCount = r.u8v();
       if (r.overran || rowCount > MAX_SUMMARY_ROWS) return BAD;
       const rows: SummaryRow[] = [];
@@ -1190,7 +1200,7 @@ export function decodeHeader(r: ByteReader): Decoded {
         reason,
         scoreA,
         scoreB,
-        holdSeconds,
+        endsTick,
         rows,
         xp,
       };

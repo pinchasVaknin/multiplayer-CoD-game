@@ -204,7 +204,21 @@ export class LiveMatch extends MatchInstance {
    */
   summaryElapsed(masterTick: number): boolean {
     if (this.state !== InstanceState.ENDED || this.endedAtTick < 0) return false;
-    return (masterTick - this.endedAtTick) * DT >= this.options.summaryHoldSeconds;
+    return masterTick >= this.summaryEndsTick;
+  }
+
+  /**
+   * The master tick the hold expires on — the deadline the summary screen counts down to
+   * (playtest round 4, B4).
+   *
+   * The same number `summaryElapsed` decides on, rather than a second expression of it. The
+   * client used to be sent `holdSeconds` and integrate a local `dt` against it, which is a
+   * second clock for the one fact the server already owns: it could start late, drift, keep
+   * counting through a lost connection, and had no way of being right for a player who reached
+   * the screen a frame after the message that opened it.
+   */
+  get summaryEndsTick(): number {
+    return this.endedAtTick + Math.round(this.options.summaryHoldSeconds / DT);
   }
 
   /**
@@ -248,7 +262,7 @@ export class LiveMatch extends MatchInstance {
       scoreB: outcome?.scoreB ?? 0,
       rows,
       xp: buildXpLines(outcome?.winner ?? 'DRAW', rows),
-      holdSeconds: this.options.summaryHoldSeconds,
+      endsTick: this.summaryEndsTick,
     };
     this.summary = built;
     return built;

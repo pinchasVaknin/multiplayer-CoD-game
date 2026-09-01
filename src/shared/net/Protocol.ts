@@ -17,6 +17,13 @@
 /**
  * Bump on any layout change to any message in this file.
  *
+ * v9 (M11 Gate B, playtest round 4): `MsgS.Summary` carries the tick the hold **ends on**
+ * instead of how many seconds it lasts.
+ *
+ * A duration is only true at the instant it is sent, and the summary screen's countdown was the
+ * one place in the client still integrating a local `dt` against a server deadline. It is now
+ * the same derivation the vote overlay has always used.
+ *
  * v2: the snapshot header gained match phase, phase seconds and round (M10 playtest fix).
  * The HUD reads those off the client's own `MatchFlow`, which on a dedicated server never
  * ticks — so without them the banner and the clock showed their construction-time values for
@@ -49,7 +56,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'

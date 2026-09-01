@@ -818,7 +818,8 @@ export class Server {
       instance.markSummarySent();
       log.info(
         `match ${instance.id} over — ${summary.winner} ${summary.scoreA}-${summary.scoreB} ` +
-          `(${summary.reason}). Holding the summary for ${summary.holdSeconds}s.`,
+          `(${summary.reason}). Holding the summary until tick ${summary.endsTick}, ` +
+          `${this.cfg.summaryHoldSeconds}s from now.`,
       );
     }
     if (!instance.summaryElapsed(tickIndex)) return;

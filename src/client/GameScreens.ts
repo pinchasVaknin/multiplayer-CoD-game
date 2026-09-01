@@ -54,6 +54,8 @@ export interface GameScreensDeps {
   readonly onResume: () => void;
   readonly onToggleOverlay: () => void;
   readonly onLeaveSummary: () => void;
+  /** The summary's secondary: leave the server for the main menu (playtest round 4, B4). */
+  readonly onExitSummary: () => void;
 
   readonly statusLine: () => string;
   readonly pauseStatusLine: () => string;
@@ -111,12 +113,26 @@ export class GameScreens {
     this.summary = new EndOfMatch({
       // Sized to the largest roster any map asks for, so the board never has to grow.
       rowsPerTeam: 8,
+      /**
+       * Acts on the first press (playtest round 4, B4).
+       *
+       * This used to swallow the first click to finish the XP animation and leave only on the
+       * second, which is the reported *"you have to click twice"* — and it was this, not a
+       * focus guard and not pointer lock. The reasoning behind it was sound and the shape was
+       * not: a button labelled "Return to lobby" that does something else is a button that
+       * lies, and the moment there are two of them the player cannot tell which press was
+       * eaten by which.
+       *
+       * The XP is banked when SUMMARY is *entered*, not when the bar finishes, so skipping the
+       * animation costs nothing but the animation. Leaving finishes it and goes.
+       */
       onContinue: () => {
-        if (this.xpSummary.isPlaying) {
-          this.xpSummary.finish();
-          return;
-        }
+        this.xpSummary.finish();
         deps.onLeaveSummary();
+      },
+      onExit: () => {
+        this.xpSummary.finish();
+        deps.onExitSummary();
       },
     });
     // The M4 insertion point, filled (S6.1). `EndOfMatch` needed no other change.
@@ -138,17 +154,16 @@ export class GameScreens {
     report: XpReport | null,
     prestige: number,
     /**
-     * Seconds the server will hold this screen before migrating everybody back (M11, §6.9).
+     * Whether a server is holding this screen (M11, §6.9).
      *
-     * Zero in single-player, where the player leaves when they press Continue. Non-zero over
-     * the network, where they do not get to choose: the server takes them back to the arena on
-     * its own clock, and a button that said "Continue" without saying that would read as
-     * unresponsive for twelve seconds and then act on its own.
+     * The *connection*, not the hold it sent: over the network the player does not get to
+     * choose when this screen ends — the server takes them back to the arena on its own clock —
+     * and that stays true whether or not the number describing it arrived. The countdown itself
+     * is pushed in per frame by `Game.draw`; see `EndOfMatch.setRemainingSeconds`.
      */
-    returnSeconds = 0,
+    networked = false,
   ): void {
-    this.summary.setNetworked(returnSeconds > 0);
-    this.summary.setReturnSeconds(returnSeconds);
+    this.summary.setNetworked(networked);
     this.summary.setColumns(match.mode.getScoreboardColumns(), match.mode.name, mapName);
     this.summary.show(
       result.winner,
