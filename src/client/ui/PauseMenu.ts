@@ -6,12 +6,19 @@
  * for a build with no pause state to do and an unreasonable thing for a game to do.
  *
  * So Esc now enters `PAUSED`. The world stays built and the simulation stops advancing;
- * this screen goes over the top of it. Three buttons, because there are exactly three
- * things a paused player wants: carry on, look at the numbers, or leave.
+ * this screen goes over the top of it. Four buttons, because there are exactly four
+ * things a paused player wants: carry on, fix a setting, look at the numbers, or leave.
  *
  * **Debug overlay is a button here** rather than only F1, which is the second half of the
  * M4 note: the tuning panel needs a mouse, a mouse needs pointer lock released, and
  * releasing pointer lock used to mean quitting. Paused, the cursor is already free.
+ *
+ * **Create-a-Class is deliberately not one of them** (playtest round 4, B8). It was, from M6
+ * until round 4, and the editor was made an overlay in round 2 specifically so that opening
+ * it from here did not cost the player their seat. The doctrine changed instead: the editor
+ * is a front-end screen, and inside a match the only way to change class is keys 1-5. So the
+ * route is gone rather than made safe — `LEGAL_TRANSITIONS` no longer admits `PAUSED ->
+ * LOADOUT` at all, which is what makes this a rule instead of an omission.
  */
 
 export interface PauseMenuDeps {
@@ -29,11 +36,9 @@ export class PauseMenu {
   private readonly deps: PauseMenuDeps;
   private readonly resumeButton: HTMLButtonElement;
   /**
-   * M6. Bound after construction because `Game` registers its states — and therefore
-   * learns how to reach LOADOUT — after the menus exist.
+   * M8. Bound after construction because `Game` registers its states — and therefore
+   * learns how to reach SETTINGS — after the menus exist.
    */
-  private onLoadout: (() => void) | null = null;
-  /** M8. Same late binding as `onLoadout`, and for the same reason. */
   private onSettings: (() => void) | null = null;
 
   constructor(deps: PauseMenuDeps) {
@@ -52,8 +57,6 @@ export class PauseMenu {
 
     this.resumeButton = button('Resume', () => deps.onResume());
     this.resumeButton.classList.add('op-btn--primary');
-    // S6.3's "between spawns": the class change lands on the live match on the way back.
-    const loadout = button('Create a class', () => this.onLoadout?.());
     // M8: paused is where a player actually notices their sensitivity is wrong, and the
     // cursor is already free here.
     const settings = button('Settings', () => this.onSettings?.());
@@ -63,19 +66,16 @@ export class PauseMenu {
 
     const actions = document.createElement('div');
     actions.className = 'op-actions op-actions--stack';
-    actions.append(this.resumeButton, loadout, settings, debug, quit);
+    actions.append(this.resumeButton, settings, debug, quit);
 
     const hint = document.createElement('p');
     hint.className = 'op-screen__sub';
     // F1 is no longer bound during play (M5 playtest note); the overlay is a button here.
-    hint.textContent = 'Esc to resume · overlay above · Tab for the scoreboard';
+    // The class line is the whole of B8: 1-5 is the in-match route, and the only one.
+    hint.textContent = 'Esc to resume · 1-5 to change class · Tab for the scoreboard';
 
     this.screen.append(heading, this.status, actions, hint);
     deps.host.appendChild(this.screen);
-  }
-
-  setOnLoadout(fn: () => void): void {
-    this.onLoadout = fn;
   }
 
   setOnSettings(fn: () => void): void {

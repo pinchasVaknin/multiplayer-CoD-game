@@ -44,12 +44,12 @@ export interface GameScreensDeps {
   readonly serverConfigured: () => boolean;
   readonly displayName: () => string;
   readonly onDisplayName: (name: string) => void;
+  /** The menu's Create-a-Class button. The only door into the editor (round 4, B8). */
   readonly onLoadout: () => void;
   /** M8. Open the settings screen from the menu or the pause screen. */
   readonly onSettings: () => void;
-  readonly onLoadoutBack: () => void;
-  /** Whether the editor may offer "Start match". See `LoadoutEditorDeps.canLaunch`. */
-  readonly canLaunch: () => boolean;
+  /** The editor's one action: persist and go back to the menu (round 4, B5). */
+  readonly onLoadoutSaveAndExit: () => void;
   readonly onQuitToMenu: () => void;
   readonly onResume: () => void;
   readonly onToggleOverlay: () => void;
@@ -61,6 +61,14 @@ export interface GameScreensDeps {
   readonly pauseStatusLine: () => string;
   /** Whether the selected mode lifts unlock gates (the Shooting Range does). */
   readonly unrestricted: () => boolean;
+  /**
+   * Anisotropy for the editor's weapon preview (round 4, F15).
+   *
+   * The same number `ClientMatch` builds its viewmodels with, read from the one
+   * `ProceduralTextures` the renderer owns — the weapon textures are cached per process and
+   * the first caller decides, so passing a different one here would be a silent second answer.
+   */
+  readonly anisotropy: () => number;
 }
 
 export class GameScreens {
@@ -90,9 +98,8 @@ export class GameScreens {
     this.loadoutEditor = new LoadoutEditor({
       host: deps.host,
       profile: deps.profile,
-      onBack: deps.onLoadoutBack,
-      onLaunch: deps.onLaunch,
-      canLaunch: deps.canLaunch,
+      onSaveAndExit: deps.onLoadoutSaveAndExit,
+      anisotropy: deps.anisotropy,
       unrestricted: deps.unrestricted,
     });
 
@@ -105,9 +112,6 @@ export class GameScreens {
       onQuit: deps.onQuitToMenu,
       statusLine: deps.pauseStatusLine,
     });
-    // A pause-screen loadout edit comes back through PAUSED, so the world it left is the
-    // world it returns to and the class change lands on a live match.
-    this.pauseMenu.setOnLoadout(deps.onLoadout);
     this.pauseMenu.setOnSettings(deps.onSettings);
 
     this.summary = new EndOfMatch({

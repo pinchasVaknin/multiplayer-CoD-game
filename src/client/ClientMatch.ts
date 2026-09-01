@@ -963,23 +963,18 @@ export class Match {
   }
 
   /**
-   * A front-end surface has the keyboard and the cursor (M11 Gate B).
+   * Whether the player's command should be neutered this tick. Read by both samplers.
    *
-   * The loadout overlay and the quick class selector are opened **over a running match** —
-   * there is no pausing a dedicated server — so the player's body has to stand still while
-   * they are reading a menu, without the match stopping around them.
-   *
-   * Deliberately separate from `inputFrozen`. That flag also drives `bots.inputFrozen`, and a
-   * player opening their class list should not stop the bots; and over the network it is the
-   * *server's* answer, which this client is in no position to overrule. This one is local,
-   * affects only which sampler `Game` and `MatchWorld` choose, and is cleared by the same call
-   * that closes the surface.
+   * It used to be `uiFocus || inputFrozen`, where `uiFocus` meant *a front-end surface has the
+   * keyboard and the cursor* — built for the Create-a-Class overlay, which was opened over a
+   * running match because there is no pausing a dedicated server. Playtest round 4 (B8) made
+   * the editor a front-end screen again, and that left `uiFocus` a boolean with **no writer**:
+   * dead state sitting in the input path, indistinguishable from a flag somebody forgot to
+   * set. The quick class selector never needed it — it is offered only in the two windows
+   * where the body is already frozen, which is what `inputFrozen` says.
    */
-  uiFocus = false;
-
-  /** Whether the player's command should be neutered this tick. Read by both samplers. */
   get inputSuppressed(): boolean {
-    return this.uiFocus || this.inputFrozen;
+    return this.inputFrozen;
   }
 
   /** True when this match is driven by a server. See `MatchDeps.networked`. */

@@ -1,5 +1,4 @@
 import type { GameEvents } from '../../shared/core/Events';
-import { WEAPON_DEFS } from '../../shared/weapons/WeaponDefs';
 import { HEADSHOT_PATH, HEADSHOT_VIEWBOX, ICON_VIEWBOX, iconFor, makeIconSvg } from './WeaponIcons';
 
 /**
@@ -42,7 +41,7 @@ export class KillfeedView {
 
   private readonly rows: Row[] = [];
   /** Cached icon markup per weapon id, so a path is parsed once and not once per kill. */
-  private readonly iconCache = new Map<string, SVGSVGElement | null>();
+  private readonly iconCache = new Map<string, SVGSVGElement>();
 
   constructor() {
     this.element = document.createElement('div');
@@ -188,29 +187,20 @@ export class KillfeedView {
   }
 
   /**
-   * Draw the weapon's outline, or its name when that class has no outline yet.
+   * Draw the weapon's outline.
    *
-   * The fallback is why `iconFor` returns null rather than a generic box: a feed row that
-   * says `M4 CARBINE` is informative, and a row with a placeholder rectangle in it is a
-   * promise the build has not kept.
+   * It used to be *"the outline, or its name when that class has no outline yet"*, and the
+   * name was what eleven of the twelve weapons got, because the icons were one hand-drawn AR
+   * path keyed by class. `iconFor` is per weapon and projected from the model spec now
+   * (playtest round 4, F15), so there is always a shape and it is always this weapon's.
    */
   private paintIcon(row: Row, weaponId: string): void {
     row.iconSlot.replaceChildren();
-    const def = WEAPON_DEFS[weaponId];
     const cached = this.iconCache.get(weaponId);
     if (cached === undefined) {
-      const path = iconFor(def?.class);
-      const svg = path === null ? null : makeIconSvg(path, ICON_VIEWBOX, 'hud-feed__icon-svg');
+      const svg = makeIconSvg(iconFor(weaponId), ICON_VIEWBOX, 'hud-feed__icon-svg');
       this.iconCache.set(weaponId, svg);
-      if (svg === null) {
-        row.iconSlot.textContent = def?.name ?? weaponId.toUpperCase();
-        return;
-      }
       row.iconSlot.appendChild(svg.cloneNode(true));
-      return;
-    }
-    if (cached === null) {
-      row.iconSlot.textContent = def?.name ?? weaponId.toUpperCase();
       return;
     }
     row.iconSlot.appendChild(cached.cloneNode(true));

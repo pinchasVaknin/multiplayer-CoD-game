@@ -2,7 +2,7 @@ import { ALL_EQUIPMENT, type EquipmentId } from '../equipment/EquipmentDefs';
 import { PERK_IDS, perkDef, type PerkId } from '../perks/PerkDefs';
 import { ATTACHMENT_IDS, attachmentDef, fitsWeapon, type AttachmentId } from '../weapons/Attachments';
 import { requireWeapon, WEAPON_DEFS, type WeaponDef } from '../weapons/WeaponDefs';
-import { CAMO_IDS, type CamoId } from './Camos';
+import { camoDef, CAMO_IDS, type CamoId } from './Camos';
 import { fieldUpgradeDef, FIELD_UPGRADE_IDS, type FieldUpgradeId } from './FieldUpgrades';
 import type { LoadoutSlot } from './Loadouts';
 import type { SaveV2, WeaponSaveData } from './SaveData';
@@ -44,7 +44,14 @@ export const ATTACHMENT_KILL_THRESHOLDS: Readonly<Record<AttachmentId, number>> 
   muzzle_suppressor: 60,
 };
 
-/** Account level each piece of equipment becomes selectable at. */
+/**
+ * Account level each piece of equipment becomes selectable at.
+ *
+ * The one gated category whose level lives in a side table rather than on the def, which is
+ * half of why B7 happened: everything else answers `def.unlockLevel` and this has to be looked
+ * up. It stays here — this file is the one about gates — and `equipmentUnlockLevel` below is
+ * the only reader, so the lookup has exactly one place to be wrong.
+ */
 export const EQUIPMENT_UNLOCK_LEVEL: Readonly<Record<EquipmentId, number>> = {
   frag: 1,
   flashbang: 1,
@@ -52,6 +59,22 @@ export const EQUIPMENT_UNLOCK_LEVEL: Readonly<Record<EquipmentId, number>> = {
   semtex: 8,
   claymore: 16,
 };
+
+/**
+ * The level, or a throw. **Not a default** (playtest round 4, B7).
+ *
+ * `EQUIPMENT_UNLOCK_LEVEL[id] ?? 1` is what both readers used to say, and a `?? 1` on a table
+ * of gates means a missing row silently unlocks the item at level one — the quietest possible
+ * failure for a progression system. `noUncheckedIndexedAccess` forces *something* to be
+ * written there; this is the version that is loud, in the same shape as `requireWeapon`.
+ */
+export function equipmentUnlockLevel(id: EquipmentId): number {
+  const level = EQUIPMENT_UNLOCK_LEVEL[id];
+  if (level === undefined) {
+    throw new Error(`Equipment "${id}" has no row in EQUIPMENT_UNLOCK_LEVEL.`);
+  }
+  return level;
+}
 
 /**
  * Per-weapon XP for each weapon level, 1..10.
@@ -154,7 +177,7 @@ export class UnlockState {
 
   equipmentUnlocked(id: EquipmentId): boolean {
     if (this.unrestricted || this.isPermanent(id)) return true;
-    return this.level >= (EQUIPMENT_UNLOCK_LEVEL[id] ?? 1);
+    return this.level >= equipmentUnlockLevel(id);
   }
 
   fieldUpgradeUnlocked(id: FieldUpgradeId): boolean {
@@ -166,7 +189,21 @@ export class UnlockState {
     return this.camos[id] === true;
   }
 
-  /** What a locked item says on its chip. Empty when the item is available. */
+  /**
+   * What a locked item says on its chip. Empty when the item is available.
+   *
+   * **One of these per gated category, and the editor asks for all of them** (playtest round
+   * 4, B7). The report was *"the gas grenade shows no unlock level"* — SMOKE, whose row in
+   * `EQUIPMENT_UNLOCK_LEVEL` has said 3 since M6. The table was never the problem: there was
+   * no `equipmentRequirement` to ask, so `LoadoutEditor` passed the literal `'LOCKED'` and the
+   * level the gate was enforcing never reached the screen. Semtex and the claymore had exactly
+   * the same hole, and perks and field upgrades were reading `unlockLevel` off the def
+   * themselves — three ways of answering one question, one of which answered nothing.
+   *
+   * They all live here now, beside the predicates they are the explanation for, so a gate and
+   * its caption cannot say different things. `scripts/check-unlocks.mjs` fails if a category
+   * gains a gate without one, or if the editor stops asking.
+   */
   weaponRequirement(weaponId: string): string {
     if (this.weaponUnlocked(weaponId)) return '';
     return `LEVEL ${requireWeapon(weaponId).unlockLevel}`;
@@ -176,6 +213,34 @@ export class UnlockState {
     const remaining = this.attachmentKillsRemaining(weaponId, attachment);
     if (remaining === 0) return '';
     return `${remaining} MORE KILLS`;
+  }
+
+  equipmentRequirement(id: EquipmentId): string {
+    if (this.equipmentUnlocked(id)) return '';
+    return `LEVEL ${equipmentUnlockLevel(id)}`;
+  }
+
+  perkRequirement(id: PerkId): string {
+    if (this.perkUnlocked(id)) return '';
+    return `LEVEL ${perkDef(id).unlockLevel}`;
+  }
+
+  fieldUpgradeRequirement(id: FieldUpgradeId): string {
+    if (this.fieldUpgradeUnlocked(id)) return '';
+    return `LEVEL ${fieldUpgradeDef(id).unlockLevel}`;
+  }
+
+  /**
+   * Camos are earned by a challenge rather than by a level, so the chip is the challenge.
+   *
+   * The one requirement here that is not a number, which is why it is worth being explicit:
+   * `CamoDef.requirement` is authored prose ("25 kills with the weapon") and `Challenges.ts`
+   * is what actually awards it. This reads the def so the picker and the challenge list quote
+   * the same sentence.
+   */
+  camoRequirement(id: CamoId): string {
+    if (this.camoUnlocked(id)) return '';
+    return camoDef(id).requirement.toUpperCase();
   }
 
   /** Everything a token could still be spent on, for the prestige screen. */
@@ -335,7 +400,7 @@ export function unlocksAtLevel(level: number): string[] {
     if (perkDef(id).unlockLevel === level) out.push(perkDef(id).name);
   }
   for (const eq of ALL_EQUIPMENT) {
-    if ((EQUIPMENT_UNLOCK_LEVEL[eq.id] ?? 1) === level) out.push(eq.name);
+    if (equipmentUnlockLevel(eq.id) === level) out.push(eq.name);
   }
   for (const id of FIELD_UPGRADE_IDS) {
     if (fieldUpgradeDef(id).unlockLevel === level) out.push(fieldUpgradeDef(id).name);

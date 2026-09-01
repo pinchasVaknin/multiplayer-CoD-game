@@ -5320,6 +5320,14 @@ section's confidence came from reading the code rather than from watching the pa
 
 ## Create-a-Class was a state where it should have been an overlay
 
+**Superseded at round 4. The diagnosis below stands; the fix it describes has been removed.**
+Round four's report asks for the opposite design — the editor is a front-end screen and inside a
+match the only way to change class is keys 1-5 — so there is no overlay any more and no route
+into the editor from `MATCH` or `PAUSED` at all. The paragraph about the deferral, two below,
+is the half that survived and it now protects the 1-5 path alone. See "the loadout doctrine"
+under round 4 for what replaced this and why. Kept rather than deleted because the *diagnosis*
+is still the record of what was wrong with the M11 §6.6 edge.
+
 The editor is two different things sharing one screen. From the front end it is a state: no
 world, nothing running, `LOADOUT` is honest. From inside a match it is an overlay — and it was
 the state in both cases, so every route out went somewhere costly. Back went to `loadoutReturn`;
@@ -5327,10 +5335,11 @@ Escape went to `PAUSED`; and the editor's own **"Start match"** button calls `on
 clears `multiplayerJoin` and starts a solo game. That is the reported *"kicks the player out to
 a Solo game"*, exactly.
 
-Opened over a live world it is now an overlay: the state never leaves `MATCH` or `PAUSED`, the
-socket is untouched, the match runs underneath (there is no pausing a dedicated server), the
-body stands still through `ClientMatch.uiFocus`, and "Start match" is not offered because there
-is no match to start from inside one.
+Opened over a live world it became an overlay: the state never left `MATCH` or `PAUSED`, the
+socket was untouched, the match ran underneath (there is no pausing a dedicated server), the
+body stood still through `ClientMatch.uiFocus`, and "Start match" was not offered because there
+is no match to start from inside one. All of that is gone at round 4, `uiFocus` included — with
+the overlay removed it was a boolean with no writer.
 
 **The class change itself had to be deferred locally as well**, and this is Tier 1 #20 arriving
 from the client's side: `meta.setLoadout` re-runs the perk hooks and one of them writes
@@ -5382,6 +5391,12 @@ the digits — offered in exactly two windows and nowhere else:
 
 Deliberately not offered while alive and playing: there the answer is Create-a-Class and the
 change lands on the next death, which is CoD's rule.
+
+**Corrected at round 4.** Create-a-Class is no longer reachable from inside a match, so these
+two windows are not one route among several — they are the *only* way to change class in a
+match. The sentence above described a fallback that no longer exists; the rule it states is
+unchanged, and the panel it describes now carries more weight than it did. See "the loadout
+doctrine" below.
 
 The digit listener is registered *after* the vote overlay's, so a ballot keeps first refusal,
 and it consumes the key — picking class 2 does not also pull out the pistol, and picking class 5
@@ -5887,3 +5902,267 @@ what it has is the socket behaviour the screen was breaking.
 - A **backgrounded** tab survived the summary screen that a visible one did not.
   `pumpNetworkWhileHidden` has always called `net.update()` unconditionally, which is both the
   shape this fix follows and a small proof that it is safe.
+
+## Playtest round 4 — the loadout doctrine, and a picker that never showed the weapon
+
+B5, B8, B11, B7 and F15. Two of them are one design decision and it **reverses round two**, one
+is a screen that rebuilt itself on every click, one is a gate whose number never reached the
+screen, and one is a picker of twelve names for objects nobody could see.
+
+### The decision, first, because two of the reports are it
+
+**The editor is a front-end screen. Inside a match the only way to change class is keys 1-5.**
+
+That is not a bug fix. M11 §6.6 put `MATCH -> LOADOUT` in the transition table for the warmup
+arena; round two found that every route out of the editor went somewhere costly and fixed it by
+making the editor an *overlay* over the live world, so there was no transition left to route
+wrongly. The report now asks for the opposite, so the overlay is **removed** rather than
+repaired, and the record above has been rewritten rather than left standing: "Create-a-Class was
+a state where it should have been an overlay" now says what it was and what happened to it.
+
+Three things went with it — the pause menu's button, `Game.openLoadout`/`closeLoadout`, and the
+`MATCH`, `PAUSED` and `SUMMARY` edges into `LOADOUT` — and the third is the one that matters,
+because it turns the doctrine from a habit into a rule. `LEGAL_TRANSITIONS` now reads
+`LOADOUT: ['MENU']` and no other row names it as a target, so a route added by accident throws
+`Illegal game transition` on the frame it is taken. That is stronger than the grep the brief
+asked for, and the grep agrees with it: one `transitionTo('LOADOUT')` in the tree, wired to the
+main menu's button, and one caller of `loadoutEditor.show()`.
+
+**What survived is the half that protects the path that is left.** The deferral of
+`meta.setLoadout` (Tier 1 #20) was built for the overlay and matters more without it: a class
+applied to a standing body re-runs the perk hooks, one of which writes
+`PlayerController.speedScale`, so the client predicts a speed the server — which defers to the
+next spawn — is not simulating. `pickQuickClass` is now the **only** caller of that pair, so
+`ClientMatch.applyLoadout` and `ServerMatch.setPendingLoadout` are load-bearing for 1-5 alone.
+
+Two things did not survive, and both are the same shape as the `editorOpen` field: code whose
+only reason to exist was the route that has gone.
+
+- `ClientMatch.uiFocus` — *"a front-end surface has the keyboard and the cursor"* — had **no
+  writer left**. A boolean in the input path that nothing sets is indistinguishable from one
+  somebody forgot to set. `inputSuppressed` is `inputFrozen` now.
+- `HudSurfaceState.editorOpen` was tested by both `scoreboardOpen` and `quickLoadoutWindow`, and
+  both already required `screen === 'MATCH'`, where it can no longer be true. Round four's own
+  surface table exists to say what each surface is derived from; a condition that cannot fire is
+  a row that has stopped describing the code.
+
+**The cost, stated rather than glossed:** a player connected to a server cannot now *build* a
+class without leaving it. They can pick among the five they have, on 1-5, in the two windows the
+quick selector offers — and to edit the sixth perk they quit to the menu. That is what the
+report asks for and it is the right trade for a game with no lobby screen, but it is a real
+loss compared to the overlay and it is the thing to watch for in the next round.
+
+### B5 — one button, and the save is on the way out
+
+*"Replace the exit-to-match button with save-and-exit, going to the main menu."* The button the
+report names is the editor's own **"Start match"**, which called `onLaunch` — the same call the
+main menu's Start uses, which clears `multiplayerJoin` and launches a solo game. With the editor
+reachable only from the menu there is exactly one destination, so there is exactly one button:
+**Save and exit**. Two buttons that both land on MENU would be the pair P2 refused to ship.
+
+The flush is in the `LOADOUT` state's **exit handler**, not on the button. Every route out passes
+through it — the button, Escape, and anything added later — which is what makes "no route leaves
+without saving" a property of the state rather than of one listener. `Profile.editLoadout`
+already persisted each edit, but through `SaveStore.touch`, which debounces; leaving the screen
+is exactly the moment a debounce stops being a kindness.
+
+### B11 — the list that jumped, and why saving `scrollTop` would have been the wrong fix
+
+*"Selecting a weapon scrolls the list back to the top."*
+
+`edit()` called `paint()` called `screen.replaceChildren(...)`. The `.lo-options` element the
+player had scrolled — `max-height: 320px; overflow-y: auto` — was **thrown away on every click**,
+and its replacement was a fresh node, and a fresh node's `scrollTop` is 0. The brief was right
+that saving and restoring the offset is the plaster: it removes the symptom and leaves the whole
+screen rebuilt twelve times a minute.
+
+So `paint()` runs once per `show()` and nothing else calls it. Every mutable piece of the screen
+registers a closure in `refreshers` and `refresh()` runs them; every argument of an option past
+its label is a **predicate rather than a value**, so the element is built once and decides what
+it says each time it is asked. Changing slot, equipping a class and renaming one are all
+refreshes now, not repaints. Opening a row appends its options and closing one removes them,
+truncating `refreshers` back to the length it had before — a closure still holding a detached
+node is work done on nothing, and the quiet kind of accumulation that becomes a leak.
+
+The reason the in-place refresh is *complete* rather than approximate is worth writing down,
+because it is what makes the rebuild unnecessary: **an edit inside the open row can never change
+which options that row offers.** Overkill changes the secondary weapon list and lives in a perk
+row; a primary change re-lists the attachments row; only one row is open at a time. Each of
+those closed rows is rebuilt when it is next opened. Preserved scroll is then the test rather
+than the mechanism — nothing is preserved, because nothing was destroyed.
+
+### B7 — the brief's hypothesis was wrong, and the real one is worse
+
+*"The gas grenade shows no unlock level in the picker."*
+
+The suggested mechanism was a missing table row. It is not: there is no gas grenade — the
+tacticals are FLASHBANG and SMOKE, `רימון גז` is the smoke, and `EQUIPMENT_UNLOCK_LEVEL.smoke`
+has said **3** since M6. The gate was reading it correctly the whole time.
+
+**The editor passed the string literal `'LOCKED'`.** Weapons asked `unlocks.weaponRequirement`,
+attachments asked `unlocks.attachmentRequirement`, perks and field upgrades read `unlockLevel`
+off their own def, and equipment — the one category whose level lives in a side table rather
+than on the def — had nothing to ask, because `UnlockState` had no `equipmentRequirement`. Three
+ways of answering one question, one of which answered nothing. SEMTEX (8) and CLAYMORE (16) had
+the identical hole; smoke is simply the first one a low-level player meets.
+
+All six requirements come from `UnlockState` now, beside the predicates they are the explanation
+for, so a gate and its caption cannot say different things. Two smaller things fell out:
+
+- `EQUIPMENT_UNLOCK_LEVEL[id] ?? 1` was what both readers said. `noUncheckedIndexedAccess`
+  forces *something* there, and `?? 1` on a table of gates means a missing row silently unlocks
+  the item at level one — the quietest possible failure for a progression system.
+  `equipmentUnlockLevel` throws instead, in the same shape as `requireWeapon`.
+- Camos are gated by a challenge rather than by a level, and their chip said `LOCKED` too. It
+  quotes `CamoDef.requirement` now, which is the same sentence `Challenges.ts` awards against.
+
+**And the class of bug is a check that fails.** `scripts/check-unlocks.mjs`, wired into
+`npm run check`, tests both halves of a gate, because either alone is silent: every gated item
+has an unlock record, **and** every gated category has a requirement accessor that the editor
+actually calls. The second half is the one that was broken and no amount of table-checking would
+have found it. A literal requirement string in the picker fails it by name.
+
+Watched red three ways, because a check nobody has seen fail is a check that has not been
+written yet:
+
+| Red control | What it said |
+|---|---|
+| `smoke: 3` deleted from the table | `equipment "smoke" has no row in EQUIPMENT_UNLOCK_LEVEL` |
+| the picker's `'LOCKED'` literal restored — **the bug as it shipped** | *does not call unlocks.equipmentRequirement*, and *passes the literal requirement "LOCKED"* |
+| `equipmentRequirement` removed from `UnlockState` | `UnlockState has no equipmentRequirement` |
+
+Its limits are the cosmetic audit's: it reads sources with regular expressions, so it knows the
+editor *names* the accessor and not that the string reaches a DOM node. What is on the screen is
+a browser claim.
+
+### F15 — the picker shows the weapon, from the builder that makes the weapon
+
+The editor printed twelve names and thirteen numbers and never once showed the object.
+`LoadoutStats` has been the point of that screen since M6 precisely because it is repainted from
+`resolveLoadout` — *the same call the match makes* — so the numbers cannot be a marketing chart.
+`WeaponPreview` is that argument applied to the picture: the model is `buildWeaponModel`, the
+viewmodel's own builder, from the same `WeaponModelSpec`, with the same three shared materials
+and the same procedurally generated camo. There is no second description of a rifle in it.
+
+Three decisions inside that are not obvious:
+
+- **It has a renderer of its own.** `Renderer`'s canvas is full-screen and *behind* the DOM
+  front end, and `.op-screen` paints a near-opaque gradient with a backdrop blur over all of it,
+  so scissoring the preview into a corner of the main canvas would put it behind the screen it
+  belongs to. The context is created on the first `show()` rather than at boot — most sessions
+  never open the editor.
+- **The framing comes from the geometry, not from a per-weapon number.** The pistol is genuinely
+  a different size (`WeaponModelSpec.scale` says so) and a fixed camera distance would draw one
+  as a speck and clip the other. The bounding box is taken from what was just built, so a spec
+  change moves the framing with it.
+- **A hovered weapon is drawn bare.** The camo belongs to the equipped weapon in that slot; a
+  weapon under the cursor has not been equipped, and painting the class's finish onto it would
+  show a combination that does not exist. Choosing a camo repaints the equipped model with it,
+  which is the point of putting the two on one screen. Attachments are **not** modelled — the
+  builder has no notion of them, and inventing one here would be the second source this feature
+  exists to remove.
+
+The spin is ticked from `Game.draw`, not from a timer of its own: same reasoning as the summary
+countdown's, and a weapon spinning in a background tab is a GPU nobody asked for.
+
+### `WeaponIcons` was the second source, and the brief said to decide about it
+
+It was one hand-typed 48-coordinate `AR` outline keyed by weapon **class**, with `iconFor`
+returning null for the eight classes nobody had drawn — so eleven of the twelve shipped weapons
+printed their name in the killfeed instead of a shape.
+
+The decision is that it stops being a source. `weaponSilhouettePath` projects the same
+`WeaponModelSpec` orthographically down +X — the side view the specs were authored to read at,
+which is what "the LMG reads as heavier than the SMG at a glance" means — and every part becomes
+one quad in the union. `rx` is honoured because it rotates in exactly the plane being drawn (the
+grip's rake, the stock's drop, the magazine's curve); `ry` and `rz` are ignored, because they
+turn a part out of this plane and an ejection-port sliver seen edge-on is not part of a 16-pixel
+silhouette. The glass and the red dot are skipped: they are what you see *through*.
+
+Measured over the shipped roster: **12 weapons, 12 distinct silhouettes, 19-25 quads each, every
+coordinate inside the 48 × 16 box with its 0.5 margin honoured.** The fit is uniform-scale, and
+both constraints bind for different weapons — the pistol is height-limited and 19 units wide,
+the snipers are width-limited and span the full 47 — which is the proportion difference the icon
+exists to carry. The name fallback is gone: an id with no spec of its own gets `AR_BASE` from
+`modelSpecFor`, which is exactly what the *viewmodel* would draw for it, so the feed and the
+hands still agree.
+
+### Measured
+
+Nothing in this session changes a number the harness reports, which is the honest description of
+what was verified: the work is a screen, a doctrine and a check, and the harness's job here was
+to show that removing `editorOpen` from two HUD predicates and `uiFocus` from the input path did
+not move anything. `npm run skirmish`, three headless clients, shipped timings, one full cycle
+through a vote and a migration:
+
+| Probe | Result |
+|---|---|
+| Quick loadout window | 9 800 ticks over **29 windows** (6 206 respawn / 3 594 pre-match) |
+| ...open while alive and out of the freeze | **0** — the B13 assertion, and it blocks |
+| Tab surviving `neutralise` while dead | **3 184** of 6 216 dead ticks; board open 3 184 |
+| Spectator invariants | 6 238 selections while dead, **0 self / 0 enemy / 0 dead** |
+| Divergence checker | **0 / 7 372** per client |
+| Mispredictions into a live match | **0** (§8.9 requires 0); to the arena 0; spawn window 0 |
+| Live roster | 3H + 7B = 10, the mode's authored count |
+| The run | **FLOW CHECK PASSED** |
+
+Unchanged and expected: `post-match hold: NOT EXERCISED`, at shipped timings, for the reason the
+B4 session recorded.
+
+| Probe | Result |
+|---|---|
+| `npm run leak`, 100 cycles | subscriptions **26 → 26 (+0)**, heap 12.65 → 13.29 MiB (+0.64). LEAK CHECK PASSED |
+| `npm run check` | boundaries, cosmetic audit, **unlock audit** and all three typecheck targets pass |
+| Unlock audit red controls | 3 of 3 went red; see the table above |
+| Weapon silhouettes | 12 weapons, **12 distinct**, 19-25 quads each, 0 coordinates outside the box |
+
+And the grep the brief asked for, which is now the weaker of the two proofs:
+
+| Question | Answer |
+|---|---|
+| `transitionTo('LOADOUT')` | **one**, `Game.ts`, wired to the main menu's button |
+| callers of `loadoutEditor.show()` | **one**, the `LOADOUT` state's `enter` |
+| rows of `LEGAL_TRANSITIONS` naming `LOADOUT` as a target | **one**, `MENU` |
+
+### Needs a browser
+
+Every claim in this session is about a screen, and `HeadlessClient` builds no `ClientMatch`, no
+`Game` and no DOM. The harness proves the rules around the editor did not move; it cannot see
+the editor. The silhouettes were rendered to a standalone SVG page and looked at — twelve
+distinct, recognisable shapes — but **not at 42 × 14 in the killfeed**, which is the size that
+decides whether they read.
+
+- **B11, and it is the one to check first.** Open Create-a-Class, open the Primary row, scroll to
+  the bottom of the weapon list and pick something. The list must **not** move. Then: change
+  class on the left, rename one, equip one, fit an attachment — none of those may scroll either
+  the option list or the page.
+- **B5.** The editor must offer **one** button, reading "Save and exit", landing on the main
+  menu. Edit a class, leave with the button, reload the page: the edit is there. Do it again
+  leaving with **Escape**: the edit is there too.
+- **B8.** Pause a match: there must be no "Create a class" button. Escape out, press 1-5: the
+  class still changes in the two windows and nowhere else. There is no route into the editor
+  from a match — if one is left, it throws `Illegal game transition` rather than opening.
+- **B7.** At a low level, open Lethal and Tactical. SMOKE must read `LEVEL 3`, SEMTEX `LEVEL 8`,
+  CLAYMORE `LEVEL 16` — and the camo rows must name their challenge rather than saying LOCKED.
+- **F15.** The weapon must be visible, centred, spinning on the spot rather than wobbling, and
+  it must change as the cursor moves down the weapon list. Choose a camo: the model must take
+  it. Open the Sidearm rows: the pistol must be the one on show. Then check the frame cost with
+  the editor open — it is a second WebGL context and the first one anybody has measured.
+- **The killfeed.** Get killed by several different weapons and look at the icons at their real
+  size. This is the claim the SVG page cannot make.
+
+### Found while here
+
+- **`ClientMatch.uiFocus` and `HudSurfaceState.editorOpen` both lost their last writer** with the
+  overlay, and both are removed rather than left. Recorded here rather than under a report
+  because the pattern is worth the line: this milestone's standing failure is a fact that moved
+  and left its readers behind, and this is the mirror image — a *route* that went away and left
+  its guards behind. A guard for a case that can no longer arise reads exactly like a guard
+  somebody forgot to trigger.
+- **`EQUIPMENT_UNLOCK_LEVEL` is the only gated category whose level lives in a side table**
+  rather than on its def, which is half of why B7 was easy to write. It stays where it is —
+  `Unlocks.ts` is the file about gates — but it now has exactly one reader
+  (`equipmentUnlockLevel`) instead of two ad-hoc lookups with `?? 1` on the end.
+- **The editor's "Start match" is gone and the main menu's is not.** Nothing else offered it, so
+  no flow lost a step; a player who wants to play now presses Start on the screen that has
+  always had one.

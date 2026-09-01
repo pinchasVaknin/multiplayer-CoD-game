@@ -1,41 +1,37 @@
-import type { WeaponClass } from '../../shared/weapons/WeaponDefs';
+import { weaponSilhouettePath } from '../weapons/WeaponSilhouette';
 
 /**
- * Killfeed icons, as SVG path data written here rather than loaded (brief S6.5, S2).
+ * Killfeed icons, drawn rather than loaded (brief S6.5, S2).
  *
- * Zero external assets means the silhouette of a rifle is a string of coordinates in a
- * source file. Each path is drawn in a 48 x 16 viewBox with the barrel pointing right and
- * the grip below the line, so every class shares one baseline and a feed row does not shift
- * when the weapon changes.
+ * Zero external assets means the silhouette of a rifle is geometry in a source file. It used
+ * to be geometry *in this file*: one hand-typed 48-coordinate `AR` outline, keyed by weapon
+ * **class**, with `iconFor` returning null for the eight classes nobody had drawn and the feed
+ * falling back to the weapon's name. Eleven of the twelve shipped weapons printed their name.
  *
- * **Only the classes that exist are drawn.** M4 ships one weapon, and eight silhouettes for
- * weapons that do not exist yet is exactly the kind of scaffolding this project does not
- * ship. `iconFor` therefore returns `null` for a class with no path and the feed falls back
- * to the weapon's *name* — a real alternative rendering, not a placeholder box, and the one
- * M5 will see for each new weapon until its outline is drawn.
+ * **That made this a second source for what a weapon looks like** (playtest round 4, F15), and
+ * the instruction attached to F15 was that there should be one. So the path now comes from
+ * `weaponSilhouettePath`, which projects the same `WeaponModelSpec` the viewmodel is built
+ * from — the icon is the gun, seen from the side, and it cannot drift from it because there is
+ * nothing left here to drift. Twelve weapons, twelve outlines, and a thirteenth arrives with
+ * its spec rather than with a drawing session.
+ *
+ * The name fallback is gone with it: `iconFor` no longer returns null. An id with no spec of
+ * its own gets `AR_BASE` from `modelSpecFor`, which is exactly what the *viewmodel* would draw
+ * for it — so the feed and the hands still agree, which is the property that matters and the
+ * one a null could not have kept.
  */
 
 export const ICON_VIEWBOX = '0 0 48 16';
 
-const PATHS: Partial<Record<WeaponClass, string>> = {
-  /**
-   * Assault rifle: receiver, long barrel with a front sight block, carry handle, magazine
-   * raked forward, and a stock behind the grip. Reads at 16 px, which is the only test.
-   */
-  AR:
-    'M6 6 H30 V10 H6 Z' +
-    'M30 7 H43 V9 H30 Z' +
-    'M40 4 H42 V7 H40 Z' +
-    'M12 4 H24 V6 H12 Z' +
-    'M18 10 L21 16 H17 L15 10 Z' +
-    'M6 7 L1 8 V11 H6 Z' +
-    'M9 10 H12 V13 H9 Z',
-};
-
-/** SVG path data for a weapon class, or null when that class has no outline drawn yet. */
-export function iconFor(weaponClass: WeaponClass | undefined): string | null {
-  if (weaponClass === undefined) return null;
-  return PATHS[weaponClass] ?? null;
+/**
+ * SVG path data for one weapon's outline, in `ICON_VIEWBOX`, barrel pointing right.
+ *
+ * Keyed by weapon **id** rather than by class, which is the change F15 bought: an SMG and an
+ * LMG are not the same shape, and the feed can now say which one killed you without printing
+ * its name. `weaponSilhouettePath` memoises, so calling this per feed row costs a map lookup.
+ */
+export function iconFor(weaponId: string): string {
+  return weaponSilhouettePath(weaponId);
 }
 
 /**

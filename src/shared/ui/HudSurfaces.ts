@@ -30,6 +30,16 @@ import { DT } from '../core/Loop';
  *
  * Nothing here touches the DOM, so `shared/` compiles without the DOM lib exactly as it did
  * before. See `scripts/check-boundaries.mjs`.
+ *
+ * ## `editorOpen` is gone (round 4, B8)
+ *
+ * Both predicates below used to test it: Create-a-Class could be open as an overlay over a
+ * live match, and a surface behind a full-screen editor is a surface that must be down. Round
+ * four's loadout doctrine removed that route — the editor is a front-end screen and
+ * `LEGAL_TRANSITIONS` no longer admits `MATCH -> LOADOUT` — so the flag could only ever be
+ * false wherever these are evaluated. A condition that cannot fire is a rule guarding nothing,
+ * and leaving one in a table whose whole purpose is to say what each surface is derived from
+ * is how the table stops describing the code.
  */
 
 /**
@@ -70,8 +80,6 @@ export interface HudSurfaceState {
   readonly screen: GameStateId;
   /** False between a teardown and the next build; every surface is down. */
   readonly hasWorld: boolean;
-  /** Create-a-Class, opened as an overlay over a live world (round 2). */
-  readonly editorOpen: boolean;
   readonly playerDead: boolean;
   /** The death screen's own countdown. Zero means "not coming back on a clock". */
   readonly respawnSeconds: number;
@@ -92,7 +100,7 @@ export interface HudSurfaceState {
  * pressing. Asked once per frame from state that outlives the tick, there is nothing to stick.
  */
 export function scoreboardOpen(s: HudSurfaceState): boolean {
-  if (!s.hasWorld || s.screen !== 'MATCH' || s.editorOpen) return false;
+  if (!s.hasWorld || s.screen !== 'MATCH') return false;
   return s.scoreboardHeld;
 }
 
@@ -112,7 +120,7 @@ export function scoreboardOpen(s: HudSurfaceState): boolean {
  *    decided round offers it for a body that is about to be reset anyway.
  */
 export function quickLoadoutWindow(s: HudSurfaceState): QuickLoadoutWindow {
-  if (!s.hasWorld || s.screen !== 'MATCH' || s.editorOpen) return 'none';
+  if (!s.hasWorld || s.screen !== 'MATCH') return 'none';
   if (s.playerDead && s.respawnSeconds > 0) return 'respawn';
   if (s.phase === 'WARMUP' && s.round <= 1) return 'prematch';
   return 'none';

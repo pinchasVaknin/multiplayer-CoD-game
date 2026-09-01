@@ -403,15 +403,6 @@ export class Game {
   private debugRequest: DebugOverlayRequest = 'none';
   /** Where the settings screen's Back button goes. Captured on entry (M8). */
   private settingsReturn: GameStateId = 'MENU';
-  /** Where Back from the loadout editor goes. Captured on entry. See the LOADOUT state. */
-  private loadoutReturn: GameStateId = 'MENU';
-  /**
-   * True while Create-a-Class is open **over a live world** rather than as a state.
-   *
-   * See `openLoadout`. The distinction is the whole of the fix for "opening the class screen
-   * drops me out of the server": as an overlay there is no transition to route wrongly.
-   */
-  private loadoutOverlay = false;
 
   constructor(canvas: HTMLCanvasElement, uiHost: HTMLElement, debugHost: HTMLElement) {
     // M6: one save object for everything (S6.6). Settings used to live in their own store;
@@ -472,13 +463,9 @@ export class Game {
       serverConfigured: () => isServerConfigured(window.location.search),
       displayName: () => this.profile.settings.callsign,
       onDisplayName: (name) => this.profile.patchSettings({ callsign: name }),
-      onLoadout: () => this.openLoadout(),
+      onLoadout: () => this.transitionTo('LOADOUT'),
       onSettings: () => this.transitionTo('SETTINGS'),
-      onLoadoutBack: () => this.closeLoadout(),
-      // The editor's "Start match" button only means anything from the front end. Inside a
-      // live world it is the button that used to drop the player out of the server — see
-      // `openLoadout` — so the editor is told not to offer it.
-      canLaunch: () => this.world === null,
+      onLoadoutSaveAndExit: () => this.transitionTo('MENU'),
       onQuitToMenu: () => this.transitionTo('MENU'),
       onResume: () => this.resumeFromPause(),
       onToggleOverlay: () => this.toggleOverlayFromPause(),
@@ -487,6 +474,7 @@ export class Game {
       statusLine: () => this.statusLine(),
       pauseStatusLine: () => this.pauseStatusLine(),
       unrestricted: () => findMode(this.selection.modeId).unrestricted,
+      anisotropy: () => this.textures.anisotropy,
     });
 
     this.input = new Input({
@@ -732,49 +720,32 @@ export class Game {
      * LOADOUT (M6). Declared in `GameStates.ts` since M1 with no handler; this is it.
      *
      * No world is built and no simulation runs — Create-a-Class is a front-end screen that
-     * reads and writes the profile, and every edit persists through `Profile` as it is
-     * made rather than on the way out. It is reachable from the menu and from the pause
-     * screen, which is S6.3's "between spawns".
+     * reads and writes the profile, and every edit persists through `Profile` as it is made
+     * rather than on the way out. **Reachable from the menu and from nowhere else** since
+     * playtest round 4 (B8); S6.3's "between spawns" is served by the quick class selector's
+     * 1-5, which is what the report asked for. See the doctrine note further down this file.
      */
     this.states.set('LOADOUT', {
-      enter: (from) => {
-        /**
-         * Remember where Back goes (M11, §6.6).
-         *
-         * The editor is reachable from the menu, from the pause screen and — new in M11 — from
-         * inside the warmup arena, and Back must return to whichever one sent it. Before this,
-         * Back always went to `MENU`, which tore the world down: a player who opened Create a
-         * Class from a live arena to change a perk was dropped out of the server to do it.
-         *
-         * Same capture-on-entry as `settingsReturn`, and for the same reason.
-         */
-        this.loadoutReturn = from === 'MENU' ? 'MENU' : from;
+      enter: () => {
         this.input.clearHeld();
         this.screens.loadoutEditor.show();
       },
-      exit: (to) => {
+      /**
+       * One exit, one destination, and the save happens here (playtest round 4, B5).
+       *
+       * `LEGAL_TRANSITIONS` admits `LOADOUT -> MENU` and nothing else, so this handler is the
+       * whole of "no route leaves the editor without saving" — the button, Escape and anything
+       * added later all pass through it. Putting the flush on the button instead would have
+       * been a second writer waiting for a third route.
+       *
+       * `Profile.editLoadout` already persists every edit as it is made, but through
+       * `SaveStore.touch`, which debounces the actual write. Leaving the screen is exactly the
+       * moment that debounce stops being a kindness: a player who edits a class and closes the
+       * tab a second later has made a decision, and `flush` is what makes it a saved one.
+       */
+      exit: () => {
         this.screens.loadoutEditor.hide();
-        if (to === 'MENU') {
-          this.teardownWorld();
-          return;
-        }
-        // Back into a match that is still standing: hand the new class over live. A world
-        // that was never torn down is the paused case, and `buildWorld` would no-op.
-        if (this.world !== null) this.world.match.applyLoadout(this.applyLoadout());
-
-        /**
-         * Tell the server, which applies it on the next spawn (§6.6, Tier 1 #20).
-         *
-         * The local half above changes what this client predicts with; this is the half that
-         * changes what the server simulates with. They must land on the same tick or the gap
-         * between them is a misprediction on every tick inside it — so the server defers to the
-         * next spawn, and the client's own `applyLoadout` is likewise a next-spawn change on a
-         * living player. See `ServerMatch.setPendingLoadout`.
-         *
-         * The same ids are then locked into the `MatchRequest` at migration, which is what
-         * carries the edit into the live match.
-         */
-        this.sendLoadoutToServer();
+        this.profile.flush();
       },
     });
 
@@ -936,71 +907,38 @@ export class Game {
     });
   }
 
-  /**
-   * Open Create-a-Class (§6.6, M11 Gate B playtest).
-   *
-   * **Two different things share one screen**, and conflating them is what took players out of
-   * the server. From the front end it is a *state*: there is no world, nothing is running, and
-   * `LOADOUT` is the honest description. From inside a match it is an **overlay**: the world
-   * stays built, the socket stays open, the seat stays ours, and the state never leaves `MATCH`
-   * or `PAUSED`.
-   *
-   * It used to be the state in both cases, and every route out of it went somewhere costly:
-   * Back went to `loadoutReturn`, which was `MENU` for anybody who had reached it from the menu
-   * at any point in the session; Escape went to `PAUSED`; and the editor's own "Start match"
-   * button called `onLaunch`, which **clears `multiplayerJoin`** and starts a solo game. That
-   * last one is the reported *"kicks the player out to a Solo game"*, exactly.
-   *
-   * The match keeps running underneath, because there is no pausing a dedicated server. The
-   * body stands still — `ClientMatch.uiFocus` neuters the command at the sampler — and the
-   * class change lands on the next respawn, which is what §6.6 asks for and what the server
-   * does with it anyway.
-   */
-  private openLoadout(): void {
-    if (this.world === null) {
-      // No world to protect: the front-end screen, exactly as M6 built it.
-      this.transitionTo('LOADOUT');
-      return;
-    }
-    if (this.loadoutOverlay) return;
-    this.loadoutOverlay = true;
-    this.world.match.uiFocus = true;
-    // The cursor belongs to the editor's buttons now. Disarmed as well as released, or the
-    // first click on a perk row would be swallowed by a pointer-lock request.
-    this.input.clearHeld();
-    this.input.armPointerLock(false);
-    this.input.exitPointerLock();
-    this.screens.loadoutEditor.show();
-  }
+  // -- the loadout doctrine -------------------------------------------------
 
-  /**
-   * Close it, and hand the new class to both halves of the simulation.
+  /*
+   * Where Create-a-Class went, and the two reversals behind it (playtest round 4, B5 and B8).
    *
-   * The same two calls the `LOADOUT` state's exit handler makes, for the same reasons: the
-   * local copy so this client predicts with what it is holding, and `sendLoadout` so the server
-   * simulates with it. The server defers to the next spawn (`ServerMatch.setPendingLoadout`),
-   * and so does a living local player, so the two land on the same tick.
+   * There is no `openLoadout` and no `closeLoadout` any more, and that is the change. M11 §6.6 made the editor
+   * reachable from inside the warmup arena; round 2 found that every route out of it was
+   * costly — Back went to `MENU` and tore the world down, Escape went to `PAUSED`, and the
+   * editor's own "Start match" cleared `multiplayerJoin` and launched a solo game — and fixed
+   * it by making the editor an *overlay* over the live world, so there was no transition left
+   * to route wrongly.
+   *
+   * Round 4 asks for the opposite, and it is a design decision rather than a defect: **the
+   * editor is a front-end screen, and inside a match the only way to change class is keys
+   * 1-5.** So the overlay is gone rather than fixed, `LEGAL_TRANSITIONS` no longer admits
+   * `MATCH -> LOADOUT` or `PAUSED -> LOADOUT`, and `Menus` is the one door.
+   *
+   * **What survived the removal is the half that protects the surviving path.** The deferral of
+   * `meta.setLoadout` (Tier 1 #20) was built for the overlay and matters more without it: a
+   * class applied to a standing body re-runs the perk hooks, one of which writes
+   * `PlayerController.speedScale`, so the client predicts a speed the server — which defers to
+   * the next spawn — is not simulating. That is a per-tick disagreement about how fast you are
+   * moving, which is what rubberbanding is. `pickQuickClass` is now the *only* caller of that
+   * pair, so `ClientMatch.applyLoadout` and `ServerMatch.setPendingLoadout` are load-bearing
+   * for 1-5 alone.
+   *
+   * What is left in this file is `pickQuickClass` below and the `LOADOUT` state above. This
+   * note is here rather than on either of them because it is about the *absence* of the code
+   * that used to sit between them, and a deletion has nowhere else to be documented.
    */
-  private closeLoadout(): void {
-    if (!this.loadoutOverlay) {
-      // The front-end state, not the overlay.
-      this.transitionTo(this.loadoutReturn);
-      return;
-    }
-    this.loadoutOverlay = false;
-    this.screens.loadoutEditor.hide();
-    const world = this.world;
-    if (world !== null) {
-      world.match.uiFocus = false;
-      world.match.applyLoadout(this.applyLoadout());
-    }
-    this.sendLoadoutToServer();
-    if (this.state === 'MATCH') {
-      // Back in the fight; the next click takes the cursor again.
-      this.input.clearHeld();
-      this.input.armPointerLock(true);
-    }
-  }
+
+  // -- HUD surfaces ---------------------------------------------------------
 
   /**
    * Every HUD surface this class owns, decided once per frame from one place.
@@ -1056,7 +994,6 @@ export class Game {
     return {
       screen: this.state,
       hasWorld: match !== undefined,
-      editorOpen: this.loadoutOverlay,
       playerDead: match?.isPlayerDead ?? false,
       respawnSeconds: match?.playerRespawnSeconds ?? 0,
       phase: match?.flow.currentPhase ?? 'WARMUP',
@@ -1284,12 +1221,6 @@ export class Game {
    * closes the link, which is what frees the seat on the server without waiting for a timeout.
    */
   private teardownWorld(options: { keepConnection?: boolean } = {}): void {
-    // A world going away takes any surface that was drawn over it. Without this, quitting from
-    // the pause screen with the class overlay open leaves the editor on top of the main menu.
-    if (this.loadoutOverlay) {
-      this.loadoutOverlay = false;
-      this.screens.loadoutEditor.hide();
-    }
     this.pendingSummary = false;
     this.pendingRotation = null;
     // A rotation keeps the socket no matter which teardown runs. The SUMMARY state tears the
@@ -1962,6 +1893,10 @@ export class Game {
      */
     this.voteOverlay.tick();
     this.updateHudSurfaces();
+    // The editor's weapon preview spins from the render pass rather than from a timer of its
+    // own, so it stops with the frame loop instead of running on in a background tab. It
+    // early-outs when the screen is hidden, which is every frame of a match.
+    this.screens.loadoutEditor.tick(dt);
     /**
      * The post-match return clock, once per frame, from the server's own deadline.
      *
@@ -2151,9 +2086,6 @@ export class Game {
     // The browser has taken the cursor either way; the match stays armed, so the next click
     // recaptures it. See `Input.armPointerLock`.
     if (this.cancelMortarOverlay()) return;
-    // Create-a-Class released the cursor on purpose. Dropping the player onto the pause screen
-    // for it would put a modal over a modal, which is the clash the pause menu was reported for.
-    if (this.loadoutOverlay) return;
     if (this.state === 'MATCH') this.transitionTo('PAUSED');
   }
 
@@ -2192,11 +2124,6 @@ export class Game {
     // panel must not be thrown back into a firefight, and one cancelling a mortar mark must
     // not be dropped onto the pause screen.
     if (this.cancelMortarOverlay()) return;
-    // Same rule for the class overlay: Escape closes it and stops there.
-    if (this.loadoutOverlay) {
-      this.closeLoadout();
-      return;
-    }
     if (this.state === 'SETTINGS') {
       // A binding row that is waiting for a key eats Escape as "cancel the capture"; only
       // once nothing is armed does Escape leave the screen.
@@ -2205,7 +2132,8 @@ export class Game {
       return;
     }
     if (this.state === 'LOADOUT') {
-      this.transitionTo(this.world === null ? 'MENU' : 'PAUSED');
+      // One destination, same as the button's. The state's exit handler does the saving.
+      this.transitionTo('MENU');
       return;
     }
     if (this.state === 'PAUSED') {

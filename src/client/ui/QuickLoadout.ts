@@ -24,8 +24,10 @@ import type { LoadoutSlot } from '../../shared/meta/Loadouts';
  *  - the pre-match freeze, which is ten seconds long for exactly this reason;
  *  - the respawn wait, where they are dead and the timer is running.
  *
- * It is deliberately **not** available while alive and playing. There the answer is the pause
- * screen's Create-a-Class, and the change lands when they next die — which is CoD's rule, and
+ * It is deliberately **not** available while alive and playing, and after playtest round 4's
+ * B8 it is the *only* way to change class inside a match at all: Create-a-Class is a front-end
+ * screen now, reachable from the main menu and from nowhere else. A player who wants a
+ * different rifle mid-fight waits for the next of these two windows, which is CoD's rule, and
  * not something a HUD panel should be quietly implying otherwise about.
  *
  * ## Cost

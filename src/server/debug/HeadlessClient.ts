@@ -1441,7 +1441,6 @@ export class HeadlessClient {
     const state: HudSurfaceState = {
       screen: 'MATCH',
       hasWorld: true,
-      editorOpen: false,
       playerDead: !alive,
       respawnSeconds: this.respawnDisplay,
       phase: phaseAt(h.phase),
