@@ -168,6 +168,8 @@ export class GameScreens {
     networked = false,
   ): void {
     this.summary.setNetworked(networked);
+    // Before the columns, because the heading the columns build is itself relative (B12).
+    this.summary.setViewer(match.viewer);
     this.summary.setColumns(match.mode.getScoreboardColumns(), match.mode.name, mapName);
     this.summary.show(
       result.winner,

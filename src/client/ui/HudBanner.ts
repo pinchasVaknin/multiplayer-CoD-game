@@ -1,3 +1,10 @@
+import {
+  relationClass,
+  relationTo,
+  relationToSelf,
+  type ViewerContext,
+} from '../../shared/ui/TeamColour';
+
 /**
  * The score banner and the round timer (brief S6.4).
  *
@@ -58,6 +65,10 @@ export function makeBannerState(): BannerState {
 export class HudBanner {
   readonly element: HTMLElement;
 
+  /** The two slot containers, so their colour can follow the seat. */
+  private readonly slotLeft: HTMLElement;
+  private readonly slotRight: HTMLElement;
+  private viewer: ViewerContext = { team: 'A', freeForAll: false };
   private readonly scoreA: HTMLElement;
   private readonly scoreB: HTMLElement;
   private readonly barA: HTMLElement;
@@ -86,7 +97,10 @@ export class HudBanner {
     this.element.className = 'hud-banner';
 
     const teamA = document.createElement('div');
-    teamA.className = 'hud-banner__team hud-banner__team--friendly';
+    // Both slots are painted by `setViewer`, not here (round 4, B12). Baked in at
+    // construction, the left slot was friendly green in every seat — so a team-B player read
+    // their own score in the enemy's colour for the whole match.
+    teamA.className = 'hud-banner__team';
     this.scoreA = document.createElement('span');
     this.scoreA.className = 'hud-banner__score op-num';
     const trackA = document.createElement('div');
@@ -109,7 +123,7 @@ export class HudBanner {
     centre.append(this.clock, this.rounds);
 
     const teamB = document.createElement('div');
-    teamB.className = 'hud-banner__team hud-banner__team--hostile';
+    teamB.className = 'hud-banner__team';
     this.scoreB = document.createElement('span');
     this.scoreB.className = 'hud-banner__score op-num';
     const trackB = document.createElement('div');
@@ -122,6 +136,9 @@ export class HudBanner {
     teamB.append(this.labelB, this.scoreB, trackB);
 
     this.element.append(teamA, centre, teamB);
+    this.slotLeft = teamA;
+    this.slotRight = teamB;
+    this.applyViewer();
 
     // The warm-up / round-over line, centred over the crosshair rather than in the banner:
     // it is a state change, and a state change belongs where the player is already looking.
@@ -135,15 +152,57 @@ export class HudBanner {
     return this.phase;
   }
 
+  /**
+   * Which seat is reading the banner (playtest round 4, B12).
+   *
+   * Set once per match by `MatchHud`, beside the scoreboard's. It decides both which score
+   * goes in which slot and what colour each slot is, because those are the same question.
+   */
+  setViewer(viewer: ViewerContext): void {
+    this.viewer = viewer;
+    this.applyViewer();
+    // The scores swap sides with the seat, so the change guards have to forget last match's.
+    this.lastA = -1;
+    this.lastB = -1;
+    this.lastFillA = -1;
+    this.lastFillB = -1;
+  }
+
+  /**
+   * The one writer of the two slots' colour.
+   *
+   * In a team mode the left slot is the viewer's own side, so it is friendly in every seat. In
+   * Free-for-All the layout is unchanged — leader on the left, you on the right, which is what
+   * makes "am I close" one glance — and the colours follow the same rule the rest of the HUD
+   * uses there: with no teams everybody else is hostile, and the only friendly number on the
+   * screen is your own.
+   */
+  private applyViewer(): void {
+    const opponent = this.viewer.team === 'A' ? 'B' : 'A';
+    // Team mode: your side left and friendly, theirs right and hostile.
+    // FFA: the leader is on the left and is not your team-mate; the right slot is you.
+    const left = this.viewer.freeForAll ? relationTo(this.viewer, opponent) : relationToSelf();
+    const right = this.viewer.freeForAll ? relationToSelf() : relationTo(this.viewer, opponent);
+    this.slotLeft.className = `hud-banner__team hud-banner__team--${relationClass(left)}`;
+    this.slotRight.className = `hud-banner__team hud-banner__team--${relationClass(right)}`;
+  }
+
   update(state: BannerState): void {
     /**
      * In Free-for-All the two sides are **leader** and **you**, not team A and team B.
      *
      * The left slot is whoever is winning and the right is this client, so "am I close" is the
      * same glance it is in a team mode.
+     *
+     * In a team mode the left slot is the viewer's **own** side rather than team A's (round 4,
+     * B12). `scoreA` and `scoreB` are still absolute on the wire, which is right — they are the
+     * match's scores, not this client's view of them — and this is the one place that turns
+     * them into a left and a right.
      */
-    const left = state.ffa ? state.leaderScore : state.scoreA;
-    const right = state.ffa ? state.selfScore : state.scoreB;
+    const ownScore = this.viewer.team === 'A' ? state.scoreA : state.scoreB;
+    const otherScore = this.viewer.team === 'A' ? state.scoreB : state.scoreA;
+    const left = state.ffa ? state.leaderScore : ownScore;
+    const right = state.ffa ? state.selfScore : otherScore;
 
     if (state.ffa !== this.lastFfa) {
       this.lastFfa = state.ffa;

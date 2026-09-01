@@ -1,6 +1,7 @@
 import type { HitZone } from '../../shared/combat/HitboxRig';
 import type { GameEvents } from '../../shared/core/Events';
-import { clamp01, DEG2RAD, RAD2DEG } from '../../shared/core/MathUtil';
+import { clamp01, RAD2DEG } from '../../shared/core/MathUtil';
+import { CROSSHAIR_LINE_LENGTH, crosshairGapPx, crosshairOpacity } from '../../shared/ui/Crosshair';
 import type { MapDef } from '../../shared/world/maps/types';
 import { HudBanner, makeBannerState, type BannerState } from './HudBanner';
 import { HudTactical, makeTacticalState, type TacticalState } from './HudTactical';
@@ -37,9 +38,6 @@ const HIT_DIRECTION_SECONDS = 1.1;
 /** How long the full-screen hurt flash lasts. */
 const HURT_FLASH_SECONDS = 0.42;
 
-/** Crosshair line length in px; must match `--hud-cross-len` in hud.css. */
-const LINE_LENGTH = 7;
-const MIN_GAP = 3;
 
 /**
  * Health at which the low-health state begins (brief S6.4).
@@ -199,6 +197,9 @@ export class Hud {
   // ---- M5: pushed from the sim rather than pulled through `HudState` -------
   private flashIntensity = 0;
   private threatActive = false;
+  private objectiveActive = false;
+  private objectiveX = 0;
+  private objectiveZ = 0;
   private threatX = 0;
   private threatY = 0;
   private threatZ = 0;
@@ -447,6 +448,25 @@ export class Hud {
     out.z = this.threatZ;
   }
 
+  /**
+   * Where the loose bomb is, for the objective bearing arrow (round 4, F2).
+   *
+   * The same set/read pair the threat uses, and for the same reason: the fact is decided in the
+   * frame's earlier passes and consumed when `MatchHud` composes the tactical state, and one
+   * record per frame is what stops two halves of the HUD describing different ticks.
+   */
+  setObjectiveBearing(active: boolean, x: number, z: number): void {
+    this.objectiveActive = active;
+    this.objectiveX = x;
+    this.objectiveZ = z;
+  }
+
+  readObjectiveBearing(out: { active: boolean; x: number; z: number }): void {
+    out.active = this.objectiveActive;
+    out.x = this.objectiveX;
+    out.z = this.objectiveZ;
+  }
+
   /** Wipe every per-match trace. Called on teardown so a second match starts clean. */
   resetForMatch(): void {
     this.clearMarkers();
@@ -460,6 +480,7 @@ export class Hud {
     this.lastHitLatencyMs = -1;
     this.flashIntensity = 0;
     this.threatActive = false;
+    this.objectiveActive = false;
   }
 
   dispose(): void {
@@ -470,16 +491,13 @@ export class Hud {
   // -- internals -------------------------------------------------------------
 
   private updateCrosshair(state: HudState): void {
-    // The gap is the spread cone projected onto the screen, so what the crosshair shows
-    // is literally where the rounds can go — not a decorative animation of it.
-    const halfHeight = state.viewportHeight * 0.5;
-    const tanHalfFov = Math.tan(state.fovDeg * 0.5 * DEG2RAD);
-    const projected = tanHalfFov > 1e-4 ? (Math.tan(state.spreadDeg * DEG2RAD) / tanHalfFov) * halfHeight : 0;
-    const gap = Math.round(Math.min(220, Math.max(MIN_GAP, projected)));
+    // The projection, the floor and the ADS fade all live in `shared/ui/Crosshair` now, so
+    // they can be measured without a browser (round 4, B2). What is left here is the writes.
+    const gap = crosshairGapPx(state.spreadDeg, state.fovDeg, state.viewportHeight);
 
     if (gap !== this.lastGap) {
       this.lastGap = gap;
-      const offset = gap + LINE_LENGTH * 0.5;
+      const offset = gap + CROSSHAIR_LINE_LENGTH * 0.5;
       const t = this.lines[0];
       const b = this.lines[1];
       const l = this.lines[2];
@@ -491,7 +509,7 @@ export class Hud {
     }
 
     // Hidden on ADS (S6.5): the sights are the aiming reference, not an overlay.
-    const opacity = Math.round((1 - clamp01(state.adsFraction * 1.35)) * 100) / 100;
+    const opacity = crosshairOpacity(state.adsFraction);
     if (opacity !== this.lastCrossOpacity) {
       this.lastCrossOpacity = opacity;
       this.crosshair.style.opacity = String(opacity);

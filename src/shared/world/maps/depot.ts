@@ -726,9 +726,16 @@ export const DEPOT_MAP: MapDef = {
      * linear (0.016, 0.023, 0.034): black with a rounding error on it.
      *
      * So both colours come up and the intensity comes back down. The numbers below land at
-     * about 40-45% of Foundry's daylight fill, which is the point the yard becomes legible
-     * between the mast pools without the masts ceasing to read as pools. It is still, by a
-     * wide margin, the darkest map in the game.
+     * about 40-45% of Foundry's daylight fill, and it is still by a wide margin the darkest map
+     * in the game.
+     *
+     * **Round 4 correction: this was right and it was not enough, and the reason was not here.**
+     * The clause that used to end this paragraph — "which is the point the yard becomes legible
+     * between the mast pools" — was a prediction, and `npm run readability` falsifies it: with
+     * these lights and the asphalt as it then was, the yard measured a mean of **4.4 out of
+     * 255**. The fill is fine. What was two per cent was the ground's albedo, which lives in
+     * `shared/world/maps/albedo.ts` and is now 0.070 rather than 0.019. Nothing in this block
+     * changed at round 4, and nothing in it should be raised again without a reading first.
      *
      * The ground term carries proportionally more than the sky term, unchanged from M8's
      * reasoning and still right: a cargo yard at night is lit from below by its own asphalt,

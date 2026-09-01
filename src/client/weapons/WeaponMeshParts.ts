@@ -45,6 +45,29 @@ export interface TubePart {
   readonly sides?: number;
   /** Runs along Z by default; set for a tube standing on Y. */
   readonly vertical?: boolean;
+  /**
+   * Drop the end caps (round 4, B2).
+   *
+   * Every other tube on a weapon is solid — a barrel, a suppressor, a magazine — and a cap you
+   * cannot see costs two triangles. The scope tube is the one that sits *on the sight line*,
+   * and there a cap is the difference between an optic and a plug.
+   */
+  readonly openEnded?: boolean;
+}
+
+/**
+ * Where the scope tube's centre sits along Z, and where its ocular end does.
+ *
+ * Exported because `bodyTubes` builds the tube and `opticBoxes` has to put glass and a reticle
+ * *inside* it: two files' worth of the same expression is how the lens ends up four millimetres
+ * behind the eyepiece and nobody can see why. -Z is forward, so the ocular end is the +Z one.
+ */
+export function scopeTubeCentreZ(spec: WeaponModelSpec): number {
+  return spec.receiverLength * 0.5 * 0.25 - spec.opticLength * 0.3;
+}
+
+export function scopeOcularZ(spec: WeaponModelSpec): number {
+  return scopeTubeCentreZ(spec) + spec.opticLength * 0.5;
 }
 
 /** Height of the bore above the origin. Everything barrel-shaped hangs off this. */
@@ -267,6 +290,38 @@ export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
       for (const dz of [0, -spec.opticLength * 0.62]) {
         out.push({ surface: 'gunmetal', x: 0, y: ringY, z: back * 0.25 + dz, w: 0.026, h: ringH, d: 0.016 });
       }
+      /**
+       * The ocular glass and the reticle — round 4, B2, and this is the whole of that bug.
+       *
+       * The aperture note above says the sights are clear "on all twelve weapons by
+       * construction". They were clear on ten. `irons` and `reddot` were both rebuilt at M7 to
+       * derive from the sight line, and `scope` was left as it was on the reasoning that a
+       * scoped weapon hands its viewmodel off to `HudTactical`'s overlay above
+       * `SCOPE_VIEWMODEL_HIDDEN`, so nobody ever sees the metal.
+       *
+       * That reasoning is a statement about `WeaponDef.scope`, and this is a switch on
+       * `WeaponModelSpec.optic`. **They disagree on exactly one weapon.** `ar_longbow` is
+       * modelled with a scope — "long, thin, scoped: reads as a marksman rifle" — and has no
+       * `scope` block in its def, so `hasScope` is false, no overlay is drawn, the viewmodel
+       * is never hidden, and `crosshairOpacity` has faded the reticle to zero by ADS 0.74
+       * exactly as it should. The player aims down a capped, opaque, 12-sided cylinder sitting
+       * on the sight line. Reported as "the crosshair is closed on one particular AR", which is
+       * a precise description of what is on screen.
+       *
+       * The fix is to make the mesh honest rather than to give the rifle a `def.scope` it was
+       * never balanced for: a scope block is scope-in time, an FOV pull, breath and sway, and
+       * inventing those to unblock a sight picture would be a simulation change made for a
+       * picture. So the tube gets what the red dot has had since M7 — glass with
+       * `depthWrite: false`, and an emissive speck on the sight line — and the aperture claim
+       * above becomes true of twelve weapons instead of ten.
+       *
+       * For the two snipers this is invisible: their viewmodel is gone before the overlay
+       * arrives, so these two quads are never rendered at ADS and are a few square millimetres
+       * seen from outside at hip. The cost of making the rule uniform is two quads.
+       */
+      const ocularZ = scopeOcularZ(spec);
+      out.push({ surface: 'lens', x: 0, y: lineY, z: ocularZ - 0.004, w: 0.026, h: 0.026, d: 0.002 });
+      out.push({ surface: 'reticle', x: 0, y: lineY, z: ocularZ - 0.022, w: 0.0026, h: 0.0026, d: 0.0012 });
       break;
     }
   }
@@ -398,14 +453,24 @@ export function bodyTubes(spec: WeaponModelSpec): TubePart[] {
   });
 
   if (spec.optic === 'scope') {
+    /**
+     * Both open-ended, and that is B2's fix (round 4).
+     *
+     * These two cylinders are centred on `sightHeight` — the line `ViewmodelAnim.adsY` puts on
+     * the screen centre when the player aims — and `CylinderGeometry` caps its ends unless it
+     * is told not to. So aiming a scoped model meant looking at the flat back of a 32 mm
+     * gunmetal disc. Open, with backfaces culled, the eye goes down the bore to the world, and
+     * the glass and reticle in `opticBoxes` are what it meets on the way.
+     */
     out.push({
       surface: 'gunmetal',
       x: 0,
       y: spec.sightHeight,
-      z: spec.receiverLength * 0.5 * 0.25 - spec.opticLength * 0.3,
+      z: scopeTubeCentreZ(spec),
       radius: 0.016,
       length: spec.opticLength,
       sides: 12,
+      openEnded: true,
     });
     // Objective bell.
     out.push({
@@ -416,6 +481,7 @@ export function bodyTubes(spec: WeaponModelSpec): TubePart[] {
       radius: 0.024,
       length: spec.opticLength * 0.22,
       sides: 12,
+      openEnded: true,
     });
   }
 

@@ -38,6 +38,9 @@ export default defineConfig({
         // M11. Drives the whole skirmish flow — connect, warmup, vote, migrate, play,
         // return — plus the teardown leak run. Every Gate A number comes out of this.
         skirmishHarness: 'src/server/skirmishHarness.ts',
+        // Playtest round 4 P9. Content rather than a run: crosshair geometry, the team-colour
+        // invariant and per-map ground luminance, all pure functions of the shipped tables.
+        readability: 'src/server/readability.ts',
       },
       output: { entryFileNames: '[name].js', format: 'esm' },
     },

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { ViewerContext } from '../shared/ui/TeamColour';
 import type { SchedulerConfig } from '../shared/ai/AiScheduler';
 import { BotDirector, RESPAWN_SECONDS } from '../shared/ai/BotDirector';
 import { BotRenderer } from './ai/BotRenderer';
@@ -223,6 +224,9 @@ export interface MatchDeps {
 
 /** The player's side. Bots added to 'A' fight alongside them, 'B' against. */
 export const PLAYER_TEAM: BotTeam = 'A';
+
+/** Reused every frame by the objective-bearing bridge below (S4.7: no render allocation). */
+const bombBearingScratch = { active: false, x: 0, z: 0 };
 
 /**
  * Standing eye height, for a remote body whose exact stance eye is not on the wire.
@@ -884,6 +888,18 @@ export class Match {
    */
   get localTeam(): BotTeam {
     return this.deps.localTeam ?? PLAYER_TEAM;
+  }
+
+  /**
+   * Which seat is looking at the HUD, as one value (playtest round 4, B12).
+   *
+   * `localTeam` alone is not enough to decide a colour, because Free-for-All keeps the
+   * two-team substrate and half of an FFA lobby therefore shares the viewer's side without
+   * being on their team. Both facts travel together or the killfeed paints four opponents
+   * green, which is the seam post-M8 closed in the minimap and left open everywhere else.
+   */
+  get viewer(): ViewerContext {
+    return { team: this.localTeam, freeForAll: this.deps.mode.freeForAll === true };
   }
 
   /**
@@ -2018,6 +2034,10 @@ export class Match {
     this.fillStreakHud();
     this.fillMinimapStreaks();
     this.objectives.update(dt);
+    // Straight from the pass that just decided where the bomb mesh goes, so the arrow and
+    // the object it points at are the same frame's answer (round 4, F2).
+    this.objectives.readBombBearing(bombBearingScratch);
+    this.ui.hud.setObjectiveBearing(bombBearingScratch.active, bombBearingScratch.x, bombBearingScratch.z);
     this.mortarOverlay.update(dt, MORTAR_MARK_RADIUS);
     this.ui.update(this.flow, sim.x, sim.z, sim.yaw, dt);
     this.feedback.render(camera);

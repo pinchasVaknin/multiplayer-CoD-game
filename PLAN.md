@@ -2866,6 +2866,18 @@ that moves nothing an eye can see. The colours come up and the intensity comes b
 darkest surface in the yard goes from an 8-bit value of 10 to 54. The fog moved with it,
 because a fog left at `0x151a22` would have put the far half of the map back where it started.
 
+> **Corrected at round 4, and only the last sentence of the diagnosis is wrong.** The linear-space
+> re-derivation above is right, and I re-checked its arithmetic before touching Depot again: the
+> fill really was fourteen times darker and really is about 42% of Foundry's now. What the "10 to
+> 54" describes is the **light**, not the picture. The surface it lands on — the `asphalt` span
+> that is the entire yard — returned 0.019 of it, so the ground itself measured a mean of **4.4
+> out of 255** on this tree, before round 4 touched anything. That is why the report came back a
+> third time, and it is why the paragraph's closing claim about the fog is the only part of this
+> fix that reached the player. The lesson this section already draws — *when a fix does not take,
+> measure the thing rather than moving the number further* — is exactly right and was applied one
+> level too high: the thing to measure was the pixel, not the lamp. See "reading the fight" under
+> round 4, and `npm run readability`, which exists so the next round starts from a number.
+
 **Step offset.** Rise, advance, drop is the classic three-sweep step-up and it works on an
 *axis-aligned box*, whose flat underside is over a tread the moment it nudges forward. A
 capsule's underside is a hemisphere and is only over a tread once its centre has passed the
@@ -6735,3 +6747,394 @@ Every item is a networked match. Single-player is unaffected by the client half 
 - **`FieldUpgradeRuntime.reset()` has no caller.** Deliberate — the charge is not per life — but
   a method with no caller looks exactly like a wire somebody forgot, which is how this session
   started. Recorded in the table so the next reader does not have to re-derive it.
+
+---
+
+## Playtest round 4 — reading the fight, and an optic with no hole in it
+
+Covers **B2** (the crosshair on one AR), **B12** (team colours), **F9** (Depot is dark), **F2**
+(an arrow to the bomb) and **F3** (the dog tag). Four of the five are about what the player can
+*see*, which makes this the session where the split between what a harness can prove and what
+needs eyes is at its widest — so two of the things built here are instruments rather than fixes.
+
+### Two of the five had already been reported and fixed, and the interesting part is why they came back
+
+B2 and F9 are both second and third reports of something the record says was dealt with. Neither
+was a regression. In both cases the earlier fix was correct about the thing it named and was not
+the thing that was wrong, and in both cases nobody could tell, because the quantity in question
+lived where no process in this project could read it. That is the shape of the whole session:
+
+- The crosshair's projection lived inside `Hud.updateCrosshair`, next to the `style.transform`
+  writes it feeds. Asking "how wide is the M4's crosshair at rest" meant opening a browser.
+- A map's brightness lived in a painter in `client/engine/ProceduralTextures`, three files away
+  from the `lights` array two rounds of "Depot is too dark" had edited.
+
+So `shared/ui/Crosshair.ts` and `shared/world/MapLuminance.ts` exist now for the same reason
+`HudSurfaces` and `pickSpectatorTarget` do — the half that can be wrong invisibly belongs where
+it can be measured — and `npm run readability` is the entry point that reads them. It is a
+one-shot probe over the shipped tables rather than a run, so unlike every other harness here one
+execution of it is a fact rather than a sample.
+
+### B2 — the model had a scope and the def did not
+
+*"The crosshair is closed on a particular AR-type rifle."*
+
+The brief offered two hypotheses and both are dead, the first of them decisively:
+
+| Hypothesis | What the measurement says |
+|---|---|
+| The spread cone collapses and draws a closed cross | `LONGBOW MK3` has the **widest** crosshair of the four ARs — 26 px standing against the M4's 18. The tightest cone in the game is the shotgun's, at 8 px. **0 of 48 hip-fire states** reach the 3 px floor |
+| An optic misclassified as *scoped* takes the reticle away | Nothing misclassifies anything. `hasScope` is `def.scope !== undefined`, no AR carries a `scope` block, and no attachment adds one |
+
+The real mechanism is the exact converse of the second, and it is one sentence: **`ar_longbow`
+is the only weapon whose *model* carries a scope and whose *def* does not.**
+
+Three weapons are modelled with `optic: 'scope'` — the two snipers and the LONGBOW, whose spec
+comment says "long, thin, scoped: reads as a marksman rifle from across the screen". Two of them
+have a `scope` block in `WeaponDefs`, so above `SCOPE_VIEWMODEL_HIDDEN` the viewmodel hands off
+to `HudTactical`'s scope overlay and the metal is never seen. The LONGBOW has no such block, so:
+
+- no overlay is drawn, because `hasScope` is false;
+- the viewmodel is never hidden, because `scoped` tests the same field;
+- and the crosshair fades to zero opacity at an ADS fraction of 0.74 like every other weapon,
+  which is S6.5's rule and is correct.
+
+That leaves the player aiming at `bodyTubes`' scope geometry: a 12-sided cylinder of radius
+0.016 centred exactly on `spec.sightHeight` — the line `ViewmodelAnim.adsY` puts on the screen
+centre — built by `CylinderGeometry` with its **end caps on**, because `openEnded` defaults to
+false and nothing had ever needed otherwise. Aiming the LONGBOW is aiming into the flat back of
+a gunmetal disc. "כוונת סגורה" is a precise description of it.
+
+This is the third time this codebase has shipped the same defect, and both previous ones are
+commented in the file it happened in again: the M6 playtest's *"pistol viewmodel obscuring the
+target"* (sight bases straddling the sight line) and *"the SMG optic rendering opaque, blocking
+the target entirely"* (a solid box where the window should be). M7 rebuilt `irons` and `reddot`
+around `sightHeight` and wrote down the rule — *"the aperture is clear on all twelve weapons by
+construction"*. It was clear on ten. `scope` was exempted on the reasoning that its owners hand
+off to the overlay, which is a statement about `WeaponDef.scope` made in a switch on
+`WeaponModelSpec.optic`, and those two disagree on exactly one weapon.
+
+**The fix makes the mesh honest rather than giving the rifle a `def.scope`.** A scope block is
+scope-in time, an FOV pull, breath and sway; inventing those to unblock a sight picture would be
+a simulation change made for a picture, and the LONGBOW was balanced without them. So the tube
+and its objective bell are open-ended, and the ocular end gets what the red dot has had since
+M7 — glass with `depthWrite: false`, and an emissive speck on the sight line. Both derive from
+`scopeOcularZ`, which `bodyTubes` and `opticBoxes` now share, because a lens placed from a
+re-typed copy of the tube's own expression is a lens four millimetres behind the eyepiece that
+nobody can explain. For the two snipers the change is invisible — their viewmodel is gone before
+the overlay arrives — and the cost of making the rule uniform is two quads.
+
+**The floor, since the brief asked for one.** `MIN_GAP` already existed at 3 px and is now named
+`CROSSHAIR_MIN_GAP` and documented as a legibility floor rather than a tuning constant. Measured:
+**0 of 48 hip-fire states across all twelve weapons reach it**, so it is a guard against a future
+weapon rather than a number the game is sitting on. The ADS column is reported and deliberately
+excluded from that count, because `crosshairOpacity(1)` is `0.00` — a collapsed gap there is
+invisible by design.
+
+### B12 — the palette was right and three surfaces chose from it wrongly
+
+*"In multiplayer I can end up on the red side, which is confusing because red normally means
+enemy."*
+
+`ui/Palette.ts` has been right since M8. It exposes `friendly` and `hostile` and has no concept
+of a team A colour in any of its three colourblind modes; there is no absolute team colour in it
+to leak. The leak is one level up, in the surfaces that decide *which of the two to ask for*, and
+it is the same expression written three times:
+
+| Surface | What it said |
+|---|---|
+| `Scoreboard` | `team === 'A' ? 'friendly' : 'hostile'`, and `'ALLIES' : 'AXIS'` |
+| `Killfeed` | `team === 'A' ? '…--friendly' : '…--hostile'` |
+| `HudBanner` | slot A built with `--friendly` and slot B with `--hostile`, at construction |
+
+Each is correct for the seat the game was built from. `Match.smallerTeam` sends the **second
+human to join** to team B, and from there the scoreboard paints your own side hostile red and
+labels it AXIS on the right, the killfeed paints your team-mates as enemies for the whole match,
+and the banner shows your score in the enemy's colour. `EndOfMatch` reuses `Scoreboard`, so the
+summary screen was absolute too — at the one moment the player looks hardest at it.
+
+Already relative and needing nothing: the minimap (*"resolved by the caller against the local
+team, so the minimap needs no team logic"*), the objective meshes, zone ownership, and the alive
+counter. The vote overlay carries no team colour, and there are no nameplates in the tree.
+
+**The rule is enforced by types, which the brief asked for over a comment.** `shared/ui/
+TeamColour.ts` holds `relationTo(viewer, subject)`, and `relationClass` — the only door from a
+relation to a stylesheet suffix — accepts only a `TeamRelation`. A raw `ScoreTeam` no longer
+type-checks anywhere a colour is chosen, so the broken expression cannot be written: there is
+nothing for `team === 'A' ? …` to return that a caller can use. The audit agrees with the type
+after the change — `grep` finds no `=== 'A'` left in `client/ui` at all.
+
+Three decisions inside it that are not just a rename:
+
+- **Order is part of the bug.** A team-B player was reading their own score on the right. Both
+  two-slot surfaces put the viewer's own side on the left now, via `teamsInViewOrder`.
+- **`ALLIES` / `AXIS` were absolute too**, and carried the same defect in words: a player seated
+  into B was told they were the Axis. They follow the relation.
+- **Free-for-All is inside the same function rather than beside it.** FFA keeps the two-team
+  substrate deliberately, so half of every lobby shares the viewer's `ScoreTeam` without being a
+  team-mate — the seam post-M8 closed in the minimap and the gunfire ping and left open in the
+  killfeed, where four opponents were drawn green. `relationTo` takes `freeForAll` and answers
+  `HOSTILE` for everybody, so the killfeed is fixed by the same change rather than by a second one.
+
+The viewer is assembled once, in `MatchHud`, and handed to all three surfaces; `ClientMatch
+.viewer` is the getter it comes from, beside `localTeam`, which already carries a comment about
+this class of bug. The summary board takes it from `GameScreens.showSummary`, because that screen
+is built at boot and outlives every match it shows.
+
+### F9 — the fill was not the small number either, and this time the small number was not a light
+
+*"The third map is very dark."* Reported after M8, again at round 2, and now a third time.
+
+Round 2's work is right and I checked its arithmetic before touching anything: it found that
+intensity was the wrong lever, re-derived Depot's hemisphere colours in linear space, and landed
+the fill at about 42% of Foundry's sky term with a ground term that is actually *brighter* than
+Foundry's. There is nothing left to find in `depot.ts`. So the analysis the brief asked for —
+*"the problem was not the key light, it was the fill"*, applied to Depot — has an answer one
+level further down, and it is not a light at all:
+
+**Depot's yard is one `asphalt` span from wall to wall, and `asphalt` was `0x24262b` — a linear
+luminance of 0.019, against Foundry's floor at 0.101.** A surface that returns two per cent of
+what falls on it. Two rounds multiplied the light reaching it by 1.5 and 1.9; two per cent of
+1.9 is still two per cent. That is why each pass looked partial, and why the third report says
+what the first one said.
+
+The number was in a painter in `client/engine`, where the word "lighting" does not appear and
+where no Node process could read it. It is in `shared/world/maps/albedo.ts` now, one table, and
+`ProceduralTextures` takes its fill from it — so the grain, aggregate, cracks and bay lines stay
+exactly where they were and the number they are laid over can be measured.
+
+Measured, and the red control is one flag rather than an edit-and-revert:
+`npm run readability -- --ground 0x24262b` re-reads Depot with its shipped asphalt.
+
+| Map | Ground | Albedo (linear) | Floor, as the screen shows it (0-255) |
+|---|---|---|---|
+| Foundry | `floor` | 0.1014 | 61 / **61.7** / 96 |
+| Dunes | `sand` | 0.3818 | 185 / **185.0** / 185 |
+| Depot — **before** | `asphalt` 0x24262b | 0.0194 | 3 / **4.4** / 10 |
+| Depot — **after** | `asphalt` 0x474b53 | 0.0700 | 15 / **21.3** / 39 |
+
+1188 samples across the nav grid, up-facing, sRGB decode through irradiance, Lambert, ACES and
+exposure 1.25 — the same five multiplications the renderer performs. **The yard was a mean of
+4.4 out of 255.** Four counts off black. The post-M8 note recording that the report came back
+saying *"STILL pitch black"* was not an exaggeration; it was a reading.
+
+**And the reason given for keeping it there is wrong**, which is worth writing down because it
+survived two fixes. The old comment said a brighter ground would "flatten the pools into a
+uniform grey". Albedo is a *multiplier*, so it cannot change the ratio between a mast pool and
+the gap between two masts. Measured across the playable grid, that ratio is **2.60x on Depot**
+before and after this change — against Foundry's 1.86x and Dunes' 1.00x, so Depot remains the
+most pooled map in the game and by some distance the darkest. What flattens pools is *fill*,
+which is added rather than multiplied, and fill is exactly what the two previous passes raised.
+
+The first version of that ratio in the probe was wrong too, and it is a useful mistake: it
+sampled "under a mast" against the world origin and reported 1.05x. The origin on Depot is six
+metres from a mast. A ratio is only as good as the two places it was measured, so the probe takes
+the extremes of the whole grid, which has no opinion.
+
+**What this does not settle.** `MapLuminance` states its limits and they all point one way — no
+shadowing, no baked vertex AO (whose floor is 0.32, so an enclosed corner is up to three times
+darker than reported), no fog, no texture detail. Every number above is therefore an **upper
+bound**, which is the direction that makes the *before* conclusive: a mean of 4.4 with the
+sunniest possible assumptions is unarguable. It cannot be read backwards. Whether 21.3 is now
+enough is a browser claim and it is on the list below with a screenshot, along with the honest
+statement that if it is still dark the next lever is the irradiance floor — Depot's darkest floor
+samples receive 0.705 against Foundry's 2.148, and at those samples the masts contribute nothing
+at all.
+
+### F2 — the bomb arrow, and where its boundary is
+
+`MatchObjectives` opens by ruling out exactly this: objective markers are **world geometry, not
+HUD markers**, because "a capture ring drawn on the HUD tells you a number, and a capture ring
+drawn on the floor tells you where to stand". That argument is decisive for a capture ring and it
+is not decisive here. For a bomb lying somewhere in a sixty-metre map that the round cannot start
+without, *which way is it* is the entire question, and the world object answering it is a 0.3 m
+box behind a container — which this same file already records as having been reported as
+*"there is no physical bomb entity"*.
+
+So route (a), an off-screen HUD indicator, and the rule in `MatchObjectives` is amended where it
+was departed from rather than left contradicting the code.
+
+**The intel filter is satisfied by construction, not by a check**, and the report's own wording
+is what draws the line — *"the bomb **to pick up**"*:
+
+| Bomb state | Arrow |
+|---|---|
+| `CARRIED`, `carrierId === -1` — on the floor, claimable | **yes.** A fixed public point that both sides already see blinking |
+| `CARRIED`, `carrierId >= 0` | **no.** The bomb's position *is* a living player's position — `followCarrier` makes it true every tick so the mesh can ride its carrier, which is exactly what would make a HUD version a wallhack on whoever picked it up |
+| `PLANTED` | **no.** The site is a world object with a ring and an accelerating light |
+
+`readBombBearing` is the only source, it is written in the same pass that decides where the mesh
+goes, and it is cleared every frame and re-asserted — so a pickup takes the arrow down on the
+frame it happens rather than leaving it latched. There is no code path that can hand the HUD a
+carried bomb's coordinates.
+
+**One component, not two.** The brief named `showHitDirection`, which is the *transient* member
+of this family — a chevron that fades over 1.1 s. The persistent member is `HudTactical`'s
+grenade-threat arrow, which takes a world position, the player's position and yaw, and rotates a
+ring-mounted element for as long as a condition holds. That is what a bomb marker is. Both are
+`BearingIndicator` now, two instances rather than one element with two writers, because a grenade
+can land beside the bomb you are running for. The bomb's arrow is deliberately calmer and further
+out than the grenade's: one says *you are about to die* and the other says *the objective is that
+way*, and a HUD that shouts both at the same volume has said nothing. It reads `--c-neutral`,
+which is what an unclaimed objective is everywhere else in this game.
+
+### F3 — the tag was a hologram because of its material
+
+What made the dog tag read as a hologram was not its shape. It was one `MeshBasicMaterial` with
+`toneMapped: false` shared by the plate and the chain, so the whole object was a flat fill of the
+team colour that no light in the scene touched. A thing that does not respond to the light around
+it is not in the world.
+
+The plate and chain are lit steel now — one `MeshLambertMaterial` shared by all 24 pooled tags,
+since none of them changes colour — with bevel strips that give a 16 mm plate visible thickness
+at three metres, a 16-segment chain ring in place of the old 4-segment one that was a visible
+square, and a bead at the clasp. It hangs off the chain on its own group and swings slightly out
+of phase with the spin, which also fixes something the old one did: a flat card rotating about
+its own axis presents zero area twice per revolution and flickered out of existence at those
+angles.
+
+**The colour moves to an emissive edge behind the plate**, and that is the part that needed
+thinking about rather than re-skinning. Making the whole tag lit would have been the
+honest-but-useless version: on Depot, at 21 counts out of 255, a steel plate on asphalt cannot be
+seen, and Kill Confirmed is a mode built entirely on noticing these from across a room. The edge
+keeps `toneMapped: false`, so the tag is exactly as findable as it was while the object in front
+of it is solid, and friendly-to-deny stays one glance from enemy-to-confirm. Cosmetic only:
+`check:cosmetics` is green, the snapshot is untouched, and nothing here goes near
+`KillConfirmedConfig.pickupRadius`.
+
+### Measured
+
+Every number came out of a run in this session. **No protocol change** — nothing in P9 touches
+the wire, so there is no version to bump and `netharness` has nothing new to exercise.
+
+**`npm run readability`** — the new probe, and the source of every content number above.
+
+| Probe | Result |
+|---|---|
+| Crosshair gaps, 12 weapons × 4 hip-fire states | **0 of 48** at the 3 px floor; AR family 18 / 22 / 16 / **26** px standing |
+| Reticle opacity | hip **1.00**, half-ADS 0.32, full ADS **0.00** |
+| Weapons offered the scope overlay | **2 of 12**; the other 10 must show a sight picture from their own geometry |
+| Team colour, every (viewer, subject) pair | **0 violations of 12 pairs**, both seats, team modes and FFA |
+| Depot's yard, before → after | **4.4 → 21.3** mean of 255, over 1188 samples |
+| Depot pool-to-gap irradiance | **2.60x**, unchanged by the albedo (Foundry 1.86x, Dunes 1.00x) |
+
+The team-colour half **exits non-zero on a violation**; the crosshair and lighting halves are
+readings, because there is no threshold a human has agreed to and inventing one here would be the
+magic number P0 bans.
+
+**`npm run harness` — 5 matches, seeds 1-5, TDM on Foundry.** The regression control, and this
+session is the one where it should be exact: everything above is presentation.
+
+| | |
+|---|---|
+| Scores | **75-59, 75-66, 62-75, 75-66, 60-75** — byte-identical to P5's baseline on the same seeds |
+| Life-starts with partial grenade stock | **0** across all five (observed stock equals expected in every match) |
+| Streak life-starts inheriting a balance / round carry-overs | **0 / 0** |
+| Negative balances / kill-anchor resyncs | **0 / 0** |
+
+**`npm run skirmish` — 3 headless clients, a real server, a real wire, shipped timings.** Also
+presentation-only, so this is a control too: nothing here should have moved and nothing did.
+
+| Probe | Result |
+|---|---|
+| The run | **FLOW CHECK PASSED** |
+| Migrations | 3 of 3, **0 failed**; live roster 3H + 7B = 10, the mode's authored count |
+| Mispredictions entering a live match | **0** (S8.9 requires 0); to the arena 0; spawn window 0 |
+| Divergence checker | **0 / 7373** per client |
+| Spectator invariants | 6620 selections while dead, **0 self / 0 enemy / 0 dead** |
+| Quick loadout window | 10 079 ticks over 30 windows, **0 while alive** |
+| Tab surviving `neutralise` while dead | 3280 of 6507 dead ticks; board open 3280 |
+| Per-life grenade stock | 113 life-starts (24 human, 89 bot), **0 partial / 0 empty**, 274 held against 274 expected |
+| Streak life-starts inheriting a balance / round carry-overs | **0 / 0** |
+
+And one incidental confirmation that B12 was reachable exactly as reported: the server seated
+**OP1 on team A, OP2 on team B, OP3 on team A**. The second human into a match is on the red
+side, every time, which is `Match.smallerTeam` doing what it was written to do.
+
+Unchanged and expected: `post-match hold: NOT EXERCISED` at shipped timings, for the reason the
+B4 session recorded.
+
+**`npm run leak` — 100 allocate/destroy cycles.** Subscriptions **29 -> 29 (+0)**, heap 12.73 ->
+13.42 MiB (+0.69). **LEAK CHECK PASSED.** The baseline is P5's 29 unchanged: the two arrows are
+pooled DOM owned by `HudTactical`, the tag pool is 24 groups built once per match, and nothing in
+this session subscribes to anything.
+
+**`npm run check`** and **`npm run build`** green — boundaries (294 files), the cosmetic audit
+(19 snapshot fields) and the unlock audit all pass, and all three typecheck targets.
+
+### What was not verified
+
+Everything about how any of this looks. `HeadlessClient` builds no `ClientMatch`, no `Game` and
+no DOM, and the preview pane never fires `requestAnimationFrame` — so of the five items here,
+**four produce no harness number at all** and the fifth (F9) produces a number about arithmetic
+rather than about a rendered frame.
+
+That gap is the reason two of this session's five deliverables are instruments. What `readability`
+buys is not a substitute for looking: it is that the next person to be told "the third map is
+dark" can say by how much, in the units the eye uses, before touching a light.
+
+Specifically unverified, and each was reasoned from the code:
+
+- That the LONGBOW's sight picture is now clear. The geometry says the caps are gone and the
+  glass is on the sight line; whether the aperture *reads* at ADS is pixels.
+- That an open-ended tube looks right from outside at hip. Backface culling makes the interior
+  invisible, which is the intent, but it is a claim about a rasteriser.
+- That 21.3 / 255 is enough. See F9 above.
+- That the dog tag is legible on Depot now that its body is lit.
+
+### Needs a browser
+
+- **B2, and it is the one to check first.** Equip `LONGBOW MK3` and aim. You must see *through*
+  the scope — a clear tube with a small red dot on the sight line — rather than at a flat metal
+  disc. Then aim a `KESTREL .338` and a `VANTAGE SR`: both must be exactly as they were, because
+  their viewmodel is hidden before the overlay arrives and this change must be invisible on them.
+  Then the M4 and the HALCYON, whose irons and red dot must be untouched.
+- **B12, from the seat that has it.** You need to be the **second** human into a match, which is
+  what puts you on team B. Your side must be on the **left**, in green, labelled ALLIES — on the
+  scoreboard, on the score banner and on the end-of-match board. Your team-mates must be green in
+  the killfeed and the enemy red. Then play an FFA: every other name in the feed must be hostile,
+  including the half of the lobby that shares your substrate side, and the banner must read
+  LEADER on the left and YOU on the right with your own number the friendly one.
+- **F9, with a screenshot.** Vote Depot. Stand in the yard between two mast pools and photograph
+  it; stand under a mast and photograph that. The pools must still read as pools — that is the
+  claim the 2.60x ratio makes and the thing the previous fix was afraid of losing. If it is still
+  too dark, the number to bring back is whether you can see a body against the asphalt at twenty
+  metres, because that is what the next lever gets chosen against.
+- **F2.** Play Search & Destroy as an attacker. At round start the arrow must point at the bomb
+  and must go away the moment somebody picks it up — **watch for that specifically**, because an
+  arrow that keeps tracking a carrier is the wallhack this design exists to avoid. It must not
+  come back after a plant. Then get an enemy grenade thrown at you while the bomb is loose: two
+  arrows, and they must be distinguishable at a glance.
+- **F3.** Kill Confirmed. The tag must read as a solid object that catches the map's light and
+  swings on its chain, and it must still be findable across a room — check that on Depot rather
+  than Foundry, which is where it is hard.
+- **The killfeed at its real size**, unchanged from P3's list and now also carrying B12's colours.
+
+Unchanged from the earlier lists: the arena-return residual of 1-3 sub-25 cm mispredictions, and
+everything under "Open, and all of one kind".
+
+### Found while here
+
+- **`asphalt` is used by exactly one map**, which is what made raising it safe and local. It is
+  also the only ground in the game whose base colour was chosen to be "correct for the material"
+  rather than against the light it would sit under, and the comment that defended it was reasoning
+  about a multiplier as though it were an addend. Worth keeping in mind for the next map: the
+  question a ground colour has to answer is not *what colour is asphalt*, it is *what does this
+  return under this map's light*.
+- **`BotMesh` keys its bodies on the team letter too** — slate for A, sand for B — so which
+  silhouette your side wears flips between matches. It is deliberate and documented as such
+  ("neither team reading as the enemy by colour alone"), so it is *not* the B12 defect: those two
+  colours are not the palette's friendly and hostile, and neither means "shoot this". Left,
+  recorded, because it is the one remaining absolute team→appearance mapping in the client and
+  the next person grepping for one will find it.
+- **`WeaponModelSpec.optic` and `WeaponDef.scope` are two answers to "does this weapon have a
+  scope"**, and B2 is what one disagreement between them cost. They are not merged here: one is a
+  client-side model description and the other is shared simulation data, and merging them would
+  put a rendering detail in `shared/` or a balance number in `client/`. What changed is that the
+  disagreement is no longer *fatal* — every optic kind now builds a clear aperture, so a spec that
+  says "scope" on a weapon the simulation does not scope is a cosmetic mismatch rather than a
+  blind rifle. The next weapon to want a real scope still has to add both.
+- **`DUNES` reads 185 / 185 / 185** — a perfectly flat floor, because it has no point lights at
+  all. Not a defect (it is midday sun on open sand) and not this session's item, but it is the one
+  map where the lighting has no spatial structure whatsoever, and it is worth knowing before
+  anybody asks why it feels flat.

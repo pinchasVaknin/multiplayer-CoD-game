@@ -1,4 +1,5 @@
-import { clamp01, RAD2DEG } from '../../shared/core/MathUtil';
+import { clamp01 } from '../../shared/core/MathUtil';
+import { BearingIndicator } from './BearingIndicator';
 
 /**
  * The M5 half of the HUD: equipment, the grenade indicator, the flash white-out, and the
@@ -54,6 +55,16 @@ export interface TacticalState {
   threatY: number;
   threatZ: number;
 
+  /**
+   * Where the loose bomb is, when there is one to go and pick up (round 4, F2).
+   *
+   * Deliberately only the **loose** bomb. See `MatchObjectives.readBombBearing` for why a
+   * carried one must never appear here: it would track a living enemy through walls.
+   */
+  objectiveActive: boolean;
+  objectiveX: number;
+  objectiveZ: number;
+
   /** 0 = irons, 1 = fully scoped. Draws the scope overlay. */
   scopeFraction: number;
   /** 0..1 breath remaining, and whether it is being held. */
@@ -83,6 +94,9 @@ export function makeTacticalState(): TacticalState {
     threatX: 0,
     threatY: 0,
     threatZ: 0,
+    objectiveActive: false,
+    objectiveX: 0,
+    objectiveZ: 0,
     scopeFraction: 0,
     breath: 1,
     breathHeld: false,
@@ -105,7 +119,15 @@ export class HudTactical {
   readonly element: HTMLElement;
   readonly flashElement: HTMLElement;
   readonly scopeElement: HTMLElement;
-  readonly threatElement: HTMLElement;
+  /**
+   * Two arrows, one component (round 4, F2).
+   *
+   * The grenade warning and the bomb marker are the same widget pointed at different things,
+   * and they can be live at once — a grenade lands beside the bomb you are running for — so
+   * they are two instances rather than one element with two writers.
+   */
+  private readonly threatArrow = new BearingIndicator('threat');
+  private readonly objectiveArrow = new BearingIndicator('objective');
 
   private readonly weaponPrimary: HTMLElement;
   private readonly weaponSecondary: HTMLElement;
@@ -129,8 +151,6 @@ export class HudTactical {
   private lastTactical = '';
   private lastFlash = -1;
   private lastScope = -1;
-  private lastThreatAngle = 999;
-  private threatShown = false;
   private cookShown = false;
   private breathShown = false;
 
@@ -192,10 +212,7 @@ export class HudTactical {
     this.breathFill = document.createElement('i');
     this.breathBar.appendChild(this.breathFill);
 
-    this.threatElement = document.createElement('div');
-    this.threatElement.className = 'hud-threat';
-    this.threatElement.appendChild(document.createElement('i'));
-    this.threatElement.style.opacity = '0';
+
 
     this.flashElement = document.createElement('div');
     this.flashElement.className = 'hud-flash';
@@ -211,7 +228,15 @@ export class HudTactical {
 
   /** Every element this owns, in the order `Hud` should append them. */
   get layers(): readonly HTMLElement[] {
-    return [this.scopeElement, this.element, this.cookBar, this.breathBar, this.threatElement, this.flashElement];
+    return [
+      this.scopeElement,
+      this.element,
+      this.cookBar,
+      this.breathBar,
+      this.threatArrow.element,
+      this.objectiveArrow.element,
+      this.flashElement,
+    ];
   }
 
   /**
@@ -258,7 +283,15 @@ export class HudTactical {
 
     this.updateCook(state);
     this.updateBreath(state);
-    this.updateThreat(state, playerX, playerZ, playerYaw);
+    this.threatArrow.update(state.threatActive, state.threatX, state.threatZ, playerX, playerZ, playerYaw);
+    this.objectiveArrow.update(
+      state.objectiveActive,
+      state.objectiveX,
+      state.objectiveZ,
+      playerX,
+      playerZ,
+      playerYaw,
+    );
     this.updateFlash(state.flash);
     this.updateScope(state.scopeFraction);
   }
@@ -268,10 +301,10 @@ export class HudTactical {
     this.lastScope = -1;
     this.flashElement.style.opacity = '0';
     this.scopeElement.style.opacity = '0';
-    this.threatElement.style.opacity = '0';
+    this.threatArrow.reset();
+    this.objectiveArrow.reset();
     this.cookBar.style.opacity = '0';
     this.breathBar.style.opacity = '0';
-    this.threatShown = false;
     this.cookShown = false;
     this.breathShown = false;
   }
@@ -300,28 +333,6 @@ export class HudTactical {
     if (!show) return;
     this.breathFill.style.transform = `scaleX(${clamp01(state.breath).toFixed(3)})`;
     this.breathFill.classList.toggle('is-held', state.breathHeld);
-  }
-
-  private updateThreat(
-    state: TacticalState,
-    playerX: number,
-    playerZ: number,
-    playerYaw: number,
-  ): void {
-    if (state.threatActive !== this.threatShown) {
-      this.threatShown = state.threatActive;
-      this.threatElement.style.opacity = state.threatActive ? '1' : '0';
-    }
-    if (!state.threatActive) return;
-
-    // World bearing to the grenade, minus where the player is looking. Positive is to the
-    // right of the crosshair, which is the same convention `showHitDirection` uses.
-    const worldAngle = Math.atan2(state.threatX - playerX, -(state.threatZ - playerZ));
-    const relative = worldAngle - playerYaw;
-    const deg = Math.round(relative * RAD2DEG);
-    if (deg === this.lastThreatAngle) return;
-    this.lastThreatAngle = deg;
-    this.threatElement.style.transform = `rotate(${deg}deg)`;
   }
 
   private updateFlash(flash: number): void {

@@ -1,3 +1,5 @@
+import type { ScoreTeam } from '../../shared/combat/ScoreSystem';
+import { relationClass, relationTo, type ViewerContext } from '../../shared/ui/TeamColour';
 import type { GameEvents } from '../../shared/core/Events';
 import { HEADSHOT_PATH, HEADSHOT_VIEWBOX, ICON_VIEWBOX, iconFor, makeIconSvg } from './WeaponIcons';
 
@@ -37,6 +39,17 @@ interface Row {
 }
 
 export class KillfeedView {
+  /**
+   * Which seat is reading the feed. Defaulted rather than required, and set by `Hud` when the
+   * match tells it — the feed is constructed before a seat is known, exactly like the summary
+   * board. See `shared/ui/TeamColour`.
+   */
+  private viewer: ViewerContext = { team: 'A', freeForAll: false };
+
+  setViewer(viewer: ViewerContext): void {
+    this.viewer = viewer;
+  }
+
   readonly element: HTMLElement;
 
   private readonly rows: Row[] = [];
@@ -107,8 +120,8 @@ export class KillfeedView {
       head.victim.textContent = entry.victimName;
     }
 
-    head.killer.className = `hud-feed__name ${teamClass(entry.killerTeam, entry.involvesLocal)}`;
-    head.victim.className = `hud-feed__name ${teamClass(entry.victimTeam, entry.involvesLocal)}`;
+    head.killer.className = `hud-feed__name ${teamClass(this.viewer, entry.killerTeam, entry.involvesLocal)}`;
+    head.victim.className = `hud-feed__name ${teamClass(this.viewer, entry.victimTeam, entry.involvesLocal)}`;
     head.el.classList.toggle('hud-feed__row--local', entry.involvesLocal);
 
     if (entry.weaponId !== head.lastWeapon) {
@@ -207,8 +220,15 @@ export class KillfeedView {
   }
 }
 
-function teamClass(team: 'A' | 'B' | 'NONE', involvesLocal: boolean): string {
-  if (team === 'NONE') return 'hud-feed__name--neutral';
-  const base = team === 'A' ? 'hud-feed__name--friendly' : 'hud-feed__name--hostile';
+/**
+ * The colour a name is painted, from this client's seat (playtest round 4, B12).
+ *
+ * It was `team === 'A' ? friendly : hostile` — absolute, so from a team-B seat the feed
+ * painted every team-mate as an enemy and every enemy as a team-mate, all match. `relationTo`
+ * is the only door to a colour class now, and it takes the viewer, so the old expression is
+ * not merely discouraged: there is no longer a function it can call.
+ */
+function teamClass(viewer: ViewerContext, team: ScoreTeam | 'NONE', involvesLocal: boolean): string {
+  const base = `hud-feed__name--${relationClass(relationTo(viewer, team))}`;
   return involvesLocal ? `${base} hud-feed__name--bright` : base;
 }

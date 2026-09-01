@@ -1,5 +1,12 @@
 import type { PlayerScore, ScoreSystem, ScoreTeam } from '../../shared/combat/ScoreSystem';
 import type { ColumnDef } from '../../shared/modes/GameMode';
+import {
+  relationClass,
+  relationTo,
+  teamLabel,
+  teamsInViewOrder,
+  type ViewerContext,
+} from '../../shared/ui/TeamColour';
 
 /**
  * The scoreboard, on held Tab (brief S6.5).
@@ -32,6 +39,12 @@ export class Scoreboard {
   private readonly bodies: Record<ScoreTeam, HTMLElement>;
   private readonly rows: Record<ScoreTeam, Row[]> = { A: [], B: [] };
   private readonly title: HTMLElement;
+  /** The two team blocks and the grid holding them, so `setViewer` can reorder and recolour. */
+  private readonly grid: HTMLElement;
+  private readonly blocks: Record<ScoreTeam, HTMLElement>;
+  /** The name-column heading per side. Its text is `ALLIES`/`AXIS` and therefore relative. */
+  private readonly teamLabels: Partial<Record<ScoreTeam, HTMLElement>> = {};
+  private viewer: ViewerContext = { team: 'A', freeForAll: false };
   private columns: ColumnDef[] = [];
   private open = false;
   private accumulator = 0;
@@ -53,9 +66,13 @@ export class Scoreboard {
     const heads: Partial<Record<ScoreTeam, HTMLElement>> = {};
     const bodies: Partial<Record<ScoreTeam, HTMLElement>> = {};
 
+    const blocks: Partial<Record<ScoreTeam, HTMLElement>> = {};
     for (const team of ['A', 'B'] as const) {
       const block = document.createElement('div');
-      block.className = `sb__team sb__team--${team === 'A' ? 'friendly' : 'hostile'}`;
+      // The colour class is written by `setViewer`, which is the single writer of everything
+      // on this board that depends on which seat is reading it (round 4, B12).
+      block.className = 'sb__team';
+      blocks[team] = block;
 
       const head = document.createElement('div');
       head.className = 'sb__head';
@@ -90,6 +107,51 @@ export class Scoreboard {
     }
     this.teamHeads = { A: headA, B: headB };
     this.bodies = { A: bodyA, B: bodyB };
+
+    const blockA = blocks.A;
+    const blockB = blocks.B;
+    if (blockA === undefined || blockB === undefined) {
+      throw new Error('Scoreboard failed to build its team blocks');
+    }
+    this.grid = grid;
+    this.blocks = { A: blockA, B: blockB };
+    this.applyViewer();
+  }
+
+  /**
+   * Which seat is reading this board (playtest round 4, B12).
+   *
+   * Mutable rather than a constructor argument because the two boards have different
+   * lifetimes: `MatchHud`'s is built per match and could have taken it once, but the summary's
+   * is built at boot by `GameScreens` and outlives every match it shows. One of the two would
+   * have had to set it late, and a field that is sometimes set at construction and sometimes
+   * afterwards is the shape that ends up unset.
+   *
+   * Idempotent, so calling it every time a match starts costs a class write and nothing else.
+   */
+  setViewer(viewer: ViewerContext): void {
+    this.viewer = viewer;
+    this.applyViewer();
+  }
+
+  /**
+   * The one writer of everything relative on this board: block colour, block order, heading.
+   *
+   * Order is DOM order — `appendChild` on an element already in the grid moves it — so the
+   * viewer's own side is always the left-hand block. That is half of what B12 reports: a
+   * team-B player was reading their score on the right, in red, under a heading that told them
+   * they were the Axis.
+   */
+  private applyViewer(): void {
+    for (const team of teamsInViewOrder(this.viewer)) {
+      const relation = relationTo(this.viewer, team);
+      const block = this.blocks[team];
+      block.className = `sb__team sb__team--${relationClass(relation)}`;
+      // Re-appending in view order re-sorts the grid without rebuilding either block.
+      this.grid.appendChild(block);
+      const label = this.teamLabels[team];
+      if (label !== undefined) label.textContent = teamLabel(relation);
+    }
   }
 
   get isOpen(): boolean {
@@ -111,7 +173,8 @@ export class Scoreboard {
       head.style.gridTemplateColumns = template;
       const label = document.createElement('span');
       label.className = 'sb__col sb__col--name';
-      label.textContent = team === 'A' ? 'ALLIES' : 'AXIS';
+      label.textContent = teamLabel(relationTo(this.viewer, team));
+      this.teamLabels[team] = label;
       head.appendChild(label);
       for (const column of columns) {
         const cell = document.createElement('span');

@@ -146,7 +146,16 @@ function addMerged(
   }
 
   for (const part of tubes) {
-    const g = new THREE.CylinderGeometry(part.radius, part.radius, part.length, part.sides ?? 12, 1);
+    // `openEnded` is load-bearing on the scope tube and nowhere else: a capped cylinder
+    // standing on the sight line is a plug, which is round 4's B2. See `WeaponMeshParts`.
+    const g = new THREE.CylinderGeometry(
+      part.radius,
+      part.radius,
+      part.length,
+      part.sides ?? 12,
+      1,
+      part.openEnded ?? false,
+    );
     // CylinderGeometry runs along +Y; barrels run along Z.
     if (part.vertical !== true) g.rotateX(Math.PI / 2);
     g.translate(part.x, part.y, part.z);

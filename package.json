@@ -24,6 +24,8 @@
     "skirmish": "npm run build:server && node --expose-gc dist-server/skirmishHarness.js",
     "//leak": "M11 S8.13. 100 allocate/destroy cycles, logging heap and live EventBus subscriptions at each. Both must be flat.",
     "leak": "npm run build:server && node --expose-gc dist-server/skirmishHarness.js --leak 100",
+    "//readability": "Playtest round 4 P9. Crosshair gaps for the whole roster, the (viewer, subject) colour invariant, and what each map's ground reads at on a 0-255 screen. Pure functions of the content, so one run is a fact rather than a sample; the team-colour half exits non-zero.",
+    "readability": "npm run build:server && node dist-server/readability.js",
     "//hashes": "S6.6. Node writes the per-tick hashes; the browser writes its own from the debug console; the differ reports the first divergent tick.",
     "hashes": "npm run build:server && node dist-server/hashRun.js",
     "//check": "The gate. Boundaries first: a partition violation makes the type errors that follow meaningless noise, so it is the thing that speaks. Then the S8.25 cosmetic audit and the S6.2 unlock audit, both cheap, each catching a whole class of mistake that compiles.",

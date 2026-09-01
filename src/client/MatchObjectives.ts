@@ -17,6 +17,35 @@ import type { ObjectiveZone } from '../shared/modes/ObjectiveZone';
  * number, and a capture ring drawn on the floor tells you **where to stand**. Domination is
  * decided by standing in the right circle, so the circle belongs on the ground.
  *
+ * ## The one exception, and its exact boundary (playtest round 4, F2)
+ *
+ * *"A marker arrow pointing at the bomb to pick up."* An arrow on the HUD is a departure from
+ * the rule above and it is worth being precise about why it is allowed here and nowhere else.
+ *
+ * The rule's argument is that a world marker answers *where do I stand* and a HUD marker only
+ * answers *which way is it*. For a capture ring that is decisive. For a bomb lying somewhere in
+ * a 60-metre map that the round cannot start without, *which way is it* is the entire question,
+ * and the world object answering it is a 0.3 m box behind a container. The mode's own history
+ * says the same thing from the other end: this file already carries the note that a carried
+ * bomb was invisible and the mode was reported as having *"no bomb"*.
+ *
+ * So the exception is **the loose bomb only**, and that boundary is what keeps it honest rather
+ * than being a wallhack with a justification:
+ *
+ *  - `bomb === 'CARRIED' && carrierId === -1` — on the floor, claimable, a fixed point in the
+ *    world that both sides can already see blinking. The arrow adds a bearing to a fact that is
+ *    public.
+ *  - `carrierId >= 0` — **no arrow**. The bomb's position is a living player's position, and an
+ *    indicator that tracks it through geometry is a legitimised wallhack on whoever picked it
+ *    up. `followCarrier` makes `bombX/Y/Z` true every tick precisely so the mesh can ride its
+ *    carrier, and that is exactly what makes the HUD version dangerous.
+ *  - `PLANTED` — no arrow. The site is a world object with a ring and an accelerating light,
+ *    and by then everybody knows where it is.
+ *
+ * That falls out of `readBombBearing` rather than out of a check somewhere else, so the intel
+ * filter is satisfied by construction: there is no code path that can hand the HUD a carried
+ * bomb's coordinates.
+ *
  * ## Cost
  *
  * Everything here is built once at construction and only ever *transformed* or recoloured
@@ -72,7 +101,16 @@ interface FlagVisual {
 
 interface TagVisual {
   readonly group: THREE.Group;
-  readonly mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  /**
+   * The team-coloured part, and the only part whose colour changes (round 4, F3).
+   *
+   * The plate and the chain are lit steel shared by every tag; what says *whose* tag this is
+   * is the emissive edge behind it. Keeping the two apart is what lets the object be solid and
+   * still legible on Depot — see `buildTagPool`.
+   */
+  readonly edge: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  /** Hangs the plate off the chain, so the whole thing swings rather than spinning flat. */
+  readonly hanger: THREE.Group;
   tagId: number;
   active: boolean;
 }
@@ -93,6 +131,15 @@ export class MatchObjectives {
   private readonly flags: FlagVisual[] = [];
   private readonly tags: TagVisual[] = [];
   private readonly sites: FlagVisual[] = [];
+  /**
+   * Where the loose bomb is, for the HUD's bearing arrow. Never a carried one — see the header.
+   *
+   * A mutable record read into the caller's own scratch, the same shape `Hud.readThreat` uses,
+   * because this is read once per frame from inside the render pass and S4.7 allows no
+   * allocation there.
+   */
+  private readonly bombBearing = { active: false, x: 0, z: 0 };
+
   /** The planted bomb, shown only while one is down. */
   private readonly bomb: THREE.Group = new THREE.Group();
   private readonly bombLight: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
@@ -141,9 +188,24 @@ export class MatchObjectives {
    * `dt` is a real frame delta, which is legitimate because every use of it is a spin or a
    * pulse — no gameplay value is integrated here (S4.1).
    */
+  /**
+   * Read the loose bomb's bearing, or `active: false` when there is nothing to point at.
+   *
+   * A mode with no bomb never writes `bombBearing`, so the default of `false` is what every
+   * non-S&D match reports — which is why this is safe to call unconditionally.
+   */
+  readBombBearing(out: { active: boolean; x: number; z: number }): void {
+    out.active = this.bombBearing.active;
+    out.x = this.bombBearing.x;
+    out.z = this.bombBearing.z;
+  }
+
   update(dt: number): void {
     this.spin = (this.spin + dt * 0.9) % (Math.PI * 2);
     const mode = this.deps.mode;
+    // Cleared every frame and re-asserted by `updateBomb`, so a mode change, a plant or a
+    // pickup takes the arrow down on the same frame rather than leaving it latched.
+    this.bombBearing.active = false;
 
     for (const flag of this.flags) this.updateZone(flag, dt);
     for (const site of this.sites) this.updateZone(site, dt);
@@ -274,23 +336,84 @@ export class MatchObjectives {
    * mesh per tag would be a steady allocation in the middle of a firefight.
    */
   private buildTagPool(): void {
-    const geo = new THREE.BoxGeometry(0.16, 0.24, 0.02);
-    const chainGeo = new THREE.TorusGeometry(0.07, 0.008, 4, 10);
-    this.disposables.push(geo, chainGeo);
+    /**
+     * A solid, hanging tag rather than a coloured hologram (playtest round 4, F3).
+     *
+     * What made the old one read as a hologram was not its shape, it was its **material**: one
+     * `MeshBasicMaterial` with `toneMapped: false` for the plate and the chain both, so the
+     * object was a flat fill of the team colour that no light in the scene touched. A thing
+     * that does not respond to the light around it is not in the world, and that is what the
+     * report is describing.
+     *
+     * So the plate and the chain are lit steel now — one `MeshLambertMaterial` shared by all 24
+     * tags, because none of them ever changes colour — and they take the map's key, fill and
+     * mast pools like every other object. The bevel strips are what make a 2 mm plate read as
+     * having thickness at three metres.
+     *
+     * **The colour moves to an emissive edge behind the plate**, and that is the part that had
+     * to be thought about rather than just re-skinned. Making the whole tag lit would have been
+     * the honest-but-useless version: on Depot, at 20/255, a steel plate on asphalt is
+     * invisible, and Kill Confirmed is a mode built entirely on noticing these from across a
+     * room. The edge keeps `toneMapped: false`, so it is exactly as findable as the old tag
+     * was, while the object in front of it is solid. Friendly-to-deny and enemy-to-confirm stay
+     * one glance apart, which is the mode's whole ask.
+     *
+     * The plate hangs from the chain on its own group and is tilted, so the spin swings it
+     * rather than rotating a flat card about its own axis — the old one presented zero area
+     * twice per revolution and flickered out of existence at those angles.
+     */
+    const plateGeo = new THREE.BoxGeometry(0.15, 0.23, 0.016);
+    const bevelGeo = new THREE.BoxGeometry(0.16, 0.2, 0.01);
+    const edgeGeo = new THREE.BoxGeometry(0.175, 0.255, 0.004);
+    // 12 radial segments rather than 4: at 0.07 m the old ring was a visible square.
+    const chainGeo = new THREE.TorusGeometry(0.055, 0.006, 6, 16);
+    const beadGeo = new THREE.SphereGeometry(0.011, 8, 6);
+    this.disposables.push(plateGeo, bevelGeo, edgeGeo, chainGeo, beadGeo);
+
+    /**
+     * Stamped steel, shared by every tag and never recoloured.
+     *
+     * Lambert rather than Standard for the reason the map brushes are: this game's surface
+     * interest comes from its procedural maps and its lighting, not from a BRDF, and 24 of
+     * these can be on the floor at once in a busy Kill Confirmed.
+     */
+    const steel = new THREE.MeshLambertMaterial({ color: 0xb9bfc8 });
+    this.disposables.push(steel);
+
     for (let i = 0; i < 24; i++) {
       const mat = new THREE.MeshBasicMaterial({ color: colorEnemy(), toneMapped: false });
       this.hostileMaterials.push(mat);
       this.disposables.push(mat);
+
       const group = new THREE.Group();
-      const mesh = new THREE.Mesh(geo, mat);
-      group.add(mesh);
-      const chain = new THREE.Mesh(chainGeo, mat);
-      chain.position.y = 0.19;
+
+      // The plate and everything that turns with it.
+      const hanger = new THREE.Group();
+      const edge = new THREE.Mesh(edgeGeo, mat);
+      edge.position.z = -0.006;
+      hanger.add(edge);
+      hanger.add(new THREE.Mesh(plateGeo, steel));
+      const bevel = new THREE.Mesh(bevelGeo, steel);
+      bevel.position.z = 0.004;
+      hanger.add(bevel);
+      // Hung off the chain and tilted: a tag on a neck chain never sits square.
+      hanger.position.y = -0.055;
+      hanger.rotation.z = 0.22;
+      hanger.rotation.x = -0.14;
+      group.add(hanger);
+
+      const chain = new THREE.Mesh(chainGeo, steel);
+      chain.position.y = 0.03;
       chain.rotation.x = Math.PI / 2;
       group.add(chain);
+      // One bead at the clasp, so the ring reads as a chain rather than as a washer.
+      const bead = new THREE.Mesh(beadGeo, steel);
+      bead.position.set(0, -0.025, 0);
+      group.add(bead);
+
       group.visible = false;
       this.group.add(group);
-      this.tags.push({ group, mesh, tagId: -1, active: false });
+      this.tags.push({ group, edge, hanger, tagId: -1, active: false });
     }
   }
 
@@ -316,8 +439,11 @@ export class MatchObjectives {
       // built on noticing them.
       visual.group.position.set(tag.x, tag.y + 0.12 + Math.sin(this.spin * 2.2 + tag.id) * 0.07, tag.z);
       visual.group.rotation.y = this.spin * 1.6 + tag.id;
+      // The plate swings on its chain a little out of phase with the turn, so it reads as a
+      // hanging object rather than as a card on a turntable (round 4, F3).
+      visual.hanger.rotation.z = 0.22 + Math.sin(this.spin * 1.9 + tag.id) * 0.16;
       // Friendly tags deny, enemy tags score — so they must be told apart instantly.
-      visual.mesh.material.color.setHex(
+      visual.edge.material.color.setHex(
         tag.team === this.deps.localTeam ? colorFriendly() : colorEnemy(),
       );
       // The last three seconds blink, which is the only warning it is about to evaporate.
@@ -400,6 +526,19 @@ export class MatchObjectives {
     const site = mode.plantedSite;
     const planted = mode.bomb === 'PLANTED' && site !== null;
     this.updateInteractRing(mode);
+
+    /**
+     * The HUD arrow's one source (round 4, F2). See the exception in this file's header.
+     *
+     * Written here, in the same pass that decides where the mesh goes, so the arrow and the
+     * object it points at cannot describe different frames.
+     */
+    const loose = mode.bomb === 'CARRIED' && mode.carrierId < 0;
+    this.bombBearing.active = loose;
+    if (loose) {
+      this.bombBearing.x = mode.bombX;
+      this.bombBearing.z = mode.bombZ;
+    }
 
     /**
      * Before the plant the same mesh is the bomb itself — on the floor **or on its carrier**

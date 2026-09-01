@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Rng } from '../../shared/core/Rng';
 import { MATERIAL_KEYS, type MaterialKey } from '../../shared/world/maps/types';
+import { materialBaseColor } from '../../shared/world/maps/albedo';
 
 /**
  * All surface detail is generated in code (brief S2): no texture packs, no CDN.
@@ -56,72 +57,72 @@ export class ProceduralTextures {
 
     switch (key) {
       case 'concrete':
-        paintConcrete(ctx, rng, 0x6a6f78, 0.13);
+        paintConcrete(ctx, rng, materialBaseColor('concrete'), 0.13);
         worldScale = 2;
         break;
       case 'concreteDark':
-        paintConcrete(ctx, rng, 0x3d424b, 0.16);
+        paintConcrete(ctx, rng, materialBaseColor('concreteDark'), 0.16);
         worldScale = 2;
         break;
       case 'floor':
-        paintFloor(ctx, rng);
+        paintFloor(ctx, rng, materialBaseColor('floor'));
         worldScale = 2;
         break;
       case 'metal':
-        paintMetal(ctx, rng);
+        paintMetal(ctx, rng, materialBaseColor('metal'));
         worldScale = 1;
         break;
       case 'hazard':
-        paintHazard(ctx, rng);
+        paintHazard(ctx, rng, materialBaseColor('hazard'));
         worldScale = 1;
         break;
       case 'accent':
-        paintAccent(ctx, rng);
+        paintAccent(ctx, rng, materialBaseColor('accent'));
         worldScale = 1;
         break;
       case 'rubber':
-        paintRubber(ctx, rng);
+        paintRubber(ctx, rng, materialBaseColor('rubber'));
         worldScale = 1;
         break;
       case 'brick':
-        paintBrick(ctx, rng);
+        paintBrick(ctx, rng, materialBaseColor('brick'));
         // 2 m per repeat gives four courses of brick a metre, which reads at running speed.
         worldScale = 2;
         break;
       case 'rust':
-        paintRust(ctx, rng);
+        paintRust(ctx, rng, materialBaseColor('rust'));
         worldScale = 2.4;
         break;
       case 'grate':
-        paintGrate(ctx, rng);
+        paintGrate(ctx, rng, materialBaseColor('grate'));
         worldScale = 1;
         break;
 
       // ---- M8 -------------------------------------------------------------
       case 'sand':
-        paintSand(ctx, rng);
+        paintSand(ctx, rng, materialBaseColor('sand'));
         // 3 m per repeat: a desert street is a big flat surface and a 1 m tile on it
         // reads as a chequerboard the moment you sprint down the lane.
         worldScale = 3;
         break;
       case 'plaster':
-        paintPlaster(ctx, rng);
+        paintPlaster(ctx, rng, materialBaseColor('plaster'));
         worldScale = 2.4;
         break;
       case 'clayTile':
-        paintClayTile(ctx, rng);
+        paintClayTile(ctx, rng, materialBaseColor('clayTile'));
         worldScale = 1.4;
         break;
       case 'wood':
-        paintWood(ctx, rng);
+        paintWood(ctx, rng, materialBaseColor('wood'));
         worldScale = 1.6;
         break;
       case 'asphalt':
-        paintAsphalt(ctx, rng);
+        paintAsphalt(ctx, rng, materialBaseColor('asphalt'));
         worldScale = 3;
         break;
       case 'paintedSteel':
-        paintPaintedSteel(ctx, rng);
+        paintPaintedSteel(ctx, rng, materialBaseColor('paintedSteel'));
         worldScale = 2.4;
         break;
     }
@@ -150,8 +151,8 @@ function paintConcrete(ctx: CanvasRenderingContext2D, rng: Rng, base: number, gr
   speckle(ctx, rng, 900, 0.35, 1.6);
 }
 
-function paintFloor(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x555a63);
+function paintFloor(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   blotches(ctx, rng, 18, 30, 90, 0.05);
   grainNoise(ctx, rng, 0.1);
 
@@ -174,8 +175,8 @@ function paintFloor(ctx: CanvasRenderingContext2D, rng: Rng): void {
   speckle(ctx, rng, 500, 0.25, 1.4);
 }
 
-function paintMetal(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x4c515a);
+function paintMetal(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   // Brushed streaks.
   for (let i = 0; i < 700; i++) {
     const y = rng.float() * TEX_SIZE;
@@ -207,8 +208,8 @@ function paintMetal(ctx: CanvasRenderingContext2D, rng: Rng): void {
   grainNoise(ctx, rng, 0.06);
 }
 
-function paintHazard(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x14171c);
+function paintHazard(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   ctx.save();
   ctx.fillStyle = '#ffb340';
   // 45-degree stripes, drawn wide enough to survive the rotation.
@@ -227,8 +228,8 @@ function paintHazard(ctx: CanvasRenderingContext2D, rng: Rng): void {
   speckle(ctx, rng, 700, 0.4, 2);
 }
 
-function paintAccent(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x14171c);
+function paintAccent(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   grainNoise(ctx, rng, 0.08);
   ctx.fillStyle = '#ffb340';
   ctx.fillRect(0, TEX_SIZE * 0.46, TEX_SIZE, TEX_SIZE * 0.08);
@@ -236,8 +237,8 @@ function paintAccent(ctx: CanvasRenderingContext2D, rng: Rng): void {
   ctx.fillRect(0, TEX_SIZE * 0.4, TEX_SIZE, TEX_SIZE * 0.2);
 }
 
-function paintRubber(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x24272d);
+function paintRubber(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   grainNoise(ctx, rng, 0.14);
   // Studded mat.
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
@@ -262,8 +263,8 @@ function paintRubber(ctx: CanvasRenderingContext2D, rng: Rng): void {
  * repeating texture from reading as a repeating texture: the eye finds the wrong-coloured
  * brick before it finds the tile boundary.
  */
-function paintBrick(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x4a3a34);
+function paintBrick(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   const courses = 8;
   const courseH = TEX_SIZE / courses;
   const brickW = TEX_SIZE / 4;
@@ -296,8 +297,8 @@ function paintBrick(ctx: CanvasRenderingContext2D, rng: Rng): void {
 }
 
 /** Corroded container plate: ribs, bloom rust, and paint that lost the argument. */
-function paintRust(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x6d4a35);
+function paintRust(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   blotches(ctx, rng, 22, 20, 64, 0.12);
 
   // Vertical corrugation. The ribs are what make a container a container.
@@ -332,8 +333,8 @@ function paintRust(ctx: CanvasRenderingContext2D, rng: Rng): void {
  * would be worse than an opaque one. What the holes buy is the *read*: you can tell you are
  * above something.
  */
-function paintGrate(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x101317);
+function paintGrate(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   const bars = 8;
   const pitch = TEX_SIZE / bars;
   // Load-bearing bars: thicker, brighter on their top edge.
@@ -369,8 +370,8 @@ function paintGrate(ctx: CanvasRenderingContext2D, rng: Rng): void {
  * bands at different frequencies and a slight angle keep the pattern from resolving
  * into stripes.
  */
-function paintSand(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0xbfa274);
+function paintSand(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   blotches(ctx, rng, 20, 30, 96, 0.05);
 
   ctx.save();
@@ -403,8 +404,8 @@ function paintSand(ctx: CanvasRenderingContext2D, rng: Rng): void {
  * render — the point is that a village wall reads as *hand-finished*, which is what makes
  * it a different building material from Foundry's fired brick rather than a recolour.
  */
-function paintPlaster(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0xc4ab86);
+function paintPlaster(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   blotches(ctx, rng, 24, 26, 84, 0.07);
 
   // Block courses, ghosted: four courses to the tile, mortar barely darker.
@@ -437,8 +438,8 @@ function paintPlaster(ctx: CanvasRenderingContext2D, rng: Rng): void {
 }
 
 /** Baked clay roof tile. Dunes' roofs and window lintels: the map's one saturated note. */
-function paintClayTile(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x8f5236);
+function paintClayTile(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   const rows = 6;
   const rowH = TEX_SIZE / rows;
   const tileW = TEX_SIZE / 5;
@@ -462,8 +463,8 @@ function paintClayTile(ctx: CanvasRenderingContext2D, rng: Rng): void {
 }
 
 /** Weathered plank. Market stalls, doors, carts, and Depot's pallets. */
-function paintWood(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x6d5334);
+function paintWood(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   const planks = 6;
   const plankW = TEX_SIZE / planks;
   for (let i = 0; i < planks; i++) {
@@ -497,13 +498,23 @@ function paintWood(ctx: CanvasRenderingContext2D, rng: Rng): void {
 /**
  * Cracked asphalt with painted bay lines. Depot's yard.
  *
- * Deliberately near-black in albedo: Depot is a night map lit by pooled sources, and a
- * ground that reflects much of anything flattens the pools into a uniform grey. The bay
- * lines are the only bright thing, which is what gives the yard readable geometry in the
- * dark without adding a light.
+ * **The base colour is no longer chosen here** (playtest round 4, F9). It comes from
+ * `MATERIAL_BASE_COLOR`, and the reason is the paragraph that used to be in this place: it
+ * said the near-black albedo was deliberate, because "a ground that reflects much of anything
+ * flattens the pools into a uniform grey". That premise is wrong. Albedo multiplies the
+ * irradiance, so it cannot change the ratio between a mast pool and the gap between two masts
+ * — `npm run readability` measures that at 2.60x across the yard, unchanged by this. Fill is
+ * what flattens pools, because fill is added; and the fill is precisely what the two previous
+ * "Depot is too dark" passes raised, while this number sat five times below Foundry's floor and
+ * multiplied all of it away.
+ *
+ * What stays true from the old note is the *look*: the bay lines are still the brightest thing
+ * in the tile, the aggregate is still two-thirds pale flecks against dark, and the cracks are
+ * unchanged. Those are texture. The number they are laid over is albedo, and it is the number
+ * that decides whether the yard is visible at all.
  */
-function paintAsphalt(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x24262b);
+function paintAsphalt(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   blotches(ctx, rng, 22, 24, 80, 0.07);
   // Aggregate.
   for (let i = 0; i < 2400; i++) {
@@ -543,8 +554,8 @@ function paintAsphalt(ctx: CanvasRenderingContext2D, rng: Rng): void {
  * from a Foundry one even though both are 6 m of corrugated steel. The ribs are the same
  * pitch deliberately — that is what a shipping container is.
  */
-function paintPaintedSteel(ctx: CanvasRenderingContext2D, rng: Rng): void {
-  fill(ctx, 0x2f4a4f);
+function paintPaintedSteel(ctx: CanvasRenderingContext2D, rng: Rng, base: number): void {
+  fill(ctx, base);
   blotches(ctx, rng, 16, 22, 70, 0.08);
 
   const pitch = TEX_SIZE / 8;

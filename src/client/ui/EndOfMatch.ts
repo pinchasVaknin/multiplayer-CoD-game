@@ -1,6 +1,7 @@
 import { accuracy, killDeath, type PlayerScore, type ScoreSystem, type ScoreTeam } from '../../shared/combat/ScoreSystem';
 import type { ColumnDef } from '../../shared/modes/GameMode';
 import { Scoreboard } from './Scoreboard';
+import type { ViewerContext } from '../../shared/ui/TeamColour';
 
 /**
  * The post-match summary (brief S6.5).
@@ -164,6 +165,18 @@ export class EndOfMatch {
 
   setColumns(columns: ColumnDef[], modeName: string, mapName: string): void {
     this.board.setColumns(columns, modeName, mapName);
+  }
+
+  /**
+   * Which seat is reading the board (playtest round 4, B12).
+   *
+   * This screen is built once at boot and shows every match after it, so unlike `MatchHud`'s
+   * board it cannot take the viewer at construction — there is no seat yet. `GameScreens
+   * .showSummary` sets it from `match.localTeam`, beside the winner it already passes for
+   * exactly the same reason: it is the one place that knows which side this client was on.
+   */
+  setViewer(viewer: ViewerContext): void {
+    this.board.setViewer(viewer);
   }
 
   show(

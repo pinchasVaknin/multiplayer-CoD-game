@@ -1,3 +1,4 @@
+import type { ViewerContext } from '../../shared/ui/TeamColour';
 import type { Combatant } from '../../shared/ai/Combatant';
 import type { ScoreSystem, ScoreTeam } from '../../shared/combat/ScoreSystem';
 import { EV, type GameBus } from '../../shared/core/Events';
@@ -77,6 +78,19 @@ export class MatchHud {
     });
     this.streaks = new HudStreaks(deps.uiHost);
     this.scoreboard = new Scoreboard(deps.teamSize + 1);
+
+    /**
+     * Every surface that paints a team, from one value (playtest round 4, B12).
+     *
+     * `MatchHud` already carries both halves of the viewer — the seat the server gave this
+     * client, and whether the mode has teams at all — so this costs nothing to assemble and is
+     * the reason it is assembled *here*: three surfaces reading one object cannot disagree
+     * about which side the player is on, and disagreeing about exactly that is the bug.
+     */
+    const viewer: ViewerContext = { team: deps.localTeam, freeForAll: deps.freeForAll };
+    this.scoreboard.setViewer(viewer);
+    this.hud.banner.setViewer(viewer);
+    this.hud.feed.setViewer(viewer);
     this.scoreboard.setColumns(deps.columns, deps.modeName, deps.mapName);
     deps.uiHost.appendChild(this.scoreboard.element);
 
@@ -128,6 +142,10 @@ export class MatchHud {
     tac.threatX = threatScratch.x;
     tac.threatY = threatScratch.y;
     tac.threatZ = threatScratch.z;
+    this.hud.readObjectiveBearing(objectiveScratch);
+    tac.objectiveActive = objectiveScratch.active;
+    tac.objectiveX = objectiveScratch.x;
+    tac.objectiveZ = objectiveScratch.z;
 
     this.fillFriendlies();
     this.streaks.update(this.streakState);
@@ -249,6 +267,8 @@ export class MatchHud {
 }
 
 const threatScratch = { active: false, x: 0, y: 0, z: 0 };
+/** Module-level and reused, like the threat's: the render pass allocates nothing (S4.7). */
+const objectiveScratch = { active: false, x: 0, z: 0 };
 
 function phaseLabel(flow: MatchFlow): string {
   switch (flow.currentPhase) {

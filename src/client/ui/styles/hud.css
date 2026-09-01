@@ -703,29 +703,49 @@
 }
 
 /*
- * Grenade indicator. A ring-mounted chevron rotated to the bearing, exactly the way the
- * directional hit indicator works — one visual language for "something is over there".
+ * Bearing indicators. A ring-mounted chevron rotated to point at something in the world,
+ * exactly the way the directional hit indicator works — one visual language for "something is
+ * over there". Two of them (round 4, F2): the live grenade, and the bomb waiting to be picked
+ * up. `BearingIndicator` owns the rotation; these two blocks own what each one looks like.
  */
-.hud-threat {
+.hud-bearing {
   position: absolute;
   inset: 0;
   transition: opacity 120ms linear;
   pointer-events: none;
 }
 
-.hud-threat > i {
+.hud-bearing > i {
   position: absolute;
   left: 50%;
   top: 50%;
   width: 26px;
   height: 26px;
   margin: -13px;
+  rotate: 45deg;
+}
+
+/* The grenade about to go off. Urgent: the damage colour, and it pulses. */
+.hud-bearing--threat > i {
   transform: translateY(-104px);
   border-left: 3px solid var(--c-bad);
   border-top: 3px solid var(--c-bad);
-  rotate: 45deg;
-  filter: drop-shadow(0 0 5px rgba(232, 96, 76, 0.55));
+  filter: drop-shadow(0 0 5px var(--c-damage-soft));
   animation: hud-threat-pulse 0.45s ease-in-out infinite alternate;
+}
+
+/*
+ * The bomb on the floor. Deliberately calmer and further out than the grenade warning: one is
+ * "you are about to die", the other is "the objective is that way", and a HUD that shouts both
+ * at the same volume has told the player nothing. Neutral rather than friendly, because an
+ * unclaimed objective is the palette's `neutral` everywhere else in this game.
+ */
+.hud-bearing--objective > i {
+  transform: translateY(-128px);
+  border-left: 3px solid var(--c-neutral);
+  border-top: 3px solid var(--c-neutral);
+  opacity: 0.85;
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.6));
 }
 
 @keyframes hud-threat-pulse {
