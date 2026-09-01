@@ -5,21 +5,29 @@
 
 ---
 
-## איך להעתיק
+## איך מריצים
 
-כל פרומפט הוא **בלוק אחד רציף**, עצמאי לחלוטין. הגבולות מסומנים בתוך הבלוק עצמו:
+סשן טרייה בתיקיית הפרויקט, ושורה אחת:
 
-| | |
-|---|---|
-| **השורה הראשונה להעתיק** | `--- OPERATOR session brief ---` |
-| **השורה האחרונה להעתיק** | `--- end of session brief ---` |
+    Execute P1 from docs/PLAYTEST-ROUND-4.md
 
-שתי שורות הסימון האלה הן חלק מההעתקה (הן לא מזיקות, והן מוודאות שלא חתכת באמצע).
-בפועל: זה בדיוק כל מה שנמצא בין שני קווי ה-``` של הבלוק — לחיצה על כפתור ההעתקה של הבלוק
-עושה את זה נכון מעצמה.
+אין מה להעתיק. הקובץ נקרא מהדיסק — אז הוא צריך להיות שם, וכדאי לעשות לו commit אם אתה
+עובד בענף אחר.
 
-**§P0 (Ground rules) לא מועתק.** כל פרומפט פותח בהוראה לקרוא אותו מהקובץ הזה. לכן הקובץ
-חייב להיות על הדיסק בסשן — ואם אתה עובד בענף אחר, כדאי לעשות לו commit.
+---
+
+## How a session here is run
+
+You have been asked to execute one of the sessions below — P1 through P11. Only that one.
+
+Everything you need is in this file: the report as it was written, in "The report, verbatim";
+the rules that bind every session, in "P0 — Ground rules"; and your own brief.
+
+**Read "P0 — Ground rules" in full before you touch code, and treat every rule in it as
+binding.** It is not preamble: it says what counts as a fix here, what is banned, what the gate
+is, what you may claim to have verified, and what you must produce before the session ends.
+
+One session per fresh session. The only handover between them is `PLAN.md` and this file.
 
 ---
 
@@ -27,7 +35,7 @@
 
 | # | נושא | פריטי הדוח | תלוי ב־ |
 |---|---|---|---|
-| P0 | Ground rules — נקרא, לא מועתק | — | — |
+| P0 | Ground rules — חלות על כל סשן | — | — |
 | P1 | UI surfaces and the keys they hold | B1, B6, B13 | — |
 | P2 | The summary screen and the way back | B4 | — |
 | P3 | The loadout doctrine | B5, B8, B11, B7, F15 | — |
@@ -102,7 +110,7 @@ Hebrew as reported, with an English gloss. The prompts refer to these ids.
 
 # P0 — Ground rules
 
-**לא מועתק.** כל סשן פותח בהוראה לקרוא את הסעיף הזה מתוך הקובץ.
+Binding on every session below.
 
 ## Read before you touch code
 
@@ -204,16 +212,7 @@ write code.
 
 # P1 — UI surfaces and the keys they hold
 
-מכסה **B1, B6, B13**. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **B1, B6, B13**.
 
 ## Three reports, one shape
 
@@ -275,23 +274,11 @@ back.
   Escape then back into the game; Tab held across the moment of death and after it; waiting out
   a respawn with the panel open.
 
---- end of session brief ---
-```
-
 ---
 
 # P2 — The summary screen and the way back
 
-מכסה **B4**. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **B4**.
 
 ## The session
 
@@ -346,23 +333,11 @@ to the arena, and the vote cycle running there *is* the rematch. So:
   the connection alive (check in NetPanel that it is the same socket); exiting to the menu really
   disconnects.
 
---- end of session brief ---
-```
-
 ---
 
 # P3 — The loadout doctrine: when a class may change, and where
 
-מכסה **B5, B8, B11, B7, F15**. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **B5, B8, B11, B7, F15**.
 
 ## The session
 
@@ -431,23 +406,11 @@ session.
 - Needs a browser: the list does not jump; the gas grenade shows its level; the weapon is
   visible; 1-5 still works and has not moved.
 
---- end of session brief ---
-```
-
 ---
 
 # P4 — Killstreaks as a currency, not a threshold
 
-מכסה **B9, B10**. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **B9, B10**.
 
 ## The session
 
@@ -507,22 +470,11 @@ deliberately never simulated"), so:
 - Needs a browser: the HUD, the balance decreasing on activation, and a used streak's key doing
   nothing while saying why.
 
---- end of session brief ---
-```
 ---
 
 # P5 — Grenades: the per-life reset, in every mode
 
-מכסה **B3**. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **B3**.
 
 ## The session
 
@@ -560,23 +512,11 @@ listening to a different event is the next bug.
 - `npm run check` green.
 - Needs a browser: the HUD count after a respawn and at the start of an S&D round.
 
---- end of session brief ---
-```
-
 ---
 
 # P6 — The waiting room and the edges of a match
 
-מכסה **F7, F11, F12, F13**. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **F7, F11, F12, F13**.
 
 ## The session
 
@@ -633,23 +573,11 @@ for overlaid screens and honour it.
 - Needs a browser: the caption is where it should be; settings open centred; the sound plays
   once.
 
---- end of session brief ---
-```
-
 ---
 
 # P7 — Cheat codes, and the debug gate
 
-מכסה **F14**. הרץ אחרי P1, P3, P4. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **F14**. Run after P1, P3 and P4.
 
 ## The session
 
@@ -720,23 +648,11 @@ normal state.
 - `npm run check` green. If the wire changed, bump the protocol.
 - Needs a browser: typing each code, `SPEC[]n` included, and moving between the modes.
 
---- end of session brief ---
-```
-
 ---
 
 # P8 — Reconnect and join-in-progress
 
-מכסה **F8**. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **F8**.
 
 ## The session
 
@@ -776,22 +692,11 @@ The skirmish harness runs real headless clients. Add the ability to drop and re-
   protocol v8). A returning client is exactly the case it should be speaking about.
 - `npm run leak` — repeated disconnects are a classic source of leaked subscriptions.
 
---- end of session brief ---
-```
 ---
 
 # P9 — Reading the fight
 
-מכסה **B2, B12, F9, F2, F3**. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **B2, B12, F9, F2, F3**.
 
 ## The session
 
@@ -863,23 +768,11 @@ not touch simulation, and it does not touch the pickup radius.
 - Needs a browser, with screenshots: the crosshair on the reported rifle; the third map lit; my
   team's colour while I am on the "red" side; the arrow; the tag.
 
---- end of session brief ---
-```
-
 ---
 
 # P10 — Bot difficulty and the mini-tutorial
 
-מכסה **F1, F10**. העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **F1, F10**.
 
 ## The session
 
@@ -921,23 +814,11 @@ surfaces and do not draw one over another (see P1).
   selector is not wired.
 - Needs a browser: the text is readable and does not collide with the class selector.
 
---- end of session brief ---
-```
-
 ---
 
 # P11 — Planning brief: the large content
 
-מכסה **F4, F5, F6, F16, F17**. **הסשן הזה לא כותב קוד.** העתק מ־`--- OPERATOR session brief ---` עד `--- end of session brief ---`.
-
-```text
---- OPERATOR session brief ---
-
-You are continuing OPERATOR, a browser arena FPS on a dedicated server (repo: CoD, branch
-main). This is one focused session, and it writes no product code.
-
-First, read `docs/PLAYTEST-ROUND-4.md` section "P0 — Ground rules" in full, and treat every
-rule there as binding for this session. Then this:
+Covers **F4, F5, F6, F16, F17**. **This session writes no product code.**
 
 ## The session
 
@@ -989,9 +870,6 @@ Present both with cost, risk and the effect on load time, and recommend one. Sta
 A "Milestone 12 — proposed" section in `PLAN.md`: scope, dependency order, what each item breaks,
 and the list of decisions waiting on the human, each with a recommendation. One commit that adds
 documentation only.
-
---- end of session brief ---
-```
 
 ---
 
