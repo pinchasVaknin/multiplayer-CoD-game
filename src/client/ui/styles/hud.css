@@ -811,18 +811,33 @@
 }
 
 /*
- * Three states rather than two, because the slots are the class's keys rather than a list of
- * what has been earned: empty (nothing bound to this key), owned-but-not-yet-earned (the name
- * is worth reading — it says what key 5 is for), and ready to spend.
+ * Four states, because kills are a currency (playtest round 4, B9 + B10): empty (nothing bound
+ * to this key), owned-but-unaffordable (the name and its price — it says what key 5 is for and
+ * what it will cost), affordable, and already bought this life. The last two both leave the key
+ * doing nothing, which is exactly why they must not look the same.
  */
 .hud-streaks__slot.is-owned {
   opacity: 0.62;
 }
 
-/* An earned streak lights up. Nothing else in this widget moves. */
+/* Affordable lights up. Nothing else in this widget moves. */
 .hud-streaks__slot.is-ready {
   opacity: 1;
   border-color: var(--c-accent-dim);
+}
+
+/*
+ * Spent. Struck through rather than merely dim: dim is what unaffordable already says, and a
+ * player who cannot tell "not yet" from "not again" will keep pressing the key.
+ */
+.hud-streaks__slot.is-used {
+  opacity: 0.45;
+  border-color: var(--c-line);
+}
+
+.hud-streaks__slot.is-used .hud-streaks__name {
+  text-decoration: line-through;
+  color: var(--c-text-faint);
 }
 
 .hud-streaks__key {
@@ -849,6 +864,20 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--c-text);
+}
+
+/* The price in kills, or USED. Tabular so three slots line up as a column of costs. */
+.hud-streaks__cost {
+  font-size: 9px;
+  font-weight: 700;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-faint);
+}
+
+.hud-streaks__slot.is-ready .hud-streaks__cost {
+  color: var(--c-accent);
 }
 
 .hud-streaks__progress {

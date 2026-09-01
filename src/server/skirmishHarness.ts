@@ -5,6 +5,7 @@ import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } 
 import { CLIENT_TIMEOUT_MS } from '../shared/net/Protocol';
 import { votePhaseName, type NetLoadout } from '../shared/net/Skirmish';
 import type { StreakId } from '../shared/streaks/StreakDefs';
+import type { StreakEconomyReport } from '../shared/streaks/StreakLedger';
 import { loadConfig, usesShortenedTimings, type ServerConfig } from './Config';
 import { HeadlessClient, type HeadlessClientReport } from './debug/HeadlessClient';
 import { installServerLogging, metric } from './log';
@@ -304,8 +305,11 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let observedDetonated = 0;
   let observedSmokePeak = 0;
   let observedSmokeBlocked = 0;
-  /** Which match the streak grant has already been applied to, so it happens once each. */
-  let grantedTo = -1;
+  /** The live match's streak economy, sampled while it is running. See below. */
+  let observedEconomy: StreakEconomyReport | null = null;
+  /** When the streak wallet was last topped up, and how many times. See the grant below. */
+  let grantedAtMs = 0;
+  let grants = 0;
   let gunnerDropped = false;
   let droppedAtMs = 0;
   /** When `--abandon` emptied the live match, and whether the server then released it. */
@@ -315,6 +319,9 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let lastPhase = -1;
   const phaseBoundaries: { cycle: number; phase: string; atMs: number }[] = [];
   const startMs = nowMs();
+
+  /** How often `--grant-streak` pays the wallet in. Short enough to outpace a life. */
+  const GRANT_INTERVAL_MS = 15_000;
 
   const cycleSeconds =
     cfg.voteCycle.playSeconds + cfg.voteCycle.modeVoteSeconds + cfg.voteCycle.mapVoteSeconds;
@@ -354,6 +361,14 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       // instantaneous count is zero for most of a match that had smoke in it throughout.
       observedSmokePeak = Math.max(observedSmokePeak, eq.smokeLive);
       observedSmokeBlocked = eq.smokeBlocked;
+      /**
+       * The economy, sampled here for the same reason the roster is (round 4, B9 + B10).
+       *
+       * Taken while the live match is running, because the report is folded out of per-entity
+       * rows that go away with the instance. A reading taken after it has been destroyed is
+       * every field zero, and every field zero passes every check below.
+       */
+      observedEconomy = running.match.streakEconomy;
 
       /**
        * Put a streak in every seated player's hand, once per match (§8.22).
@@ -393,12 +408,24 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
         }
       }
 
-      if (opts.grantStreak !== null && grantedTo !== running.id) {
-        grantedTo = running.id;
+      /**
+       * Top the wallet up, repeatedly (round 4, B9 + B10).
+       *
+       * Was once per match, which is the right shape for an entitlement and the wrong one for a
+       * currency: a single grant is spent once and proves only that the debit path runs. Paying
+       * in what the streak costs every `GRANT_INTERVAL_MS` puts every client permanently able to
+       * afford it, so the only thing that can stop them buying it again is B10 — and
+       * `maxUsedInOneLife` in the economy report is what that looks like from outside.
+       *
+       * Still `debugGrant`, which is the same `credit` a care package uses, so everything
+       * downstream of "this player can now afford a UAV" is shipping code.
+       */
+      if (opts.grantStreak !== null && nowMs() - grantedAtMs > GRANT_INTERVAL_MS) {
+        grantedAtMs = nowMs();
+        grants++;
         for (const seat of running.sessions) {
           running.match.streaks.debugGrant(seat.player.entityId, opts.grantStreak as StreakId);
         }
-        log.info(`granted ${opts.grantStreak} to ${running.playerCount} player(s) in match ${running.id}.`);
       }
     }
 
@@ -475,6 +502,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     phaseBoundaries,
     firstInputMs,
     droppedAtMs,
+    economy: observedEconomy,
+    grants,
   });
 }
 
@@ -636,11 +665,22 @@ interface FlowReportInput {
   readonly firstInputMs: number;
   /** When `--drop-gunner` cut the gunner's link, or 0 if it never fired (§8.23). */
   readonly droppedAtMs: number;
+  /**
+   * The live match's killstreak economy, sampled while it was running (round 4, B9 + B10).
+   *
+   * Null when no live match was ever observed. Passed in rather than read here, for the same
+   * reason the roster counts are: by the time this function runs the instance is gone and every
+   * field would be zero — and every field zero passes every check.
+   */
+  readonly economy: StreakEconomyReport | null;
+  /** How many times `--grant-streak` topped the wallets up. Zero without the flag. */
+  readonly grants: number;
 }
 
 function reportFlow(input: FlowReportInput): number {
   const { opts, cfg, server, reports, cycleReports, phaseBoundaries, firstInputMs, droppedAtMs } =
     input;
+  const economy = input.economy;
 
   const migrations = server.migrationLog.log;
   const failedMigrations = migrations.filter((m) => !m.ok);
@@ -929,6 +969,43 @@ function reportFlow(input: FlowReportInput): number {
         `actual summary→arena ${returned.map((r) => r.summaryHoldMs).join('/')}ms ` +
         `(server hold ${cfg.summaryHoldSeconds}s, client timeout ${CLIENT_TIMEOUT_MS}ms, ` +
         `${droppedOnSummary.length} dropped).`,
+    );
+  }
+
+  /**
+   * The killstreak economy, over a real connection (playtest round 4, B9 + B10).
+   *
+   * Two blocking assertions and their denominator, because every one of these counters is zero
+   * in a run where nobody ever killed anybody:
+   *
+   * - **The balance is never negative.** It is the model's floor: `charge` refuses what the
+   *   balance cannot cover, so a negative reading means something reached the wallet without
+   *   passing the one door — which is the whole failure mode this session exists to prevent.
+   * - **The kill anchor never goes backwards inside a match.** `foldKills` measures a delta
+   *   against `PlayerScore.kills`, and a count that resets under it would silently starve every
+   *   balance for the rest of the run while looking like nothing at all.
+   *
+   * `dirtyLifeStarts` is reported rather than asserted: a life that begins without a death
+   * before it is a round-based mode's business, and it is P5's row to decide.
+   */
+  if (economy === null) {
+    log.warn('streak economy: NOT SAMPLED — no live match was observed running in this run.');
+  } else {
+    if (economy.negativeBalances > 0) {
+      problems.push(`${economy.negativeBalances} negative streak balance(s) — the debit door was bypassed (B9)`);
+    }
+    if (economy.resyncs > 0) {
+      problems.push(`${economy.resyncs} kill-anchor resync(s) inside a live match — the balance was starved (B9)`);
+    }
+    log.info(
+      `streak economy: ${economy.lives} life/lives, ${economy.lifeStarts} life-start(s) ` +
+        `(${economy.dirtyLifeStarts} inheriting a balance); banked ${economy.killsBanked} + ` +
+        `${economy.credited} credited, spent ${economy.spent}, peak balance ${economy.peakBalance}; ` +
+        `${economy.postMortemKills} post-mortem kill(s) dropped; ` +
+        `${economy.activations} activation(s) over ${input.grants} wallet top-up(s), most in one ` +
+        `life ${economy.maxUsedInOneLife}; refused ${economy.refusedUnaffordable} unaffordable / ` +
+        `${economy.refusedUsed} already used; entitlement per life ${economy.thresholdGrants} under the ` +
+        `threshold model vs ${economy.balancePurchases} under the balance.`,
     );
   }
 

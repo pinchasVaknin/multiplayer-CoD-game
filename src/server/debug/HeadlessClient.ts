@@ -703,12 +703,25 @@ export class HeadlessClient {
             this.liveEntityId = this.net.entityId;
             for (const c of view.contacts) this.liveContactIds.add(c.entityId);
           }
-          if (view.pending.length > 0) {
-            this.pendingSeen++;
-            this.wantStreak = view.pending[0] ?? -1;
-          } else {
-            this.wantStreak = -1;
+          /**
+           * Buy the cheapest thing this client can afford (round 4, B9).
+           *
+           * The view no longer says what is held — under a balance nothing is — so the choice
+           * has to be made here from the price list, and it is the same choice the HUD paints:
+           * an offer priced at or under the balance and not already bought this life. Cheapest
+           * first, so a client with twelve kills exercises the *debit* rather than sitting on a
+           * balance waiting for the one expensive thing it has equipped.
+           */
+          let best = -1;
+          let bestPrice = Number.POSITIVE_INFINITY;
+          for (const offer of view.offers) {
+            if (offer.used || offer.price > view.balance) continue;
+            if (offer.price >= bestPrice) continue;
+            bestPrice = offer.price;
+            best = offer.kind;
           }
+          if (best >= 0) this.pendingSeen++;
+          this.wantStreak = best;
         },
         /**
          * Dog tags (Gate B, §6.8).

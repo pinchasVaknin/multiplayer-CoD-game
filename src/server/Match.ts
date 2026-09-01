@@ -7,6 +7,7 @@ import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
 import { Btn, isDown } from '../shared/core/InputCommand';
 import { StreakSystem } from '../shared/streaks/StreakSystem';
 import { SILENT_PRESENTATION } from '../shared/streaks/StreakPresentation';
+import type { StreakEconomyReport } from '../shared/streaks/StreakLedger';
 import {
   ALL_STREAK_IDS,
   DEFAULT_STREAK_CONFIG,
@@ -1195,6 +1196,17 @@ export class ServerMatch {
     if (!this.flow.respawnAllowed(player.entityId)) return;
     this.flow.noteRespawn(player.entityId);
     this.spawnPlayer(player);
+  }
+
+  /**
+   * The killstreak economy this match produced (playtest round 4, B9 + B10).
+   *
+   * Read by both harnesses. It carries its own red control: `thresholdGrants` is what the
+   * model this replaced would have handed out over the same lives, computed from the same
+   * kills, so the before and the after come out of one run and cannot be two different fights.
+   */
+  get streakEconomy(): StreakEconomyReport {
+    return this.streaks.economyReport();
   }
 
   /** Equipment thrown and detonated this match. Read by the harness (§8.24). */

@@ -6,6 +6,14 @@ import {
 } from '../../shared/streaks/StreakDefs';
 import type { StreakEntityState, StreakView, UavContactState } from '../../shared/net/Skirmish';
 
+/** One of this player's keys, as the server prices and gates it. Shaped like `StreakPrice`. */
+export interface ReplicatedOffer {
+  readonly id: StreakId;
+  readonly price: number;
+  /** Bought this life (B10). The fourth state the streak strip paints. */
+  readonly used: boolean;
+}
+
 /**
  * The server's answer to every streak question a networked client used to answer itself
  * (M11 Gate B, §6.8, §8.22).
@@ -33,11 +41,11 @@ import type { StreakEntityState, StreakView, UavContactState } from '../../share
  * server recorded against it.
  */
 export class ReplicatedStreaks {
-  /** Kind indices this player holds, newest last. Empty until the first frame arrives. */
-  private pendingKinds: readonly number[] = [];
-  private streakCount_ = 0;
+  /** The class's streaks, priced and gated. Empty until the first frame arrives. */
+  private offers_: readonly ReplicatedOffer[] = [];
+  private balance_ = 0;
   private nextKind = -1;
-  private nextRequirement_ = 0;
+  private nextPrice_ = 0;
   private scrambled_ = false;
   private sweepAngle_ = -1;
   private contacts_: readonly UavContactState[] = [];
@@ -47,10 +55,18 @@ export class ReplicatedStreaks {
   private seen = false;
 
   apply(view: StreakView): void {
-    this.pendingKinds = view.pending;
-    this.streakCount_ = view.streakCount;
+    // Resolved to ids here rather than at every read, because the wire's kind index is a
+    // detail of the wire and three of this class's four readers ask by streak id.
+    const offers: ReplicatedOffer[] = [];
+    for (const offer of view.offers) {
+      const def = STREAK_DEFS[offer.kind];
+      if (def === undefined) continue;
+      offers.push({ id: def.id, price: offer.price, used: offer.used });
+    }
+    this.offers_ = offers;
+    this.balance_ = view.balance;
     this.nextKind = view.nextKind;
-    this.nextRequirement_ = view.nextRequirement;
+    this.nextPrice_ = view.nextPrice;
     this.scrambled_ = view.scrambled;
     this.sweepAngle_ = view.sweepAngle;
     this.contacts_ = view.contacts;
@@ -67,10 +83,10 @@ export class ReplicatedStreaks {
    * of stale-state bug that list exists to prevent.
    */
   clear(): void {
-    this.pendingKinds = [];
-    this.streakCount_ = 0;
+    this.offers_ = [];
+    this.balance_ = 0;
     this.nextKind = -1;
-    this.nextRequirement_ = 0;
+    this.nextPrice_ = 0;
     this.scrambled_ = false;
     this.sweepAngle_ = -1;
     this.contacts_ = [];
@@ -82,25 +98,48 @@ export class ReplicatedStreaks {
     return this.seen;
   }
 
-  /** The streaks this player may spend, in key order — the same shape `pendingFor` returns. */
-  get pending(): readonly StreakId[] {
-    const out: StreakId[] = [];
-    for (const kind of this.pendingKinds) {
-      const def = STREAK_DEFS[kind];
-      if (def !== undefined) out.push(def.id);
-    }
-    return out;
+  /** This player's three keys, priced and gated. Shaped like `StreakSystem.pricesFor`. */
+  get offers(): readonly ReplicatedOffer[] {
+    return this.offers_;
   }
 
-  /** The streak being worked toward and what it costs, or null. Shaped like `nextFor`. */
-  get next(): { def: StreakDef; requirement: number } | null {
+  /** What this streak costs, or 0 when the server has not offered it. */
+  priceOf(id: StreakId): number {
+    return this.offerFor(id)?.price ?? 0;
+  }
+
+  /** B10: already bought this life. */
+  hasUsed(id: StreakId): boolean {
+    return this.offerFor(id)?.used === true;
+  }
+
+  /**
+   * Whether pressing this key would do anything.
+   *
+   * Derived from the offer rather than from a list of what is held, because a balance has no
+   * such list — and derived here rather than in `ClientMatch` so the local and networked
+   * answers are the same shape and the HUD cannot be told two different stories.
+   */
+  canAfford(id: StreakId): boolean {
+    const offer = this.offerFor(id);
+    return offer !== undefined && !offer.used && offer.price <= this.balance_;
+  }
+
+  /** The cheapest streak not yet affordable, and its price, or null. Shaped like `nextFor`. */
+  get next(): { def: StreakDef; price: number } | null {
     const def = STREAK_DEFS[this.nextKind];
     if (def === undefined) return null;
-    return { def: streakDef(def.id), requirement: this.nextRequirement_ };
+    return { def: streakDef(def.id), price: this.nextPrice_ };
   }
 
-  get streakCount(): number {
-    return this.streakCount_;
+  /** Kills banked and not yet spent. Was `streakCount`, which is a different number now. */
+  get balance(): number {
+    return this.balance_;
+  }
+
+  private offerFor(id: StreakId): ReplicatedOffer | undefined {
+    for (const offer of this.offers_) if (offer.id === id) return offer;
+    return undefined;
   }
 
   get scrambled(): boolean {

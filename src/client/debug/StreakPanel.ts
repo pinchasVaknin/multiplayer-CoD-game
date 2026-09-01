@@ -40,8 +40,8 @@ export class StreakPanel {
     this.match = match;
 
     const streaks = overlay.section('Killstreaks', overlay.rightColumn);
-    this.fProgress = streaks.addField('Streak / next');
-    this.fPending = streaks.addField('In hand');
+    this.fProgress = streaks.addField('Balance / next');
+    this.fPending = streaks.addField('Spent this life');
     this.fActive = streaks.addField('Active entities');
     this.fPerks = streaks.addField('Ghost / Cold / Hardline');
 
@@ -49,8 +49,10 @@ export class StreakPanel {
     // to reach the Chopper Gunner would measure the score system rather than the streak.
     for (const def of STREAK_DEFS) {
       streaks.addNode(
-        this.button(`Give + use ${def.name}`, () => {
+        this.button(`Buy + use ${def.name}`, () => {
           const sim = match.playerSim;
+          // Credits the price and then pays it, so the button exercises the debit rather than
+          // stepping around it. A streak already bought this life stays refused, which is B10.
           match.streaks.debugGrant(PLAYER_ENTITY_ID, def.id);
           this.spend(def.id, sim.x, sim.y, sim.z, sim.yaw);
         }),
@@ -103,17 +105,17 @@ export class StreakPanel {
 
   private refresh(): void {
     const streaks = this.match.streaks;
-    const row = this.match.score.row(PLAYER_ENTITY_ID);
+    const balance = streaks.balanceOf(PLAYER_ENTITY_ID);
     const next = streaks.nextFor(PLAYER_ENTITY_ID);
     set(
       this.fProgress,
       next === null
-        ? `${row?.streak ?? 0} · all earned`
-        : `${row?.streak ?? 0} -> ${next.requirement} ${next.def.name}`,
+        ? `${balance} · nothing out of reach`
+        : `${balance} -> ${next.price} ${next.def.name}`,
     );
 
-    const held = streaks.pendingFor(PLAYER_ENTITY_ID);
-    set(this.fPending, held.length === 0 ? '—' : held.join(', '));
+    const used = streaks.usedBy(PLAYER_ENTITY_ID);
+    set(this.fPending, used.length === 0 ? '—' : used.join(', '));
     set(this.fActive, `${streaks.active.length} · ${streaks.lastMs.toFixed(2)} ms`);
 
     // The three M6 hooks, as the streak system actually sees them.

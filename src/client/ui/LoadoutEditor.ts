@@ -656,7 +656,9 @@ export class LoadoutEditor {
           out.push(
             this.option(
               def.name,
-              () => `${def.requirement} kills · ${def.blurb}`,
+              // "Costs", not "at": after round 4's B9 the number is a price that is debited
+              // from a balance, not a threshold that opens something and stays crossed.
+              () => `Costs ${def.requirement} kills · ${def.blurb}`,
               () => this.slot.streaks[row.index] === def.id,
               // A streak already on another key is shown but not selectable: equipping the
               // same one twice would waste a key and is never what somebody meant to do.

@@ -14,6 +14,7 @@ import {
   MAX_PROJECTILES,
   MAX_SMOKE,
   MAX_STREAK_ENTITIES,
+  MAX_STREAK_OFFERS,
   MAX_TAGS,
   MAX_UAV_CONTACTS,
   OBJ_TEAM_A,
@@ -27,6 +28,7 @@ import {
   type ProjectileState,
   type SmokeState,
   type StreakEntityState,
+  type StreakOfferState,
   type UavContactState,
 } from '../../shared/net/Skirmish';
 import { ALL_EQUIPMENT, type EquipmentId } from '../../shared/equipment/EquipmentDefs';
@@ -117,7 +119,7 @@ export abstract class MatchInstance {
   private readonly objectiveScratch: ObjectiveState[] = [];
   private readonly streakScratch: StreakEntityState[] = [];
   private readonly contactScratch: UavContactState[] = [];
-  private readonly pendingScratch: number[] = [];
+  private readonly offerScratch: StreakOfferState[] = [];
   private readonly projectileScratch: ProjectileState[] = [];
   private readonly smokeScratch: SmokeState[] = [];
   /** Whether the last projectile frame was empty. See `sendProjectiles`. */
@@ -476,7 +478,6 @@ export abstract class MatchInstance {
    */
   private sendStreaks(): void {
     const streaks = this.match.streaks;
-    const score = this.match.score;
 
     // The common half, built once. Nothing here is per recipient.
     this.streakScratch.length = 0;
@@ -489,9 +490,23 @@ export abstract class MatchInstance {
       const { session, player } = seat;
       if (session.closed) continue;
 
-      const pending = streaks.pendingFor(player.entityId);
-      this.pendingScratch.length = 0;
-      for (const id of pending) this.pendingScratch.push(streakKindIndex(id));
+      /**
+       * The price list, not an inventory (round 4, B9 + B10).
+       *
+       * Built from `pricesFor`, which is the same accessor the ledger's own audit uses, so the
+       * number on the player's HUD and the number they are charged cannot come apart. `used` is
+       * read per offer rather than sent as a second list, because a price and its availability
+       * are one fact about one key and splitting them is how the two get out of step.
+       */
+      this.offerScratch.length = 0;
+      for (const priced of streaks.pricesFor(player.entityId)) {
+        if (this.offerScratch.length >= MAX_STREAK_OFFERS) break;
+        this.offerScratch.push({
+          kind: streakKindIndex(priced.id),
+          price: priced.price,
+          used: streaks.usedBy(player.entityId).includes(priced.id),
+        });
+      }
 
       const next = streaks.nextFor(player.entityId);
       const uav = streaks.uavFor(player.team);
@@ -512,10 +527,10 @@ export abstract class MatchInstance {
       }
 
       session.sendStreaks({
-        pending: this.pendingScratch,
-        streakCount: score.row(player.entityId)?.streak ?? 0,
+        offers: this.offerScratch,
+        balance: streaks.balanceOf(player.entityId),
         nextKind: next === null ? -1 : streakKindIndex(next.def.id),
-        nextRequirement: next?.requirement ?? 0,
+        nextPrice: next?.price ?? 0,
         scrambled: streaks.minimapScrambledFor(player.team),
         sweepAngle: uav === null ? -1 : uav.sweepAngle,
         contacts: this.contactScratch,

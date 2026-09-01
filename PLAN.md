@@ -6166,3 +6166,250 @@ decides whether they read.
 - **The editor's "Start match" is gone and the main menu's is not.** Nothing else offered it, so
   no flow lost a step; a player who wants to play now presses Start on the screen that has
   always had one.
+
+## Playtest round 4 — killstreaks became a currency, and B10 is what keeps it one
+
+Covers **B9** ("activating an ability must cost kills: twelve earned, spend six, six left, and
+an eight cannot then be afforded") and **B10** ("once a streak has been used it cannot be used
+again until death resets it").
+
+### They are one report, and the second is what makes the first survive
+
+Neither of these was a defect. `StreakSystem` did exactly what it was written to do, and the
+comment at the top of it said so in plain words: someone who reached twelve kills held six
+things and could spend three of them. Streaks were **thresholds** on `PlayerScore.streak` —
+`checkEarned` asked whether the consecutive-kill count had *crossed* a requirement, pushed an
+entitlement into a `pending` list when it had, and `activate` spliced one back out again without
+the counter moving. Crossing twelve opened everything priced at twelve or under, all at once,
+and spending was free.
+
+What the report describes is a **balance**. That is a different economy, not a corrected one,
+and the interesting part is what it does to B10. Under a threshold, "once per life" was very
+nearly free: `awardedUpTo` stopped a streak being re-granted at the same requirement, so the
+only way to hold two UAVs in one life was to have a care package drop you one. Under a balance
+it is load-bearing — without it, twelve kills buys the same four-kill UAV three times, and the
+optimal play is to spam the cheapest thing in the class. **B10 is not a second fix; it is the
+rule that stops B9's model degenerating**, and the two were built as one change for that reason.
+
+### The economy, and where each piece of it lives
+
+`src/shared/streaks/StreakLedger.ts` is new and holds the whole of it: kills banked, kills spent,
+what has been bought this life, and the audit. It replaces two maps on `StreakSystem` (`pending`,
+`awardedUpTo`), neither of which was a price.
+
+- **The balance is credited from the score and is not the score.** `foldKills` takes
+  `PlayerScore.kills` — cumulative, the server's, the thing match results are made of — and banks
+  the *difference* since the last fold. So the score stays the single authority on whether a kill
+  counted at all (a suicide and a friendly-fire kill never move it, so they never pay for
+  anything) and `streaks/` never re-decides the friendly-fire rule. The brief asked for the
+  separation to be explicit in the code because F14's `MO951357` has to add thirty kills of
+  purchasing power without touching the scoreboard: `credit` is that second door, and it exists
+  precisely because the balance is not a read of `PlayerScore.kills`.
+- **The debit is the entitlement check.** `activate` no longer asks "do you hold it" — holding is
+  not a thing any more — it asks `ledger.charge`, which refuses what the balance cannot cover and
+  what has already been bought this life, and is the only place a refusal is counted. Asking
+  `canAfford` first and charging afterwards would be two questions, and two questions is how a
+  refusal goes unrecorded.
+- **`requirementFor` is `priceOf`.** The number is the same one `StreakDef.requirement` always
+  carried. A name that says "requirement" over code that debits it is a name that hides the
+  model.
+- **`nextFor` is measured against the balance, not the streak.** That is the whole difference in
+  one line: after a purchase the HUD's "6 / 8 · SENTRY" goes back *up*, because the money is
+  gone.
+
+### The care package pays in kills
+
+The brief asked for an explicit decision. A crate credits **the price of what it rolled** rather
+than handing the streak over.
+
+Handing the streak over is the one shape that breaks both new rules at once. A crate drops a
+random `fromCarePackage` streak, which need not be one of the claimant's three — and since round
+two, keys 3/4/5 index the *class's* slots, so an unequipped drop had no key to be pressed from
+and no price on screen: a dead gift. It also laundered B10, because a second copy of a streak
+already spent this life would arrive as a fresh entitlement. Paying out the roll's value keeps
+one currency, one once-per-life rule and no dead drops, and the gamble survives intact — a crate
+is worth between five and twelve kills depending on what it rolls.
+
+### Two credits that had to be refused, both found by measurement
+
+Both are the same mechanism — **a wallet belongs to a life** — and neither was visible until the
+probe below started counting life-starts.
+
+1. **A kill that lands after your own death.** A mutual kill is two `EntityKilled` events in one
+   tick, and in one of the two orders the loser's death is processed first: `onDeath` zeroes the
+   wallet, and then the kill they landed on the way down credits it again. The balance survives
+   into the next life, which is exactly what B10 forbids. `checkEarned` now drops the credit for
+   a combatant whose `health.alive` is false — but still **advances the anchor**, because the
+   score has counted that kill and always will, and leaving the anchor behind would bank the same
+   kill one life later instead, where nothing would be looking.
+2. **A credit aimed at a corpse.** `credit` had no such rule, so the harness's repeating top-up
+   paid dead seats. `creditKills` is now the single door for every unearned credit — crate, cheat,
+   harness — and applies the same test.
+
+### `PlayerController.spawn` is the one door a new life comes through
+
+Worth writing down because P5 is looking for exactly this signal. The audit first subscribed to
+both `EV.PlayerSpawned` and `EV.BotSpawned` and counted **304 life-starts against 154 actual
+ones**. They are not two spawns: `Bot.spawn` calls `this.controller.spawn` at line 285 and
+`NetPlayer.spawn` calls it at line 240, and `PlayerController.spawn` is what emits
+`EV.PlayerSpawned`. `EV.BotSpawned` is a *second announcement of the same spawn*, carrying tier
+and nearest-enemy detail for the director. One subscription covers every combatant in the game.
+
+### The wire is a price list now (protocol v10)
+
+`MsgS.Streaks` carried `pending`, a list of kind indices the player had earned. A currency cannot
+be replicated that way: a client needs to know what a press will **cost** before making it, and
+why a key that did nothing did nothing. Both facts are the server's — the price carries Hardline's
+discount, the used set is per life and per entity — so `StreakView` now carries
+`offers: {kind, price, used}[]` and `balance` in place of `pending` and `streakCount`.
+
+Offers are keyed by kind rather than sent in slot order. The server drops empty slots when it
+resolves a class, so position does not survive a class with a gap in it; the client already knows
+its own three keys and looks each one up.
+
+Three bytes per offer against one per held streak is bigger, and has to be. `MAX_PENDING_STREAKS`
+is `MAX_STREAK_OFFERS`, still three.
+
+### "Is it in your class" moved to the untrusted boundary
+
+It used to be answered implicitly: the pending list could only hold what had been earned, and
+earning was filtered by the class. With no list, the question needed a home, and the right one is
+`Server.onStreakRequest` — beside the three untrusted questions §4.16 already answers there
+(which instance, where it lands, and now: whether they can pay). Putting it back inside
+`activate` as well would have cost the debug panel its "buy and use" buttons for the three
+streaks a class does not carry, which is acceptance criterion 1's only instrument.
+
+### The HUD has four states, and the fourth is why the key did nothing
+
+`HudStreaks` painted three: empty, owned-but-unearned, ready. There are four now, and the price
+is on screen, because a player cannot plan a purchase whose cost they cannot see. Unaffordable
+and already-spent both leave the key doing nothing, which is exactly why they must not look the
+same: an unaffordable slot shows its price in kills, a spent one reads `USED` and is struck
+through. That is the report's *"a used streak's key doing nothing while saying why"* — said
+persistently by the slot itself rather than by a toast, because round four's own HUD-surface
+invariant is that surfaces have one writer and this needed no new surface.
+
+Keys 3/4/5 still index the class's three slots, unchanged from round two. The earned list decided
+whether a press was honoured; the balance and the used set decide it now.
+
+### Measured
+
+Every number below came out of a run in this session, named with the probe that produced it.
+`ServerMatch.streakEconomy` is the probe; it folds the still-open lives in, so it can be taken
+mid-match and taken twice.
+
+**`npm run harness` — 5 matches, seeds 1-5, TDM on Foundry.** The five scores are byte-identical
+to the pre-change baseline (75-61, 66-75, 44-75, 69-75, 75-64), which is the regression control
+and is expected: nothing in a bot-only match spends a streak.
+
+| | Total over 5 matches |
+|---|---|
+| Lives closed / life-starts observed | 705 / 718 |
+| Life-starts inheriting a balance (must be 0) | **0** |
+| Kills banked, against 679 scored in the five matches | 678 |
+| Negative balances observed (must be 0) | **0** |
+| Kill-anchor resyncs inside a match (must be 0) | **0** |
+| Post-mortem kills dropped | 1 |
+| Streaks a life is entitled to — **threshold model** | **75** |
+| Streaks a life is entitled to — **balance model** | **38** |
+
+The last two rows are the pacing answer the brief asked for, and both come out of the same run
+on the same seeds: the threshold model handed out 75 streaks across those 705 lives, the balance
+affords 38. **A 49% cut in what a life's kills entitle a player to.** That is the intended
+direction — twelve kills is now a chopper *or* a UAV and a sentry — and it is the human's call
+whether it is the intended size.
+
+**Red before green.** `dirtyLifeStarts` was **1 in 152 life-starts** on seed 4 before the
+post-mortem guard and **0 in 152** after, with `postMortemKills` going 0 → 1 on the same match.
+One fix, one moved number, and the other four matches unchanged.
+
+**`npm run skirmish -- --grant-streak uav` — 3 headless clients, real server, real wire.** The
+grant was one-shot before this session, which is the right shape for an entitlement and the
+wrong one for a currency: a single grant is spent once and proves only that the debit runs. It
+tops the wallet up every 15 s now, so every client is permanently able to afford the UAV and the
+only thing that can stop them buying it again is B10.
+
+| | |
+|---|---|
+| Wallet top-ups × 3 clients | 21 × 3 = 63 payments, **240 kills credited** (12 dropped to dead seats) |
+| Spent | **68** = 17 × the UAV's price of 4 |
+| Activations | **17**, across 24 lives (7 + 5 + 9 deaths, plus the life each ended in) |
+| **Most streaks bought in any one life** | **1** |
+| Peak balance held | 32 |
+| Life-starts inheriting a balance | **0** |
+| Negative balances / resyncs | **0 / 0** |
+
+That fourth row is B10, measured rather than asserted: a permanently funded wallet, a peak
+balance of 32 against a price of 4, 17 purchases — and **no life ever bought the UAV twice**.
+Each of those 63 payments would have been a separate entitlement under the threshold model, and
+the clients ask for one every 30 ticks when they have one.
+
+The streak still works end to end over the wire in the same run: 17 live streak entities seen per
+client, 3 at once at peak, 2429 / 1337 / 2429 sweep frames and 5 UAV contacts. `spent` is exactly
+`activations × price` in every run measured.
+
+**`npm run leak` — 100 cycles.** Subscriptions **27 → 27 (+0)**, heap 12.7 → 13.34 MiB. The
+audit's spawn subscription replaced the two it started with and the count did not move.
+
+**`npm run check`** and **`npm run build`** green.
+
+### What was not verified
+
+`npm run harness` reports **0 activations**, and that is not a probe failing to fire — see "Found
+while here". The activation numbers above all come from the skirmish harness, where the headless
+clients are the only things in the project that spend.
+
+`balance = earned − spent` is not measured, because it is not measurable: the balance is computed
+from the other two rather than stored, so there is no third number that could disagree. What is
+measured is the pair that *can* go wrong — a balance below zero, and a life that started with one.
+
+### Needs a browser
+
+Nothing below is testable headlessly. `HeadlessClient` drives `NetClient` and `Prediction` and
+builds no `ClientMatch`, so it has no streak strip, no keys and no loadout editor; and the preview
+pane never fires `requestAnimationFrame`, so it cannot stand in for one either.
+
+- **B9, the balance going down.** Get to four kills in a class carrying a UAV. The strip's UAV
+  slot must light and read `4`; the progress line must read `4 / 5 · COUNTER-UAV` or whatever the
+  class's next-cheapest is. Press 3. The UAV must go up **and the progress line must go back up
+  too** — the balance is now 0, so the line should read `0 / 4`-something. That is the entire
+  report in one keypress.
+- **B9, the case the report names exactly.** Reach twelve kills with a class carrying something
+  priced at 6 and something at 8. Spend the 6. The 8 must go dark and show `8`, and pressing its
+  key must do nothing.
+- **B10.** After spending the UAV, keep killing past four again. The UAV slot must stay `USED`
+  and struck through — not re-light — and its key must stay dead. Then die. On respawn the slot
+  must clear back to its price and the balance must be 0.
+- **The price on an unaffordable slot.** At zero kills all three slots must show their prices,
+  dimmed. This is what makes a class readable before the match starts.
+- **The care package.** Claim one and watch the balance jump by the price of whatever it rolled,
+  rather than a streak appearing in hand. The pickup still names its contents.
+- **Create-a-Class.** The killstreak rows must read `Costs 12 kills · …` rather than `12 kills`.
+- **Hardline.** With the perk on, every price on the strip must be one lower, and the debit must
+  match what is shown.
+- **The mortar.** Open the overlay with a marked balance, cancel with the same key: the balance
+  must be untouched. Confirm: it must drop by the mortar's price exactly once.
+
+### Found while here
+
+- **No bot has ever spent a killstreak.** There is no call site: `StreakSystem.activate` is
+  reached from `ClientMatch` (the local player's keys), `Server.onStreakRequest` (a human's
+  request), and the two debug surfaces. Bots earn a balance — the harness measures 678 kills
+  banked over 705 lives — and never spend a kill of it. That is why `activations` is 0 in every
+  bot-only run, on both sides of this change, and it is why the pacing comparison above is
+  computed as *entitlement per life* rather than as activations. It is not this session's item —
+  nobody reported it and building bot streak AI is a feature, not a fix — but it means the human
+  currently plays against ten opponents who will never call anything in, and F16's three new
+  streaks would inherit the same silence.
+- **`EV.StreakProgress` and `EV.StreakEarned` have no gameplay subscriber.** Only the debug
+  panel's log listens. Both are still emitted and both now carry balance-model numbers, but a
+  streak becoming affordable is currently announced to nobody — no audio cue, no HUD flash. That
+  is a gap an announcer would fill and is worth knowing before F16 adds three more streaks to
+  not announce.
+- **A round start is not a death, and the ledger treats it that way.** `dirtyLifeStarts` is the
+  count of lives that began holding a balance from the life before, and it is 0 in every TDM run
+  measured here because every TDM life starts with a death. A Search & Destroy survivor's next
+  round starts without one, and will carry both the balance and the used set across. That is a
+  policy question rather than a bug under B10's literal wording ("until death resets it"), and it
+  is P5's row to decide: `StreakLedger.resetLife` is the single door P5 should hang the
+  spawn-serial signal on, and `dirtyLifeStarts` is the number that will say whether it worked.

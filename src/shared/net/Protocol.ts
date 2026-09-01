@@ -17,6 +17,16 @@
 /**
  * Bump on any layout change to any message in this file.
  *
+ * v10 (M11 Gate B, playtest round 4): `MsgS.Streaks` carries a **price list** instead of an
+ * inventory — each equipped streak's kind, what it costs this player after Hardline, and
+ * whether they have already bought it this life — plus the kill **balance** in place of the
+ * consecutive-kill count.
+ *
+ * B9 turned killstreaks from thresholds into a currency, and a currency cannot be replicated as
+ * a list of things you are allowed to press: the client has to know what a press will cost, and
+ * why a key that does nothing did nothing. Both facts are the server's, because both are per
+ * life and one of them carries a perk.
+ *
  * v9 (M11 Gate B, playtest round 4): `MsgS.Summary` carries the tick the hold **ends on**
  * instead of how many seconds it lasts.
  *
@@ -56,7 +66,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'

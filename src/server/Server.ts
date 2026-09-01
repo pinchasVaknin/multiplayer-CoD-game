@@ -288,9 +288,12 @@ export class Server {
    *
    * - **Which instance.** The router, never the client. A request from somebody in the arena
    *   cannot reach into the live match.
-   * - **Whether they have it.** `StreakSystem.activate` returns null for a streak this entity
-   *   has not earned, which is the whole of the entitlement check — the pending list is the
-   *   authoritative one and the client's copy is a replica of it.
+   * - **Whether they may buy it, and whether they can pay.** Two questions since round 4's B9,
+   *   because a balance answers only the second. The class check is here: `pricesFor` is the
+   *   list the server offered this seat, and a request for anything outside it is a client
+   *   asking for a streak it never had a key for. The payment check is inside
+   *   `StreakSystem.activate`, which debits through the one door that also refuses a streak
+   *   already bought this life (B10).
    * - **Where it goes.** At the player's own body, from the *server's* copy of their position.
    *   The only coordinates taken from the client are the mortar's marked point, which is a
    *   genuine choice the player makes on the map overlay and is clamped to the map by
@@ -313,11 +316,17 @@ export class Server {
       return;
     }
 
+    const streaks = instance.match.streaks;
+    if (!streaks.pricesFor(player.entityId).some((p) => p.id === def.id)) {
+      log.warn(`${session.displayName} asked for ${def.id}, which is not in their class.`);
+      return;
+    }
+
     const sim = player.controller.sim;
     // The mortar is marked on the map overlay; everything else is placed where the caller
     // stands. `MortarStrike` clamps the mark to the playable area.
     const isMortar = def.id === 'mortar';
-    const granted = instance.match.streaks.activate(
+    const granted = streaks.activate(
       player.entityId,
       def.id,
       isMortar ? x : sim.x,
@@ -326,7 +335,7 @@ export class Server {
       sim.yaw,
     );
     if (granted === null) {
-      log.debug(`${session.displayName} asked for ${def.id} and does not hold one.`);
+      log.debug(`${session.displayName} asked for ${def.id} and cannot pay for it.`);
       return;
     }
     log.info(`${session.displayName} called in ${def.id} in instance ${instance.id}.`);

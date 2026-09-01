@@ -1531,8 +1531,10 @@ export class Match {
       if (!justPressed(cmd.buttons, this.prevButtons, bit)) continue;
       const id = this.streakSlots[i];
       if (id === undefined || id === null) continue;
-      // Earned and unspent, or the press is simply not honoured. The HUD has already said so.
-      if (!this.heldStreaks().includes(id)) continue;
+      // Affordable and not already bought this life, or the press is simply not honoured. The
+      // slot has already said which of the two it is — the price, or USED — so a press that
+      // does nothing is a press the player was told about before they made it.
+      if (!this.canAffordStreak(id)) continue;
 
       const sim = this.deps.player.sim;
       // A mortar is *marked* before it is spent: the overlay opens, and the streak is only
@@ -1582,24 +1584,38 @@ export class Match {
     );
   }
 
-  /**
-   * What this player may spend right now.
-   *
-   * The server's list in a networked match and the local system's otherwise. Routed through one
-   * accessor rather than branched at each of the three call sites, because the failure when one
-   * of them is missed is a HUD that offers a streak the server will refuse.
-   */
   /** Record the class's streaks, in both the shapes the rest of the match asks for. */
   private setStreakLoadout(streaks: ReadonlyArray<StreakId | null>): void {
     this.streakSlots = [streaks[0] ?? null, streaks[1] ?? null, streaks[2] ?? null];
     this.equippedStreakIds = this.streakSlots.filter((id): id is StreakId => id !== null);
   }
 
-  private heldStreaks(): readonly StreakId[] {
-    return this.isNetworked ? this.replicatedStreaks.pending : this.streaks.pendingFor(this.localId);
+  /**
+   * The three questions the streak strip and the keys ask, each behind one accessor.
+   *
+   * The server's answer in a networked match and the local system's otherwise. Routed through
+   * these rather than branched at each call site, because the failure when one of them is
+   * missed is a HUD that offers a streak the server will refuse, or a key that charges a price
+   * the screen never showed. There were two of these before round 4; the balance model adds
+   * price and availability, which is what a currency needs on screen to be playable at all.
+   */
+  private streakBalance(): number {
+    return this.isNetworked ? this.replicatedStreaks.balance : this.streaks.balanceOf(this.localId);
   }
 
-  private nextStreak(): { def: StreakDef; requirement: number } | null {
+  private streakPrice(id: StreakId): number {
+    return this.isNetworked ? this.replicatedStreaks.priceOf(id) : this.streaks.priceOf(id, this.localId);
+  }
+
+  private streakUsed(id: StreakId): boolean {
+    return this.isNetworked ? this.replicatedStreaks.hasUsed(id) : this.streaks.usedBy(this.localId).includes(id);
+  }
+
+  private canAffordStreak(id: StreakId): boolean {
+    return this.isNetworked ? this.replicatedStreaks.canAfford(id) : this.streaks.canAfford(this.localId, id);
+  }
+
+  private nextStreak(): { def: StreakDef; price: number } | null {
     return this.isNetworked ? this.replicatedStreaks.next : this.streaks.nextFor(this.localId);
   }
 
@@ -1957,23 +1973,24 @@ export class Match {
    */
   private fillStreakHud(): void {
     const hud = this.ui.streakState;
-    const held = this.heldStreaks();
     for (let i = 0; i < hud.slots.length; i++) {
       const slot = hud.slots[i];
       if (slot === undefined) continue;
       const id = this.streakSlots[i] ?? null;
       slot.name = id === null ? '' : streakDef(id).name;
-      slot.ready = id !== null && held.includes(id);
+      // Four states now, not three (round 4, B9 + B10). A slot that is dark because the
+      // player cannot afford it and a slot that is dark because they already spent it are
+      // different sentences, and the key does nothing in both — so the strip has to say which.
+      slot.price = id === null ? 0 : this.streakPrice(id);
+      slot.used = id !== null && this.streakUsed(id);
+      slot.ready = id !== null && this.canAffordStreak(id);
     }
-    // The streak count is the server's too when there is one: it is the number the earn
-    // threshold is measured against, and two opinions about it is two opinions about whether
-    // the player has earned anything.
-    hud.streak = this.isNetworked
-      ? this.replicatedStreaks.streakCount
-      : (this.score.row(this.localId)?.streak ?? 0);
+    // The **balance**, and the server's when there is one: it is the number a purchase is
+    // charged against, and two opinions about it is two opinions about whether a key works.
+    hud.balance = this.streakBalance();
     const next = this.nextStreak();
     hud.nextName = next?.def.name ?? '';
-    hud.nextRequirement = next?.requirement ?? 0;
+    hud.nextPrice = next?.price ?? 0;
 
     this.fillObjectiveBanner(hud);
     this.fillFreeForAllBanner();

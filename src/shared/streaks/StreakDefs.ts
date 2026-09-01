@@ -5,9 +5,11 @@
  * implements it, which is S3's rule and is what lets the debug panel slider them without the
  * streak knowing it is being tuned.
  *
- * `requirement` is the raw consecutive-kill count. It is never read directly by gameplay —
- * `StreakSystem.requirementFor` applies Hardline's discount first, and the HUD is told the
- * *effective* number so it never has to know a perk exists.
+ * `requirement` is the raw price in kills. It is never read directly by gameplay —
+ * `StreakSystem.priceOf` applies Hardline's discount first, and the HUD is told the *effective*
+ * number so it never has to know a perk exists. The field keeps its name because that is what
+ * the number *is* to a designer; what round 4's B9 changed is that it is now debited from a
+ * balance rather than merely reached.
  */
 
 export type StreakId = 'uav' | 'counter_uav' | 'care_package' | 'mortar' | 'sentry' | 'chopper';

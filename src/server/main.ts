@@ -165,6 +165,17 @@ function reportMatch(
     ticksLate: jitter?.late ?? null,
     ticksDropped: jitter?.dropped ?? null,
     heapMb: heapMb(),
+    /**
+     * The killstreak economy (playtest round 4, B9 + B10).
+     *
+     * `lives`/`lifeStarts` are the denominators: a zero in `negativeBalances` means nothing
+     * unless something was actually banked and spent. `thresholdGrants` against
+     * `balancePurchases` is the model change itself — the same lives, priced both ways.
+     *
+     * `activations` is zero in a bot-only run and that is not a measurement failure: no bot has
+     * ever had a call site that spends a streak. See PLAN.md, "Found while here".
+     */
+    streaks: match.streakEconomy,
     hitRateByTier: Object.fromEntries(
       Object.entries(report.perTier).map(([tier, r]) => [
         tier,

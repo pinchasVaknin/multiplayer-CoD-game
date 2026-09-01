@@ -335,21 +335,49 @@ export interface UavContactState {
 }
 
 /**
+ * One streak this player has equipped, as the server prices and gates it (round 4, B9 + B10).
+ *
+ * Replaces the list of "earned and unspent kind indices" that used to be here. Under a balance
+ * there is nothing to hold, so what a client needs is not an inventory but a **price list**:
+ * what each of my three keys costs, and whether I have already spent that one this life. Both
+ * facts are the server's — the price carries Hardline, and the used set is per life and per
+ * entity — and a client that recomputed either would be the second authority §4.15 exists to
+ * prevent.
+ *
+ * Keyed by `kind` rather than delivered in slot order. The server drops empty slots when it
+ * resolves a class, so position here does not survive a class with a gap in it; the client
+ * already knows its own three keys and looks each one up.
+ */
+export interface StreakOfferState {
+  /** Index into `STREAK_DEFS`. */
+  readonly kind: number;
+  /** Kills it costs this player, already discounted by Hardline. */
+  readonly price: number;
+  /** Bought this life. B10: not available again until death. */
+  readonly used: boolean;
+}
+
+/**
  * Everything one recipient is told about streaks this tick.
  *
- * Built per seat rather than broadcast, because three of its parts are private: what *you* have
- * earned, what *your* team's UAV can see, and whether *your* minimap is scrambled. The entity
+ * Built per seat rather than broadcast, because three of its parts are private: what *you* can
+ * afford, what *your* team's UAV can see, and whether *your* minimap is scrambled. The entity
  * list is common and is simply carried along with them.
  */
 export interface StreakView {
-  /** Kind indices this player has earned and not yet spent, in key order. */
-  readonly pending: readonly number[];
-  /** Consecutive kills, for the HUD's progress readout. */
-  readonly streakCount: number;
-  /** The next streak this player is working toward, or -1. */
+  /** The class's streaks, priced and gated. Up to three. */
+  readonly offers: readonly StreakOfferState[];
+  /**
+   * Kills banked and not yet spent (round 4, B9).
+   *
+   * Was `streakCount`, the consecutive-kill counter. The two are different numbers the moment
+   * anything is bought, and it is the balance the HUD's progress line is measured against.
+   */
+  readonly balance: number;
+  /** The cheapest streak this player cannot afford yet, or -1. */
   readonly nextKind: number;
-  /** Kills needed for it, already discounted by Hardline. */
-  readonly nextRequirement: number;
+  /** What it costs, already discounted by Hardline. */
+  readonly nextPrice: number;
   /** An enemy Counter-UAV is up: this player's minimap is scrambled. */
   readonly scrambled: boolean;
   /** Sweep bearing of a friendly UAV, or -1 when this team has none. */
@@ -362,8 +390,8 @@ export interface StreakView {
 export const MAX_STREAK_ENTITIES = 16;
 /** Contacts a sweep can carry. One per roster slot, and the roster caps well below this. */
 export const MAX_UAV_CONTACTS = 24;
-/** Streaks a player can hold at once — three keys, three slots (M7 playtest). */
-export const MAX_PENDING_STREAKS = 3;
+/** Offers a player can be shown at once — three keys, three slots (M7 playtest). */
+export const MAX_STREAK_OFFERS = 3;
 
 // -- equipment in flight (M11 Gate B, §6.8, §8.24) ----------------------------
 

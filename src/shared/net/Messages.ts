@@ -25,7 +25,7 @@ import {
   type EntitySnapshot,
 } from './Snapshot';
 import {
-  MAX_PENDING_STREAKS,
+  MAX_STREAK_OFFERS,
   MAX_PROJECTILES,
   MAX_SMOKE,
   type ProjectileState,
@@ -33,6 +33,7 @@ import {
   MAX_STREAK_ENTITIES,
   MAX_UAV_CONTACTS,
   type StreakEntityState,
+  type StreakOfferState,
   type StreakView,
   type UavContactState,
   BOMB_CARRIED,
@@ -603,13 +604,22 @@ export function writeStreakRequest(w: ByteWriter, kind: number, x: number, z: nu
 export function writeStreaks(w: ByteWriter, view: StreakView): Uint8Array {
   head(w, MsgS.Streaks);
 
-  const pending = Math.min(view.pending.length, MAX_PENDING_STREAKS);
-  w.u8v(pending);
-  for (let i = 0; i < pending; i++) w.u8v((view.pending[i] ?? 0) & 0xff);
+  // Three bytes per offer rather than one per held streak (round 4, B9). A price list is
+  // bigger than an inventory and has to be: a client cannot decide what a key does, or say why
+  // it did nothing, from a list of what it is allowed to press.
+  const offers = Math.min(view.offers.length, MAX_STREAK_OFFERS);
+  w.u8v(offers);
+  for (let i = 0; i < offers; i++) {
+    const o = view.offers[i];
+    if (o === undefined) continue;
+    w.u8v(o.kind & 0xff);
+    w.u8v(Math.max(0, Math.min(255, o.price)));
+    w.u8v(o.used ? 1 : 0);
+  }
 
-  w.u8v(Math.max(0, Math.min(255, view.streakCount)));
+  w.u8v(Math.max(0, Math.min(255, view.balance)));
   w.i8(view.nextKind);
-  w.u8v(Math.max(0, Math.min(255, view.nextRequirement)));
+  w.u8v(Math.max(0, Math.min(255, view.nextPrice)));
   // Sweep as a quantised angle with a sentinel: -1 means "your team has no UAV up", which is a
   // different statement from "the beam is at zero" and the minimap draws them differently.
   w.u8v(view.scrambled ? 1 : 0);
@@ -1268,14 +1278,19 @@ export function decodeHeader(r: ByteReader): Decoded {
           };
     }
     case MsgS.Streaks: {
-      const pendingCount = r.u8v();
-      if (r.overran || pendingCount > MAX_PENDING_STREAKS) return BAD;
-      const pending: number[] = [];
-      for (let i = 0; i < pendingCount; i++) pending.push(r.u8v());
+      const offerCount = r.u8v();
+      if (r.overran || offerCount > MAX_STREAK_OFFERS) return BAD;
+      const offers: StreakOfferState[] = [];
+      for (let i = 0; i < offerCount; i++) {
+        const kind = r.u8v();
+        const price = r.u8v();
+        const used = r.u8v() === 1;
+        offers.push({ kind, price, used });
+      }
 
-      const streakCount = r.u8v();
+      const balance = r.u8v();
       const nextKind = r.i8();
-      const nextRequirement = r.u8v();
+      const nextPrice = r.u8v();
       const scrambled = r.u8v() === 1;
       const hasSweep = r.u8v() === 1;
       const sweepRaw = r.u16();
@@ -1331,10 +1346,10 @@ export function decodeHeader(r: ByteReader): Decoded {
         : {
             kind: 'streaks',
             view: {
-              pending,
-              streakCount,
+              offers,
+              balance,
               nextKind,
-              nextRequirement,
+              nextPrice,
               scrambled,
               sweepAngle,
               contacts,

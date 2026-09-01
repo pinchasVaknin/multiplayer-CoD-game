@@ -3,10 +3,11 @@
  *
  * Two widgets that share a corner and a lifetime:
  *
- * **The streak strip** — what you are holding, what you are working toward, and which key
- * spends it. Three slots because there are three keys; a fourth earned streak simply waits.
- * The next-streak line shows the *effective* requirement, which is already Hardline-discounted
- * by `StreakSystem`, so this file has never heard of a perk.
+ * **The streak strip** — what your three keys cost, which of them you can pay for, and which
+ * you have already spent this life. Three slots because there are three keys. Every price shown
+ * is the *effective* one, already Hardline-discounted by `StreakSystem`, so this file has never
+ * heard of a perk; and the progress line counts the **balance** toward the cheapest thing still
+ * out of reach, which after round 4's B9 goes back up when you buy something.
  *
  * **The objective banner** — the bomb timer, the plant/defuse ring, and the capture prompt.
  * It only appears when there is something to say, because a HUD element that is present and
@@ -24,26 +25,36 @@ export interface StreakSlotState {
   /** '3', '4' or '5'. */
   key: string;
   /**
-   * Whether this slot's streak is earned and can be spent right now (M11 Gate B playtest).
+   * Whether this slot's streak can be bought right now (M11 Gate B playtest).
    *
    * The slots used to hold whatever the player had *earned*, packed from index 0 — so the one
    * streak a player was holding always appeared on key 3, whichever key their class actually
    * bound it to, and pressing 5 for the Chopper Gunner they had just earned did nothing. The
    * slots are the **class's** three keys now, always in the same order, and this is what says
    * which of them is live. A named but unready slot is the useful half of that: it tells the
-   * player what key 5 is *for* before they have earned it.
+   * player what key 5 is *for* before they can pay for it.
    */
   ready: boolean;
+  /**
+   * What it costs, in kills (round 4, B9).
+   *
+   * On screen because a player cannot plan a purchase whose price they cannot see, and because
+   * it is the reason a key does nothing: an unaffordable slot showing "8" says what is
+   * missing, where a dark slot says only that something is.
+   */
+  price: number;
+  /** Bought this life (round 4, B10). Not available again until death. */
+  used: boolean;
 }
 
 export interface StreakHudState {
-  /** Up to three held streaks, in the order the keys spend them. */
+  /** The class's three streaks, in the order the keys spend them. */
   readonly slots: StreakSlotState[];
-  /** Consecutive kills right now. */
-  streak: number;
-  /** What is next, and at how many kills. Empty name means everything is earned. */
+  /** Kills banked and not yet spent. Was the consecutive-kill count (round 4, B9). */
+  balance: number;
+  /** What is next, and what it costs. Empty name means everything is affordable or spent. */
   nextName: string;
-  nextRequirement: number;
+  nextPrice: number;
 
   // ---- objective banner --------------------------------------------------
   /** Headline, or empty to hide the banner entirely. */
@@ -66,13 +77,13 @@ export interface StreakHudState {
 export function makeStreakHudState(): StreakHudState {
   return {
     slots: [
-      { name: '', key: '3', ready: false },
-      { name: '', key: '4', ready: false },
-      { name: '', key: '5', ready: false },
+      { name: '', key: '3', ready: false, price: 0, used: false },
+      { name: '', key: '4', ready: false, price: 0, used: false },
+      { name: '', key: '5', ready: false, price: 0, used: false },
     ],
-    streak: 0,
+    balance: 0,
     nextName: '',
-    nextRequirement: 0,
+    nextPrice: 0,
     objectiveLabel: '',
     objectiveSeconds: -1,
     interactFraction: -1,
@@ -91,6 +102,7 @@ export class HudStreaks {
 
   private readonly slotEls: HTMLElement[] = [];
   private readonly slotNameEls: HTMLElement[] = [];
+  private readonly slotCostEls: HTMLElement[] = [];
   private readonly progressEl: HTMLElement;
   private readonly bannerLabel: HTMLElement;
   private readonly bannerTimer: HTMLElement;
@@ -124,10 +136,15 @@ export class HudStreaks {
       key.textContent = String(3 + i);
       const name = document.createElement('span');
       name.className = 'hud-streaks__name';
-      slot.append(key, name);
+      // The price, or USED. One element, because they are two halves of one sentence — what
+      // this key would cost you, and that you have already paid it once this life.
+      const cost = document.createElement('i');
+      cost.className = 'hud-streaks__cost';
+      slot.append(key, name, cost);
       slots.appendChild(slot);
       this.slotEls.push(slot);
       this.slotNameEls.push(name);
+      this.slotCostEls.push(cost);
     }
     this.element.appendChild(slots);
 
@@ -207,17 +224,23 @@ export class HudStreaks {
       const entry = state.slots[i];
       const name = entry?.name ?? '';
       const ready = entry?.ready === true;
-      // The cache key carries both facts, so a slot that becomes spendable without changing
-      // its name still repaints. Two guards would have needed two caches.
-      const stamp = ready ? `+${name}` : name;
+      const used = entry?.used === true;
+      const cost = name.length === 0 ? '' : used ? 'USED' : String(entry?.price ?? 0);
+      // The cache key carries every fact the slot paints, so a slot that becomes affordable —
+      // or stops being, or is spent — without changing its name still repaints. One stamp
+      // rather than four guards, because four guards would need four caches.
+      const stamp = `${ready ? '+' : '-'}${cost}|${name}`;
       if (stamp !== this.lastSlotNames[i]) {
         this.lastSlotNames[i] = stamp;
         const el = this.slotNameEls[i];
+        const costEl = this.slotCostEls[i];
         const slot = this.slotEls[i];
         if (el !== undefined) el.textContent = name;
+        if (costEl !== undefined) costEl.textContent = cost;
         if (slot !== undefined) {
           slot.classList.toggle('is-ready', ready);
           slot.classList.toggle('is-owned', name.length > 0);
+          slot.classList.toggle('is-used', used);
         }
       }
     }
@@ -225,7 +248,7 @@ export class HudStreaks {
     const progress =
       state.nextName.length === 0
         ? ''
-        : `${state.streak} / ${state.nextRequirement} · ${state.nextName}`;
+        : `${state.balance} / ${state.nextPrice} · ${state.nextName}`;
     if (progress !== this.lastProgress) {
       this.lastProgress = progress;
       this.progressEl.textContent = progress;
