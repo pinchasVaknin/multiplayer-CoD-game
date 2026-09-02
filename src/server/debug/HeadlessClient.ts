@@ -387,6 +387,35 @@ export interface HeadlessClientReport {
   readonly notices: readonly string[];
   /** Vote phases this client cast a vote in. */
   readonly votesCast: number;
+
+  // -- reconnect (playtest round 4, F8) ---------------------------------------
+
+  /** How many times this client dropped its socket and dialled back in. */
+  readonly reconnects: number;
+  /** Re-dial to the first synchronised frame, ms, or -1 if it never got one back. */
+  readonly resyncMs: number;
+  /** The seat as it stood the instant before the drop, or null if this client never dropped. */
+  readonly seatBeforeDrop: SeatSnapshot | null;
+  /** The seat this client came back to, or null if it never came back. */
+  readonly seatAfterReturn: SeatSnapshot | null;
+  /** §7 divergence, counted only over frames **after** a return. Denominator included. */
+  readonly hashSamplesAfterReturn: number;
+  readonly hashMismatchesAfterReturn: number;
+}
+
+/**
+ * What a seat is, for the purpose of asking whether it survived (round 4, F8).
+ *
+ * The entity id is the whole question: it is what the score row, the streak ledger, the hand
+ * and the rewind history are all keyed by, so a seat that came back with the same id came back
+ * with all of them and one that did not came back with none. `matchId` is beside it because a
+ * player who returned to the *arena* has technically kept a seat and has not kept **theirs**.
+ */
+export interface SeatSnapshot {
+  readonly entityId: number;
+  readonly matchId: number;
+  readonly team: 'A' | 'B';
+  readonly atMs: number;
 }
 
 export class HeadlessClient {
@@ -563,6 +592,29 @@ export class HeadlessClient {
   /** Migrations where no prepared build was waiting. Should be arena returns only. */
   private lateBuilds = 0;
 
+  /**
+   * The drop-and-return probe (playtest round 4, F8).
+   *
+   * `awaitingResync` is the latch that makes the resync time honest: it opens at the moment
+   * the re-dial is asked for and closes on the first frame `NetClient.synchronised` is true,
+   * which is the first frame the server has told this client where it is. Anything measured
+   * to the socket opening instead would be reporting a TCP handshake.
+   *
+   * `hashSamplesAfterReturn` is counted separately from the run total for the reason the
+   * §7 checker's own `hashSamples === 0` branch exists: a returning client is exactly the case
+   * the divergence checker should be speaking about, and a zero mismatch count over zero
+   * samples is a probe that never looked.
+   */
+  private reconnects = 0;
+  private awaitingResync = false;
+  private reconnectAtMs = 0;
+  private resyncMs = -1;
+  private returned = false;
+  private seatBeforeDrop: SeatSnapshot | null = null;
+  private seatAfterReturn: SeatSnapshot | null = null;
+  private hashSamplesAfterReturn = 0;
+  private hashMismatchesAfterReturn = 0;
+
   private migrationWindow: {
     untilTick: number;
     baseline: number;
@@ -706,6 +758,10 @@ export class HeadlessClient {
          */
         onStateHash: (tick, hash) => {
           this.hashSamples++;
+          // Counted separately once this client has come back from a drop (round 4, F8): a
+          // returning client is exactly the case §4.18's discard list is about, and folding its
+          // samples into the run total would let a match's worth of clean frames bury them.
+          if (this.returned) this.hashSamplesAfterReturn++;
           const mine = hashModeState(this.localModeFacts());
           if (mine === hash) {
             this.hashMismatchStreak = 0;
@@ -715,6 +771,7 @@ export class HeadlessClient {
           if (this.hashMismatchStreak < HASH_CONFIRM_SAMPLES) return;
           this.hashMismatchStreak = 0;
           this.hashMismatches++;
+          if (this.returned) this.hashMismatchesAfterReturn++;
           if (this.firstMismatchTick < 0) this.firstMismatchTick = tick;
         },
         onStreaks: (view) => {
@@ -1162,11 +1219,92 @@ export class HeadlessClient {
     if (this.awaitingReturn && (this.net.state === 'disconnected' || this.link.state === 'closed')) {
       this.droppedOnSummary = true;
     }
+
+    /**
+     * The return has landed (playtest round 4, F8).
+     *
+     * Closed on `synchronised` rather than on `'joined'`, because the two are a snapshot
+     * interval apart and only the second means the server has said where this body is. The seat
+     * is read here, on the frame it becomes true, for the same reason the Ghost probe reads its
+     * entity id inside the match rather than at report time: **entity ids are per instance**, so
+     * a seat read later is a seat read in whatever world the flow has since moved this client
+     * into.
+     */
+    if (this.awaitingResync && this.net.synchronised) {
+      this.awaitingResync = false;
+      this.returned = true;
+      this.resyncMs = Math.round(nowMs() - this.reconnectAtMs);
+      this.seatAfterReturn = {
+        entityId: this.net.entityId,
+        matchId: this.net.matchId,
+        team: this.net.team,
+        atMs: nowMs(),
+      };
+    }
   }
 
   disconnect(clean: boolean): void {
     if (clean) this.net.disconnect('done');
     else this.link.terminate();
+  }
+
+  /**
+   * Drop this client's socket the way a pulled cable does (playtest round 4, F8).
+   *
+   * `terminate` rather than `disconnect(false)` so the seat as it stood is recorded first —
+   * once the link is gone, `net.entityId` still reads the old value but nothing else about the
+   * moment is recoverable, and the whole probe is a before-and-after.
+   *
+   * Unclean on purpose. A clean `Bye` frees the seat immediately and is the case S8.11 already
+   * covers; the case F8 is about is the one where the server finds out on its own.
+   */
+  dropForReconnect(): void {
+    this.seatBeforeDrop = {
+      entityId: this.net.entityId,
+      matchId: this.net.matchId,
+      team: this.net.team,
+      atMs: nowMs(),
+    };
+    /**
+     * Clear the previous cycle's answer, and this is not tidiness (round 4, F8).
+     *
+     * `seatAfterReturn` is what the harness waits on to decide a cycle has landed. Left over
+     * from the last one it is already non-null, so cycle two closes on the *first* frame it is
+     * looked at — before the socket has even been re-opened — and reports cycle one's seat and
+     * cycle one's resync time again. A nine-cycle run did exactly that: three genuine results
+     * and six copies of them, all green.
+     *
+     * Found by reading a run whose resync times repeated in threes. A latch is the right shape
+     * for a thing that happens once and the wrong one for a thing that happens N times, and the
+     * cheapest way to tell them apart is that the second kind has to be reset by whatever starts
+     * the next round of it.
+     */
+    this.seatAfterReturn = null;
+    this.resyncMs = -1;
+    this.link.terminate();
+  }
+
+  /**
+   * Dial back in on the same client object (playtest round 4, F8).
+   *
+   * The same `NetClient`, the same `NodeLink`, a new socket — which is the browser's shape too,
+   * minus the world it has to rebuild. `NetClient.connect` refuses unless the state is `'idle'`
+   * or `'disconnected'`, and the only place `'joined'` becomes `'disconnected'` is the top of
+   * `update`, so the pump below is a precondition rather than a courtesy: without it the
+   * `Hello` is silently never sent and the run reports a client that simply never came back.
+   */
+  async reconnect(): Promise<void> {
+    this.net.update();
+    this.reconnects++;
+    this.reconnectAtMs = nowMs();
+    this.awaitingResync = true;
+    await this.link.open();
+    this.net.connect();
+  }
+
+  /** Whether this client is dropped and has not yet been dialled back in. */
+  get droppedOut(): boolean {
+    return this.link.state === 'closed';
   }
 
   report(): HeadlessClientReport {
@@ -1259,6 +1397,12 @@ export class HeadlessClient {
       droppedOnSummary: this.droppedOnSummary,
       notices: [...this.notices],
       votesCast: this.votesCast,
+      reconnects: this.reconnects,
+      resyncMs: this.resyncMs,
+      seatBeforeDrop: this.seatBeforeDrop,
+      seatAfterReturn: this.seatAfterReturn,
+      hashSamplesAfterReturn: this.hashSamplesAfterReturn,
+      hashMismatchesAfterReturn: this.hashMismatchesAfterReturn,
     };
   }
 

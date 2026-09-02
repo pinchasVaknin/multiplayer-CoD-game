@@ -234,6 +234,26 @@ export class Game {
   /** Set by the Play Multiplayer button. Wins over `?server=`. See `launchMatch`. */
   private multiplayerJoin: HandshakeOptions | null = null;
 
+  /**
+   * The seat this client may still be able to get back (M11 Gate B, playtest round 4, F8).
+   *
+   * **State that outlives the world it describes**, which is the whole reason it is a field on
+   * `Game` rather than something read off the netcode when it is needed: by the time a
+   * reconnect is worth attempting the socket is closed and `MatchWorld` is about to be torn
+   * down, so a token fetched at that moment would be fetched from an object that is going away.
+   * It is captured at the handshake and refreshed from `NetClient` — which updates it on every
+   * seat assignment — while the world still exists.
+   *
+   * In memory only, deliberately. A page reload is the one reconnect case this does not cover,
+   * and `sessionStorage` would cover it at the cost of leaving a live seat capability sitting in
+   * the tab where any script on the origin can read it. That is a trade worth making
+   * consciously rather than by default, and it is on the list for the human.
+   */
+  private reconnectToken: Uint8Array | null = null;
+
+  /** True while a reconnect dial is in flight, so a second frame cannot start a second one. */
+  private reconnecting = false;
+
   /** The non-blocking vote overlay (§4.20). Built at boot, shown only while balloting. */
   private readonly voteOverlay: VoteOverlay;
 
@@ -1231,6 +1251,21 @@ export class Game {
     this.world = null;
     this.speedo.reset();
     if (!keep) this.server = null;
+    /**
+     * Leaving on purpose gives up the seat as well as the socket (round 4, F8).
+     *
+     * The server already refuses to hold a seat for a clean `Bye` — see `LeaveCause` — and this
+     * is the same rule stated on the side that knows *why* the world is going away. Without it,
+     * quitting to the menu and pressing Play Multiplayer again inside the grace would present a
+     * claim on the match just quit; with only the server's half, the client would be asking for
+     * something it should not want.
+     *
+     * `reconnecting` is the exception and is the whole reason the flag exists: `tryReconnect`
+     * tears the world down through this very path on its way to dialling back in, and clearing
+     * the token there would throw away the thing it is about to present. Same shape as
+     * `rotating` two lines above.
+     */
+    if (!keep && !this.reconnecting) this.reconnectToken = null;
   }
 
   /**
@@ -1439,6 +1474,42 @@ export class Game {
     await this.launchMatch();
   }
 
+  /**
+   * The socket died mid-match: dial back in and present the seat we held (round 4, F8).
+   *
+   * Returns whether an attempt was started. False means there is nothing to try — a
+   * single-player match, a client that never got a token, or a dial already in flight — and the
+   * caller falls back to the menu, which is what happened unconditionally before this.
+   *
+   * ## Why it reuses `launchMatch` rather than doing anything of its own
+   *
+   * Because a reconnect is a join. The server decides whether it is a *return* — that is what
+   * the token is for — and every step on this side is identical either way: handshake, learn
+   * which map and mode are running, build that world, enter `MATCH`. Writing a second path
+   * would be writing a second copy of the ordering fix from M10's playtest, which is exactly
+   * the class of duplication that produced the map/mode desync in the first place.
+   *
+   * The world is torn down **completely**, socket included, through the ordinary `MATCH -> MENU`
+   * exit handler rather than by hand — it describes an instance this client has already been
+   * thrown out of, and the returning `Welcome` may name a different map (the arena's, if the
+   * grace has expired). Clearing `this.server` is what that teardown does and what makes
+   * `launchMatch` dial rather than return early, so the transition is doing three jobs and none
+   * of them is duplicated here.
+   */
+  private tryReconnect(): boolean {
+    if (this.reconnecting || this.joining) return false;
+    if (this.multiplayerJoin === null || this.reconnectToken === null) return false;
+
+    this.reconnecting = true;
+    netLog.info('lost the connection mid-match — dialling back in with the seat we held.');
+    this.transitionTo('MENU');
+    this.screens.menus.showBoot('RECONNECTING…');
+    void this.launchMatch().finally(() => {
+      this.reconnecting = false;
+    });
+    return true;
+  }
+
   private async launchMatch(): Promise<void> {
     /**
      * **Only the Play Multiplayer button connects** (M11 playtest, §6.2).
@@ -1465,12 +1536,21 @@ export class Game {
     this.screens.menus.showBoot(`CONNECTING TO ${hostOf(join.url)}…`);
     try {
       // The class goes with the `Hello`, not after it. See `handshake` and Tier 1 #20.
-      const result = await handshake({ ...join, loadout: this.netLoadout() });
+      const result = await handshake({
+        ...join,
+        loadout: this.netLoadout(),
+        // Present whatever seat this client last held. Null on a first join, and a token the
+        // server does not recognise is an ordinary join rather than a refusal — see
+        // `ReconnectRegistry.claim`.
+        reconnectToken: this.reconnectToken,
+      });
+      this.reconnectToken = result.reconnectToken;
       this.server = {
         link: result.link,
         welcome: result.welcome,
         receivedAtMs: result.receivedAtMs,
         pending: result.pending,
+        reconnectToken: result.reconnectToken,
         displayName: join.displayName,
         wantRewindDebug: join.wantRewindDebug,
         onNewMatch: (welcome) => {
@@ -1838,17 +1918,32 @@ export class Game {
       net.update();
       world.debug.simulate(world.player, this.movementConfig);
 
+      // Refreshed every frame from the netcode, which rewrites it on every seat assignment.
+      // Read here rather than at the moment of the drop, because by then the world holding the
+      // netcode is the thing being torn down. See `reconnectToken`.
+      const seatToken = net.client.reconnectToken;
+      if (seatToken !== null) this.reconnectToken = seatToken;
+
       /**
-       * The connection died. Leave, rather than standing in a world nothing is driving.
+       * The connection died. Try to get back in; failing that, leave.
        *
-       * Without this a dropped client keeps its map, its HUD and its last snapshot on screen
-       * forever: the local flow is inert by design, so nothing ticks, nothing changes, and it
-       * is indistinguishable from a frozen game. The player is put back in the menu with the
-       * reason, which is the difference between "the server went away" and "it hung".
+       * Without either, a dropped client keeps its map, its HUD and its last snapshot on screen
+       * forever: the local flow is inert by design, so nothing ticks, nothing changes, and it is
+       * indistinguishable from a frozen game.
+       *
+       * **`rejected` is not tried again** (round 4, F8). A rejection is the server answering —
+       * wrong protocol version, server full — and re-dialling into the same answer is a loop
+       * with a loading screen on it. A `disconnected` is the server *not* answering, which is
+       * exactly the case a reconnect exists for.
        */
-      if (net.state === 'disconnected' || net.state === 'rejected') {
-        netLog.warn(`connection ended: ${net.client.closeReason}`);
+      if (net.state === 'rejected') {
+        netLog.warn(`connection refused: ${net.client.closeReason}`);
         this.transitionTo('MENU');
+        return;
+      }
+      if (net.state === 'disconnected') {
+        netLog.warn(`connection ended: ${net.client.closeReason}`);
+        if (!this.tryReconnect()) this.transitionTo('MENU');
       }
       return;
     }

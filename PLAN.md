@@ -4649,9 +4649,24 @@ discontinuity.
    still drop and still time a kill, and the bots still shoot at you. See "the waiting room, and
    two facts that were one flag" below for the implementation and for why the two limits in
    `FFA_WARMUP_CONFIG` were never what enforced any of it.
-3. **A `VotePhase.IDLE` that is not in the brief's table.** §4.20 requires the cycle to cancel
+3. **§6.7's "warmup is always the entry point" is amended at playtest round 4 (F8), and this is
+   the amendment.** The clause read *"a player who joins the server while a live match is
+   running goes to the warmup arena, not into the match, and joins at the next cycle. Warmup is
+   always the entry point."* It now reads: **a connection is seated in the live match when one
+   is `RUNNING` and has room, and in the warmup arena otherwise — which is every other moment of
+   the cycle, and is still where a refused seat lands.** A returning player with a live
+   reservation goes back to the seat they left, in the instance they left it in.
+
+   What the old rule bought was a single seating path. What it cost is the whole of F8: a player
+   who dropped out of a five-minute match spent the rest of it watching a ballot, and so did
+   anybody who arrived while a match was on. The piece that made the arena the safe entry
+   point — §6.5's background map build — turns out to be about *migration* rather than about
+   joining: a fresh connection has built nothing either way, and `handshake` already learns the
+   map before a world exists, so a direct join is the arena's own path with a different `mapId`.
+   `READY_WAIT` is deliberately excluded; see "the seat a disconnect used to take with it" below.
+4. **A `VotePhase.IDLE` that is not in the brief's table.** §4.20 requires the cycle to cancel
    when every human leaves; an arena with nobody in it is not in a phase of a countdown.
-4. **The instance panel is split across two places.** §7 wants both instances side by side with
+5. **The instance panel is split across two places.** §7 wants both instances side by side with
    per-instance and total tick ms. A client can see exactly one instance and cannot observe the
    server's event loop at all, so the server reports that pair in its metrics and the client
    panel reports what a player's machine can actually see. See `SkirmishPanel`.
@@ -7407,3 +7422,377 @@ everything under "Open, and all of one kind".
 - **`ScoreSystem.register`'s return value has never been used**, by any of its six call sites, in
   five milestones. That is what made changing its type free, and it is a small sign that the
   registration is a roster fact rather than a scoring one.
+
+## Playtest round 4 — the seat a disconnect used to take with it
+
+Covers **F8** (reconnect, and joining a match that is already running, after a disconnect). It
+also amends **§6.7**; the amended clause is in "Deviations, and why" above, and the code now says
+the same thing.
+
+### There was no reconnect, and the comments that mention one are about something else
+
+The brief points at three places and asks what actually happens today. All three turn out to be
+about a different thing. `Session.ts:111` says *"a reconnect reseats the session"* while
+describing the `afterIdentity` ordering contract for a **migration**; `Session.ts:271` names *"the
+reconnect grace"* inside a comment about a bug that was fixed; `serve.ts:76` is about SIGTERM and
+a *client's* reconnect loop. There is no registry, no token and no held seat anywhere in the tree.
+
+The mechanism, in one line: **a returning client is a new connection, and every fact that
+identified the old one — the `playerId`, the entity, the scoreboard row, the team — is minted
+fresh, because the only things a `Hello` carried were a name and a class.** A name is not an
+identity: two players may share one and anybody may claim yours.
+
+Four consequences, all of them that one cause, and the last two were not in the report:
+
+| Reported / observed | What it was |
+|---|---|
+| "I lose my seat when I drop" | `onLeave` to `router.release(_, 'disconnected')` to `replacePlayerWithBot`. Correct, and nothing ever gave it back |
+| "I come back to the lobby" | `onJoin` called `warmup.seat` unconditionally. §6.7 made the arena the only entry point, so a return mid-match meant standing in the arena until the next ballot |
+| **A returning player was on the end-of-match board twice** | `Match.removePlayer` keeps the score row on purpose, and `LiveMatch.buildSummary` derives `isBot` from *"no session sits on this entity"*. So the kills they earned stayed on the board attributed to a bot, while they accrued a second row from zero |
+| **Three reconnects killed the match for everybody** | Measured, below. Each returning player landed in the arena, so the third one emptied the live instance and `maybeAbandonLive` tore it down — one reconnect each was enough to cost eight other people their match |
+
+### The red control, before anything changed
+
+`npm run skirmish -- --drop-return 3 --drop-hold 3000` on the untouched tree. Three clients, a
+real server, a real wire, shipped timings; each client is dropped **uncleanly** mid-match, held
+three seconds, and dialled back in.
+
+| | Red (today's tree) |
+|---|---|
+| Kept the seat | **0 of 3** — entity 1/2/3 in match 1 became entity 4/5/6 in match 0 |
+| Kept the score | **0 of 3** — `e1 0k/1d`, `e2 0k/1d`, `e3 0k/2d` before; **no row at all** after |
+| Resynced | 3 of 3, in 48 / 62 / 82 ms |
+| The live match | **abandoned** — "every human has left a running match", 10 bots discarded |
+| The run | **FLOW CHECK FAILED**, twice |
+
+The "no row at all" is the arena being the destination: since F7 the arena records nothing, so a
+returning player has no row anywhere. The score half of that table took two attempts to be worth
+reading, and both failures are the same kind — see "the probe was wrong twice" below.
+
+### The decisions, and the shapes they were chosen against
+
+**Identity: a 128-bit capability, minted per connection, carried on every seat assignment.**
+`ReconnectRegistry.mint` is `randomBytes(16)` and nothing else — not a counter, not the
+`playerId`, not a hash of a name and a tick, because each of those is guessable by somebody who
+has watched a few connections. Three properties carry the whole of its security and each is a
+line of code rather than a rule to remember:
+
+1. **It cannot be guessed.** 128 bits of CSPRNG output, looked up by `Map.get` on the hex form —
+   which is also what keeps the comparison free of a timing side channel without a constant-time
+   routine somebody would forget to use.
+2. **A live session's token opens nothing.** A reservation is created in `onLeave` and nowhere
+   else, so while a player is connected there is no entry to match. A stolen token cannot evict
+   somebody who is still playing, and that is a property of *when entries exist* rather than a
+   check anybody has to write.
+3. **It is good once.** `claim` deletes what it returns and the returning connection mints its
+   own, so a token that has been redeemed — or observed and replayed later — matches nothing.
+
+Never logged; log lines name the `playerId`, which is meaningless outside the process.
+
+**Held for 30 s** (`RECONNECT_GRACE_MS`, in `shared/net/Protocol.ts` beside `CLIENT_TIMEOUT_MS`
+because both ends reason about it — the server enforces it and the client is what tells the
+player). Sized against what it is for: a page reload is two to five seconds and a wifi blip five
+to twenty. A laptop lid is minutes and is deliberately not covered, because the cost of a longer
+window is a seat reserved for somebody who has genuinely gone — a worse outcome for the eight
+people still playing than a lost seat is for the one who left. It is longer than
+`CLIENT_TIMEOUT_MS` on purpose: the grace starts when the server *notices*, and for an unclean
+drop that is up to ten seconds after the fact.
+
+**Only a lost connection is held, and only a seat in a `RUNNING` live match.** Both halves are
+load-bearing:
+
+- A `Bye` is the player saying they are done. `LeaveCause` carries that to `onLeave` the same way
+  `UnseatCause` carries a departure to `unseat`, and for the same reason — *only the caller can
+  tell the two apart*. Without it, quitting to the menu and pressing Play again inside thirty
+  seconds would put you back in the match you had just left. The client states the same rule from
+  its own side: `teardownWorld` drops the token unless a reconnect is the reason it is running.
+- An **arena** seat is worth nothing to hold. Since F7 the arena records no score, holds no
+  objective state and hands every arrival an instant seat, so a reservation for one would protect
+  nothing. That is also what bounds the registry: it can hold at most as many entries as the live
+  match has had players, and `forgetMatch` releases them at teardown.
+
+**The body during the gap: the bot stays, and the return takes the seat rather than the body.**
+Freezing or killing it would reintroduce exactly what `LiveMatch.releaseEntity` exists to prevent
+— in Search & Destroy `anyAlive` decides the round, so the last human on a side dropping out ends
+it for everybody, scored as an elimination nobody achieved. So the departure stays a real
+departure to the simulation, and the return is a seat granted on the team they left, which
+`LiveMatch.seat` already answers by taking a bot off that team (§6.7, §8.27). **One out, one in,
+roster unchanged, with no "was this a reconnect" branch anywhere** — the existing rule about every
+seat already says what F8 asks for about this one. Measured at 3H+7B=10 throughout every run.
+
+The **team** is reserved as well as the entity id, and that is not symmetry:
+`ServerMatch.addPlayer` balances arrivals onto the smaller side, so a returning player who was
+merely re-seated could come back on the other one. In S&D that is a spawn inside the enemy half.
+
+**The entity id is safe to hold, by construction.** `nextPlayerId` only ever increments and is
+never decremented on removal, so an id handed out once is never handed out again inside that
+instance. A held id cannot collide with a later joiner however long it is held.
+
+**Score and progression: preserved, and preserving it costs nothing.** `ScoreSystem.register`
+returns the existing row for an id it already holds, and the row survives `removePlayer` on
+purpose — *"a leaver's kills already counted toward their team's score"*. So reclaiming the id
+reclaims the row by construction rather than by copying anything, and the same line removes the
+duplicate-row defect above.
+
+**The killstreak wallet is *not* preserved, and that is the decision rather than an omission.**
+`removePlayer` runs `StreakSystem.onOwnerRemoved`, which is `onDeath` plus `ledger.forget`. The
+return is a **new life**: fresh spawn, zero balance, empty used-set. That is P4's model taken
+literally — the balance belongs to a life, and the life they left was played out by the bot that
+stood in for them. The alternative is a wallet surviving something that is not a death, which is
+precisely what P5's `dirtyLifeStarts === roundCarryOvers` invariant exists to catch; it reads 0/0
+in every run here.
+
+**Failure: told, and seated anyway.** Grace expired, instance destroyed, match full or token
+unknown — the player is seated as a new player and gets a `Notice` on the channel that already
+reaches the HUD. Expiry is evaluated **at claim time** rather than by a sweeping timer, and that
+is what makes *"your seat was held and ran out"* distinguishable from *"I have never seen this
+token"*. They deserve different answers: the first is the failure F8 asks to be told about, the
+second is an ordinary join where nothing was lost and there is nothing to say.
+
+### The full resync was already there, and that is worth saying rather than assuming
+
+The brief asks for *"a full resync on return — snapshot, mode state, the balance from P4, the
+equipment from P5, the score"*. None of it is new code. `MatchInstance.seat` builds a fresh
+`SnapshotEncoder` and zeroes both ack fields, so the next snapshot is a **full** one; the
+objective, tag, bomb, streak and projectile channels are sent to every seat on every snapshot
+tick; and `NetClient.onWelcome` resets prediction, reseeds the clock and clears interpolation. The
+resync is a property of being seated, and the honest way to report that is to measure it rather
+than to claim it — hence the resync times and the post-return divergence numbers below.
+
+One thing there **was** wrong: `onWelcome`'s §4.18 discard ran only when the state was already
+`'joined'`, on the reasoning that a fresh connection has nothing to clear. That is true of a fresh
+*object* and false of a fresh *connection* — a reconnect re-dials on a `NetClient` that has been
+through a whole match and arrives from `'disconnected'`. It is unconditional now. Every line of it
+is provably a no-op on a genuinely fresh client (`remotes` empty, both snapshot ids 0, `localAlive`
+true, `respawned` false, `ownSpawnSerial` -1 — each already its initialiser), so the condition
+bought nothing and cost exactly the case it did not cover. The removals list cannot rescue it
+either: a new encoder has no baseline and sends a **full** snapshot, which names who is present
+and never who has gone.
+
+### A pre-existing race under the new rule: a `Bye` that was thrown away
+
+`LeaveCause` only means something if the `Bye` is read, and often it was not. `WsLink`'s `close`
+handler cleared the receive queue, and `Session.receive` returned early on `closed` — which is
+true when *either* the session or the **link** has gone. `ws` emits `message` and then `close` in
+the same event-loop batch when a client sends a `Bye` and closes immediately after, which is what
+a clean disconnect *is*, so unless the server's tick happened to land between the two the frame
+was discarded and the departure was read as a pulled cable.
+
+It has cost a ten-second timeout on a seat that could have been freed at once since M10, which is
+invisible. Round 4 made it cost something visible. The fix is that the queue survives the socket
+and `receive` gates on the *session's* state, so a `Bye` decoded in the same tick closes the
+session as `'left'` before `checkTimeout` can close it as `'lost'`.
+
+**Watched red, and it took four runs to catch it**, because it is a race rather than a rule:
+
+| | Clean departures read as `client left` |
+|---|---|
+| Red control (both lines restored), 3 runs | **6 of 9** — one whole run reported 3 of 3 as `connection lost` |
+| Green, 4 runs | **12 of 12** |
+
+### Measured
+
+Every number came out of a run in this session. **Protocol v11** — the seat body carries the token
+out and `Hello` carries a claim back, both as trailing optional fields with an explicit presence
+byte rather than "read if bytes remain", because a length inferred from what is left in a frame is
+a length an attacker chooses.
+
+**`npm run skirmish -- --drop-return 3 --drop-hold 3000`** — three clients, a real server, real
+wire, shipped timings, one drop/return cycle each, held inside the grace.
+
+| Probe | Red (before) | Green |
+|---|---|---|
+| Kept the seat | **0 of 3** | **3 of 3** — entity 1/2/3, same instance, same side |
+| Kept the score | **0 of 3** (no row existed) | **3 of 3** — `e1 0k/1d`, `e2 0k/1d`, `e3 0k/3d`, unchanged across the gap |
+| Resync, re-dial to first synchronised frame | 48 / 62 / 82 ms | **50 / 45 / 65 ms** |
+| Divergence after a return | 0 / 17 779 | **0 / 11 874** |
+| Registry: reserved / claimed / still held | — | **3 / 3 / 0** |
+| The live match | **abandoned** | survived; roster 3H+7B=10 throughout |
+| The run | **FLOW CHECK FAILED** twice | **PASSED** |
+
+Both divergence figures are green, and the red one is green for a reason worth stating: a client
+that came back as a *stranger* has nothing stale to disagree about. It is the return-to-the-same-
+seat case that §4.18's discard list is actually about, which is why the samples are counted
+separately from the run total.
+
+**`npm run skirmish -- --drop-return 9 --drop-hold 1200`** — nine cycles, three per seat,
+round-robin, so a seat that only survives when it is the *first* to drop cannot pass.
+
+| | |
+|---|---|
+| Cycles / kept the seat / kept the score | **9 / 9 / 9** |
+| Resync per cycle, ms | 76, 58, 82, 66, 94, 59, 34, 77, 75 |
+| Divergence after return | **0 / 14 722** |
+| Registry: reserved / claimed / expired / unknown / still held | **9 / 9 / 0 / 0 / 0** |
+| Live roster | 3H + 7B = 10 |
+| The run | **FLOW CHECK PASSED** |
+
+**`npm run skirmish -- --drop-return 2 --drop-hold 35000`** — the failure branch, held five
+seconds past the grace on purpose. The assertion **inverts** here, the same way a `--fault` run's
+does: judged by the clean-run gate it would report a correct refusal as a failure.
+
+| | |
+|---|---|
+| Got the seat back after the grace expired | **0 of 2** (must be 0) |
+| Landed in the **running match** rather than the arena | **2 of 2** — this is join-in-progress |
+| Were told | **2 of 2** — *"Your seat was given away — welcome back."* |
+| Registry: reserved / claimed / expired / still held | **2 / 0 / 2 / 0** |
+| The run | **FLOW CHECK PASSED** |
+
+That run is where join-in-progress is measured, and the pairing is deliberate: *seat not kept* and
+*joined the running match anyway* are two different questions, and before this session the answer
+to the second was no either way.
+
+**The rest of the gate.**
+
+| Probe | Result |
+|---|---|
+| `npm run harness`, 5 matches, seeds 1-5 | Scores **75-59, 75-66, 62-75, 75-66, 60-75** — byte-identical to P5/P9/P6 on the same seeds. Nothing here touches a bot-only match, so the regression control has to be exact and is |
+| `npm run skirmish`, standing, no flags | **FLOW CHECK PASSED** — divergence 0/7369 per client, spectator 0 self / 0 enemy / 0 dead over 5599 picks, quick loadout 0 while alive over 9006 ticks, Tab 2689 of 5426 dead ticks, per-life stock 0 partial of 113, mispredictions into a live match **0** |
+| `npm run leak`, 100 cycles | subscriptions **29 to 29 (+0)**, heap 12.89 to 13.58 MiB (+0.69). **LEAK CHECK PASSED**. The baseline is P6's 29 unchanged: the registry is a `Map` on `Server` and subscribes to nothing |
+| `npm run netharness` at v11 | 2 clients, 30 s, **1800 ticks each, 0 snapshots lost, both still `joined`**, p99 0.43 m — the handshake accepts the bumped version at both ends, which is the half of a protocol bump that can silently reject everybody |
+| `npm run check` and `npm run build` | boundaries (295 files), the cosmetic audit (19 snapshot fields) and the unlock audit all pass, and all three typecheck targets |
+
+### One number moved, it was isolated, and it is **not** resolved
+
+A standing run on this tree reported a misprediction p99 of **2.54 / 3.81 / 2.54 m** against a p50
+of 0.082 / 0.123 — a fat tail with an unmoved centre. Isolated the way P1's stray misprediction
+was, by stashing rather than by rebaselining, and this is every sample taken:
+
+| Tree | p99 per client, one row per run |
+|---|---|
+| **This tree**, standing | 2.54 / 3.81 / 2.54 · 0.66 / 1.74 / 1.31 · 0.66 / 1.23 / 1.64 · 0.82 / 1.22 / 0.82 |
+| **This tree**, `--drop-return` | 1.31 / 1.85 / 1.23 · 0.66 / 0.31 / 2.36 · 2.30 / 3.45 / 2.30 |
+| **Clean tree**, standing | 0.82 / 1.35 / 0.90 · 0.90 / 1.46 / 0.74 · 0.80 / 1.23 / 0.82 |
+
+Nine clean-tree samples all sit between 0.74 and 1.46; this tree produced two runs above 2.3 and
+the rest inside that band. The two fat-tail runs were both **single** runs and two of the clean
+triples were concurrent pairs, so the last clean run was taken single to remove that confound —
+and it came back at 0.80 / 1.23 / 0.82.
+
+**What is not in doubt:** the p50 is identical on both trees, `spawn window` is 0 in every run on
+both, and §8.9's assertion — mispredictions in the 60 ticks after migrating into a live match — is
+**0** in every run on both. The number that moved is the top one per cent of ordinary in-match
+corrections, which on Foundry is a lift, a ledge or a spawn.
+
+**And there is no mechanism.** The only change this session makes to a prediction path is the
+discard in `NetClient.onWelcome` becoming unconditional, and a standing run takes exactly two
+paths through it: a first join, where every field it writes already holds that value, and a
+migration, where `rejoin` was already true and the old code ran the identical block. It is inert
+in both. Nothing else this session touches runs between snapshots at all.
+
+So: **unattributed rather than dismissed.** Two runs in six against zero in nine is not a
+distribution anybody should conclude from, and a mechanism-free difference in a wall-clock-paced
+harness is exactly what PLAN already documents moving ten per cent between runs of one tree — but
+saying "noise" on this evidence would be the second half of a sentence the first half does not
+support. It is on the next session's list, and the cheap way to settle it is a seeded run rather
+than more samples of an unseeded one.
+
+### The probe was wrong twice before it was right, and a third time after
+
+Worth recording, because all three would have shipped as false greens and each is a different
+species of the same mistake — a probe that cannot fail for the reason it claims.
+
+1. **The drop waited six seconds after the match started.** That lands inside the **ten-second
+   pre-match freeze**, where the movement axes are stripped and nobody has fired. Every cycle
+   compared `0k/0d/0pt/0sh` against a missing row and declared the score lost: the right answer
+   for the wrong reason, and one that would have gone green the day the row was reclaimed without
+   ever having proved anything about a score.
+2. **So it waited for `shotsFired > 0` instead.** This harness fields `strafe` and `runner`, and
+   **neither pulls a trigger** — every shot in a flow run is fired by a bot. The gate never opened
+   and no cycle ever ran, which the harness at least reported as *"no drop/return cycle
+   completed"* rather than passing. It asks whether *any* counter on the row has moved now, rather
+   than naming the one this harness happens to move; here that is `deaths`, and a death is exactly
+   as much a part of the record a reconnect must preserve as a kill is.
+3. **`seatAfterReturn` was a latch, and the probe waited on it.** Fine for one cycle and wrong for
+   nine: left over from the previous cycle it is already non-null, so cycle two closed on the
+   first frame it was looked at — before the socket had been re-opened — and reported cycle one's
+   seat and cycle one's resync again. A nine-cycle run produced three genuine results and six
+   copies of them, all green. Found by reading a report whose resync times repeated in threes.
+   `dropForReconnect` clears it now.
+
+The generalisation, since it is three for three: **a latch is the right shape for something that
+happens once and the wrong shape for something that happens N times**, and a gate on "has this
+seat earned anything" beats a gate on a clock every time, because the clock does not know what the
+match was doing.
+
+### What was not verified
+
+**Every claim about the browser**, which is the whole client half of this session.
+`HeadlessClient` drives `NetClient` and `Prediction` and builds no `ClientMatch`, no `Game` and no
+DOM, and the preview pane never fires `requestAnimationFrame`. What the harness proves is the
+*server's* answer — that a presented token gives the seat back, that the row survives, that the
+returning client does not diverge — and every one of those is a rule rather than a picture.
+
+Specifically unverified, each reasoned from the code:
+
+- **That `Game.tryReconnect` fires at all.** The browser's disconnect path is `net.state ===
+  'disconnected'` inside `simulate`, which no headless run reaches because `HeadlessClient` has no
+  screen and no `Game`. The harness re-dials by calling `NetClient.connect` directly, which is the
+  same code the browser reaches *through* `handshake` — but the decision to re-dial is
+  browser-only.
+- **That the world rebuilt from the returning `Welcome` is the right world.** A return after an
+  expired grace can land on a different map from the one being torn down, and that is the case the
+  M10 ordering fix exists for. It reuses `launchMatch` precisely so there is no second copy of that
+  ordering, but reuse is an argument, not a run.
+- **The `RECONNECTING…` screen, and the notices.** Both go through surfaces the harness cannot
+  see.
+- **A page reload.** The token is held in memory only, so a reload loses it and the player returns
+  as somebody new. `sessionStorage` would cover it and would leave a live seat capability where
+  any script on the origin can read it; that is a trade for the human to make rather than a
+  default, and it is on the list below.
+
+### Needs a browser
+
+- **F8, the report itself.** Join a networked match, play until you have a kill or two, then kill
+  the connection (dev tools' offline toggle, or pull the wifi). The screen must say
+  `RECONNECTING…` rather than dropping you to the menu, and within a couple of seconds you must be
+  **back in the same match**, on the same side, with your kills still on the board. Check the
+  scoreboard specifically: there must be exactly one row with your name on it.
+- **The grace expiring.** Same thing, but stay offline for more than thirty seconds. You must be
+  told *"Your seat was given away — welcome back."* and land **in the running match** as a new
+  player — not in the arena. This is the half that is easiest to get wrong silently.
+- **Join-in-progress from cold.** With a match already running, press Play Multiplayer from a
+  fresh tab. You must land in the match, not the arena, and the loading screen must build the
+  *match's* map. Then check the frame cost of that first build: a direct join has no background
+  build behind it and is the one path that builds a map on the critical path.
+- **Quitting is not a disconnect.** Finish or leave a match with "Exit to main menu", then press
+  Play Multiplayer again inside thirty seconds. You must **not** be put back in the match you just
+  left; you should get an ordinary seat.
+- **The bot handover, seen rather than counted.** Drop out and watch what the other players see: a
+  bot takes your place and your body does not simply vanish or freeze. On your return the roster
+  must still read ten.
+- **Search & Destroy, which is the mode where the team matters.** Drop as an attacker mid-round
+  and come back. You must return on the attacking side, and — because §6.7 blocks a mid-round join
+  in a one-life mode — with no body until the next round starts. Confirm you are not spawned into
+  the defenders' half.
+- **The pause screen and the summary, unchanged.** Both were fixed in B4 and both now sit behind a
+  reconnect that did not exist then; confirm a fifteen-second pause and a full post-match hold
+  still keep the connection rather than triggering a reconnect.
+
+Unchanged from the earlier lists: the arena-return residual of 1-3 sub-25 cm mispredictions, and
+everything under "Open, and all of one kind".
+
+### Found while here
+
+- **A returning player used to appear twice on the end-of-match board**, once as themselves with
+  nothing and once as a bot holding their kills. Nobody reported it because nobody could get back
+  into a match to see it. It is fixed by the same line that gives the seat back — `register`
+  returns the existing row — but the *mechanism* is worth writing down on its own:
+  `LiveMatch.buildSummary` derives `isBot` from "no session sits on this entity", which is the
+  right derivation and silently mislabels anybody whose session went away. Any future feature that
+  can leave a row seatless inherits it.
+- **`NetClient.reconnectToken` is the second piece of client state that must outlive the world**,
+  after round 4's `debugRequest`. Both are on `Game` for the same reason and by the same argument
+  — the surface is thrown away and the fact is not — and it is now a pattern rather than a
+  one-off. The next one should go beside them.
+- **The reconnect grace and the summary hold do not interact today only because a `Bye` is sent
+  on the way out of the summary.** A player who drops *during* the post-match hold has their seat
+  reserved in a match that is about to be destroyed, and `forgetMatch` releases it at teardown —
+  correct, and it means their reconnect lands in the arena with *"That match has finished"*.
+  Worth knowing before anybody lengthens `SUMMARY_HOLD_SECONDS` or shortens `RECONNECT_GRACE_MS`.
+- **Nothing in the project measures a reconnect under adverse conditions.** Every number above is
+  loopback with `--net none`. `--net bad` layers 100 ms +/- 30 ms and 2% loss and would exercise
+  the one thing this design leans on hardest — that the returning client's first full snapshot
+  arrives — but HARD RULE 9 puts that class of claim against a deployed server rather than
+  loopback, so it belongs with the §7 battery rather than here.

@@ -49,10 +49,20 @@ export class NodeLink implements INetLink {
     this.outbound = new NetSim(conditions, seed ^ 0x9e37);
   }
 
-  /** Open the socket. Resolves when connected, rejects on failure. */
+  /**
+   * Open the socket. Resolves when connected, rejects on failure.
+   *
+   * Callable a second time on a link that has closed (playtest round 4, F8): a reconnect is a
+   * new socket to the same address for the same client, and the byte counters are deliberately
+   * *not* reset, so a run that drops and returns still reports the traffic it actually used.
+   * The close reason is, because a stale one would describe the previous socket's death for the
+   * whole life of the new one.
+   */
   open(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.state_ = 'connecting';
+      this.closeReason = '';
+      this.queue.length = 0;
       const socket = new WebSocket(this.url, { maxPayload: 1 << 20 });
       socket.binaryType = 'nodebuffer';
       this.socket = socket;
@@ -67,6 +77,7 @@ export class NodeLink implements INetLink {
       socket.once('open', () => {
         socket.off('error', onError);
         socket.on('error', (err: Error) => {
+          if (!this.current(socket)) return;
           this.state_ = 'closed';
           this.closeReason = err.message;
         });
@@ -76,6 +87,7 @@ export class NodeLink implements INetLink {
       });
 
       socket.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
+        if (!this.current(socket)) return;
         const bytes = toBytes(data);
         if (bytes === null) return;
         this.bytesIn += bytes.length;
@@ -87,6 +99,7 @@ export class NodeLink implements INetLink {
       });
 
       socket.on('close', (_code: number, reason: Buffer) => {
+        if (!this.current(socket)) return;
         this.state_ = 'closed';
         if (this.closeReason === '') this.closeReason = reason.toString() || 'closed';
       });
@@ -147,6 +160,19 @@ export class NodeLink implements INetLink {
     } catch {
       // Already gone.
     }
+  }
+
+  /**
+   * Whether an event belongs to the socket this link is currently using (round 4, F8).
+   *
+   * `terminate()` returns before `ws` has emitted the socket's `close`, so on a reconnect the
+   * previous socket's close arrives *after* the new one has opened — and without this it would
+   * put a freshly connected link straight back to `'closed'` with the old reason on it. The
+   * same argument covers a late `message` from a socket whose bytes belong to a session that is
+   * over. One identity test rather than a flag per handler.
+   */
+  private current(socket: WebSocket): boolean {
+    return this.socket === socket;
   }
 
   private write(bytes: Uint8Array): void {

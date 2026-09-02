@@ -184,6 +184,8 @@ export interface NetworkedMatchOptions {
   readonly skirmish?: SkirmishSink;
   /** M11: the class to send with the `Hello` (Tier 1 #20). */
   readonly loadout?: NetLoadout | null;
+  /** The reconnect capability the handshake was answered with (round 4, F8). */
+  readonly reconnectToken?: Uint8Array | null;
   /**
    * M11 (§6.5): a map this client already built in the background, adopted instead of
    * building a new one.
@@ -291,6 +293,7 @@ export class MatchWorld {
             onNewMatch: server.onNewMatch,
             skirmish: server.skirmish,
             loadout: server.loadout,
+            reconnectToken: server.reconnectToken,
             // Both of these are filled in properly the moment the match exists — see below.
             // They are indirected through `this.match` rather than captured, because the
             // match cannot exist before the session it is being handed to.

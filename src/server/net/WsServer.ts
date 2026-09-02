@@ -145,9 +145,26 @@ export class WsLink implements INetLink {
       this.queue.push(bytes.slice());
     });
 
+    /**
+     * The socket is gone; what it already delivered is not (playtest round 4, F8).
+     *
+     * This used to clear the queue, and that threw away the one frame it most mattered to
+     * keep. `ws` emits `message` and then `close` in the same event-loop batch when a client
+     * sends a `Bye` and closes immediately after — which is exactly what a clean disconnect
+     * *is* — so unless the server's tick happened to land between the two, the `Bye` was
+     * discarded and the departure was indistinguishable from a pulled cable. The whole point of
+     * `MsgC.Bye` is that it says which one it was.
+     *
+     * It cost a ten-second timeout on a seat that could have been freed at once, which is
+     * invisible; round 4 made it cost something visible, because `LeaveCause` decides whether
+     * the seat is *held* for a reconnect, and a quit read as a loss holds a seat the player has
+     * said they do not want. `Session.receive` drains a closed link once, which is what makes
+     * keeping these frames worth anything.
+     *
+     * Outbound is still cleared: those frames have nowhere to go.
+     */
     socket.on('close', () => {
       this.state_ = 'closed';
-      this.queue.length = 0;
       this.outbound.clear();
     });
 

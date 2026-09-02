@@ -99,6 +99,20 @@ const PING_INTERVAL_MS = 250;
 export type SessionState = 'handshaking' | 'live' | 'closed';
 
 /**
+ * Why a connection ended (M11 Gate B, playtest round 4, F8).
+ *
+ * The same shape, and for the same reason, as `UnseatCause`: only the caller can tell the two
+ * apart, and the consequence differs. A connection that was **lost** may be coming back and its
+ * seat is held for the grace; one that **left** said so, with a `Bye` or by being refused, and
+ * holding a seat against the player's own statement would put them back in the match they had
+ * just quit if they pressed Play again inside thirty seconds.
+ *
+ * `'lost'` is the default on `close`, deliberately: the timeouts are the paths that reach it
+ * without a caller thinking about it, and they are exactly the ones that mean "may be back".
+ */
+export type LeaveCause = 'left' | 'lost';
+
+/**
  * What `onJoin` returns (M11, handover Tier 2 §D).
  *
  * The `afterIdentity` half is the ordering contract. See `SessionEvents.onJoin`.
@@ -126,9 +140,14 @@ export interface SessionEvents {
    *
    * Anything this handler wants to *send* as a consequence belongs in `afterIdentity`, not in
    * the handler body — see `JoinResult.afterIdentity`.
+   *
+   * `claim` is what this connection says about a seat it held before (round 4, F8), already
+   * length-checked by the decoder and **not** otherwise trusted: it is a lookup key, and the
+   * only thing the handler may conclude from it is whichever reservation it happens to match.
+   * Null on an ordinary first join, and null is not an error.
    */
-  readonly onJoin: (session: Session, name: string) => JoinResult | null;
-  readonly onLeave: (session: Session, reason: string) => void;
+  readonly onJoin: (session: Session, name: string, claim: Uint8Array | null) => JoinResult | null;
+  readonly onLeave: (session: Session, reason: string, cause: LeaveCause) => void;
   /** The player's class, structurally decoded and not yet validated (Tier 1 #20). */
   readonly onLoadout: (session: Session, loadout: NetLoadout) => void;
   /** A vote for `option` in `phase`. Accepted, ignored or rejected entirely by the cycle. */
@@ -180,6 +199,24 @@ export class Session {
   readonly playerId: PlayerId;
 
   displayName = '';
+
+  /**
+   * The capability this connection presents to get its seat back (round 4, F8).
+   *
+   * Minted once, when the seat is granted, and sent on **every** seat assignment by
+   * `sendSeat` — which is the only writer of the frame and therefore the only place it can be
+   * forgotten. A caller-supplied token would be a field four call sites have to remember, and
+   * the one that forgot would produce a client that silently cannot reconnect after a
+   * migration.
+   *
+   * Not an identity and not a name: `playerId` is the identity, and it is deliberately never
+   * sent to anybody. This is a bearer capability with a short life — see `ReconnectRegistry`
+   * for who may redeem it and `RECONNECT_TOKEN_BYTES` for why it is unguessable.
+   *
+   * **Never logged.** Log lines name the `playerId`, which is meaningless to anyone who does
+   * not already have the process's memory.
+   */
+  reconnectToken: Uint8Array | null = null;
 
   /**
    * The class this client last sent, already validated (Tier 1 #20).
@@ -248,7 +285,23 @@ export class Session {
    * defined point in the tick, and nothing can re-enter the simulation partway through it.
    */
   receive(): void {
-    if (this.closed) return;
+    /**
+     * `state`, not `closed` (playtest round 4, F8).
+     *
+     * The two differ in exactly one case and it is the one that matters: `closed` is true when
+     * *either* this session or its link has gone, so a link that died since the last tick
+     * returned here immediately and everything it had already delivered went unread. That
+     * silently ate the `Bye` on every clean disconnect where the socket closed inside the same
+     * event-loop batch — see the `close` handler in `WsServer`, which used to throw the frames
+     * away as well.
+     *
+     * Reading them is safe and is the honest thing to do: they arrived. Nothing here can
+     * produce a *send* on a dead link (`send` and `close` both check the link's own state), and
+     * the ordering is already right — `receive` runs before `checkTimeout` in the same tick, so
+     * a `Bye` decoded here closes the session as `'left'` before the link check can close it as
+     * `'lost'`.
+     */
+    if (this.state === 'closed') return;
     this.link.poll((bytes) => this.handleFrame(bytes));
   }
 
@@ -284,7 +337,7 @@ export class Session {
 
     const now = nowMs();
     if (this.state === 'handshaking' && now - this.openedMs > HANDSHAKE_TIMEOUT_MS) {
-      this.close('handshake timeout');
+      this.close('handshake timeout', 'left');
       return;
     }
     if (now - this.link.lastRecvMs > CLIENT_TIMEOUT_MS) {
@@ -298,14 +351,14 @@ export class Session {
     this.link.send(bytes);
   }
 
-  close(reason: string): void {
+  close(reason: string, cause: LeaveCause = 'lost'): void {
     if (this.state === 'closed') return;
     this.state = 'closed';
     if (this.link.state === 'open') {
       this.link.send(writeBye(this.out, true, reason));
       this.link.close(reason);
     }
-    this.events.onLeave(this, reason);
+    this.events.onLeave(this, reason, cause);
   }
 
   // -- internals -------------------------------------------------------------
@@ -316,7 +369,7 @@ export class Session {
 
     switch (msg.kind) {
       case 'hello':
-        this.handleHello(msg.version, msg.name, msg.loadout);
+        this.handleHello(msg.version, msg.name, msg.loadout, msg.reconnectToken);
         return;
       case 'commands':
         this.handleCommands(msg.count, msg.snapshotAck);
@@ -325,7 +378,8 @@ export class Session {
         this.handlePing(msg.id, msg.clientMs);
         return;
       case 'bye':
-        this.close('client left');
+        // A `Bye` is the player saying they are done. Nothing is held for them — see `LeaveCause`.
+        this.close('client left', 'left');
         return;
       case 'loadout':
         // Seated clients only. A class arriving before a seat has nowhere to be applied, and
@@ -372,7 +426,12 @@ export class Session {
     }
   }
 
-  private handleHello(version: number, name: string, loadout: NetLoadout | null): void {
+  private handleHello(
+    version: number,
+    name: string,
+    loadout: NetLoadout | null,
+    claim: Uint8Array | null,
+  ): void {
     if (this.state !== 'handshaking') {
       this.refuse(Reject.OutOfOrder, 'duplicate hello');
       return;
@@ -388,7 +447,7 @@ export class Session {
       this.link.send(writeReject(this.out, RejectCode.BadVersion));
       this.state = 'closed';
       this.link.close('version mismatch');
-      this.events.onLeave(this, 'version mismatch');
+      this.events.onLeave(this, 'version mismatch', 'left');
       return;
     }
 
@@ -409,12 +468,12 @@ export class Session {
      */
     this.loadout = sanitiseNetLoadout(loadout);
 
-    const joined = this.events.onJoin(this, this.displayName);
+    const joined = this.events.onJoin(this, this.displayName, claim);
     if (joined === null) {
       this.link.send(writeReject(this.out, RejectCode.ServerFull));
       this.state = 'closed';
       this.link.close('server full');
-      this.events.onLeave(this, 'server full');
+      this.events.onLeave(this, 'server full', 'left');
       return;
     }
 
@@ -508,7 +567,8 @@ export class Session {
   private refuse(reason: RejectReason, text: string): void {
     this.rejects.note(reason);
     log.warn(`dropping ${this.link.remoteAddress}: ${text}`);
-    this.close(text);
+    // We threw them out; the seat is not held for a connection the server refused.
+    this.close(text, 'left');
   }
 
   /**
@@ -519,7 +579,7 @@ export class Session {
    * The `migrated` flag on the payload picks the message id.
    */
   sendSeat(info: WelcomeInfo): void {
-    this.send(writeWelcome(this.out, info));
+    this.send(writeWelcome(this.out, info, this.reconnectToken));
   }
 
   /** A short line for the player. Allocation failed, migration failed, the arena was rebuilt. */

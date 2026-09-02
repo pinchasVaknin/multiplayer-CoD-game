@@ -253,6 +253,21 @@ export class NetClient {
   migrations = 0;
 
   /**
+   * What this client presents to get its seat back (M11 Gate B, playtest round 4, F8).
+   *
+   * Minted by the server, carried on every seat assignment, and **state that outlives the
+   * socket**: it is set from a `Welcome` or a `Migrate`, survives the disconnect that makes it
+   * useful, and is sent back by the next `connect()`. That is the whole reconnect on this side
+   * — there is no second flag saying "this is a reconnect", because a token is either
+   * recognised or it is not and only the server can say which.
+   *
+   * Null until the first seat assignment, and null for ever against a server that does not
+   * issue one. Never written anywhere durable by this class; where the browser keeps it across
+   * a page reload is `Game`'s decision and is documented there.
+   */
+  reconnectToken: Uint8Array | null = null;
+
+  /**
    * Set on every seat assignment, cleared by the first owner block that follows it.
    *
    * See the branch it guards in `onSnapshot`. Starts true because a fresh connection is in
@@ -260,6 +275,20 @@ export class NetClient {
    * the server thinks it is.
    */
   private awaitingFirstAuthoritativePose = true;
+
+  /**
+   * Seated, and told where we are (playtest round 4, F8).
+   *
+   * *"Joined"* is only half of it: between the seat assignment and the first owner block the
+   * client has an entity id and a controller sitting wherever the last world left it. That gap
+   * is what a reconnect has to wait out before it can claim to be back, and it is the honest
+   * definition of *"the first synchronised frame"* the reconnect probe measures against.
+   *
+   * A pure read of two fields rather than a third copy of the same fact.
+   */
+  get synchronised(): boolean {
+    return this.state === 'joined' && !this.awaitingFirstAuthoritativePose;
+  }
 
   readonly stats: NetClientStats = {
     rttMs: 0,
@@ -386,7 +415,16 @@ export class NetClient {
     this.prediction.reset();
   }
 
-  /** Begin the handshake. The link must already be open. */
+  /**
+   * Begin the handshake. The link must already be open.
+   *
+   * Called a second time on a link that has been re-opened, this **is** the reconnect (round 4,
+   * F8): the token from the last seat assignment goes out with the `Hello`, and the server
+   * either recognises it and gives the seat back or does not and seats a new player. There is
+   * deliberately no separate `reconnect()` here and no flag — a client that thinks it is
+   * reconnecting and a server that disagrees is exactly the split-brain this design avoids by
+   * letting one side hold the answer.
+   */
   connect(): void {
     if (this.state !== 'idle' && this.state !== 'disconnected') return;
     this.state = 'connecting';
@@ -396,7 +434,7 @@ export class NetClient {
     const name = this.deps.wantRewindDebug === true ? `${this.deps.displayName}#rw` : this.deps.displayName;
     // The class rides the handshake, so the seat is built with it rather than reconfigured
     // afterwards. See `writeHello` for the measured cost of the alternative.
-    this.deps.link.send(writeHello(this.writer, name, this.deps.loadout ?? null));
+    this.deps.link.send(writeHello(this.writer, name, this.deps.loadout ?? null, this.reconnectToken));
     this.lastPingMs = 0;
     this.rateWindowMs = nowMs();
   }
@@ -419,12 +457,12 @@ export class NetClient {
    * far into the past. It is corrected by the first pong regardless, but starting right means
    * the first commands sent are for ticks the server has not already simulated.
    */
-  adopt(welcome: WelcomeInfo, receivedAtMs: number): void {
+  adopt(welcome: WelcomeInfo, receivedAtMs: number, reconnectToken: Uint8Array | null): void {
     this.state = 'connecting';
     this.closeReason = '';
     this.lastPingMs = 0;
     this.rateWindowMs = nowMs();
-    this.onWelcome(welcome, receivedAtMs);
+    this.onWelcome(welcome, receivedAtMs, reconnectToken);
   }
 
   // -- M11: the skirmish messages ---------------------------------------------
@@ -550,13 +588,13 @@ export class NetClient {
 
     switch (msg.kind) {
       case 'welcome':
-        this.onWelcome(msg);
+        this.onWelcome(msg, nowMs(), msg.reconnectToken);
         return;
       case 'migrate':
         // Same handler, and that is the point: a migration and a join say the same thing
         // about this seat, so there is one path that resets prediction and interpolation
         // rather than two that must be kept in step. See `onWelcome`.
-        this.onWelcome(msg);
+        this.onWelcome(msg, nowMs(), msg.reconnectToken);
         this.deps.skirmish?.onMigrated?.(this.matchInfo());
         return;
       case 'voteState':
@@ -631,9 +669,22 @@ export class NetClient {
    * for the M10 rotation path. Sharing the path is what stops the two drifting: a migration
    * that skipped one of them produces corrections that read as netcode bugs and are not.
    */
-  private onWelcome(info: WelcomeInfo, receivedAtMs = nowMs()): void {
+  private onWelcome(
+    info: WelcomeInfo,
+    receivedAtMs: number,
+    reconnectToken: Uint8Array | null,
+  ): void {
     const { entityId, team, mapId, modeId, serverTick, serverMs } = info;
     const rejoin = this.state === 'joined';
+    /**
+     * The seat assignment is the only writer of the token (round 4, F8).
+     *
+     * Written unconditionally rather than only when one arrived, so this field always describes
+     * the seat this client currently holds. A token kept from a previous seat because the newest
+     * assignment happened not to carry one would be a client presenting a claim on a world it
+     * has already left — which the server would refuse, silently, at the worst possible moment.
+     */
+    this.reconnectToken = reconnectToken;
     this.entityId = entityId;
     this.team = team;
     this.mapId = mapId;
@@ -647,23 +698,30 @@ export class NetClient {
     this.awaitingFirstAuthoritativePose = true;
 
     /**
-     * A second `Welcome` means the server started a new match (M10, playtest round 2).
+     * Everything keyed to the previous seat goes, on **every** seat assignment (M10, playtest
+     * round 2; made unconditional at round 4 for F8).
      *
-     * Everything keyed to the old match has to go, and the entity table is the one that
-     * matters: ids are reassigned per match, so a stale interpolator would put a body from
-     * the previous map at coordinates that mean something different on this one. The owner
+     * Entity ids are reassigned per instance, so a stale interpolator would put a body from
+     * the previous world at coordinates that mean something different in this one. The owner
      * state and the prediction history go with it — they describe a player who no longer
      * exists.
+     *
+     * It used to run only when `state` was already `'joined'`, on the reasoning that a fresh
+     * connection has nothing to clear. True of a fresh *object* and false of a fresh
+     * *connection*: a reconnect re-dials on a `NetClient` that has been through a whole match,
+     * and arrives here from `'disconnected'` rather than from `'joined'`. Every line below is
+     * a no-op on a genuinely fresh client — an empty map, two zeroes and the field initialisers
+     * — so the condition bought nothing and cost exactly the case it did not cover. The
+     * removals list cannot rescue it either: a new encoder has no baseline and sends a *full*
+     * snapshot, which names who is present and never who has gone.
      */
-    if (rejoin) {
-      this.remotes.clear();
-      this.lastSnapshotId = 0;
-      this.ackSnapshot = 0;
-      this.localAlive = true;
-      this.respawned = false;
-      this.ownSpawnSerial = -1;
-      for (const cmd of this.pending) blankInto(cmd);
-    }
+    this.remotes.clear();
+    this.lastSnapshotId = 0;
+    this.ackSnapshot = 0;
+    this.localAlive = true;
+    this.respawned = false;
+    this.ownSpawnSerial = -1;
+    for (const cmd of this.pending) blankInto(cmd);
 
     /**
      * Seed the clock from the welcome, as a *guess* rather than as a sample.

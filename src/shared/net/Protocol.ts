@@ -17,6 +17,14 @@
 /**
  * Bump on any layout change to any message in this file.
  *
+ * v11 (M11 Gate B, playtest round 4): a **reconnect token** in both directions. The seat
+ * assignment carries one out, and `Hello` carries one back.
+ *
+ * F8 asks for a returning player to get their seat back, and the only thing a `Hello` used to
+ * carry was a name and a class — neither of which identifies anybody. A name is not an identity
+ * (two players may share one, and anybody may claim yours), so the server has to hand out
+ * something unguessable and recognise it on the way back in. See `RECONNECT_TOKEN_BYTES`.
+ *
  * v10 (M11 Gate B, playtest round 4): `MsgS.Streaks` carries a **price list** instead of an
  * inventory — each equipped streak's kind, what it costs this player after Hardline, and
  * whether they have already bought it this life — plus the kill **balance** in place of the
@@ -66,7 +74,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
@@ -275,6 +283,44 @@ export const CLIENT_TIMEOUT_MS = 10_000;
 
 /** How long a connection has to complete its handshake before it is dropped, ms. */
 export const HANDSHAKE_TIMEOUT_MS = 5_000;
+
+/**
+ * The reconnect token's length, bytes (M11 Gate B, playtest round 4, F8).
+ *
+ * **This is a capability, and the whole of its security is that it cannot be guessed.** Anyone
+ * holding one takes the seat it names, so 128 bits of CSPRNG output and nothing derived: not a
+ * counter, not a `playerId`, not a hash of a name and a tick — every one of those is guessable
+ * by somebody who can watch a few connections.
+ *
+ * It is looked up by exact match in a `Map` rather than compared byte by byte, which is what
+ * keeps the comparison free of a timing side channel without a constant-time routine nobody
+ * would remember to use.
+ *
+ * Sixteen bytes rather than thirty-two because of what it protects and for how long: one seat,
+ * in one match, for `RECONNECT_GRACE_MS`, on a server that mints a fresh one for every
+ * connection. It is not a password and it is never stored anywhere durable.
+ */
+export const RECONNECT_TOKEN_BYTES = 16;
+
+/**
+ * How long a seat is held for a player who has dropped, ms (F8).
+ *
+ * Shared rather than server-only because both sides reason about it: the server decides whether
+ * a returning token is still good, and the client is the thing that tells the player how long
+ * they have. A client quoting a different number from the one being enforced would be a
+ * read-out that lies in exactly the situation it exists for — the same argument `MAX_REWIND_MS`
+ * is here for.
+ *
+ * **Thirty seconds**, sized against what it is actually for. A page reload is two to five
+ * seconds and a wifi blip is five to twenty; a laptop lid is minutes and is not a case this
+ * covers. The cost of a longer window is a seat reserved for somebody who has genuinely gone,
+ * with a bot playing it — which is a worse outcome for the eight people still in the match than
+ * a lost seat is for the one who left.
+ *
+ * Deliberately longer than `CLIENT_TIMEOUT_MS`: the grace starts when the server *notices* the
+ * drop, and for an unclean disconnect that is up to ten seconds after it happened.
+ */
+export const RECONNECT_GRACE_MS = 30_000;
 
 /**
  * How far from the server's current tick a command may claim to be, in ticks.

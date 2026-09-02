@@ -42,7 +42,7 @@ import { STREAK_DEFS, type StreakId } from '../../shared/streaks/StreakDefs';
 import { Uav } from '../../shared/streaks/Uav';
 import { EFlag, makeEntitySnapshot, weaponIndexOf, type EntitySnapshot } from '../../shared/net/Snapshot';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
-import type { ServerMatch } from '../Match';
+import type { ReclaimedSeat, ServerMatch } from '../Match';
 import type { NetPlayer } from '../NetPlayer';
 import type { Session } from '../net/Session';
 import { SnapshotEncoder } from '../net/SnapshotEncoder';
@@ -210,9 +210,14 @@ export abstract class MatchInstance {
    * `controller.speedScale` from the resolved perks. There is no window in which the player
    * exists and the perks have not been applied — which is precisely the window Tier 1 #20
    * lived in.
+   *
+   * `reclaim` is a returning player taking back the id and the side they left with (round 4,
+   * F8). It changes nothing else about seating — the encoder is fresh, the acks are reset and
+   * the next snapshot is a full one, all of which a reconnect needs anyway and all of which a
+   * first join already got.
    */
-  seat(session: Session, loadout: LoadoutSlot | null): NetPlayer | null {
-    const player = this.match.addPlayer(session.displayName, loadout);
+  seat(session: Session, loadout: LoadoutSlot | null, reclaim?: ReclaimedSeat | null): NetPlayer | null {
+    const player = this.match.addPlayer(session.displayName, loadout, reclaim);
     if (player === null) return null;
     this.seats.set(session.playerId, { session, player });
     this.encoders.set(player.entityId, new SnapshotEncoder());

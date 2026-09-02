@@ -2,13 +2,14 @@ import { installClock, nowMs } from '../shared/core/Clock';
 import { logger } from '../shared/core/Log';
 import { EventBus } from '../shared/core/EventBus';
 import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } from '../shared/net/NetSim';
-import { CLIENT_TIMEOUT_MS } from '../shared/net/Protocol';
+import { CLIENT_TIMEOUT_MS, RECONNECT_GRACE_MS } from '../shared/net/Protocol';
 import { votePhaseName, WARMUP_MATCH_ID, type NetLoadout } from '../shared/net/Skirmish';
 import type { StreakId } from '../shared/streaks/StreakDefs';
 import type { StreakEconomyReport } from '../shared/streaks/StreakLedger';
 import type { LifeStockReport } from '../shared/equipment/LifeStockAudit';
 import { loadConfig, usesShortenedTimings, type ServerConfig } from './Config';
-import { HeadlessClient, type HeadlessClientReport } from './debug/HeadlessClient';
+import { HeadlessClient, type HeadlessClientReport, type SeatSnapshot } from './debug/HeadlessClient';
+import type { MatchInstance } from './instance/MatchInstance';
 import { installServerLogging, metric } from './log';
 import { nodeClock } from './NodeClock';
 import { Server } from './Server';
@@ -34,6 +35,8 @@ const log = logger('skirmish');
  *   npm run skirmish -- --net bad          # 100ms +/-30ms, 2% loss on every link
  *   npm run skirmish -- --fault latency    # FaultyMatchAllocator: latency|failure|capacity
  *   npm run skirmish -- --summary-gate     # RED CONTROL: go silent for the post-match hold
+ *   npm run skirmish -- --drop-return 3    # 3 drop/return cycles mid-match (F8)
+ *   npm run skirmish -- --drop-return 1 --drop-hold 40000   # ...past the grace, on purpose
  * ```
  *
  * ## Loopback proves the flow, not the netcode
@@ -110,6 +113,27 @@ interface HarnessOptions {
    * milestone was green about a bug that disconnected every player of every match.
    */
   readonly summaryGate: boolean;
+  /**
+   * Drop a client mid-match and dial it back in, N times (playtest round 4, F8).
+   *
+   * The instrument the reconnect session is measured with, and the only place in the project
+   * where a return from a disconnect is exercised at all. One client at a time, round-robin, so
+   * a run of three cycles asks the question of three different seats rather than three times of
+   * one — a seat that only ever survives when it is the *first* to drop would pass otherwise.
+   *
+   * The drop is **unclean**: `NodeLink.terminate`, no `Bye`. A clean departure frees the seat
+   * on purpose and is not what F8 is about.
+   */
+  readonly dropReturn: number;
+  /**
+   * How long a dropped client stays away before dialling back in, ms.
+   *
+   * The one knob that decides which half of the feature a run tests. Below the grace it is the
+   * return path; above it, it is the expiry path — the player is told and comes back as
+   * somebody new. Both are requirements, and the difference between them is this number, so it
+   * is a flag rather than a constant.
+   */
+  readonly dropHoldMs: number;
 }
 
 /**
@@ -234,6 +258,141 @@ async function main(): Promise<number> {
  * the whole milestone; a claim measured on a single cycle measures nothing."* So the default is
  * more than one cycle and the report is per-cycle rather than a total.
  */
+/**
+ * Whether this seat has anything to lose yet (playtest round 4, F8).
+ *
+ * The drop waits for this rather than for a wall clock, and it took two attempts to get right —
+ * both worth recording, because both were probes that could not fail for the reason they
+ * claimed:
+ *
+ * 1. **Six seconds after the match started.** That lands inside the ten-second pre-match
+ *    freeze, so every cycle compared `0k/0d/0pt/0sh` against a missing row and declared the
+ *    score lost. Right answer, wrong reason, and it would have gone green the day the row was
+ *    reclaimed without ever having proved anything about a score.
+ * 2. **`shotsFired > 0`.** This harness fields `strafe` and `runner`, and **neither pulls a
+ *    trigger** — the flow run's shooting is done by the arena's and the match's bots. The gate
+ *    never opened and no cycle ever ran.
+ *
+ * So it asks whether *any* counter on the row has moved, rather than naming the one this
+ *  particular harness happens to move. Here that is `deaths`: these clients are shot at
+ * constantly and die every few tens of seconds, and a death is exactly as much a part of the
+ * record a reconnect must preserve as a kill is. A run in which no row ever moves completes no
+ * cycle and fails as "no drop/return cycle completed", which is the honest outcome rather than
+ * a silent pass.
+ */
+function hasSomethingToLose(score: SeatScore | null): boolean {
+  if (score === null) return false;
+  return score.kills > 0 || score.deaths > 0 || score.score > 0 || score.shotsFired > 0;
+}
+
+/** A seat's authoritative scoreboard row, read from the server at a named instant (F8). */
+interface SeatScore {
+  readonly entityId: number;
+  readonly kills: number;
+  readonly deaths: number;
+  readonly score: number;
+  /**
+   * The field that makes the comparison meaningful.
+   *
+   * Kills and score can honestly be zero for a headless client that had bad luck, and a probe
+   * whose only evidence is `0 === 0` proves nothing. Every client in a live match fires, so
+   * `shotsFired` is the counter that is reliably non-zero by the time the first drop happens.
+   */
+  readonly shotsFired: number;
+}
+
+/** One drop-and-return cycle, and what it found (playtest round 4, F8). */
+interface ReturnCycle {
+  readonly client: string;
+  readonly entityBefore: number;
+  readonly matchBefore: number;
+  readonly teamBefore: 'A' | 'B';
+  readonly entityAfter: number;
+  readonly matchAfter: number;
+  readonly teamAfter: 'A' | 'B';
+  readonly resyncMs: number;
+  readonly scoreBefore: SeatScore | null;
+  readonly scoreAfter: SeatScore | null;
+  /** Same instance, same entity, same side. The three together are "this is my seat". */
+  readonly keptSeat: boolean;
+  /** The row this seat came back to is the row it left with, and nothing in it went backwards. */
+  readonly keptScore: boolean;
+}
+
+/** What one named client was told. Keyed by name because a cycle records the name, not the report. */
+function clientNotices(
+  reports: readonly HeadlessClientReport[],
+  name: string,
+): readonly string[] {
+  return reports.find((r) => r.name === name)?.notices ?? [];
+}
+
+/** One seat's row in one line, or why there is not one. Always prints its denominators. */
+function describeSeatScore(s: SeatScore | null): string {
+  if (s === null) return 'no row';
+  return `e${s.entityId} ${s.kills}k/${s.deaths}d/${s.score}pt/${s.shotsFired}sh`;
+}
+
+function readSeatScore(instance: MatchInstance, entityId: number): SeatScore | null {
+  const row = instance.match.score.row(entityId);
+  if (row === undefined) return null;
+  return {
+    entityId,
+    kills: row.kills,
+    deaths: row.deaths,
+    score: row.score,
+    shotsFired: row.shotsFired,
+  };
+}
+
+/**
+ * Close one cycle: what the seat was, what came back, and whether they are the same seat.
+ *
+ * `keptScore` is deliberately *not* "the numbers are equal". The match kept running while this
+ * client was away and the bot standing in for them was scored on a different row, but a
+ * reclaimed row keeps accruing the moment they are back — so equality would fail on a timing
+ * accident. What cannot happen to a preserved row is for it to go **backwards**, and that is
+ * what is asserted, against the denominators printed beside it.
+ */
+function closeReturnCycle(
+  victim: HeadlessClient,
+  after: SeatSnapshot,
+  scoreBefore: SeatScore | null,
+  server: Server,
+): ReturnCycle {
+  const report = victim.report();
+  const before = report.seatBeforeDrop;
+  const instance = server.instances.find((i) => i.id === after.matchId) ?? null;
+  const scoreAfter = instance === null ? null : readSeatScore(instance, after.entityId);
+  const keptSeat =
+    before !== null &&
+    before.entityId === after.entityId &&
+    before.matchId === after.matchId &&
+    before.team === after.team;
+  const keptScore =
+    scoreBefore !== null &&
+    scoreAfter !== null &&
+    scoreAfter.entityId === scoreBefore.entityId &&
+    scoreAfter.kills >= scoreBefore.kills &&
+    scoreAfter.deaths >= scoreBefore.deaths &&
+    scoreAfter.score >= scoreBefore.score &&
+    scoreAfter.shotsFired >= scoreBefore.shotsFired;
+  return {
+    client: report.name,
+    entityBefore: before?.entityId ?? -1,
+    matchBefore: before?.matchId ?? -1,
+    teamBefore: before?.team ?? 'A',
+    entityAfter: after.entityId,
+    matchAfter: after.matchId,
+    teamAfter: after.team,
+    resyncMs: report.resyncMs,
+    scoreBefore,
+    scoreAfter,
+    keptSeat,
+    keptScore,
+  };
+}
+
 async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig): Promise<number> {
   const clients: HeadlessClient[] = [];
   const url = `ws://127.0.0.1:${opts.port}`;
@@ -315,6 +474,13 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let grants = 0;
   let gunnerDropped = false;
   let droppedAtMs = 0;
+  /** The drop-and-return probe's state machine and its results (round 4, F8). See `ReturnCycle`. */
+  const returnCycles: ReturnCycle[] = [];
+  let dropPhase: 'idle' | 'down' | 'dialling' = 'idle';
+  let dropVictim: HeadlessClient | null = null;
+  let dropAtMs = 0;
+  let dropScoreBefore: SeatScore | null = null;
+  let dropNext = 0;
   /** When `--abandon` emptied the live match, and whether the server then released it. */
   let abandonedAtMs = 0;
   let abandonedFreedMs = 0;
@@ -435,6 +601,74 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       }
     }
 
+    /**
+     * Drop one client, wait, and dial it back in (playtest round 4, F8).
+     *
+     * Four deliberate choices, each of which a simpler version gets wrong:
+     *
+     * - **It waits for the seat to have earned something** — see `hasSomethingToLose`. "Kept
+     *   the score" is only a question worth asking of a seat that had one, and the ten-second
+     *   pre-match freeze means a wall-clock delay lands before anybody has fired. The
+     *   `scoreBefore` row is printed either way, so a zero is visible as a zero.
+     * - **The score is read from the server**, not from the client. What survives a disconnect
+     *   is the server's row; the client's copy is a replica that goes away with the socket, so
+     *   asking it would be asking the wrong end of the question.
+     * - **One cycle at a time, round-robin.** Two clients down at once confounds the seat
+     *   question with the roster question, and a probe that always dropped the same client
+     *   could not tell a seat that survives from a seat that survives *first*.
+     * - **It lives outside the `running` block.** Only the drop needs a live match; the return
+     *   has to be able to land after the match has ended, or a cycle straddling the end is
+     *   silently never closed and the run reports one fewer than it ran.
+     */
+    if (opts.dropReturn > 0) {
+      const live = server.liveMatch;
+      const liveRunning = live !== null && live.running;
+      const started = returnCycles.length + (dropPhase === 'idle' ? 0 : 1);
+
+      if (dropPhase === 'idle') {
+        if (liveRunning && started < opts.dropReturn && live !== null) {
+          const victim = clients[dropNext % clients.length];
+          const score =
+            victim === undefined || victim.net.matchId !== live.id || victim.droppedOut
+              ? null
+              : readSeatScore(live, victim.net.entityId);
+          // Round-robin advances only on a drop, so a client that is not ready yet is asked
+          // again next frame rather than skipped for the rest of the run.
+          if (victim !== undefined && hasSomethingToLose(score)) {
+            dropNext++;
+            dropVictim = victim;
+            dropScoreBefore = score;
+            dropPhase = 'down';
+            dropAtMs = nowMs();
+            log.info(
+              `reconnect cycle ${started + 1}/${opts.dropReturn}: dropping ` +
+                `${victim.report().name} (entity ${victim.net.entityId}) for ${opts.dropHoldMs}ms.`,
+            );
+            victim.dropForReconnect();
+          }
+        }
+      } else if (dropPhase === 'down' && nowMs() - dropAtMs > opts.dropHoldMs) {
+        dropPhase = 'dialling';
+        const victim = dropVictim;
+        if (victim !== null) {
+          // Not awaited: this loop *is* the client pump, and a dial that blocked here would
+          // stop every other client for the length of a socket handshake.
+          void victim.reconnect().catch((err: unknown) => {
+            log.error(`reconnect dial failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        }
+      } else if (dropPhase === 'dialling') {
+        const victim = dropVictim;
+        const after = victim === null ? null : victim.report().seatAfterReturn;
+        if (victim !== null && after !== null) {
+          returnCycles.push(closeReturnCycle(victim, after, dropScoreBefore, server));
+          dropPhase = 'idle';
+          dropVictim = null;
+          dropScoreBefore = null;
+        }
+      }
+    }
+
     // The other half of the `--abandon` probe: how long the server took to release the slot.
     if (abandonedAtMs > 0 && abandonedFreedMs === 0 && server.liveMatch === null) {
       abandonedFreedMs = nowMs();
@@ -511,6 +745,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     economy: observedEconomy,
     stock: observedStock,
     grants,
+    returnCycles,
   });
 }
 
@@ -691,6 +926,13 @@ interface FlowReportInput {
   readonly stock: LifeStockReport | null;
   /** How many times `--grant-streak` topped the wallets up. Zero without the flag. */
   readonly grants: number;
+  /**
+   * The drop-and-return cycles this run completed (playtest round 4, F8).
+   *
+   * Empty without `--drop-return`, and empty is reported as *not exercised* rather than passed:
+   * a run in which nobody ever dropped says nothing about what happens when somebody does.
+   */
+  readonly returnCycles: readonly ReturnCycle[];
 }
 
 function reportFlow(input: FlowReportInput): number {
@@ -1058,6 +1300,145 @@ function reportFlow(input: FlowReportInput): number {
     );
   }
 
+  /**
+   * Reconnect and join-in-progress (playtest round 4, F8).
+   *
+   * Three blocking assertions and every denominator printed beside them:
+   *
+   * - **The seat comes back.** Same instance, same entity id, same side. The entity id is the
+   *   whole of it — the score row, the streak ledger, the hand and the rewind history are all
+   *   keyed by it, so a seat that returns with a different id has returned with none of them.
+   * - **The score comes back with it**, and this is the half that used to fail in a way nobody
+   *   could see: the row survives a disconnect on purpose (`Match.removePlayer` keeps it), and
+   *   a returning player who could not reclaim it accrued a *second* row while the first sat on
+   *   the board attributed to a bot.
+   * - **The return does not diverge.** A returning client is exactly the case §4.18's discard
+   *   list is about, so its hash samples are counted separately — and zero mismatches over zero
+   *   samples fails as loudly as it does everywhere else in this harness.
+   *
+   * The resync time is a **reading**, not an assertion. There is no threshold anybody has
+   * agreed to, and inventing one here would be the magic number P0 bans; what is asserted is
+   * that a synchronised frame arrived at all.
+   */
+  const cycles = input.returnCycles;
+  if (opts.dropReturn > 0 && cycles.length === 0) {
+    problems.push(
+      `--drop-return ${opts.dropReturn} was set and no drop/return cycle completed — ` +
+        'either no live match ran long enough or nobody came back (F8)',
+    );
+  }
+  if (cycles.length > 0) {
+    const keptSeat = cycles.filter((c) => c.keptSeat).length;
+    const keptScore = cycles.filter((c) => c.keptScore).length;
+    const resynced = cycles.filter((c) => c.resyncMs >= 0).length;
+    /**
+     * Past the grace, the assertion inverts (F8's failure branch, and join-in-progress).
+     *
+     * The same shape as a `--fault` run: a probe that deliberately breaks the precondition must
+     * be judged against what *should* then happen, or it reports a correct refusal as a failure
+     * and teaches its reader to ignore the result. Held past `RECONNECT_GRACE_MS`, the seat is
+     * gone by design and the requirements become the other two thirds of F8:
+     *
+     * - **They must not get the seat back.** A grace that can be redeemed after it expires is
+     *   not a grace, and the entry would be claimable for as long as the match ran.
+     * - **They must land in the running match anyway**, not in the arena. That is
+     *   join-in-progress, and it is the same assertion inverted: same instance, different
+     *   entity. Before this session a returning player went to the arena either way, which is
+     *   why "kept the seat" and "joined the match" have to be separate questions.
+     * - **They must be told.** F8 asks for it in as many words, and a silent demotion to a new
+     *   player is a bug report waiting to be filed twice.
+     */
+    const graceExpired = opts.dropHoldMs >= RECONNECT_GRACE_MS;
+    if (graceExpired) {
+      const stillGotSeat = cycles.filter((c) => c.keptSeat).length;
+      const joinedTheMatch = cycles.filter((c) => c.matchAfter === c.matchBefore).length;
+      const told = cycles.filter((c) => clientNotices(reports, c.client).length > 0).length;
+      if (stillGotSeat > 0) {
+        problems.push(
+          `${stillGotSeat} of ${cycles.length} reconnect(s) got a seat back after the ` +
+            `${RECONNECT_GRACE_MS}ms grace had expired — the grace does not expire (F8)`,
+        );
+      }
+      if (joinedTheMatch < cycles.length) {
+        problems.push(
+          `${cycles.length - joinedTheMatch} of ${cycles.length} client(s) whose grace expired ` +
+            'landed outside the running match — join-in-progress did not happen (F8)',
+        );
+      }
+      if (told < cycles.length) {
+        problems.push(
+          `${cycles.length - told} of ${cycles.length} client(s) lost their seat and were not ` +
+            'told (F8)',
+        );
+      }
+      log.info(
+        `reconnect (grace expired on purpose, held ${opts.dropHoldMs}ms against a ` +
+          `${RECONNECT_GRACE_MS}ms grace): ${cycles.length} cycle(s), ${stillGotSeat} kept the ` +
+          `seat (must be 0), ${joinedTheMatch} joined the running match, ${told} were told.`,
+      );
+    }
+    if (!graceExpired && keptSeat < cycles.length) {
+      problems.push(
+        `${cycles.length - keptSeat} of ${cycles.length} reconnect(s) did not get their seat ` +
+          'back — a returning player was given a new entity, in a new instance, or on a new side (F8)',
+      );
+    }
+    if (!graceExpired && keptScore < cycles.length) {
+      problems.push(
+        `${cycles.length - keptScore} of ${cycles.length} reconnect(s) lost their scoreboard ` +
+          'row — the kills they earned are on the board without them (F8)',
+      );
+    }
+    if (resynced < cycles.length) {
+      problems.push(
+        `${cycles.length - resynced} of ${cycles.length} reconnect(s) never reached a ` +
+          'synchronised frame after dialling back in (F8)',
+      );
+    }
+    const returnSamples = reports.reduce((n, r) => n + r.hashSamplesAfterReturn, 0);
+    const returnMismatches = reports.reduce((n, r) => n + r.hashMismatchesAfterReturn, 0);
+    if (returnMismatches > 0) {
+      problems.push(
+        `${returnMismatches} confirmed divergence(s) over ${returnSamples} sample(s) taken ` +
+          'after a reconnect — the return did not resync every channel (F8, §4.18)',
+      );
+    }
+    const held = server.reconnectStats;
+    /**
+     * The registry must not still be holding anything.
+     *
+     * A reservation outlives the connection that made it by design, and the only thing that
+     * bounds it is `forgetMatch` at the live match's teardown. A run that ends with entries
+     * still in the map is either a match that was never destroyed or a bound that does not
+     * work, and both are the shape §8.13's hundred cycles exist to catch — one entry per player
+     * per match is a slow leak in the part of the process that is meant to be stateless.
+     */
+    if (held.held > 0) {
+      problems.push(
+        `${held.held} reconnect reservation(s) still held at the end of the run — the registry ` +
+          'is not released with the match it belongs to (F8)',
+      );
+    }
+    log.info(
+      `reconnect: ${cycles.length} cycle(s), ${keptSeat} kept the seat, ${keptScore} kept the ` +
+        `score, ${resynced} resynced; divergence after return ${returnMismatches}/${returnSamples}` +
+        (returnSamples === 0 ? ' (NOT EXERCISED — no hash arrived after a return)' : '') +
+        `; registry ${held.reserved} reserved / ${held.claimed} claimed / ${held.expired} expired ` +
+        `/ ${held.unknown} unknown, ${held.held} still held (must be 0)`,
+    );
+    for (const c of cycles) {
+      log.info(
+        `  ${c.client}: entity ${c.entityBefore}@${c.matchBefore}/${c.teamBefore} -> ` +
+          `${c.entityAfter}@${c.matchAfter}/${c.teamAfter}` +
+          `${c.keptSeat ? '' : '  SEAT LOST'}, resync ${c.resyncMs}ms, ` +
+          `score ${describeSeatScore(c.scoreBefore)} -> ${describeSeatScore(c.scoreAfter)}` +
+          `${c.keptScore ? '' : '  SCORE LOST'}`,
+      );
+    }
+  } else if (opts.dropReturn === 0) {
+    log.info('reconnect: NOT EXERCISED — pass --drop-return N to run drop/return cycles.');
+  }
+
   /** §8.23 case 4. Blocking: an orphaned gunship shoots people. */
   if (opts.dropGunner) {
     if (droppedAtMs === 0) {
@@ -1376,6 +1757,8 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     summaryGate: argv.includes('--summary-gate'),
     abandon: argv.includes('--abandon'),
     throwEveryTicks: Math.max(0, num('--throw', 0)),
+    dropReturn: Math.max(0, num('--drop-return', 0)),
+    dropHoldMs: Math.max(0, num('--drop-hold', 3000)),
   };
 }
 

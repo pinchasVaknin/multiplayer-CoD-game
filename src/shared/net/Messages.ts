@@ -8,6 +8,7 @@ import {
   MsgC,
   MsgS,
   PROTOCOL_VERSION,
+  RECONNECT_TOKEN_BYTES,
   quantAngle,
   dequantAngle,
   quantPitch,
@@ -215,13 +216,34 @@ function head(w: ByteWriter, id: number): void {
  *
  * A trailing optional field, so a client that has no class yet (the first ever run, before the
  * M6 save exists) simply omits it and gets the server defaults.
+ *
+ * ## And the reconnect token, behind it (playtest round 4, F8)
+ *
+ * *"I was here a moment ago and this is my seat."* Optional in exactly the same way and for the
+ * same reason: a first connection has nothing to present, and presenting a token nobody
+ * recognises is an ordinary join rather than an error. Sent last so the class — which every
+ * connection has an opinion about — is not behind a field most of them omit.
+ *
+ * The server never trusts it beyond looking it up: see `ReconnectRegistry.claim` for what it
+ * refuses, and `RECONNECT_TOKEN_BYTES` for why guessing one is the attack it is designed
+ * against.
  */
-export function writeHello(w: ByteWriter, name: string, loadout?: NetLoadout | null): Uint8Array {
+export function writeHello(
+  w: ByteWriter,
+  name: string,
+  loadout?: NetLoadout | null,
+  reconnectToken?: Uint8Array | null,
+): Uint8Array {
   head(w, MsgC.Hello);
   w.u16(PROTOCOL_VERSION);
   w.str(name);
   w.u8v(loadout == null ? 0 : 1);
   if (loadout != null) writeLoadoutBody(w, loadout);
+  const token = reconnectToken != null && reconnectToken.length === RECONNECT_TOKEN_BYTES
+    ? reconnectToken
+    : null;
+  w.u8v(token === null ? 0 : 1);
+  if (token !== null) w.raw(token);
   return w.bytes();
 }
 
@@ -281,13 +303,26 @@ export function writeCommands(
  * migration path cannot grow a field the join path lacks, which is the failure mode that
  * produces a client correctly seated in a live match and still rendering warmup's world.
  */
-export function writeWelcome(w: ByteWriter, info: WelcomeInfo): Uint8Array {
+export function writeWelcome(
+  w: ByteWriter,
+  info: WelcomeInfo,
+  reconnectToken: Uint8Array | null,
+): Uint8Array {
   head(w, info.migrated ? MsgS.Migrate : MsgS.Welcome);
-  writeSeatBody(w, info);
+  writeSeatBody(w, info, reconnectToken);
   return w.bytes();
 }
 
-function writeSeatBody(w: ByteWriter, info: WelcomeInfo): void {
+/**
+ * The token rides the seat body, and is **not** part of `WelcomeInfo` (round 4, F8).
+ *
+ * `WelcomeInfo` is *"this is your seat"* — the thing a world is built from, reconstructed by
+ * `NetClient.matchInfo` and handed around the client. A credential is not part of that answer,
+ * and folding it in would mean every builder of a `WelcomeInfo` — there are three — deciding
+ * what to put in a field only one of them knows anything about. So it is a separate argument
+ * with exactly one caller, `Session.sendSeat`, which stamps its own connection's token.
+ */
+function writeSeatBody(w: ByteWriter, info: WelcomeInfo, reconnectToken: Uint8Array | null): void {
   w.u16(PROTOCOL_VERSION);
   w.u8v(info.entityId);
   w.u8v(info.team === 'B' ? 1 : 0);
@@ -298,9 +333,16 @@ function writeSeatBody(w: ByteWriter, info: WelcomeInfo): void {
   w.u8v(info.snapshotHz);
   w.u16(info.matchId);
   w.i32(info.effectiveTick);
+  const token =
+    reconnectToken != null && reconnectToken.length === RECONNECT_TOKEN_BYTES ? reconnectToken : null;
+  w.u8v(token === null ? 0 : 1);
+  if (token !== null) w.raw(token);
 }
 
-function readSeatBody(r: ByteReader, migrated: boolean): (WelcomeInfo & { version: number }) | null {
+function readSeatBody(
+  r: ByteReader,
+  migrated: boolean,
+): (WelcomeInfo & { version: number; reconnectToken: Uint8Array | null }) | null {
   const version = r.u16();
   const entityId = r.u8v();
   const team = r.u8v() === 1 ? 'B' : 'A';
@@ -311,9 +353,12 @@ function readSeatBody(r: ByteReader, migrated: boolean): (WelcomeInfo & { versio
   const snapshotHz = r.u8v();
   const matchId = r.u16();
   const effectiveTick = r.i32();
+  const hasToken = r.u8v() === 1;
+  const reconnectToken = hasToken ? r.raw(RECONNECT_TOKEN_BYTES) : null;
   if (r.overran) return null;
   return {
     version,
+    reconnectToken,
     entityId,
     team,
     mapId,
@@ -1018,11 +1063,18 @@ export interface VoteInfo {
 
 /** Everything a decoded frame can be. Discriminated on `kind`. */
 export type Decoded =
-  | { kind: 'hello'; version: number; name: string; loadout: NetLoadout | null }
+  | {
+      kind: 'hello';
+      version: number;
+      name: string;
+      loadout: NetLoadout | null;
+      /** What this connection claims about a seat it held before (round 4, F8). */
+      reconnectToken: Uint8Array | null;
+    }
   | { kind: 'commands'; count: number; snapshotAck: number }
   | { kind: 'ping'; id: number; clientMs: number }
   | { kind: 'bye'; reason: string }
-  | ({ kind: 'welcome'; version: number } & WelcomeInfo)
+  | ({ kind: 'welcome'; version: number; reconnectToken: Uint8Array | null } & WelcomeInfo)
   | { kind: 'reject'; code: number }
   | { kind: 'pong'; id: number; clientMs: number; serverMs: number; serverTick: number }
   | { kind: 'snapshot' }
@@ -1030,7 +1082,7 @@ export type Decoded =
   | { kind: 'loadout'; loadout: NetLoadout }
   | { kind: 'vote'; phase: number; option: number }
   | { kind: 'ready'; matchId: number }
-  | ({ kind: 'migrate'; version: number } & WelcomeInfo)
+  | ({ kind: 'migrate'; version: number; reconnectToken: Uint8Array | null } & WelcomeInfo)
   | ({ kind: 'voteState' } & VoteInfo)
   | { kind: 'prepare'; matchId: number; mapId: string; modeId: string }
   | ({ kind: 'summary' } & SummaryInfo)
@@ -1076,7 +1128,11 @@ export function decodeHeader(r: ByteReader): Decoded {
       // one — hence the explicit presence byte rather than "read if bytes remain".
       const hasLoadout = r.u8v() === 1;
       const loadout = hasLoadout ? readLoadoutBody(r) : null;
-      return r.overran ? BAD : { kind: 'hello', version, name, loadout };
+      // Same explicit presence byte as the loadout above, and never "read if bytes remain":
+      // a length inferred from what is left in the frame is a length an attacker chooses.
+      const hasToken = r.u8v() === 1;
+      const reconnectToken = hasToken ? r.raw(RECONNECT_TOKEN_BYTES) : null;
+      return r.overran ? BAD : { kind: 'hello', version, name, loadout, reconnectToken };
     }
     case MsgC.Commands: {
       const snapshotAck = r.u16();

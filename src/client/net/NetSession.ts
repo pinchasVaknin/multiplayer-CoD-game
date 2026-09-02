@@ -96,6 +96,14 @@ export interface NetSessionDeps {
   readonly skirmish?: SkirmishSink;
   /** The class to send with the `Hello` (Tier 1 #20). See `writeHello`. */
   readonly loadout?: NetLoadout | null;
+  /**
+   * The reconnect token the handshake was answered with (round 4, F8).
+   *
+   * Handed in for the same reason the `Welcome` is: the handshake happens before this class
+   * exists, so the token it was given has to be carried across rather than read here. From
+   * `adopt` onward `NetClient` owns it and every later seat assignment updates it.
+   */
+  readonly reconnectToken?: Uint8Array | null;
 }
 
 export class NetSession {
@@ -386,7 +394,7 @@ export class NetSession {
    * happened before the world was built, which is the whole point of the reordering.
    */
   start(): void {
-    this.client.adopt(this.deps.welcome, this.deps.receivedAtMs);
+    this.client.adopt(this.deps.welcome, this.deps.receivedAtMs, this.deps.reconnectToken ?? null);
     // Anything that shared a batch with the `Welcome` was dequeued before this client existed.
     // Replayed after `adopt`, so it lands on a joined client rather than a connecting one.
     const pending = this.deps.pending;

@@ -152,6 +152,22 @@ export interface ServerMatchOptions {
   readonly rosterOverride?: number;
 }
 
+/**
+ * A seat a returning player is taking back (M11 Gate B, playtest round 4, F8).
+ *
+ * Deliberately just the two facts a reconnect must not be allowed to change. Everything else
+ * about the returning body — health, weapons, grenades, the streak wallet — is rebuilt from
+ * scratch, because the return is a **new life**: the one they left was played out by the bot
+ * that stood in for them, and `StreakSystem.onOwnerRemoved` already cleared the wallet on the
+ * way out. That is P4's model taken literally, and the alternative — a balance that survived
+ * something which was not a death — is exactly what P5's `dirtyLifeStarts` invariant exists to
+ * catch.
+ */
+export interface ReclaimedSeat {
+  readonly entityId: number;
+  readonly team: BotTeam;
+}
+
 export interface ServerMatchResult {
   readonly mapId: string;
   readonly modeId: string;
@@ -870,17 +886,48 @@ export class ServerMatch {
    * match that started 5v5 and gains two people does not end up 7v5. S9 puts team selection
    * in M11's lobby; until then, balance is the only sensible policy and it is one line.
    */
-  addPlayer(displayName: string, loadout?: LoadoutSlot | null): NetPlayer | null {
+  addPlayer(
+    displayName: string,
+    loadout?: LoadoutSlot | null,
+    reclaim?: ReclaimedSeat | null,
+  ): NetPlayer | null {
     if (this.players.length >= MAX_PLAYERS) return null;
 
-    const team = this.smallerTeam();
-    const entityId = this.nextPlayerId++;
-    if (entityId >= BOT_ID_FLOOR) {
-      // Entity ids 1..99 are the human range; bots start at 100. Ten seats and a fresh id per
-      // join means this is unreachable inside any real match length, but a wrapped id would
-      // collide with a bot and put two bodies on one entity.
-      this.nextPlayerId--;
-      return null;
+    /**
+     * A returning player takes back the seat they left, id and side (round 4, F8).
+     *
+     * Both halves are load-bearing and the second is easy to miss. The **id** is what the
+     * scoreboard row, the rewind history and the equipment hand are all keyed by, so reclaiming
+     * it reclaims the record rather than copying it. The **side** matters because the line below
+     * balances arrivals onto the smaller team: a player re-seated without it could come back on
+     * the other side, which in Search & Destroy is a spawn in the enemy half.
+     *
+     * Refused rather than forced if the id is somehow occupied. It cannot be — `nextPlayerId`
+     * only increments, so an id handed out once is never handed out again inside this instance,
+     * which is precisely what makes a held id safe to hold for thirty seconds. The check is here
+     * because two bodies on one entity is the failure it would produce, and that is worth a
+     * comparison rather than an assumption.
+     */
+    const team = reclaim?.team ?? this.smallerTeam();
+    let entityId: number;
+    if (reclaim != null) {
+      if (reclaim.entityId <= 0 || reclaim.entityId >= BOT_ID_FLOOR) return null;
+      if (this.getPlayer(reclaim.entityId) !== undefined) {
+        log.warn(
+          `${displayName} tried to reclaim entity ${reclaim.entityId}, which is occupied. Refused.`,
+        );
+        return null;
+      }
+      entityId = reclaim.entityId;
+    } else {
+      entityId = this.nextPlayerId++;
+      if (entityId >= BOT_ID_FLOOR) {
+        // Entity ids 1..99 are the human range; bots start at 100. Ten seats and a fresh id per
+        // join means this is unreachable inside any real match length, but a wrapped id would
+        // collide with a bot and put two bodies on one entity.
+        this.nextPlayerId--;
+        return null;
+      }
     }
 
     /**

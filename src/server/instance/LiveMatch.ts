@@ -308,9 +308,22 @@ export class LiveMatch extends MatchInstance {
    * `removeBotForSeat` rather than `bots.removeOne` — the director cannot unregister from
    * `Rewind`, and a bot removed the short way leaves a phantom in the lag-compensation path
    * that is written every tick for the rest of the match.
+   *
+   * ## A reconnect needs no new rule here, and that is the point (round 4, F8)
+   *
+   * A returning player is a seat granted on the team they left, so the line below takes a bot
+   * off that team — the same bot-for-human swap a fresh join gets, run in the opposite direction
+   * from the one `releaseEntity` performed when they dropped. One out, one in, roster unchanged,
+   * without a "was this a reconnect" branch anywhere: F8 asks for the return to *"take the seat
+   * back without changing the player count mid-match"*, and §6.7's existing rule already says
+   * exactly that about every seat.
    */
-  override seat(session: Parameters<MatchInstance['seat']>[0], loadout: Parameters<MatchInstance['seat']>[1]) {
-    const player = super.seat(session, loadout);
+  override seat(
+    session: Parameters<MatchInstance['seat']>[0],
+    loadout: Parameters<MatchInstance['seat']>[1],
+    reclaim?: Parameters<MatchInstance['seat']>[2],
+  ) {
+    const player = super.seat(session, loadout, reclaim);
     if (player === null) return null;
     this.everSeated = true;
     if (!this.match.removeBotForSeat(player.team)) {

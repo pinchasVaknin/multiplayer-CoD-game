@@ -28,11 +28,30 @@ import {
 } from './MatchAllocator';
 import { Migration, seatInfo } from './Migration';
 import { STREAK_DEFS } from '../shared/streaks/StreakDefs';
+import { ReconnectRegistry, type ReconnectStats } from './net/ReconnectRegistry';
 import { Router } from './Router';
-import { Session } from './net/Session';
+import { Session, type JoinResult, type LeaveCause } from './net/Session';
 import { WsServer, type WsLink } from './net/WsServer';
 
 const log = logger('server');
+
+/**
+ * What a reconnect claim came to (M11 Gate B, playtest round 4, F8).
+ *
+ * Two fields rather than a nullable seat, because a refused claim still has something to say
+ * and the two answers are independent: a returning player who got their seat back needs no
+ * message, and one who did not needs a *different* message depending on why. Folding them into
+ * one nullable return meant parking the reason on the session — a field with exactly one read,
+ * one write and a lifetime of three lines.
+ */
+interface ReclaimOutcome {
+  readonly seat: JoinResult | null;
+  /** What to tell the player, sent after the identity frame. Null when there is nothing to say. */
+  readonly notice: string | null;
+}
+
+/** Not a returning player. The common case, and it says nothing to anybody. */
+const NO_RECLAIM: ReclaimOutcome = { seat: null, notice: null };
 
 /**
  * The process: one loop, one arena, at most one live match (M11, §4.9).
@@ -82,6 +101,15 @@ export class Server {
   private allocating = false;
 
   private readonly sessions: Session[] = [];
+
+  /**
+   * Seats held open for players who have dropped (round 4, F8).
+   *
+   * On the server rather than on an instance, because it has to outlive the connection that
+   * made it and be readable by the next one — which is a fact about the *process*, not about a
+   * world. Bounded by the live match's teardown; see `ReconnectRegistry`.
+   */
+  private readonly reconnects = new ReconnectRegistry();
 
   private bootReport: BootBakeReport | null = null;
   private lastMetricsMs = 0;
@@ -192,6 +220,7 @@ export class Server {
       await this.allocator.destroy(this.live);
       this.live = null;
     }
+    this.reconnects.clear();
     this.warmup.dispose();
     await this.wss.close();
   }
@@ -225,6 +254,11 @@ export class Server {
     return this.router.misroutedMessages;
   }
 
+  /** Held seats, and what has happened to them (round 4, F8). Read by the flow harness. */
+  get reconnectStats(): ReconnectStats {
+    return this.reconnects.stats;
+  }
+
   // -- connections ------------------------------------------------------------
 
   private accept(link: WsLink): void {
@@ -234,41 +268,8 @@ export class Server {
         // The name is already on the session by the time this runs — `Session.handleHello`
         // sanitises it and assigns it before calling — so it is taken from there rather than
         // from the parameter, and there is one sanitised copy rather than two.
-        onJoin: (s) => {
-          /**
-           * Every player enters through the arena (§6.7).
-           *
-           * *"A player who joins the server while a live match is running goes to the warmup
-           * arena, not into the match, and joins at the next cycle. Warmup is always the entry
-           * point."* One entry point means one seating path to get right, and it is why a
-           * player can be shooting one round trip after clicking Play Multiplayer: the arena
-           * always exists and is always `RUNNING`.
-           */
-          const player = this.warmup.seat(s, s.loadout);
-          if (player === null) return null;
-          this.router.admit(s, this.warmup);
-
-          /**
-           * The seat assignment goes out in `afterIdentity`, not here (Tier 2 §D).
-           *
-           * *"Any side effect of a reconnect that sends a frame must not run inside the hello
-           * handler, or its frame overtakes the `Identity` it is a reply to."* In this flow the
-           * seat assignment **is** the identity frame, so what has to be deferred is everything
-           * downstream of it: the vote state and, if a match is being prepared, the `Prepare`
-           * that starts a background build. Sent from inside `onJoin`, either would reach the
-           * client before the `Welcome` that tells it who it is, and the handshake drops
-           * frames it has no context for.
-           */
-          return {
-            player,
-            afterIdentity: () => {
-              this.sendSeatTo(s, this.warmup, player.entityId, player.team, false);
-              this.sendVoteStateTo(s);
-              this.sendPrepareIfBuilding(s);
-            },
-          };
-        },
-        onLeave: (s, reason) => this.onLeave(s, reason),
+        onJoin: (s, _name, claim) => this.onJoin(s, claim),
+        onLeave: (s, reason, cause) => this.onLeave(s, reason, cause),
         onLoadout: (s, raw) => this.onLoadout(s, raw),
         onVote: (s, phase, option) => this.onVote(s, phase, option),
         onReady: (s, matchId) => this.onReady(s, matchId),
@@ -277,6 +278,190 @@ export class Server {
       () => this.loop.currentTick,
     );
     this.sessions.push(session);
+  }
+
+  /**
+   * A `Hello` was accepted: decide where this connection sits (§6.7, and round 4's F8).
+   *
+   * Three outcomes, in the order they are tried, and the order is the whole policy:
+   *
+   * 1. **A returning player with a live reservation** goes back to the seat they left — same
+   *    instance, same entity id, same side, same scoreboard row. This is F8's *"reconnect"*.
+   * 2. **Anybody else, while a match is actually running**, joins that match. This is F8's
+   *    *"join a match that is already running"*, and it **reverses §6.7** — see below.
+   * 3. **Everybody else** enters through the arena, exactly as before. It is still the entry
+   *    point whenever there is no running match to enter, which is most of a cycle.
+   *
+   * ## Reversing §6.7, deliberately
+   *
+   * §6.7 said *"a player who joins the server while a live match is running goes to the warmup
+   * arena, not into the match, and joins at the next cycle. Warmup is always the entry point."*
+   * The fourth playtest asks for the opposite and the amended clause is in PLAN.md, so the spec
+   * and the code say the same thing.
+   *
+   * What the old rule bought was one seating path. What it cost is the whole of F8: a player
+   * who dropped out of a five-minute match spent the rest of it in the arena watching a ballot,
+   * and so did anybody who arrived while a match was on. The cost of reversing it is smaller
+   * than it looks, because the piece that made the arena the safe entry point — the background
+   * map build — is about **migration**, not about joining: a fresh connection has not built
+   * anything yet either way, and `handshake` already tells it which map before a world exists.
+   * A direct join is the arena's own path with a different `mapId`.
+   *
+   * `RUNNING` only. A match in `READY_WAIT` has not started and its players are still in the
+   * arena waiting to be migrated as one; dropping a newcomer straight into it would seat them in
+   * a world nobody else is in yet, and `maybeStartLive` counts the arena's sessions to decide
+   * when to begin.
+   */
+  private onJoin(session: Session, claim: Uint8Array | null): JoinResult | null {
+    /**
+     * The token is minted here, before anything is seated.
+     *
+     * On the connection rather than on the seat, because it identifies *this socket's right to
+     * come back* and has to survive the migrations that reassign everything else about the seat.
+     * `Session.sendSeat` stamps it into every assignment, so there is no call site that can
+     * forget it.
+     */
+    session.reconnectToken = this.reconnects.mint();
+
+    const returning = this.reclaimSeat(session, claim);
+    if (returning.seat !== null) return returning.seat;
+    // Carried into `afterIdentity` as a local rather than parked on the session: it belongs to
+    // this one handshake, and a field would be a second place holding a fact with one use.
+    const rejoinNotice = returning.notice;
+
+    const live = this.live?.instance ?? null;
+    const joinInProgress = live !== null && live.state === InstanceState.RUNNING;
+    const destination: MatchInstance = joinInProgress && live !== null ? live : this.warmup;
+
+    const player = destination.seat(session, session.loadout);
+    if (player === null) {
+      /**
+       * The live match refused, so fall back to the arena rather than the connection.
+       *
+       * §4.20's shape applied one stage earlier: a player who cannot be given the seat they
+       * asked for is left somewhere playable with a message, never dropped. The arena is the
+       * destination of last resort and always exists.
+       */
+      if (!joinInProgress) return null;
+      const fallback = this.warmup.seat(session, session.loadout);
+      if (fallback === null) return null;
+      this.router.admit(session, this.warmup);
+      return {
+        player: fallback,
+        afterIdentity: () => {
+          this.sendSeatTo(session, this.warmup, fallback.entityId, fallback.team, false);
+          if (rejoinNotice !== null) session.notice(rejoinNotice);
+          session.notice('The match is full — you are in the arena until the next one.');
+          this.sendVoteStateTo(session);
+          this.sendPrepareIfBuilding(session);
+        },
+      };
+    }
+    this.router.admit(session, destination);
+
+    /**
+     * The seat assignment goes out in `afterIdentity`, not here (Tier 2 §D).
+     *
+     * *"Any side effect of a reconnect that sends a frame must not run inside the hello
+     * handler, or its frame overtakes the `Identity` it is a reply to."* In this flow the seat
+     * assignment **is** the identity frame, so what has to be deferred is everything downstream
+     * of it: the vote state and, if a match is being prepared, the `Prepare` that starts a
+     * background build. Sent from inside `onJoin`, either would reach the client before the
+     * `Welcome` that tells it who it is, and the handshake drops frames it has no context for.
+     */
+    return {
+      player,
+      afterIdentity: () => {
+        this.sendSeatTo(session, destination, player.entityId, player.team, false);
+        if (rejoinNotice !== null) session.notice(rejoinNotice);
+        if (joinInProgress) {
+          log.info(`${session.displayName} joined match ${destination.id} in progress.`);
+          // The ballot belongs to the arena and this player is not in it. Sending them a vote
+          // state would put a ballot on screen for a cycle they cannot take part in — round
+          // three's stale-overlay bug, arriving by the one door that was left.
+          return;
+        }
+        this.sendVoteStateTo(session);
+        this.sendPrepareIfBuilding(session);
+      },
+    };
+  }
+
+  /**
+   * Give a returning player their seat back, or explain why not (round 4, F8).
+   *
+   * Returns null for *"this is not a returning player"*, which includes a claim that named
+   * nothing and a claim whose grace had run out — the difference between those two is what the
+   * player is told, and nothing else. A refused claim always falls through to an ordinary join
+   * rather than to a refused connection: somebody whose seat has gone still wants to play.
+   */
+  private reclaimSeat(session: Session, claim: Uint8Array | null): ReclaimOutcome {
+    if (claim === null) return NO_RECLAIM;
+    const result = this.reconnects.claim(claim);
+    if (!result.ok) {
+      /**
+       * Silence for an unrecognised token, a line for one that ran out.
+       *
+       * They are genuinely different events and only one of them is worth interrupting somebody
+       * for: an *expired* claim means this player had a seat and the grace elapsed, which is
+       * the failure F8 asks to be told about. An *unknown* one is the ordinary case — a token
+       * from a match that ended cleanly, or from an arena seat that never reserved anything —
+       * and nothing was lost, so there is nothing to say.
+       */
+      return {
+        seat: null,
+        notice: result.why === 'expired' ? 'Your seat was given away — welcome back.' : null,
+      };
+    }
+
+    const held = result.reservation;
+    const live = this.live?.instance ?? null;
+    /**
+     * The instance has to still be there, and still be the one the seat is in.
+     *
+     * A reservation names a `matchId` rather than holding the instance, on purpose: an object
+     * reference would keep a destroyed world alive for the length of the grace, which is the
+     * shape §4.18's teardown list exists to prevent. `forgetMatch` drops these at teardown, so
+     * reaching here with a dead id means a match that ended inside the grace — the player
+     * genuinely has no seat to return to, and the arena is the right answer.
+     */
+    if (live === null || live.id !== held.matchId || live.state !== InstanceState.RUNNING) {
+      return { seat: null, notice: 'That match has finished — you are in the arena.' };
+    }
+
+    const player = live.seat(session, held.loadout ?? session.loadout, {
+      entityId: held.entityId,
+      team: held.team,
+    });
+    if (player === null) {
+      return { seat: null, notice: 'Your seat could not be restored — back to the arena.' };
+    }
+    // The class they were playing, restored onto the connection as well as the body: it is what
+    // the next migration locks into the `MatchRequest` (§4.18), and a returning player who then
+    // migrated home with the server's defaults would lose their class one cycle later.
+    if (held.loadout !== null) session.loadout = held.loadout;
+    this.router.admit(session, live);
+    log.info(
+      `${session.displayName} reconnected into match ${live.id} as entity ${player.entityId} ` +
+        `on team ${player.team} — the seat player ${held.playerId} left.`,
+    );
+    metric('reconnect', 'restored', {
+      playerId: session.playerId,
+      previousPlayerId: held.playerId,
+      matchId: live.id,
+      entityId: player.entityId,
+      team: player.team,
+    });
+    return {
+      seat: {
+        player,
+        afterIdentity: () => {
+          this.sendSeatTo(session, live, player.entityId, player.team, false);
+          session.notice('Reconnected — welcome back.');
+        },
+      },
+      notice: null,
+    };
   }
 
   /**
@@ -341,11 +526,46 @@ export class Server {
     log.info(`${session.displayName} called in ${def.id} in instance ${instance.id}.`);
   }
 
-  private onLeave(session: Session, reason: string): void {
+  /**
+   * A connection ended. Free the seat, and hold it open if it is worth holding (§6.7, F8).
+   *
+   * The reservation is made **before** `router.release`, and the order is the whole of it: the
+   * release is what removes the entity, replaces it with a bot and takes the seat out of the
+   * instance, so by the time it returns there is nothing left to describe. Everything the
+   * reservation needs — which instance, which entity, which side, which class — is read while
+   * the seat still exists.
+   *
+   * Only a **lost** connection is held, and only a seat in a **running live match**. A `Bye` is
+   * the player saying they are done — see `LeaveCause` — and an arena seat is worth nothing to
+   * hold: it
+   * records no score (F7), carries no objective state and is handed out instantly to anybody who
+   * asks, so a reservation for one would be a map entry protecting nothing. That is also what
+   * bounds the registry — see `ReconnectRegistry`.
+   */
+  private onLeave(session: Session, reason: string, cause: LeaveCause): void {
+    if (cause === 'lost') this.holdSeatForReturn(session);
     this.router.release(session.playerId);
     this.voteCycle.forget(session.playerId);
     session.player = null;
     log.info(`connection from ${session.link.remoteAddress} closed: ${reason}`);
+  }
+
+  private holdSeatForReturn(session: Session): void {
+    const token = session.reconnectToken;
+    const player = session.player;
+    if (token === null || player === null) return;
+    const instance = this.router.instanceOf(session.playerId);
+    const live = this.live?.instance ?? null;
+    if (instance === null || live === null || instance !== live) return;
+    if (live.state !== InstanceState.RUNNING) return;
+    this.reconnects.reserve(token, {
+      playerId: session.playerId,
+      displayName: session.displayName,
+      matchId: live.id,
+      entityId: player.entityId,
+      team: player.team,
+      loadout: session.loadout,
+    });
   }
 
   /**
@@ -863,6 +1083,15 @@ export class Server {
     for (const seat of [...handle.instance.sessions]) {
       this.migration.move(seat.session, this.warmup, this.loop.currentTick, this.cfg.snapshotHz);
     }
+    /**
+     * The held seats go with the world they were in (round 4, F8).
+     *
+     * A reservation names a `matchId`, so one that outlives its instance can never be redeemed
+     * — it would be a row nobody deletes, one per player per match, in a process §8.13 measures
+     * over a hundred allocate/destroy cycles. Released here rather than swept on a timer,
+     * because the instance ending is the exact moment the seat stops existing.
+     */
+    this.reconnects.forgetMatch(handle.id);
     await this.allocator.destroy(handle);
   }
 

@@ -49,6 +49,13 @@ const log = logger('handshake');
 export interface HandshakeResult {
   readonly link: BrowserLink;
   readonly welcome: WelcomeInfo;
+  /**
+   * The capability this connection presents to get its seat back (round 4, F8).
+   *
+   * Minted by the server for this socket and carried on every seat assignment afterwards. Null
+   * against a server that issues none. See `ReconnectRegistry` for what it is worth and to whom.
+   */
+  readonly reconnectToken: Uint8Array | null;
   /** When the `Welcome` landed, for seeding the clock honestly. See `NetClient.adopt`. */
   readonly receivedAtMs: number;
   /**
@@ -72,6 +79,14 @@ export interface HandshakeResult {
 export interface HandshakeOptions {
   /** The player's class, sent with the `Hello` (M11, Tier 1 #20). */
   readonly loadout?: NetLoadout | null;
+  /**
+   * A seat this client held a moment ago, if it is coming back (round 4, F8).
+   *
+   * Sent with the `Hello`, which is the only frame that can carry it: the server creates the
+   * seat *inside* the handshake, so a claim arriving afterwards would arrive after the body it
+   * was meant to be. Undefined on every ordinary join.
+   */
+  readonly reconnectToken?: Uint8Array | null;
   readonly url: string;
   readonly displayName: string;
   readonly conditions: NetConditions;
@@ -125,15 +140,18 @@ export async function handshake(options: HandshakeOptions): Promise<HandshakeRes
    * The buffer is sized for a name plus a full class: eight ids, two weapons with attachments,
    * and their camo strings.
    */
-  link.send(writeHello(new ByteWriter(1024), name, options.loadout ?? null));
+  link.send(
+    writeHello(new ByteWriter(1024), name, options.loadout ?? null, options.reconnectToken ?? null),
+  );
 
   try {
-    const { welcome, receivedAtMs, pending } = await awaitWelcome(link);
+    const { welcome, receivedAtMs, pending, reconnectToken } = await awaitWelcome(link);
     log.info(
       `server is running ${welcome.modeId} on ${welcome.mapId}; ` +
-        `we are entity ${welcome.entityId} on team ${welcome.team}.`,
+        `we are entity ${welcome.entityId} on team ${welcome.team}` +
+        `${options.reconnectToken != null ? ' (presented a reconnect claim)' : ''}.`,
     );
-    return { link, welcome, receivedAtMs, pending };
+    return { link, welcome, receivedAtMs, pending, reconnectToken };
   } catch (err) {
     link.close('handshake failed');
     throw err;
@@ -147,9 +165,12 @@ export async function handshake(options: HandshakeOptions): Promise<HandshakeRes
  * this happens between leaving the menu and building the world. 16 ms is a frame's worth,
  * which keeps the join feeling immediate without spinning.
  */
-function awaitWelcome(
-  link: BrowserLink,
-): Promise<{ welcome: WelcomeInfo; receivedAtMs: number; pending: Uint8Array[] }> {
+function awaitWelcome(link: BrowserLink): Promise<{
+  welcome: WelcomeInfo;
+  receivedAtMs: number;
+  pending: Uint8Array[];
+  reconnectToken: Uint8Array | null;
+}> {
   return new Promise((resolve, reject) => {
     const reader = new ByteReader(new Uint8Array(0));
     const startedAt = performance.now();
@@ -232,7 +253,8 @@ function awaitWelcome(
              * the switch. That ordering is the whole mechanism.
              */
             const receivedAtMs = performance.now();
-            finish(() => resolve({ welcome, receivedAtMs, pending }));
+            const reconnectToken = msg.reconnectToken;
+            finish(() => resolve({ welcome, receivedAtMs, pending, reconnectToken }));
             return;
           }
           case 'reject':

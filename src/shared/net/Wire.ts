@@ -259,6 +259,25 @@ export class ByteReader {
     this.at += n;
     return s;
   }
+
+  /**
+   * `n` raw bytes, **copied** (M11 playtest round 4, F8).
+   *
+   * The copy is the whole reason this is not a `subarray`. Every reader in this project is
+   * reused across frames — `ByteReader.reuse` points it at the link's next buffer, and both
+   * links reuse their receive buffers — so a view handed out here would be a window onto bytes
+   * that belong to a later message by the time anybody reads it. Opposite to `ByteWriter.raw`,
+   * whose argument the caller already owns.
+   *
+   * Length-checked like every other read, so a truncated frame sets `overran` and returns an
+   * empty array rather than throwing (S4.16).
+   */
+  raw(n: number): Uint8Array {
+    if (!this.room(n)) return new Uint8Array(0);
+    const out = this.u8.slice(this.at, this.at + n);
+    this.at += n;
+    return out;
+  }
 }
 
 function clampInt(v: number, lo: number, hi: number): number {
