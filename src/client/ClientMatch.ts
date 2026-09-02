@@ -5,7 +5,7 @@ import { BotDirector, RESPAWN_SECONDS } from '../shared/ai/BotDirector';
 import { BotRenderer } from './ai/BotRenderer';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
 import type { BotTeam } from '../shared/ai/Combatant';
-import type { PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
+import { tiersFor, type BotDifficulty, type PerceptionConfig, type TierTable } from '../shared/ai/DifficultyTiers';
 import { PlayerCombatant } from '../shared/ai/PlayerCombatant';
 import { makeSpawnChoice, type SpawnChoice } from '../shared/ai/SpawnSelector';
 import { Cheat } from '../shared/cheats/Cheats';
@@ -146,6 +146,16 @@ export interface MatchDeps {
   readonly map: MapEntry;
   readonly mode: ModeEntry;
   readonly tiers: TierTable;
+  /**
+   * How hard the bots are in a **local** match (playtest round 4, F1).
+   *
+   * The player's menu choice, straight from the save. It is read in exactly one place —
+   * `populateDefault` — and it is deliberately not consulted on a networked client, which
+   * populates no roster at all: over the wire the bots are the server's and their difficulty is
+   * the operator's `BOT_DIFFICULTY`, not this player's preference. A client that applied its own
+   * would be a client with an opinion about somebody else's simulation.
+   */
+  readonly difficulty: BotDifficulty;
   readonly perceptionConfig: PerceptionConfig;
   readonly schedulerConfig: SchedulerConfig;
   readonly seed: number;
@@ -644,6 +654,8 @@ export class Match {
       mapDef: deps.map.def,
       mapName: deps.map.name,
       modeName: this.mode.name,
+      // F10. Asked of the mode once, here, where every other fact about it is assembled.
+      modeBrief: this.mode.brief,
       columns: this.mode.getScoreboardColumns(),
       score: this.score,
       audio: deps.audio,
@@ -892,15 +904,24 @@ export class Match {
    * aim model keep working — see `modes/FreeForAll.ts` for why the two-team substrate stays.
    */
   populateDefault(): void {
+    /**
+     * The tiers, from the menu's difficulty rather than from the map alone (round 4, F1).
+     *
+     * `tiersFor` is the same function `ServerMatch` resolves with, which is what makes "Recruit"
+     * mean the same roster in a solo match and on a server started with `BOT_DIFFICULTY=RECRUIT`.
+     * `MIX` returns the map's authored spread unchanged, so every measurement taken before this
+     * session still describes the default.
+     */
+    const mix = tiersFor(this.deps.difficulty, this.deps.map.tierMix);
     const override = this.deps.mode.rosterSize;
     if (override !== undefined) {
       const bots = Math.max(0, override - 1);
       const teamB = Math.ceil(bots / 2);
-      this.bots.populate(bots - teamB, teamB, this.deps.map.tierMix);
+      this.bots.populate(bots - teamB, teamB, mix);
       return;
     }
     const size = this.deps.map.teamSize;
-    this.bots.populate(Math.max(0, size - 1), size, this.deps.map.tierMix);
+    this.bots.populate(Math.max(0, size - 1), size, mix);
   }
 
   /**

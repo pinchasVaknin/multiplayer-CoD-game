@@ -29,6 +29,8 @@ import {
   cloneTierTable,
   DEFAULT_PERCEPTION,
   DEFAULT_TIERS,
+  tiersFor,
+  type BotDifficulty,
   type BotTier,
   type PerceptionConfig,
   type TierTable,
@@ -112,7 +114,7 @@ export interface ServerMatchOptions {
   /** Total bots across both sides. Split as evenly as possible. */
   readonly bots: number;
   /** A single tier for every bot, or 'MIX' for the map's authored spread. */
-  readonly tier: BotTier | 'MIX';
+  readonly tier: BotDifficulty;
   /** Deterministic seed. The same seed replays the same match. */
   readonly seed: number;
   /**
@@ -222,6 +224,17 @@ export class ServerMatch {
   readonly mapEntry: MapEntry;
   readonly modeEntry: ModeEntry;
 
+  /**
+   * The tiers this match deals from, resolved once (playtest round 4, F1).
+   *
+   * Two things used to answer "which tier is this bot" and they answered differently:
+   * `populate` honoured `options.tier`, and `replacePlayerWithBot` read `mapEntry.tierMix`
+   * directly — so a match configured RECRUIT handed a leaver's seat to whatever the authored
+   * spread had reached. Both read this now, and `tiersFor` is the only place the choice becomes
+   * a list. `ClientMatch.populateDefault` calls the same function for the same reason.
+   */
+  private readonly tierMix: readonly BotTier[];
+
   /** Config objects. Cloned, so a future tuning message cannot mutate the shipped defaults. */
   readonly movementConfig: MovementConfig = cloneMovementConfig(DEFAULT_MOVEMENT_CONFIG);
   readonly healthConfig: HealthConfig = { ...DEFAULT_HEALTH_CONFIG };
@@ -286,6 +299,7 @@ export class ServerMatch {
     this.currentTick = options.startTick ?? 0;
     this.mapEntry = findMap(options.mapId);
     this.modeEntry = findMode(asModeId(options.modeId));
+    this.tierMix = tiersFor(options.tier, this.mapEntry.tierMix);
 
     // ---- the world ---------------------------------------------------------
     // Collision and nav only. `client/world/MapRender.ts` holds the half that would have
@@ -1167,7 +1181,7 @@ export class ServerMatch {
     const team = player.team;
     this.removePlayer(entityId);
 
-    const mix: readonly BotTier[] = this.mapEntry.tierMix;
+    const mix = this.tierMix;
     const tier = mix[this.bots.bots.length % Math.max(mix.length, 1)] ?? 'REGULAR';
     const bot = this.bots.addOne(team, tier);
     if (bot === null) {
@@ -1178,7 +1192,17 @@ export class ServerMatch {
     // Bots are rewound too — a hole here is a shot that silently resolves against the present.
     this.rewind.register(bot);
     this.rewind.resetAt(bot.entityId, this.currentTick);
-    log.info(`entity ${entityId} left; ${bot.displayName} took over on team ${team}.`);
+    /**
+     * The tier is in the line because the fix is otherwise invisible (round 4, F1).
+     *
+     * This is the call site that dealt from the map's authored mix while the match was
+     * configured for something else. A replacement that comes back at the wrong difficulty
+     * produces no error, no warning and no divergence — it produces one bot that is harder or
+     * softer than the nine beside it, which is exactly the kind of thing a player reports as
+     * "the bots are inconsistent" and nobody can attribute. Naming it here means the next such
+     * report can be checked against the log rather than argued about.
+     */
+    log.info(`entity ${entityId} left; ${bot.displayName} took over on team ${team} at ${tier}.`);
     return true;
   }
 
@@ -1458,9 +1482,7 @@ export class ServerMatch {
     const total = this.options.rosterOverride ?? this.modeEntry.rosterSize ?? this.options.bots;
     const teamB = Math.ceil(total / 2);
     const teamA = total - teamB;
-    const mix: readonly BotTier[] =
-      this.options.tier === 'MIX' ? this.mapEntry.tierMix : [this.options.tier];
-    this.bots.populate(teamA, teamB, mix);
+    this.bots.populate(teamA, teamB, this.tierMix);
     for (const bot of this.bots.bots) {
       this.score.register(bot.entityId, bot.displayName, bot.team);
       // Bots are rewound too (S4.13: *"rewinds every other entity"*). A bot strafing across
@@ -1470,7 +1492,8 @@ export class ServerMatch {
       this.rewind.register(bot);
     }
     log.info(
-      `${this.modeEntry.name} on ${this.mapEntry.name}: ${teamA} vs ${teamB} bots, seed ${this.options.seed}.`,
+      `${this.modeEntry.name} on ${this.mapEntry.name}: ${teamA} vs ${teamB} bots ` +
+        `at ${this.options.tier}, seed ${this.options.seed}.`,
     );
   }
 }

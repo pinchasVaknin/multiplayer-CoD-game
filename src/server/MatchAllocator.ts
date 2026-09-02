@@ -1,4 +1,4 @@
-import type { BotTier } from '../shared/ai/DifficultyTiers';
+import type { BotDifficulty } from '../shared/ai/DifficultyTiers';
 import type { LoadoutSlot } from '../shared/meta/Loadouts';
 import { logger } from '../shared/core/Log';
 import type { InstanceStateId, MatchId } from '../shared/net/Skirmish';
@@ -51,7 +51,11 @@ export interface MatchRequest {
   readonly modeId: string;
   readonly mapId: string;
   readonly players: readonly PlayerSlot[];
-  readonly botFill: { readonly count: number; readonly tier: BotTier | 'MIX' };
+  /**
+   * How many bots, and how hard. `tier` is `BOT_DIFFICULTY` (F1), and it is the **one** path
+   * from the operator's configuration to `BotDirector` — see `tiersFor`.
+   */
+  readonly botFill: { readonly count: number; readonly tier: BotDifficulty };
 }
 
 export interface MatchHandle {
@@ -84,7 +88,15 @@ export interface InProcessAllocatorOptions {
   readonly interpolationDelayMs: number;
   readonly readyTimeoutMs: number;
   readonly summaryHoldSeconds: number;
-  readonly botTier: BotTier | 'MIX';
+  /**
+   * Bot difficulty was here too, as `botTier`, and it was **never read** (playtest round 4, F1).
+   *
+   * `allocate` takes it from `MatchRequest.botFill.tier` — the per-request value, which is the
+   * right one, because a difficulty is a property of the match being asked for rather than of
+   * the allocator asking. The construction-time copy was set to `'MIX'` at the one call site and
+   * went nowhere, so it read as a wired knob and was one. Deleted rather than made authoritative:
+   * one fact, one path, and the path is the request.
+   */
   /** The master's current tick, so a new instance is stamped correctly before its first step. */
   readonly currentTick: () => number;
   readonly seed: number;

@@ -176,12 +176,22 @@ body.op-locked #viewport {
   align-items: center;
 }
 
-/* ---- mode / map pickers (M4) ------------------------------------------- */
+/* ---- mode / map / difficulty pickers (M4; difficulty at round 4, F1) ---- */
 
+/*
+ * Three columns since the difficulty picker joined the mode and the map.
+ *
+ * `auto-fit` against an explicit width rather than a fixed `repeat(3, ...)`: three fixed
+ * columns overflow a narrow viewport, and the convention this file already settled on at F11
+ * is that the **content** carries the cap while the layer stays full-bleed and centres it. At
+ * 840px that is three 264px columns; below it they fold to two and then to one instead of
+ * running off the side of the screen.
+ */
 .op-pickers {
   display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 280px));
-  gap: var(--s-8);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--s-6);
+  width: min(840px, 92vw);
 }
 
 .op-picker {

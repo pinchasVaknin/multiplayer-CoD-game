@@ -1,3 +1,4 @@
+import { BOT_DIFFICULTIES, type BotDifficulty } from '../ai/DifficultyTiers';
 import { defaultBindings, normaliseBindings, type BindingMap } from '../core/Keybinds';
 import { logger } from '../core/Log';
 import { ALL_EQUIPMENT, type EquipmentId } from '../equipment/EquipmentDefs';
@@ -87,6 +88,20 @@ export interface SettingsV1 {
    * crossing a trust boundary, and one side validating it is not enough.
    */
   callsign: string;
+
+  // ---- playtest round 4 ----------------------------------------------------
+  /**
+   * How hard the bots are in a solo match (F1).
+   *
+   * A setting rather than a per-launch choice because it is the same kind of fact as the mode
+   * and the map beside it: what the player picked last time is what they meant. The four tiers
+   * have existed since M3 and `'MIX'` — the map's authored spread — is the default, so an
+   * upgrading save loads with exactly the roster it had before.
+   *
+   * It governs **local** matches only. A dedicated server's bots are the operator's, from
+   * `BOT_DIFFICULTY`; see `MatchDeps.difficulty`.
+   */
+  botDifficulty: BotDifficulty;
 }
 
 export const SHADOW_QUALITIES = ['off', 'low', 'medium', 'high'] as const;
@@ -197,6 +212,7 @@ export function defaultSettings(modeId: string, mapId: string, fov: number): Set
     colorblind: 'off',
     bindings: defaultBindings(),
     callsign: generateCallsign(),
+    botDifficulty: 'MIX',
   };
 }
 
@@ -491,6 +507,7 @@ export function normaliseSave(raw: unknown, fallbackSettings: SettingsV1): SaveR
     s.showFps = settings['showFps'] === true;
     s.motionBlur = settings['motionBlur'] === true;
     s.colorblind = oneOf(settings['colorblind'], COLORBLIND_MODES, fallbackSettings.colorblind);
+    s.botDifficulty = oneOf(settings['botDifficulty'], BOT_DIFFICULTIES, fallbackSettings.botDifficulty);
     // `normaliseBindings` restores the defaults for any action the save never heard of, so
     // a pre-M8 save comes back fully bound rather than with three dead killstreak keys.
     s.bindings = normaliseBindings(settings['bindings']);

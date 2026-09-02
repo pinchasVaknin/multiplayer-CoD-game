@@ -5,6 +5,8 @@ import { nodeClock } from './NodeClock';
 import { installServerLogging, metric, type LogFormat } from './log';
 import { ServerLoop } from './Loop';
 import { ServerMatch, type ServerMatchResult } from './Match';
+import { auditModeBriefs } from '../shared/modes/ModeRegistry';
+import { BOT_TIERS, isBotDifficulty, type BotDifficulty } from '../shared/ai/DifficultyTiers';
 
 /**
  * The headless entry point (brief S6.4 and S7).
@@ -22,13 +24,23 @@ import { ServerMatch, type ServerMatchResult } from './Match';
  *   npm run server -- --matches 5 --json
  *   npm run server -- --map mp_depot --mode DOM --bots 10 --tier VETERAN --seed 7
  *   npm run server -- --minutes 10           (a fixed-duration jitter run)
+ *   npm run server -- --tier-sweep --asap    (playtest round 4 F1: one match per difficulty)
  */
 
 interface Args {
   map: string;
   mode: string;
   bots: number;
-  tier: string;
+  tier: BotDifficulty;
+  /**
+   * One match per difficulty, same seed, same map, same mode (playtest round 4, F1).
+   *
+   * The probe the selector is worth having only if it passes: it prints the roster each choice
+   * actually built and what that roster shot like, so *"the tiers do not produce different
+   * numbers"* is a thing somebody can read rather than assume. Ignores `--tier` and `--matches`,
+   * because it sets both itself.
+   */
+  tierSweep: boolean;
   seed: number;
   matches: number;
   /** Stop after this many simulated minutes even if the match has not ended. 0 = no cap. */
@@ -57,6 +69,7 @@ function parseArgs(argv: readonly string[]): Args {
     mode: 'TDM',
     bots: 10,
     tier: 'MIX',
+    tierSweep: false,
     seed: 1,
     matches: 1,
     minutes: 0,
@@ -85,8 +98,22 @@ function parseArgs(argv: readonly string[]): Args {
       case '--bots':
         args.bots = Number.parseInt(next(), 10);
         break;
-      case '--tier':
-        args.tier = next().toUpperCase();
+      case '--tier': {
+        /**
+         * Validated here rather than "inside `populate`", which is what the old comment on
+         * `newMatch` claimed and was not true: an unknown tier resolved to a one-element list
+         * containing it, and `createBot` then indexed `TierTable` with it and got `undefined`.
+         * `--tier VETRAN` produced a roster of bots with no config rather than an error.
+         */
+        const raw = next().toUpperCase();
+        if (!isBotDifficulty(raw)) {
+          throw new Error(`--tier must be one of ${BOT_TIERS.join(', ')} or MIX; got "${raw}"`);
+        }
+        args.tier = raw;
+        break;
+      }
+      case '--tier-sweep':
+        args.tierSweep = true;
         break;
       case '--seed':
         args.seed = Number.parseInt(next(), 10);
@@ -197,9 +224,9 @@ function newMatch(args: Args, index: number): ServerMatch {
     mapId: args.map,
     modeId: args.mode,
     bots: args.bots,
-    // The registry's tier union is checked inside `populate`; an unknown tier would throw
-    // there rather than silently producing a roster of recruits.
-    tier: args.tier as never,
+    // Checked at parse by `isBotDifficulty`, so this is a `BotDifficulty` rather than the
+    // `as never` that used to sit here in front of a claim about validation that was not true.
+    tier: args.tier,
     // Each match in a run gets its own seed, so five matches are five different fights
     // rather than the same one five times — which is what a stability run needs.
     seed: args.seed + index,
@@ -210,19 +237,32 @@ function tickCapFor(args: Args): number {
   return args.minutes > 0 ? Math.round((args.minutes * 60) / DT) : 0;
 }
 
+/**
+ * Whichever pacing was asked for, over a match the caller owns.
+ *
+ * The match is passed in and **not disposed here** (round 4, F1). The tier sweep reads
+ * `match.report()` after the run, and a runner that both built and destroyed its own match left
+ * the per-tier table unreachable from outside — which is why the two functions below stopped
+ * calling `newMatch` themselves.
+ */
+function runToEnd(args: Args, match: ServerMatch): Promise<ServerMatchResult | null> {
+  return args.asap ? runMatchAsap(args, 0, match) : runMatchPaced(args, 0, match);
+}
+
 /** Real time, drift-corrected, jitter measured. What a server actually does. */
-function runMatchPaced(args: Args, index: number): Promise<ServerMatchResult | null> {
+function runMatchPaced(
+  args: Args,
+  index: number,
+  match: ServerMatch,
+): Promise<ServerMatchResult | null> {
   return new Promise((resolve) => {
-    const match = newMatch(args, index);
     const cap = tickCapFor(args);
     const loop = new ServerLoop({
       tick: (t) => match.step(t),
       shouldContinue: (t) => !match.isOver && (cap === 0 || t < cap),
       onStop: () => {
         reportMatch(args, index, match, loop.meanSimMs, loop.jitter());
-        const result = match.outcome();
-        match.dispose();
-        resolve(result);
+        resolve(match.outcome());
       },
     });
     loop.start();
@@ -236,9 +276,12 @@ function runMatchPaced(args: Args, index: number): Promise<ServerMatchResult | n
  * loop, so the process stays interruptible — a five-match run that cannot be Ctrl-C'd is a
  * five-match run somebody kills with a task manager and loses the log of.
  */
-function runMatchAsap(args: Args, index: number): Promise<ServerMatchResult | null> {
+function runMatchAsap(
+  args: Args,
+  index: number,
+  match: ServerMatch,
+): Promise<ServerMatchResult | null> {
   return new Promise((resolve) => {
-    const match = newMatch(args, index);
     const cap = tickCapFor(args);
     /** 10 s of simulation per macrotask. Long enough to be cheap, short enough to yield. */
     const CHUNK = 600;
@@ -256,9 +299,7 @@ function runMatchAsap(args: Args, index: number): Promise<ServerMatchResult | nu
 
       if (match.isOver || (cap !== 0 && tick >= cap)) {
         reportMatch(args, index, match, tick === 0 ? 0 : simMsTotal / tick, null);
-        const result = match.outcome();
-        match.dispose();
-        resolve(result);
+        resolve(match.outcome());
         return;
       }
       setImmediate(pump);
@@ -266,6 +307,98 @@ function runMatchAsap(args: Args, index: number): Promise<ServerMatchResult | nu
 
     pump();
   });
+}
+
+/**
+ * Every registered mode's brief, printed and asserted (playtest round 4, F10).
+ *
+ * At boot of every run rather than behind a flag, because an audit somebody has to remember to
+ * pass is an audit nobody runs. It costs six mode constructions against no world and returns
+ * before the first tick. `GameMode.brief` being abstract already makes a *missing* brief a
+ * compile error; this is the half a type cannot state — that the sentence is non-empty, that
+ * three of them assembled correctly from the map's own objectives, and that no two modes are
+ * briefing the player identically.
+ */
+function reportModeBriefs(log: ReturnType<typeof logger>): number {
+  const audit = auditModeBriefs();
+  for (const row of audit.rows) log.info(`  ${row.id} (${row.mapId}): ${row.brief}`);
+  for (const problem of audit.problems) log.error(`  ${problem}`);
+  if (audit.problems.length > 0) {
+    log.error(`MODE BRIEF AUDIT FAILED: ${audit.problems.length} problem(s).`);
+    return 1;
+  }
+  log.info(`mode briefs: ${audit.rows.length} registered mode(s), all non-empty and distinct.`);
+  return 0;
+}
+
+/**
+ * One match per difficulty, everything else held constant (playtest round 4, F1).
+ *
+ * P10 asked for *"a match at each difficulty tier with the same seed, printing bot K/D per
+ * tier. If the tiers do not produce different numbers, the selector is not wired."* Two things
+ * are printed against that, and they answer different halves of it:
+ *
+ *  - **The roster**, per tier, which is the wiring itself. A choice that does not reach
+ *    `BotDirector` leaves every run with the map's authored spread, and five identical
+ *    composition rows is what that looks like.
+ *  - **Hit rate and K/D**, which is the table reaching behaviour — and both are **symmetric
+ *    measurements in a single-tier match**, which is the trap in reading this table. K/D is
+ *    exactly 1.00 in every single-tier row by construction: both sides are the same tier, so
+ *    every kill is also a death. Hit rate is symmetric for the same reason and measured
+ *    non-monotonic across the four (Hardened came out *below* Regular), because a harder tier is
+ *    also harder to hit. Neither is the discriminator.
+ *
+ * What separates the single-tier runs is the **time to the score limit**, printed on the roster
+ * line, because that is the one quantity a symmetric roster does not cancel: ten Veterans reach
+ * 75 kills faster than ten Recruits. And the `MIX` row is where per-tier K/D means something at
+ * all — there the four fight each other and the ordering is the acceptance claim M3 made.
+ */
+async function runTierSweep(args: Args, log: ReturnType<typeof logger>): Promise<number> {
+  const choices: readonly BotDifficulty[] = [...BOT_TIERS, 'MIX'];
+  log.info(
+    `tier sweep (F1): ${args.mode} on ${args.map}, ${args.bots} bots, seed ${args.seed}, ` +
+      `one match per difficulty.`,
+  );
+
+  let incomplete = 0;
+  for (const choice of choices) {
+    const sweepArgs: Args = { ...args, tier: choice, matches: 1, tierSweep: false };
+    const match = newMatch(sweepArgs, 0);
+    const result = await runToEnd(sweepArgs, match);
+    if (result === null) incomplete++;
+    const report = match.report();
+    const rows = Object.entries(report.perTier);
+    const composition = rows.map(([tier, r]) => `${tier} x${r.bots}`).join(', ');
+    log.info(
+      `  ${padEnd(choice, 9)} roster [${composition}] — ` +
+        `${result === null ? 'no winner' : `${result.reason} in ${result.simSeconds}s`}`,
+    );
+    for (const [tier, r] of rows) {
+      log.info(
+        `    ${padEnd(tier, 9)} ${r.bots} bot(s)  hit rate ${round3(r.hitRate)}  ` +
+          `${r.kills}k / ${r.deaths}d  K/D ${round3(r.kills / Math.max(1, r.deaths))}`,
+      );
+    }
+    metric('harness', 'tier.sweep', {
+      difficulty: choice,
+      map: args.map,
+      mode: args.mode,
+      seed: args.seed,
+      simSeconds: result?.simSeconds ?? null,
+      perTier: Object.fromEntries(
+        rows.map(([tier, r]) => [
+          tier,
+          { bots: r.bots, hitRate: round3(r.hitRate), kills: r.kills, deaths: r.deaths },
+        ]),
+      ),
+    });
+    match.dispose();
+  }
+  return incomplete === 0 ? 0 : 1;
+}
+
+function padEnd(s: string, n: number): string {
+  return s.length >= n ? s : s + ' '.repeat(n - s.length);
 }
 
 async function main(): Promise<number> {
@@ -277,6 +410,18 @@ async function main(): Promise<number> {
   installServerLogging(args.format, args.level);
 
   const log = logger('server');
+
+  /**
+   * The mode-brief audit, before anything simulates (F10).
+   *
+   * Ahead of the boot line on purpose: a failure here is about the content the whole run is
+   * built from, and reporting it after five matches would be reporting it after five matches.
+   */
+  const briefFault = reportModeBriefs(log);
+  if (briefFault !== 0) return briefFault;
+
+  if (args.tierSweep) return runTierSweep(args, log);
+
   log.info(
     `OPERATOR headless — node ${process.version}, ${args.matches} match(es), ` +
       `${args.mode} on ${args.map}, ${args.bots} bots, tier ${args.tier}, seed ${args.seed}, ` +
@@ -297,7 +442,9 @@ async function main(): Promise<number> {
 
   const results: Array<ServerMatchResult | null> = [];
   for (let i = 0; i < args.matches; i++) {
-    results.push(args.asap ? await runMatchAsap(args, i) : await runMatchPaced(args, i));
+    const match = newMatch(args, i);
+    results.push(args.asap ? await runMatchAsap(args, i, match) : await runMatchPaced(args, i, match));
+    match.dispose();
   }
 
   /**

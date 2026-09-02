@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { SchedulerConfig } from '../shared/ai/AiScheduler';
-import type { PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
+import type { BotDifficulty, PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
 import { EV, type GameBus } from '../shared/core/Events';
 import type { Input } from './input/Input';
 import type { Loop } from './engine/FrameLoop';
@@ -119,6 +119,8 @@ export interface MatchWorldDeps {
   /** M9 (S7): handed to the debug overlay, which reports the source of simulation. */
   readonly transport: ICommandQueue;
   readonly modeEntry: ModeEntry;
+  /** The menu's bot difficulty (F1). Read only by a local match — see `MatchDeps.difficulty`. */
+  readonly difficulty: BotDifficulty;
   readonly loadout: ResolvedLoadout;
 
   /**
@@ -352,6 +354,7 @@ export class MatchWorld {
       anisotropy: deps.textures.anisotropy,
       map: deps.mapEntry,
       mode: deps.modeEntry,
+      difficulty: deps.difficulty,
       tiers: deps.tiers,
       perceptionConfig: deps.perceptionConfig,
       schedulerConfig: deps.schedulerConfig,

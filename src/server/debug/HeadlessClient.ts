@@ -40,6 +40,7 @@ import {
   // `debugOverlayVisible` is deliberately absent: it reads only the front-end screen and the
   // request, and this process has neither. It is on the browser list rather than measured
   // here under a state sequence it does not depend on.
+  briefVisible,
   matchCaption,
   quickLoadoutWindow,
   scoreboardOpen,
@@ -351,6 +352,26 @@ export interface HeadlessClientReport {
    */
   readonly captionArenaTicks: number;
   readonly captionWaitingInLiveTicks: number;
+  /**
+   * F10. Ticks the mode brief was up, and the two numbers that make that one mean something.
+   *
+   * `briefTicks` is the window itself. `briefWindows` counts how many times it *opened*, because
+   * "once per match, at the start" is the requirement and a tick count cannot tell one
+   * ten-second window from ten one-second ones — the windows are what the assertion is written
+   * against.
+   *
+   * `briefArenaTicks` is the **control**, and getting that wrong is worth recording. It counts
+   * the ticks in the waiting room on which the phase-and-round rule *alone* would have opened
+   * the brief — the arena term of `briefVisible` is passed `false` deliberately — so it is the
+   * F13 shape: the number a rule without that term would have produced, printed beside the
+   * number the rule with it does. It is **not** an assertion, and the first draft of this probe
+   * made it one, which would have failed every run for doing exactly what it is meant to do.
+   * Asking `briefVisible` whether `briefVisible` suppresses the arena is a probe that can only
+   * be green, and the honest version of that question is the control.
+   */
+  readonly briefTicks: number;
+  readonly briefWindows: number;
+  readonly briefArenaTicks: number;
   /** §6.8 spectator picks, and the three invariant violations. All three must be zero. */
   readonly spectatePicks: number;
   readonly spectateSelfPicks: number;
@@ -609,6 +630,10 @@ export class HeadlessClient {
   private lastVotePhaseHeard: number = VotePhase.IDLE;
   private captionArenaTicks = 0;
   private captionWaitingInLiveTicks = 0;
+  private briefTicks = 0;
+  private briefWindows = 0;
+  private briefArenaTicks = 0;
+  private briefWasOpen = false;
   private projectileFrames = 0;
   private readonly remoteSerials = new Set<number>();
   private ownProjectileSeen = 0;
@@ -1449,6 +1474,9 @@ export class HeadlessClient {
       mapBallotBroadcasts: this.mapBallotBroadcasts,
       captionArenaTicks: this.captionArenaTicks,
       captionWaitingInLiveTicks: this.captionWaitingInLiveTicks,
+      briefTicks: this.briefTicks,
+      briefWindows: this.briefWindows,
+      briefArenaTicks: this.briefArenaTicks,
       spectatePicks: this.spectatePicks,
       spectateSelfPicks: this.spectateSelfPicks,
       spectateEnemyPicks: this.spectateEnemyPicks,
@@ -1809,6 +1837,21 @@ export class HeadlessClient {
       if (inArena) this.captionArenaTicks++;
       else if (caption === 'WAITING') this.captionWaitingInLiveTicks++;
     }
+
+    /**
+     * F10's window, sampled beside the caption because it is drawn under it.
+     *
+     * The second line is the control, not a violation count: it asks `briefVisible` with the
+     * arena term forced off, so it reports how long the room *would* have carried a brief. See
+     * `briefArenaTicks`.
+     */
+    const briefOpen = briefVisible(state.phase, state.round, inArena);
+    if (briefOpen) {
+      this.briefTicks++;
+      if (!this.briefWasOpen) this.briefWindows++;
+    }
+    this.briefWasOpen = briefOpen;
+    if (inArena && briefVisible(state.phase, state.round, false)) this.briefArenaTicks++;
 
     // Named `qlWindow` rather than `window`: `scripts/check-boundaries.mjs` bans the bare
     // identifier in `server/`, and it is right to — a headless process has no such object.

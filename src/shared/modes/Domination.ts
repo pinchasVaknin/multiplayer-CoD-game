@@ -90,6 +90,18 @@ export class Domination extends GameMode implements ObjectiveProvider {
   override readonly roundSeconds: number;
   override readonly scoreLimit: number;
 
+  /**
+   * F10, and it names the flags the map actually authored rather than "A, B and C".
+   *
+   * Three is the shipped count on both objective maps, and hard-coding the letters would be a
+   * sentence that is true of the content today and silently false the day a map authors two
+   * flags or four. The labels come off the same `ObjectiveZone`s the capture logic reads, so the
+   * brief cannot name a flag the player will not find.
+   */
+  override get brief(): string {
+    return `CAPTURE AND HOLD ${this.zones.map((z) => z.label).join(', ')} · ${this.config.scoreLimit} POINTS`;
+  }
+
   readonly zones: ObjectiveZone[] = [];
 
   private readonly config: DominationConfig;

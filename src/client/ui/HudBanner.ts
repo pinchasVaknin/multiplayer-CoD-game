@@ -31,6 +31,14 @@ export interface BannerState {
   phaseSeconds: number;
   phaseLabel: string;
   /**
+   * The mode's brief, under the caption, or empty (playtest round 4, F10).
+   *
+   * Part of the caption's own state rather than a surface of its own: it is drawn in the same
+   * block, by the same writer, from the same per-frame pass. `MatchHud` decides whether there
+   * is one — see `briefVisible` — and this class only ever asks whether the string is empty.
+   */
+  phaseBrief: string;
+  /**
    * Free-for-All: there are no teams to put on either side of the clock.
    *
    * FFA keeps the two-team substrate internally and the banner read it literally, so eight
@@ -55,6 +63,7 @@ export function makeBannerState(): BannerState {
     roundsToWin: 1,
     phaseSeconds: 0,
     phaseLabel: '',
+    phaseBrief: '',
     ffa: false,
     leaderName: '',
     leaderScore: 0,
@@ -76,6 +85,8 @@ export class HudBanner {
   private readonly clock: HTMLElement;
   private readonly rounds: HTMLElement;
   private readonly phase: HTMLElement;
+  /** F10's line under the caption. Written only when the string changed, like everything here. */
+  private readonly brief: HTMLElement;
 
   private lastA = -1;
   private lastB = -1;
@@ -84,6 +95,7 @@ export class HudBanner {
   private lastClock = '';
   private lastRounds = '';
   private lastPhase = '';
+  private lastBrief = '';
   private phaseShown = false;
 
   /** FFA captions above each score. Empty and hidden in team modes. */
@@ -145,6 +157,19 @@ export class HudBanner {
     this.phase = document.createElement('div');
     this.phase.className = 'hud-phase';
     this.phase.appendChild(document.createElement('span'));
+    /**
+     * The brief's own line (F10), a second child of the same block.
+     *
+     * `hidden` with a matching `.hud-phase__brief[hidden]` rule in `hud.css`. The attribute
+     * hides an element only because the UA stylesheet says so at the lowest specificity there
+     * is, and this element carries an author-level `display` — which is B13 exactly, and it
+     * cost two rounds. The rule is not defensive; without it the brief would stay painted for
+     * the rest of the match.
+     */
+    this.brief = document.createElement('small');
+    this.brief.className = 'hud-phase__brief';
+    this.brief.hidden = true;
+    this.phase.appendChild(this.brief);
   }
 
   /** The phase caption is a separate layer; the HUD mounts it over the centre of the screen. */
@@ -264,6 +289,7 @@ export class HudBanner {
     this.lastClock = '';
     this.lastRounds = '';
     this.lastPhase = '';
+    this.lastBrief = '';
     this.phaseShown = false;
     this.phase.classList.remove('hud-phase--on');
   }
@@ -273,6 +299,20 @@ export class HudBanner {
     if (show !== this.phaseShown) {
       this.phaseShown = show;
       this.phase.classList.toggle('hud-phase--on', show);
+    }
+    /**
+     * The brief is updated even when the caption is down (F10).
+     *
+     * The block it lives in is faded out by `--on`, so nothing is visible either way — but a
+     * brief left holding last match's string is a brief that flashes the wrong mode for one
+     * frame at the start of the next one, on the frame the caption comes back before this line
+     * is reached. Clearing it costs one comparison against a string that is almost always
+     * already equal.
+     */
+    if (state.phaseBrief !== this.lastBrief) {
+      this.lastBrief = state.phaseBrief;
+      this.brief.textContent = state.phaseBrief;
+      this.brief.hidden = state.phaseBrief === '';
     }
     if (!show) return;
     const text =

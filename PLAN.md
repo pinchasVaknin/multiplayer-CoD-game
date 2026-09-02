@@ -8297,3 +8297,320 @@ everything under "Open, and all of one kind".
   `loadout` and `reconnectToken`. F8 noted that pattern forming on the client (`debugRequest`,
   `NetClient.reconnectToken`, both on `Game`); this is the server's side of the same shape, and the
   next one belongs beside these.
+
+## Playtest round 4 — a difficulty table nothing could reach, and a mode that never said what it was for
+
+F1 and F10, and they have nothing in common except the session. F1 is the shape rule 4 keeps
+naming — one fact with three copies, of which one was dead and one consulted neither of the
+others — and F10 is not a defect at all: it is something that was never built, so the interesting
+part is where it was put rather than what was wrong with it.
+
+### F1 — the system was finished at M3 and had no way in
+
+`shared/ai/DifficultyTiers.ts` has held four tiers since M3: reaction time, aim cone, convergence
+rate, turn rate, burst discipline, push aggression, peek rate, flank chance and, from M5, grenade
+use. `BotArsenal` treats the weapon as a fifth lever. `BotDirector.populate` deals from whatever
+list it is handed. Every part of a difficulty system was already there and measured.
+
+**Nothing upstream of `populate` was ever a variable.** The server's one allocation site said
+`botFill: { count: 10, tier: 'MIX' }` as a literal, the arena said `tier: 'MIX'` as a literal, and
+the client read `this.deps.map.tierMix` directly. So this session built no difficulty system. It
+deleted three literals and put one value where they had been.
+
+There were **three** copies of the fact and they were in three different states:
+
+| Where | State |
+|---|---|
+| `MatchRequest.botFill.tier` | Read. `InProcessMatchAllocator.allocate` passes it to `LiveMatch` |
+| `InProcessAllocatorOptions.botTier` | **Never read by anything.** Declared, set to `'MIX'` at its one call site, and dead since the day it was written |
+| `ServerMatch.replacePlayerWithBot` | Read `mapEntry.tierMix` directly, ignoring `options.tier` entirely |
+
+The second is the familiar one: a knob that looks wired, is not, and reads as configuration to
+anybody who greps for it. Deleted rather than made authoritative — a difficulty is a property of
+the match being requested rather than of the allocator being asked, and the request already
+carried it.
+
+**The third is a real defect, and it was latent rather than harmless.** A player who leaves a
+running match has their seat handed to a fresh bot, and that bot was dealt from the map's authored
+spread whatever the match was configured for. It could not be observed before this session because
+the configured value was always `'MIX'`, and the two expressions agree exactly then — which is how
+a bypass survives: it is only wrong once somebody makes the thing it bypasses mean something. It
+would have been the first report `BOT_DIFFICULTY=RECRUIT` produced, and the report would have read
+*"the bots are inconsistent"*, which is unattributable. The replacement log line names the tier
+now, for that reason and no other.
+
+`tiersFor(difficulty, authoredMix)` is the one place a choice becomes a list. It is a function
+rather than an expression written twice because three call sites read it — the server's
+`populate`, the client's `populateDefault`, and the replacement above — and `ServerMatch` resolves
+it once at construction and holds the result, so the two server readers cannot drift again.
+
+The choice arrives from three places that do not overlap: `BOT_DIFFICULTY` for a dedicated server,
+the Play Solo screen for a local match, and `--tier` for the harness. `BOT_DIFFICULTY` governs
+**both** instances the process runs — the ballot's live match and the permanent waiting room —
+because a room whose bots are harder than the match it feeds is a room that lies about the server.
+A connected client's own preference reaches nothing at all: it populates no roster, and the bots it
+is shooting at are the operator's.
+
+**`--tier` was not validated, and the comment beside it said it was.** `newMatch` carried *"the
+registry's tier union is checked inside `populate`; an unknown tier would throw there rather than
+silently producing a roster of recruits."* It would not. `--tier VETRAN` resolved to a one-element
+list holding `VETRAN`, `createBot` indexed `TierTable` with it and got `undefined`, and the run
+produced ten bots with no config. It is checked at parse now, which is what the comment always
+claimed.
+
+### F10 — the brief belongs to the mode, and half of them can only be written by the map
+
+The temptation the brief named up front is a map of strings in the HUD, and the argument against
+it is not tidiness: a HUD that knows the name of every mode has to be edited when a mode is added,
+and the sixth mode is the one that gets forgotten.
+
+`GameMode.brief` is **abstract**, so a mode that forgets one is a compile error. That is the
+strongest form this check can take and it needed no new script: `npm run check` already runs three
+typecheck targets, and a class of bug that the type system can refuse outright does not need a
+`.mjs` file to notice it afterwards.
+
+It is not on `ModeEntry` beside `blurb`, and the reason is F10's own example — *"where to take the
+bomb"*. Three of the six are getters that assemble the sentence from the objectives the **map**
+authored: Search & Destroy names its actual sites, Domination its actual flags. A registry entry
+knows a mode's rules and cannot know a map's letters, and writing `A, B and C` by hand would be a
+sentence that is true of today's content and silently false the day a map authors two flags.
+
+`blurb` stays and is not duplicated. It sells a mode to somebody choosing one, on a screen a player
+migrated in by a ballot never sees. The brief instructs somebody already standing on the map with
+ten seconds before the round starts. Different sentences, on purpose.
+
+### The window, and the three surfaces that share it
+
+`briefVisible(phase, round, inWarmupArena)` lives in `shared/ui/HudSurfaces.ts` beside the other
+round-4 rules and for the same reason: it is a pure function of state that outlives the element, so
+this process can count the ticks it was up without ever drawing one.
+
+The window is round one's ten-second freeze — deliberately the *same expression* as
+`quickLoadoutWindow`'s `prematch` arm, because it is the same window. Two rules that must agree and
+are written twice are two rules that will eventually disagree. Later Search & Destroy rounds get
+three seconds and no brief: by round two the player has played round one, and a banner over the
+crosshair as a one-life round starts is a banner in front of an angle somebody is holding.
+
+P10 asked for the priority between the surfaces in that window to be defined rather than
+discovered. It is defined by **derivation and geometry, not by z-order**:
+
+| Surface | Where | Why it does not collide |
+|---|---|---|
+| Quick class selector | left edge, vertically centred | Shares the window and shares no pixels. The player is choosing a class *and* being told what the match is for; those are not competing messages |
+| Mode brief | centred, under the caption at 34% | — |
+| Alive strip / objective banner | centred at 52px / 84px | Both above it, and neither moves |
+| The ballot | the arena's | **Cannot be up here at all**, and that is a fact rather than a z-index. The server broadcasts the vote to `warmup.sessions` only and round three made `onMigrated` hide it, so a client in a live pre-match has been migrated by definition. The brief is off in the arena from the other side. Different instances: no ordering is needed, or possible |
+
+The arena has no brief because it has nothing to brief. §6.3's room has no objective and no win
+condition, F7 took the last consequence out of it, and `matchCaption` already ranks the room above
+the phase there and reads `WAITING`. A permanent banner over the crosshair of a room nobody is
+trying to win is exactly the *"present and empty"* element `HudStreaks` refuses to be.
+
+The one place the geometry could still collide is the class panel, and its clearance is **derived
+rather than eyeballed**: `.ql` sits at `left: var(--s-4)` with a 168px minimum and `border-box`
+padding, so its right edge is about 216px, and a centred block clears that when its width is at
+most `100vw - 440px`. That is the second term of the brief's `max-width`, which is why it is an
+expression rather than a round number. It has still never been seen — the arithmetic says they
+cannot overlap and only a browser can say whether it reads well, which is what the list below is
+for.
+
+### The F10 probe was written wrong first, and it is the mistake this file keeps recording
+
+The first draft asserted that the brief was never up in the waiting room, and it would have failed
+every run — for doing precisely what it is meant to do. `briefVisible` returns false in the arena
+*by construction*, so the counter was measuring the arena term suppressing itself: a probe that can
+only be green, dressed as one that blocks.
+
+What is printed instead is the **control**, in the shape F13 established one session earlier: the
+ticks the phase-and-round rule *alone* would have run for in the room, printed beside the ticks the
+rule with the arena term actually ran for. The blocking assertion moved to the one question that is
+not about the predicate but about what the predicate is fed — *"round one only"* means a client
+that migrated into N matches may see at most N briefs, and more than that means the server sent
+`WARMUP` with `round <= 1` again inside a match.
+
+### Measured
+
+Every number below came out of a run in this session. **No protocol change**: difficulty is server
+configuration that never crosses the wire, and the brief is derived on the client from the mode it
+already has.
+
+**The mode briefs, and they are the F10 headline measurement.** Audited at the boot of every
+`main.ts` run rather than behind a flag, because an audit somebody has to remember to pass is an
+audit nobody runs. Each mode is constructed against the first map it can legally run on, and the
+sentence is the one a player would read:
+
+| Mode | Brief, as assembled |
+|---|---|
+| TDM | ELIMINATE THE ENEMY TEAM · FIRST TO 75 KILLS |
+| DOM | CAPTURE AND HOLD A, B, C · 200 POINTS |
+| KC | KILLS DROP TAGS · TAKE ENEMY TAGS TO SCORE, YOUR OWN TO DENY · 65 TAGS |
+| FFA | NO TEAMS · EVERY OPERATOR FOR THEMSELVES · FIRST TO 30 KILLS |
+| SND | ONE LIFE · ATTACKERS PLANT THE BOMB AT A OR B · DEFENDERS DEFUSE IT |
+| RANGE | EVERY WEAPON UNLOCKED · STATIC AND POP-UP TARGETS · NOBODY SHOOTING BACK |
+
+Six registered modes, six briefs, all non-empty and all distinct. The letters in the two objective
+rows are read off the map's own zones, which is the half a type cannot check and the reason this is
+a run rather than a grep.
+
+**The difficulty sweep** — `npm run server -- --tier-sweep --asap --text --seed 1`. One TDM on
+Foundry per choice, ten bots, same seed, everything else held.
+
+| Choice | Roster it actually built | Time to 75 kills |
+|---|---|---|
+| RECRUIT | RECRUIT x10 | **523.4 s** |
+| REGULAR | REGULAR x10 | **317.1 s** |
+| HARDENED | HARDENED x10 | **264.0 s** |
+| VETERAN | VETERAN x10 | **230.3 s** |
+| MIX | RECRUIT x2, REGULAR x4, HARDENED x3, VETERAN x1 | 285.4 s |
+
+The roster column is the wiring, and it is the half that answers *"if the tiers do not produce
+different numbers, the selector is not wired"* without any argument about behaviour: an unwired
+choice leaves five identical composition rows. The `MIX` row is the map's authored eight-entry
+spread dealt round-robin over ten, wrapping onto its first two — which is what `populate` has
+always done and is the check that `'MIX'` still means exactly what it meant.
+
+**Hit rate and K/D are symmetric in a single-tier match, and reading them as the discriminator is
+the trap.** K/D is exactly 1.00 in all four single-tier rows by construction — both sides are the
+same tier, so every kill is also a death. Hit rate is symmetric for the same reason and came out
+**non-monotonic**: 0.138 / 0.152 / 0.142 / 0.185, with Hardened *below* Regular, because a harder
+tier is also harder to hit. The comment in `runTierSweep` said hit rate was what separated the
+single-tier runs; the measurement said otherwise and the comment was rewritten to match it. What
+separates them is the time column above, which a symmetric roster does not cancel.
+
+The `MIX` row is where per-tier K/D means anything at all, and there it is monotonic in both:
+
+| Tier | Bots | Hit rate | K / D | K/D |
+|---|---|---|---|---|
+| RECRUIT | 2 | 0.069 | 5 / 24 | **0.21** |
+| REGULAR | 4 | 0.119 | 37 / 55 | **0.67** |
+| HARDENED | 3 | 0.193 | 54 / 45 | **1.20** |
+| VETERAN | 1 | 0.251 | 39 / 11 | **3.55** |
+
+That is M3's acceptance claim holding, measured in one match rather than asserted.
+
+**`npm run harness`** — five TDM matches on Foundry, unpaced, seeds 1-5. All five reached the
+score limit (285.4 / 301.1 / 307.0 / 286.1 / 283.2 s of simulation). The two audits earlier
+sessions left blocking are quoted because they are *unchanged*: `partialStock` **0** against 284
+to 294 observed grenade stocks per match, and `negativeBalances` **0** with `resyncs` **0** in all
+five. Neither F1 nor F10 touches the equipment or the streak economy, and a session that moved
+one of them without meaning to would have moved it here.
+
+**`npm run skirmish`** — three headless clients, a real server, a real wire, shipped timings, one
+complete cycle through both ballots, a migration and a TDM. **FLOW CHECK PASSED.**
+
+| Probe | Result |
+|---|---|
+| Mode brief up | **1 800 ticks over 3 windows** — one window per client, 600 ticks each, which is the ten-second freeze exactly |
+| Brief windows against migrations into a live match | **3 of 3** — the round-one assertion, and it blocks |
+| The control: the same rule without its arena term | **1 755 ticks** it would have run for in the waiting room |
+| Quick loadout window (unchanged) | 8 351 ticks over 24 windows (4 796 respawn / 3 555 pre-match), **0** while alive |
+| Tab surviving `neutralise` while dead (unchanged) | 2 365 of 4 805 dead ticks |
+| Spectator invariants (unchanged) | 5 085 selections while dead, 0 self / 0 enemy / 0 dead |
+| Divergence checker (unchanged) | 0 / 7 316 per client |
+| Mispredictions into a live match (unchanged) | **0** |
+| `arena (F12)` (unchanged) | 0 ticks of `WAITING` in a live match |
+
+**The pre-match column is the measurement that says the two surfaces are genuinely different
+rules, and it is the useful one.** The class panel's pre-match total is 3 555 ticks across three
+clients — about 19.8 s each — and the brief's is 600 ticks each. The difference is one arena
+warm-up: `quickLoadoutWindow` has no arena term and opens in the waiting room's first ten seconds
+as well, because changing class there is exactly what a player is in that room to do. The brief
+does not, because there is nothing to brief. Two surfaces in one window, derived from state that
+differs by one term, measured differing by precisely that term.
+
+**The first run of this failed, and it was the probe rather than the code**: the same tree with
+the assertion written the wrong way round reported `FLOW CHECK FAILED: 1761 tick(s) with the mode
+brief up in the waiting room`. That number is the control above, and reading it as a violation is
+what the section on the probe describes. Everything else in that run was already green.
+
+**`BOT_DIFFICULTY` end to end, and the replacement bug watched red.**
+`BOT_DIFFICULTY=recruit npm run skirmish -- --drop-return 1` — lower case on purpose, since the
+parser is case-insensitive. The value reaches every place this process makes a bot, in one run:
+
+| Where it landed | Line |
+|---|---|
+| The boot line | `arena with 3 bots at RECRUIT` |
+| The arena instance | `FREE-FOR-ALL on TESTBED: 1 vs 2 bots at RECRUIT` |
+| The allocated live match | `match 1: TEAM DEATHMATCH on FOUNDRY, 10 bots at RECRUIT` |
+| `ServerMatch.populate` | `5 vs 5 bots at RECRUIT, seed 40504` |
+| **Four leavers' seats** | `ANVIL took over on team A at RECRUIT`, and three more at the teardown |
+
+FLOW CHECK PASSED, and F8's reconnect is unaffected: 1 cycle, seat kept, score kept, divergence
+after return 0/5235.
+
+**The replacement was then watched red, and the first attempt at the control could not have
+failed.** Run red at `RECRUIT` and the bug reports `RECRUIT` too — Foundry's authored mix is eight
+entries, the index at that moment is seven, and `mix[7]` is `RECRUIT` by coincidence. A red control
+that agrees with green is not a control, and the fix is to pick a value where the two answers
+differ rather than to believe the one that agreed:
+
+| Same drop, same seed, `BOT_DIFFICULTY=veteran` | The replacement bot came back at |
+|---|---|
+| Red — `replacePlayerWithBot` reading `mapEntry.tierMix`, one line, nothing else changed | **RECRUIT** |
+| Green | **VETERAN** |
+
+Which is the worst version of the defect and the reason it is worth a section: the *softest* tier
+in the *hardest* match, arriving silently, on the side of whoever just lost a team-mate.
+
+### What was not verified
+
+- **Nothing on screen.** `HeadlessClient` builds no `ClientMatch` and the preview pane never fires
+  `requestAnimationFrame`, so every F10 claim above is about a rule and none is about a pixel. The
+  brief's text has been checked for content and never for legibility, and the `.hud-phase__brief`
+  block — including its `[hidden]` companion rule, which is the B13 trap — has never been painted.
+- **The single-tier hit-rate ordering.** One seed, one map, one mode. Four numbers within 0.05 of
+  each other on a symmetric roster is not enough to claim an ordering in either direction, and
+  none is claimed: the sweep is a wiring probe and the behavioural claim rests on the `MIX` row and
+  on the time column.
+- **`BOT_DIFFICULTY` against a deployed server.** It is exercised end to end through `loadConfig`
+  and every instance-construction site in *this* process, at two different values; it has not been
+  set on Render, and `deploy/operator.env` and `DEPLOY.md` are documentation until somebody does.
+- **The solo path at a non-default difficulty.** `ClientMatch.populateDefault` calls the same
+  `tiersFor` the server calls and typechecks against the same union, but `HeadlessClient` builds no
+  `ClientMatch`, so *"pick Recruit in the menu and get ten Recruits"* is reasoned from one shared
+  function and has not been run. It is the first item on the browser list for that reason.
+
+### Needs a browser
+
+- **The brief itself.** Start a solo TDM. During the ten-second freeze a second line must appear
+  under `GET READY · 10`, reading `ELIMINATE THE ENEMY TEAM · FIRST TO 75 KILLS`, and it must
+  **go away** when the countdown ends — that is the `.hud-phase__brief[hidden]` rule, and B13 is
+  what happens when a block like this ships without one.
+- **Search & Destroy, which is the report's own example.** The brief must name the map's real
+  sites (`AT A OR B` on Foundry). Then let round one end: rounds two onward get a three-second
+  freeze and **no brief**.
+- **The three surfaces in one window.** In the pre-match freeze the class panel is on the left and
+  the brief is centred under the caption; read both without either obscuring the other, then press
+  a digit and confirm the class change still lands.
+- **The waiting room.** Connect to a server and stand in the arena: the caption reads `WAITING`
+  and there must be **no brief under it**, ever, including in the first ten seconds after
+  connecting — which is exactly the window the control number above says the rule would otherwise
+  have opened in.
+- **Difficulty on the Play Solo screen.** Three columns now. Pick Recruit, start a match, and the
+  bots should be visibly slower to react; pick Veteran and they should not. Then select the
+  Shooting Range: the difficulty column must lock and read *"Difficulty — no bots in this mode"*,
+  not *"fixed by this mode"*.
+- **The picker at a narrow window.** The third column made `.op-pickers` `auto-fit` against
+  `min(840px, 92vw)`; at a phone-width viewport the columns must fold rather than run off the side
+  of the screen.
+- **The setting surviving a reload.** Pick a difficulty, reload the page, and the Play Solo screen
+  must come back on the same one. It is written on `pagehide` beside the mode and the map.
+
+Unchanged from the earlier lists: the arena-return residual of 1-3 sub-25 cm mispredictions, and
+everything under "Open, and all of one kind".
+
+### Found while here
+
+- **`MatchRequest.botFill.count` is not read either.** `allocate` takes only `botFill.tier`, and
+  `LiveMatch.buildDeps` hard-codes `bots: 10` with a comment saying the mode's authored roster
+  decides the count — which is true, and which makes the `count` field on the request a second
+  dead knob beside the one this session deleted. Left, because unlike the tier it has no reader to
+  disagree with and removing it is a change to the allocator's public shape for no defect.
+- **`BotHarness` keeps its own four-tier `MIX` constant**, which is a flat spread rather than the
+  map's authored one. That is right for a measurement lever — M3's per-tier table only means
+  something if the roster is controlled — and it is now the only place in the tree that says
+  "mixed" and means something other than `tiersFor`. Recorded rather than unified, because
+  unifying them would make the debug harness measure the content instead of the tiers.
+- **`npm run check` cannot see a mode brief and `npm run harness` can**, which is the same split
+  `check-unlocks.mjs` documents about itself. The abstract member is what the gate enforces; the
+  sentence being worth reading is enforced one layer out, at the boot of every simulation run.

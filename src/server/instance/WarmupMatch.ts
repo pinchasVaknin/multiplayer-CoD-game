@@ -1,3 +1,4 @@
+import type { BotDifficulty } from '../../shared/ai/DifficultyTiers';
 import { logger } from '../../shared/core/Log';
 import { InstanceState, WARMUP_MATCH_ID } from '../../shared/net/Skirmish';
 import { GREYBOX_MAP } from '../../shared/world/maps/greybox';
@@ -56,6 +57,15 @@ export interface WarmupOptions {
   readonly startTick: number;
   /** Bots in the arena. §6.3 asks for 2-3, so a lone player has something to shoot. */
   readonly bots: number;
+  /**
+   * How hard they are (playtest round 4, F1).
+   *
+   * The same `BOT_DIFFICULTY` the live match runs at, and passed rather than defaulted here for
+   * the reason `bots` is: this instance has no opinion about the operator's configuration. It
+   * was the literal `'MIX'` before this session, which meant a server deliberately set to
+   * RECRUIT still put a Veteran in the room a new player lands in.
+   */
+  readonly difficulty: BotDifficulty;
 }
 
 export class WarmupMatch extends MatchInstance {
@@ -115,7 +125,7 @@ function buildDeps(options: WarmupOptions): MatchInstanceDeps {
     modeId: 'FFA',
     bots: options.bots,
     rosterOverride: options.bots,
-    tier: 'MIX',
+    tier: options.difficulty,
     seed: options.seed,
     startTick: options.startTick,
     baked: options.bakery.instanceView(GREYBOX_MAP.id),

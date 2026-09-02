@@ -174,6 +174,24 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
   readonly sites: ObjectiveZone[] = [];
   readonly config: SearchDestroyConfig;
 
+  /**
+   * F10, and this is the report's own example: *"where to take the bomb"*.
+   *
+   * The sites are named from the map's own objectives, so the letters in the brief are the
+   * letters on the `SITE A` banner the objective HUD puts up when the carrier stands in one.
+   *
+   * **Both sides in one sentence, deliberately.** The brief is a property of the mode and the
+   * mode does not know which seat is reading it — and more usefully, the two halves of Search &
+   * Destroy are only legible together: a defender who is not told the attackers are carrying a
+   * bomb to one of two named places does not know what they are defending. Which side *you* are
+   * on is already said continuously by the objective banner and the alive strip; this says what
+   * the round is.
+   */
+  override get brief(): string {
+    const where = this.sites.map((s) => s.label).join(' OR ');
+    return `ONE LIFE · ATTACKERS PLANT THE BOMB AT ${where} · DEFENDERS DEFUSE IT`;
+  }
+
   /** Which side is attacking this round. Flips with the side swap. */
   attackers: BotTeam = 'B';
   bomb: BombState = 'CARRIED';

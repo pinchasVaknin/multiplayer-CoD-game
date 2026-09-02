@@ -440,6 +440,11 @@
   left: 50%;
   top: 34%;
   transform: translate(-50%, -50%);
+  /* A column since the mode brief joined it (round 4, F10): caption, then brief under it. */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
   opacity: 0;
   visibility: hidden;
   transition: opacity var(--dur-med) var(--ease), visibility var(--dur-med);
@@ -450,7 +455,7 @@
   visibility: visible;
 }
 
-.hud-phase span {
+.hud-phase > span {
   font-family: var(--font-ui);
   font-size: var(--t-title);
   font-weight: var(--w-heavy);
@@ -459,6 +464,49 @@
   color: var(--c-accent);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.95);
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The mode brief (playtest round 4, F10). One line, under `GET READY`, for ten seconds.
+ *
+ * Quieter than the caption on purpose: the caption is a countdown the eye tracks and this is a
+ * sentence the eye reads once. It is centred by the parent's `align-items` and capped rather
+ * than wrapped free, which is the convention F11 settled on for every overlaid block — the
+ * content carries the width and the layer stays where it is.
+ */
+.hud-phase__brief {
+  /*
+   * Wide enough to read, and **derived so it cannot reach the class panel**, which is up in the
+   * same window (F10 defines the priority between those two surfaces; see `briefVisible`).
+   *
+   * `.ql` is `left: var(--s-4)` with a 168px minimum and `border-box` padding, so its right edge
+   * sits at roughly 16 + 200 = 216px. This block is centred, so its left edge is
+   * `(100vw - width) / 2`, and keeping that clear of 216px with margin means
+   * `width <= 100vw - 440px`. That is the second term, and it is arithmetic rather than a number
+   * tuned until the overlap stopped. Below about 860px of viewport the sentence narrows and
+   * wraps onto a second line, which the flex column above already handles; it never slides under
+   * the panel.
+   */
+  max-width: min(720px, 100vw - 440px);
+  text-align: center;
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  font-weight: var(--w-medium);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-text);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.95);
+}
+
+/*
+ * **Required, not defensive** — the same rule `.hud-mortar` and `.ql` carry and for the same
+ * reason. `[hidden] { display: none }` is a UA rule at the lowest specificity there is, and the
+ * `display` this block inherits from a flex parent is not the problem; a future author-level
+ * `display` on this selector would be. B13 was two rounds of a panel that hid an attribute and
+ * nothing else, and the audit that followed it says every attribute-hidden surface gets one.
+ */
+.hud-phase__brief[hidden] {
+  display: none;
 }
 
 /*

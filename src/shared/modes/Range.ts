@@ -55,6 +55,15 @@ export class Range extends GameMode {
   /** No limit: the bar at the top of the HUD has nothing to count toward. */
   override readonly scoreLimit = 0;
 
+  /**
+   * F10. Nobody is coming, which on a range is the whole brief.
+   *
+   * No distances in it deliberately: where the dummies stand is `client/combat/TargetRange.ts`,
+   * which this package cannot see, and a sentence in `shared/` naming numbers held in `client/`
+   * is a sentence that goes stale the first time somebody moves a target.
+   */
+  override readonly brief = 'EVERY WEAPON UNLOCKED · STATIC AND POP-UP TARGETS · NOBODY SHOOTING BACK';
+
   private readonly config: RangeConfig;
   private ticksLeft = 0;
 

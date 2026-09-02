@@ -116,6 +116,62 @@ export interface TierConfig {
 export type TierTable = Record<BotTier, TierConfig>;
 
 /**
+ * What the player, the operator and the harness actually choose (playtest round 4, F1).
+ *
+ * A tier or `'MIX'`, and the second one is not a fifth tier — it is *the map's authored
+ * spread*, which is what every match in this project has run since M3. Keeping it in the same
+ * union as the four tiers is what lets one value travel from a menu option, an environment
+ * variable or a CLI flag all the way to `BotDirector.populate` without anybody branching on
+ * "did they pick a tier or did they leave it alone".
+ */
+export type BotDifficulty = BotTier | 'MIX';
+
+/** Every legal choice, in the order a picker should offer them. Easiest first, mix last. */
+export const BOT_DIFFICULTIES: readonly BotDifficulty[] = [...BOT_TIERS, 'MIX'];
+
+/**
+ * One line each, for the menu and for `DEPLOY.md`.
+ *
+ * Here rather than in `client/ui/Menus.ts` because a difficulty that reads one way in the
+ * front end and another way in the deployment guide is two descriptions of one table, and this
+ * file is the table. Nothing here touches the DOM, so `shared/` still compiles without it.
+ */
+export const BOT_DIFFICULTY_BLURBS: Readonly<Record<BotDifficulty, string>> = {
+  RECRUIT: 'Slow to react, wide cone, never throws',
+  REGULAR: 'The M3 baseline — the tier a mixed roster is mostly made of',
+  HARDENED: 'Fast, accurate, pushes and flanks',
+  VETERAN: 'Short controlled bursts, leads a moving target, grenades often',
+  MIX: 'The authored spread of all four across the roster — the default',
+};
+
+/**
+ * The one place a difficulty becomes a list of tiers.
+ *
+ * Three call sites read this and they are the three that used to disagree: the server's
+ * `ServerMatch.populate`, the client's `ClientMatch.populateDefault`, and the bot that takes
+ * over a leaver's seat mid-match. The third is why this is a function rather than an
+ * expression repeated twice — `replacePlayerWithBot` dealt from the map's authored mix and
+ * never looked at what the match was configured for, so a Recruit match handed a leaver's seat
+ * to whichever tier the round-robin had reached. It was invisible because the two agreed
+ * whenever the choice was `'MIX'`, which until this session it always was.
+ *
+ * `authoredMix` is `MapEntry.tierMix` at every call site. It is passed rather than imported so
+ * this stays a pure function of its arguments and `shared/ai/` keeps not knowing about the mode
+ * registry.
+ */
+export function tiersFor(
+  difficulty: BotDifficulty,
+  authoredMix: readonly BotTier[],
+): readonly BotTier[] {
+  return difficulty === 'MIX' ? authoredMix : [difficulty];
+}
+
+/** Whether a string off the environment, a save or a command line names a difficulty. */
+export function isBotDifficulty(raw: string): raw is BotDifficulty {
+  return (BOT_DIFFICULTIES as readonly string[]).includes(raw);
+}
+
+/**
  * The shipped tiers.
  *
  * Reaction times span the 0.15-0.6 s band S6.3 specifies, ordered so Veteran is at the

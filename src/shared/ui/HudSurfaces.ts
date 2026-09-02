@@ -218,6 +218,54 @@ export function matchCaption(phase: MatchPhase, inWarmupArena: boolean): string 
 }
 
 /**
+ * The mode brief, under the caption, and only in the window it can be read in (round 4, F10).
+ *
+ * ## Which window, and why it is that one
+ *
+ * The **ten-second pre-match freeze of round one** — `MatchFlow.MATCH_START_SECONDS`, which
+ * round two lengthened from three for the quick class selector. It is the only moment in a
+ * match when a player is standing still, cannot be shot, and has not yet decided anything. The
+ * later rounds of a Search & Destroy series get three seconds and no brief: by round two the
+ * player has played round one, and a banner over the crosshair at the moment a one-life round
+ * starts is a banner in front of an angle somebody is holding.
+ *
+ * The window is deliberately the *same expression* as `quickLoadoutWindow`'s `'prematch'` arm —
+ * `WARMUP`, round one — because they are the same window. Two rules that must agree and are
+ * written twice are two rules that will eventually disagree; if that arm ever changes, this
+ * reads the change.
+ *
+ * ## The three surfaces in that window, and how they do not collide
+ *
+ * P10 asked for the priority between them to be defined rather than discovered. It is defined
+ * by **derivation and geometry, not by z-order**, which is what the round-4 invariant is for:
+ *
+ *  - **The quick class selector** (`.ql`) is a left-edge panel, vertically centred. The brief is
+ *    a centred line under the caption at 34% of the height. They share the window and share no
+ *    pixels, which is the point — the player is being asked to choose a class *and* told what
+ *    the match is for, and those are not competing messages.
+ *  - **The ballot** (`.op-vote`) cannot be up here at all, and that is a fact rather than a
+ *    z-index. The vote overlay belongs to the arena: the server broadcasts it to `warmup.sessions`
+ *    only, and round three made `onMigrated` hide it. A client in a live match's pre-match freeze
+ *    has been migrated by definition. The brief is off in the arena for the same structural
+ *    reason, from the other side — so the two surfaces are in different instances and no ordering
+ *    between them is needed or possible.
+ *  - **The objective banner** (`.hud-objective`) sits at 84px, under the score banner, and the
+ *    alive strip at 52px. Both are above the brief and neither moves.
+ *
+ * ## Why the arena is excluded
+ *
+ * `matchCaption` already ranks the room above the phase and reads `WAITING` there for as long
+ * as a player stands in it. There is nothing to brief: §6.3's room has no objective, no score
+ * and nothing to win, and F7 took the last of the consequences out of it. A permanent banner
+ * over the crosshair of a room nobody is trying to win is exactly the *"present and empty"*
+ * element `HudStreaks` refuses to be.
+ */
+export function briefVisible(phase: MatchPhase, round: number, inWarmupArena: boolean): boolean {
+  if (inWarmupArena) return false;
+  return phase === 'WARMUP' && round <= 1;
+}
+
+/**
  * Does that caption carry a countdown beside it?
  *
  * `HudBanner` appends the phase's remaining seconds whenever there are any, which is right for

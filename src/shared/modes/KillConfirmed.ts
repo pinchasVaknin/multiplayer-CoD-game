@@ -96,6 +96,16 @@ export class KillConfirmed extends GameMode implements ObjectiveProvider {
   override readonly roundSeconds: number;
   override readonly scoreLimit: number;
 
+  /**
+   * F10, and both halves are in it because the deny is the half nobody works out unaided.
+   *
+   * *"A kill is not a point"* is the whole mode, and a player briefed only on collecting enemy
+   * tags will leave their own team-mates' on the floor for the other side to take.
+   */
+  override get brief(): string {
+    return `KILLS DROP TAGS · TAKE ENEMY TAGS TO SCORE, YOUR OWN TO DENY · ${this.config.scoreLimit} TAGS`;
+  }
+
   /** Live tags. Read by `MatchObjectives` for the meshes and by the HUD for the markers. */
   readonly tags: DogTag[] = [];
 

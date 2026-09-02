@@ -4,7 +4,7 @@ import { logger } from '../../shared/core/Log';
 import type { SummaryInfo, SummaryRow, SummaryXpLine } from '../../shared/net/Messages';
 import { InstanceState, type MatchId } from '../../shared/net/Skirmish';
 import { findMap, findMode } from '../../shared/modes/ModeRegistry';
-import type { BotTier } from '../../shared/ai/DifficultyTiers';
+import type { BotDifficulty } from '../../shared/ai/DifficultyTiers';
 import { ServerMatch } from '../Match';
 import type { MapBakery } from '../MapBakery';
 import { MatchInstance, type MatchInstanceDeps, type UnseatCause } from './MatchInstance';
@@ -52,7 +52,7 @@ export interface LiveMatchOptions {
   readonly interpolationDelayMs: number;
   readonly seed: number;
   readonly startTick: number;
-  readonly botTier: BotTier | 'MIX';
+  readonly botTier: BotDifficulty;
   /** How long `READY_WAIT` waits before starting without a slow client, ms (§4.18). */
   readonly readyTimeoutMs: number;
   /** Seconds the summary is held before everybody goes back (§6.9: 12-15 s). */

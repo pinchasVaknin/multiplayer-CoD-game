@@ -6,7 +6,7 @@ import type { ProceduralAudio } from '../engine/ProceduralAudio';
 import type { ColumnDef } from '../../shared/modes/GameMode';
 import type { MatchFlow } from '../../shared/modes/MatchFlow';
 import type { MapDef } from '../../shared/world/maps/types';
-import { captionHasCountdown, matchCaption } from '../../shared/ui/HudSurfaces';
+import { briefVisible, captionHasCountdown, matchCaption } from '../../shared/ui/HudSurfaces';
 import { Hud, makeHudState, type HudState } from './Hud';
 import { Scoreboard } from './Scoreboard';
 import { HudStreaks, makeStreakHudState, type StreakHudState } from './HudStreaks';
@@ -61,6 +61,16 @@ export interface MatchHudDeps {
    * derived, because `MatchHud` has no connection and no business acquiring one.
    */
   readonly warmupArena: boolean;
+  /**
+   * The mode's own one-line brief (playtest round 4, F10).
+   *
+   * Read from `GameMode.brief` once, at construction, beside `modeName` and `columns` — the
+   * three facts about the mode this file is allowed to know. It is a string rather than the mode
+   * itself for the reason the class comment gives: nothing here computes anything about the
+   * match, and a `MatchHud` holding a live mode would be a `MatchHud` that could start asking it
+   * questions.
+   */
+  readonly modeBrief: string;
 }
 
 export class MatchHud {
@@ -147,6 +157,16 @@ export class MatchHud {
      */
     banner.phaseSeconds = captionHasCountdown(this.deps.warmupArena) ? flow.phaseSecondsRemaining : 0;
     banner.phaseLabel = matchCaption(flow.currentPhase, this.deps.warmupArena);
+    /**
+     * The brief, under it, and this is its **one writer** too (F10).
+     *
+     * The predicate is `briefVisible` rather than "is the caption up": the caption is also up
+     * for `ROUND OVER`, for `MATCH OVER` and permanently in the arena, and none of those is a
+     * moment to tell somebody what the mode is for.
+     */
+    banner.phaseBrief = briefVisible(flow.currentPhase, flow.round, this.deps.warmupArena)
+      ? this.deps.modeBrief
+      : '';
 
     // The flash and the threat are pushed into the HUD from the sim tick they happen on;
     // fold them into the state here so `HudTactical` still sees one record per frame.

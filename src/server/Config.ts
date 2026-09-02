@@ -1,3 +1,4 @@
+import { isBotDifficulty, type BotDifficulty } from '../shared/ai/DifficultyTiers';
 import { NET_PERFECT, parseConditions, type NetConditions } from '../shared/net/NetSim';
 import { VOTE_CYCLE_CONFIG, type VoteCycleConfig } from '../shared/net/Skirmish';
 
@@ -93,6 +94,19 @@ export interface ServerConfig {
    * starts to crowd the greybox room, which is a weapon range rather than an arena.
    */
   readonly warmupBots: number;
+  /**
+   * How hard the bots are, everywhere this process makes any (`BOT_DIFFICULTY`, F1).
+   *
+   * `RECRUIT`, `REGULAR`, `HARDENED`, `VETERAN`, or `MIX` for the map's authored spread, which
+   * is the default and is what every match has run since M3. The four tiers have existed in
+   * `shared/ai/DifficultyTiers.ts` since M3 and until this session nothing outside a debug panel
+   * could reach them: the one allocation site named `'MIX'` as a literal, and so did the arena.
+   *
+   * It governs **both** instances this process runs — the ballot's live match and the permanent
+   * warmup arena — because they are one operator's answer to one question, and a room whose bots
+   * are harder than the match they are waiting for would be a room that lies about the server.
+   */
+  readonly botDifficulty: BotDifficulty;
   /**
    * How long `READY_WAIT` waits on a client's background build before starting without it
    * (§4.18, §6.5), ms.
@@ -201,6 +215,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
     metricsSeconds: intOr(env['METRICS_SECONDS'], 30, 0, 3600),
     rewindDisabled: (env['REWIND_DISABLED'] ?? '') === '1',
     warmupBots: intOr(env['WARMUP_BOTS'], 3, 0, 8),
+    botDifficulty: difficultyOr(env['BOT_DIFFICULTY'], 'MIX'),
     readyTimeoutMs: intOr(env['READY_TIMEOUT_MS'], 20_000, 500, 120_000),
     summaryHoldSeconds: intOr(env['SUMMARY_HOLD_SECONDS'], 14, 1, 60),
     faultInjection: (env['FAULT_INJECTION'] ?? '') === '1',
@@ -233,7 +248,8 @@ export function describeConfig(cfg: ServerConfig): string {
       : '';
   return (
     `${cfg.host}:${cfg.port} ${tls}, skirmish flow, ` +
-    `arena with ${cfg.warmupBots} bots, seed ${cfg.seed}, ${cfg.snapshotHz} Hz snapshots, ` +
+    `arena with ${cfg.warmupBots} bots at ${cfg.botDifficulty}, seed ${cfg.seed}, ` +
+    `${cfg.snapshotHz} Hz snapshots, ` +
     `${cfg.interpolationDelayMs}ms interpolation, ` +
     `${cfg.readyTimeoutMs}ms ready timeout, ${cfg.summaryHoldSeconds}s summary hold` +
     (cfg.faultInjection ? ', FAULT INJECTION ON' : '') +
@@ -254,6 +270,21 @@ function intOr(raw: string | undefined, fallback: number, min: number, max: numb
   // Clamped rather than rejected: a deploy with `PORT=99999` should come up on a usable
   // port and say so, not refuse to start at three in the morning.
   return i < min ? min : i > max ? max : i;
+}
+
+/**
+ * A bot difficulty, or the fallback.
+ *
+ * Case-insensitive and **clamped rather than rejected**, the same way `intOr` treats a port:
+ * `BOT_DIFFICULTY=veteran` and `BOT_DIFFICULTY=VETERAN` are the same instruction, and a typo
+ * comes up on the authored spread with the boot line saying so rather than refusing to start at
+ * three in the morning. The rotation is the opposite case and is validated — see `listOr` — for
+ * the reason given there: a bad map id breaks at the first rotation, hours later.
+ */
+function difficultyOr(raw: string | undefined, fallback: BotDifficulty): BotDifficulty {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const upper = raw.trim().toUpperCase();
+  return isBotDifficulty(upper) ? upper : fallback;
 }
 
 function blankToUndefined(raw: string | undefined): string | undefined {

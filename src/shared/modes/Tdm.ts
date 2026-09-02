@@ -60,6 +60,14 @@ export class Tdm extends GameMode {
   override readonly roundSeconds: number;
   override readonly scoreLimit: number;
 
+  /**
+   * F10. The limit is in the sentence because in TDM it is the objective: there is nothing to
+   * stand on and nothing to carry, so what is worth saying is where the finish line is.
+   */
+  override get brief(): string {
+    return `ELIMINATE THE ENEMY TEAM · FIRST TO ${this.config.scoreLimit} KILLS`;
+  }
+
   private readonly config: TdmConfig;
   /** Ticks left, owned here because the win condition is the only thing that reads it. */
   private ticksLeft = 0;

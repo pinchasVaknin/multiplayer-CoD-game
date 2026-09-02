@@ -145,7 +145,6 @@ export class Server {
       interpolationDelayMs: cfg.interpolationDelayMs,
       readyTimeoutMs: cfg.readyTimeoutMs,
       summaryHoldSeconds: cfg.summaryHoldSeconds,
-      botTier: 'MIX',
       currentTick: () => this.loop.currentTick,
       seed: cfg.seed,
       roundSecondsOverride: cfg.matchRoundSeconds,
@@ -1030,7 +1029,7 @@ export class Server {
         modeId: resolution.modeId,
         mapId: resolution.mapId,
         players,
-        botFill: { count: 10, tier: 'MIX' },
+        botFill: { count: 10, tier: this.cfg.botDifficulty },
       });
       this.live = handle;
       const elapsed = nowMs() - startedMs;
@@ -1207,7 +1206,7 @@ export class Server {
       modeId,
       mapId,
       players: [],
-      botFill: { count: 10, tier: 'MIX' },
+      botFill: { count: 10, tier: this.cfg.botDifficulty },
     });
     this.live = handle;
     // One step, so the instance builds its entity list and its bots take a tick — a teardown
@@ -1308,6 +1307,7 @@ export class Server {
       seed: this.cfg.seed,
       startTick,
       bots: this.cfg.warmupBots,
+      difficulty: this.cfg.botDifficulty,
     });
   }
 

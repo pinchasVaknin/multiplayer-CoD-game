@@ -1233,6 +1233,29 @@ function reportFlow(input: FlowReportInput): number {
       `the scoreboard key was discarded on all ${deadTicks} dead tick(s) — neutralise dropped it (B6)`,
     );
   }
+  /**
+   * F10, and the assertion is about the **windows**, not about the arena.
+   *
+   * The arena number is a control and is printed rather than asserted — see
+   * `HeadlessClientReport.briefArenaTicks` for why asserting it would have been a probe that
+   * could only be green.
+   *
+   * This one can genuinely go red, because it is not a question about the predicate: it is a
+   * question about the **replicated phase and round** the predicate is fed. *"Round one only"*
+   * is the rule, so a client that migrated into two matches may see at most two briefs. More
+   * than that means the server sent `WARMUP` with `round <= 1` again inside a match — a
+   * Search & Destroy series re-entering round one, or a flow reset that should not have
+   * happened — and the visible symptom would be the objective banner reappearing over a live
+   * round, which is what round three's stale-overlay report looked like from the outside.
+   */
+  const briefWindowsTotal = reports.reduce((n, r) => n + r.briefWindows, 0);
+  const liveMigrations = reports.reduce((n, r) => n + r.intoLiveWindows.length, 0);
+  if (briefWindowsTotal > liveMigrations) {
+    problems.push(
+      `the mode brief opened ${briefWindowsTotal} time(s) across ${liveMigrations} migration(s) ` +
+        'into a live match — it is a round-one surface and opened more than once (F10)',
+    );
+  }
   log.info(
     `hud surfaces: quick loadout ${surfaceTicks} tick(s) over ${surfaceWindows} window(s) ` +
       `(${surfaceRespawn} respawn / ${surfacePrematch} pre-match), ${surfaceAlive} while alive (must be 0); ` +
@@ -1659,6 +1682,9 @@ function reportArena(server: Server, reports: readonly HeadlessClientReport[]): 
   const broadcasts = reports.reduce((sum, r) => sum + r.mapBallotBroadcasts, 0);
   const captionArena = reports.reduce((sum, r) => sum + r.captionArenaTicks, 0);
   const captionLive = reports.reduce((sum, r) => sum + r.captionWaitingInLiveTicks, 0);
+  const briefTicks = reports.reduce((sum, r) => sum + r.briefTicks, 0);
+  const briefWindows = reports.reduce((sum, r) => sum + r.briefWindows, 0);
+  const briefArena = reports.reduce((sum, r) => sum + r.briefArenaTicks, 0);
 
   log.info(
     `arena (F7): score rows ${rows}, ` +
@@ -1676,6 +1702,15 @@ function reportArena(server: Server, reports: readonly HeadlessClientReport[]): 
     `arena (F12): caption up ${captionArena} tick(s) in the room, ` +
       `${captionLive} tick(s) of WAITING in a live match (must be 0)`,
   );
+  /**
+   * F10, printed here because it is the same question as F12 — *where is this client* — and the
+   * arena is the control for both. The window count is the denominator: `briefTicks` alone
+   * cannot distinguish one ten-second brief from a banner that never came down.
+   */
+  log.info(
+    `brief (F10): up ${briefTicks} tick(s) over ${briefWindows} window(s) in live matches; ` +
+      `without the arena term the same rule would have run ${briefArena} tick(s) in the room`,
+  );
 
   metric('skirmish', 'arena', {
     scoreRows: rows,
@@ -1688,6 +1723,9 @@ function reportArena(server: Server, reports: readonly HeadlessClientReport[]): 
     worstBallotBroadcasts: worstBroadcasts,
     captionArenaTicks: captionArena,
     captionWaitingInLiveTicks: captionLive,
+    briefTicks,
+    briefWindows,
+    briefArenaTicks: briefArena,
   });
 }
 

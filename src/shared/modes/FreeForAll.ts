@@ -101,6 +101,20 @@ export class FreeForAll extends GameMode {
   override readonly roundSeconds: number;
   override readonly scoreLimit: number;
 
+  /**
+   * F10, and the arena is the reason the second half is conditional.
+   *
+   * `FFA_WARMUP_CONFIG` zeroes the limit (§6.3), so the permanent waiting room would otherwise
+   * be briefed as *"first to 0 kills"*. The brief is not drawn in the arena at all — see
+   * `briefVisible` — but a mode whose sentence only reads correctly because nobody looks at it
+   * is a sentence waiting to be wrong.
+   */
+  override get brief(): string {
+    return this.config.scoreLimit > 0
+      ? `NO TEAMS · EVERY OPERATOR FOR THEMSELVES · FIRST TO ${this.config.scoreLimit} KILLS`
+      : 'NO TEAMS · EVERY OPERATOR FOR THEMSELVES';
+  }
+
   private readonly config: FreeForAllConfig;
   private ticksLeft = 0;
 

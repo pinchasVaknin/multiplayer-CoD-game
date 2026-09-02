@@ -89,6 +89,7 @@ All optional; every one has a working default. Full list in `src/server/Config.t
 | Key | Default | Notes |
 |---|---|---|
 | `WARMUP_BOTS` | `3` | Bots in the permanent arena. |
+| `BOT_DIFFICULTY` | `MIX` | How hard every bot on this server is, in the live match **and** in the arena (playtest round 4, F1). `RECRUIT`, `REGULAR`, `HARDENED`, `VETERAN`, or `MIX` for the map's authored spread of all four dealt round-robin, which is what every earlier build ran. Reaction time, aim cone, convergence, push aggression and grenade use all move with it; health does not and never will. Case-insensitive; an unrecognised value falls back to `MIX`. The boot line names the one in force. |
 | `SUMMARY_HOLD_SECONDS` | `14` | How long the post-match board is held. |
 | `PLAY_SECONDS` | `120` | Free play between ballots. |
 | `STATIC_DIR` | `dist` | Empty string serves no client. |

@@ -1,3 +1,8 @@
+import {
+  BOT_DIFFICULTIES,
+  BOT_DIFFICULTY_BLURBS,
+  type BotDifficulty,
+} from '../../shared/ai/DifficultyTiers';
 import { inputLabel, type ActionId, type BindingMap } from '../../shared/core/Keybinds';
 import type { GameModeId } from '../../shared/modes/GameMode';
 import { MAPS, MODES, modesForMap } from '../../shared/modes/ModeRegistry';
@@ -18,6 +23,14 @@ import { MAPS, MODES, modesForMap } from '../../shared/modes/ModeRegistry';
 export interface MenuSelection {
   modeId: GameModeId;
   mapId: string;
+  /**
+   * How hard the bots are (playtest round 4, F1).
+   *
+   * Beside the mode and the map because it is the same kind of choice and it is answered on the
+   * same screen. Solo only: a connected client populates no roster, and the bots it shoots at
+   * belong to the server that made them.
+   */
+  difficulty: BotDifficulty;
 }
 
 export interface MenuDeps {
@@ -287,7 +300,8 @@ export class Menus {
     // A mode may pin its map — the Shooting Range only exists where the dummies are. The
     // picker still shows the map so the player knows where they are going; it simply
     // cannot be changed, which is more informative than hiding the column.
-    const forced = MODES.find((m) => m.id === this.deps.selection.modeId)?.forcedMapId ?? null;
+    const modeEntry = MODES.find((m) => m.id === this.deps.selection.modeId);
+    const forced = modeEntry?.forcedMapId ?? null;
     const mapList = this.picker(
       'Map',
       MAPS.map((m) => ({ id: m.id, name: m.name, blurb: m.blurb })),
@@ -298,6 +312,35 @@ export class Menus {
         this.paint();
       },
       forced !== null,
+    );
+
+    /**
+     * Difficulty (F1), and it is a third column rather than a control below the two.
+     *
+     * The four tiers have been in `DifficultyTiers.ts` since M3 with nothing outside a debug
+     * panel able to choose between them. `MIX` is last and is the default: it is not a fifth
+     * tier but the map's authored spread of all four, which is what every match in this project
+     * has run — so the picker's default selection is the behaviour that was already shipped.
+     */
+    const difficultyList = this.picker(
+      'Difficulty',
+      BOT_DIFFICULTIES.map((id) => ({
+        id,
+        name: id === 'MIX' ? 'MIXED' : id,
+        blurb: BOT_DIFFICULTY_BLURBS[id],
+      })),
+      this.deps.selection.difficulty,
+      (id) => {
+        this.deps.selection.difficulty = id as BotDifficulty;
+        this.paint();
+      },
+      // The Shooting Range fills no roster (`populatesRoster: false`), so there is nobody for a
+      // difficulty to describe. Shown and locked rather than hidden, for the reason the map
+      // column is: a picker that vanishes tells the player less than one that says why.
+      // `false` for a selection the registry does not recognise: the picker stays live, and
+      // `findMode` throws on launch, which is where a bad mode id should be found.
+      modeEntry !== undefined && !modeEntry.populatesRoster,
+      'no bots in this mode',
     );
 
     const launch = this.button('Start match', () => this.deps.onLaunch());
@@ -314,9 +357,14 @@ export class Menus {
 
     const columns = document.createElement('div');
     columns.className = 'op-pickers';
-    columns.append(modeList, mapList);
+    columns.append(modeList, mapList, difficultyList);
 
-    this.screen.replaceChildren(title('OPERATOR'), subtitle('Select mode and map'), columns, actions);
+    this.screen.replaceChildren(
+      title('OPERATOR'),
+      subtitle('Select mode, map and difficulty'),
+      columns,
+      actions,
+    );
     launch.focus();
   }
 
@@ -328,6 +376,16 @@ export class Menus {
     selected: string,
     onPick: (id: string) => void,
     locked = false,
+    /**
+     * Why it is locked, appended to the heading.
+     *
+     * The map picker's reason — *"fixed by this mode"* — was the only one until the difficulty
+     * picker arrived, and it is the wrong sentence for that one: the Shooting Range does not
+     * *fix* a difficulty, it has nobody to apply one to. A locked control that misstates its own
+     * reason is worse than an enabled one that does nothing, because the player then believes
+     * the wrong thing about the mode.
+     */
+    lockedNote = 'fixed by this mode',
   ): HTMLElement {
     const wrap = document.createElement('div');
     wrap.className = 'op-picker';
@@ -335,7 +393,7 @@ export class Menus {
 
     const heading = document.createElement('span');
     heading.className = 'op-label';
-    heading.textContent = locked ? `${label} — fixed by this mode` : label;
+    heading.textContent = locked ? `${label} — ${lockedNote}` : label;
     wrap.appendChild(heading);
 
     for (const entry of entries) {

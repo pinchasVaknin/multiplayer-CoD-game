@@ -151,6 +151,33 @@ export abstract class GameMode {
   abstract readonly scoreLimit: number;
 
   /**
+   * One line saying what a player is here to do (playtest round 4, F10).
+   *
+   * *"A short brief per mode: what the objective is, where to take the bomb."* The obvious
+   * shape for that is a map of strings in the HUD, and it is the wrong one: a HUD that knows
+   * the name of every mode is a HUD that has to be edited when a mode is added, and the sixth
+   * mode is the one that gets forgotten. So the mode says it and the HUD draws whatever it is
+   * given — and because this is **abstract**, a mode that forgets is a compile error rather
+   * than a blank banner nobody notices until a playtest.
+   *
+   * A getter rather than a string field on three of the five, and that is the second reason it
+   * lives here rather than beside `ModeEntry.blurb` in the registry: *"where to take the bomb"*
+   * is a per-map fact. Search & Destroy names its actual sites, Domination its actual flags, and
+   * both read them off the objectives the map authored. A registry entry knows the mode's rules
+   * and cannot know the map's letters.
+   *
+   * It is not `ModeEntry.blurb` and does not replace it. The blurb sells a mode to somebody
+   * choosing one — *"first to 75 kills, or ten minutes"* — on a screen a player migrated in by a
+   * ballot never sees. This is an instruction to somebody who is already standing on the map
+   * with ten seconds before the round starts, and the two are different sentences on purpose.
+   *
+   * Upper case, no trailing punctuation, and short enough to read in that window: it is drawn
+   * under the `GET READY` caption in one line. See `briefVisible` in `shared/ui/HudSurfaces.ts`
+   * for exactly when, and `MatchHud` for the one writer.
+   */
+  abstract readonly brief: string;
+
+  /**
    * Seconds a decided round is held on screen before the next one starts (post-M8).
    *
    * A default rather than an abstract, because only one mode has an opinion. Four seconds is

@@ -5,6 +5,8 @@ import { DEPOT_MAP } from '../world/maps/depot';
 import { DUNES_MAP } from '../world/maps/dunes';
 import { FOUNDRY_MAP } from '../world/maps/foundry';
 import { GREYBOX_MAP } from '../world/maps/greybox';
+import { ScoreSystem } from '../combat/ScoreSystem';
+import { createGameBus } from '../core/Events';
 import type { GameMode, GameModeId, ModeDeps } from './GameMode';
 import { Domination } from './Domination';
 import { FFA_CONFIG, FFA_WARMUP_CONFIG, FreeForAll } from './FreeForAll';
@@ -242,6 +244,87 @@ export function modesForMap(mapId: string): ModeEntry[] {
     if (mode.forcedMapId !== null && mode.forcedMapId !== mapId) return false;
     return mode.requiresObjective === undefined || kinds.has(mode.requiresObjective);
   });
+}
+
+/**
+ * Every registered mode's brief, built the way a match builds it (playtest round 4, F10).
+ *
+ * ## Why this is a run rather than a grep
+ *
+ * `GameMode.brief` is `abstract`, so a mode that omits it entirely is a **compile error** and
+ * needs no check at all. What a type cannot say is that the string is worth reading: three of
+ * the six are getters that assemble the sentence from the map's authored objectives, so
+ * "Domination briefs you to capture nothing" is a live question about content, and no regular
+ * expression over the source can answer it. `scripts/check-unlocks.mjs` says the same thing
+ * about its own limits from the other side.
+ *
+ * Each mode is constructed against **the first map it can legally run on** — the same
+ * `modesForMap` filter the menu uses — because Search & Destroy throws on a map with no bomb
+ * sites and Domination on one with no flags, and a mode that cannot be built anywhere is a
+ * different fault which this reports as such rather than crashing on.
+ *
+ * Pure, allocating a throwaway bus and score per mode and keeping neither. Nothing here
+ * subscribes to anything that outlives the call.
+ */
+export function auditModeBriefs(): ModeBriefAudit {
+  const rows: ModeBriefRow[] = [];
+  const problems: string[] = [];
+  const seen = new Map<string, GameModeId>();
+
+  for (const entry of MODES) {
+    const map = MAPS.find((m) => modesForMap(m.id).some((mode) => mode.id === entry.id));
+    if (map === undefined) {
+      problems.push(`${entry.id} can be played on no registered map; its brief cannot be built.`);
+      continue;
+    }
+    let brief: string;
+    try {
+      brief = entry
+        .create({
+          bus: createGameBus(),
+          score: new ScoreSystem(createGameBus()),
+          roster: [],
+          mapDef: map.def,
+        })
+        .brief.trim();
+    } catch (err) {
+      problems.push(`${entry.id} threw while being built on ${map.id}: ${String(err)}`);
+      continue;
+    }
+    rows.push({ id: entry.id, mapId: map.id, brief });
+    if (brief === '') {
+      problems.push(
+        `${entry.id} has an empty brief. The pre-match banner would be blank for ten seconds, ` +
+          'which reads as a mode with no objective rather than as a missing string.',
+      );
+    }
+    const duplicate = seen.get(brief);
+    if (duplicate !== undefined) {
+      problems.push(
+        `${entry.id} and ${duplicate} brief identically ("${brief}"). Two modes with one ` +
+          'sentence is a copy-paste, and the second mode is the one nobody notices is wrong.',
+      );
+    } else if (brief !== '') {
+      seen.set(brief, entry.id);
+    }
+  }
+
+  if (rows.length !== MODES.length && problems.length === 0) {
+    problems.push('fewer briefs than registered modes with nothing to say why — audit is broken.');
+  }
+  return { rows, problems };
+}
+
+export interface ModeBriefRow {
+  readonly id: GameModeId;
+  /** The map it was built on, because three of the briefs name that map's objectives. */
+  readonly mapId: string;
+  readonly brief: string;
+}
+
+export interface ModeBriefAudit {
+  readonly rows: readonly ModeBriefRow[];
+  readonly problems: readonly string[];
 }
 
 export function findMap(id: string): MapEntry {

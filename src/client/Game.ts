@@ -471,6 +471,10 @@ export class Game {
     this.selection = {
       modeId: resolveModeId(asModeId(settings.modeId)).id,
       mapId: resolveMapId(settings.mapId).id,
+      // Already validated against the union by `normaliseSave`, which is where every other
+      // enumerated setting is checked. No resolve step, because unlike a map id it has never
+      // had a rename to survive.
+      difficulty: settings.botDifficulty,
     };
 
     this.renderer = new Renderer(canvas);
@@ -1344,6 +1348,7 @@ export class Game {
       schedulerConfig: this.schedulerConfig,
       mapEntry: this.mapEntry(),
       modeEntry,
+      difficulty: this.selection.difficulty,
       loadout: this.applyLoadout(),
       onMatchEnded: () => {
         this.pendingSummary = true;
@@ -2437,7 +2442,11 @@ export class Game {
   };
 
   private readonly onPageHide = (): void => {
-    this.profile.patchSettings({ modeId: this.selection.modeId, mapId: this.selection.mapId });
+    this.profile.patchSettings({
+      modeId: this.selection.modeId,
+      mapId: this.selection.mapId,
+      botDifficulty: this.selection.difficulty,
+    });
     this.profile.flush();
     this.audio.suspend();
   };
