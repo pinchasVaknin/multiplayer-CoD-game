@@ -35,29 +35,30 @@ export class BearingIndicator {
   }
 
   /**
-   * Point at `(targetX, targetZ)`, or go away.
+   * Point along `bearingRad`, or go away.
    *
-   * `active` is passed rather than inferred from the coordinates because "no target" and "a
-   * target at the origin" are different facts and the origin is inside every one of these maps.
+   * **This no longer computes a bearing, and that is the fix** (P9 follow-up). It used to take
+   * a world position and a player yaw and do the trigonometry here, with a comment claiming the
+   * result matched `Hud.showHitDirection`'s convention. It did not: the two expressions differ
+   * by twice the player's yaw, so this arrow was correct only while the player faced yaw 0 and
+   * pointed a full 180 degrees wrong at yaw 90. P9 wrote that expression into a shared component
+   * and gave it a second consumer, which turned one wrong arrow into two.
+   *
+   * `bearingRad` now comes from `shared/ui/ScreenProjection`, which is the one place in the
+   * project that turns a world point into a screen direction, and which `readability` measures.
+   * What is left here is the DOM write, which is all this class should ever have been.
+   *
+   * `active` is passed rather than inferred because "no target" and "a target dead ahead" are
+   * different facts and both produce a bearing of zero.
    */
-  update(
-    active: boolean,
-    targetX: number,
-    targetZ: number,
-    playerX: number,
-    playerZ: number,
-    playerYaw: number,
-  ): void {
+  update(active: boolean, bearingRad: number): void {
     if (active !== this.shown) {
       this.shown = active;
       this.element.style.opacity = active ? '1' : '0';
     }
     if (!active) return;
 
-    // World bearing to the target, minus where the player is looking. Positive is to the
-    // right of the crosshair, which is the convention `Hud.showHitDirection` uses.
-    const worldAngle = Math.atan2(targetX - playerX, -(targetZ - playerZ));
-    const deg = Math.round(((worldAngle - playerYaw) * 180) / Math.PI);
+    const deg = Math.round((bearingRad * 180) / Math.PI);
     if (deg === this.lastAngleDeg) return;
     this.lastAngleDeg = deg;
     this.element.style.transform = `rotate(${deg}deg)`;

@@ -664,6 +664,7 @@ export class Match {
       teamSize: deps.map.teamSize,
       freeForAll: deps.mode.freeForAll === true,
       warmupArena: deps.warmupArena === true,
+      cameraRig: deps.cameraRig,
     });
     this.weaponAudio = new WeaponAudio(deps.audio);
 

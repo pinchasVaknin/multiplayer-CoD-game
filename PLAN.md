@@ -9051,3 +9051,212 @@ removed from them.
   as "Planned" while M11 Gate B is part-done and four playtest rounds have landed on top of it.
   Left alone deliberately: correcting it is a claim about what is complete, and Gate B's own
   "What Gate B still needs" list is the honest answer to that question rather than a table row.
+
+---
+
+## Playtest round 4 — P9's bomb arrow pointed at the wrong place, and one component is not one calculation
+
+A regression from P9's own F2, reported after it shipped. The brief asked for the mechanism
+before the fix, and the mechanism is the more useful half: **P9 set out to remove a duplicated
+bearing calculation and instead gave a wrong one a second consumer.**
+
+### What P9 did, and why it made things worse rather than better
+
+F2 asked for an arrow pointing at the bomb. `MatchObjectives` rules out HUD markers, so the
+brief offered two routes, and route (a) said to reuse *"the mechanism that already exists for hit
+direction (`HudTactical.showHitDirection`), one component for both uses rather than two that will
+drift"*.
+
+P9 read that, noticed correctly that `showHitDirection` is the **transient** member of the family
+and `HudTactical.updateThreat` is the **persistent** one, and unified the bomb arrow with the
+threat arrow into `BearingIndicator`. That reasoning is still right. What it did not do was look
+inside the expression it was promoting, and it shipped a comment asserting the thing it had not
+checked:
+
+> *"Positive is to the right of the crosshair, which is the convention `Hud.showHitDirection`
+> uses."*
+
+It is not. There were **three** bearing calculations in the client and no two were the same:
+
+    MatchFeedback   wrap(playerYaw - atan2(-(tx - px), -(tz - pz)))     hit chevrons
+    HudTactical          atan2( (tx - px), -(tz - pz)) - playerYaw      grenade threat
+    BearingIndicator     the second one, verbatim, now also the bomb    P9
+
+`atan2(-a, b)` is `-atan2(a, b)`, so the first is `playerYaw + A` and the second is
+`A - playerYaw`. **They differ by exactly twice the player's yaw.** `aimWithOffset` settles which
+is right — this project's forward is `(-sin(yaw), -cos(yaw))` — and it is `MatchFeedback`'s.
+
+So the grenade warning has pointed to the wrong place for as long as it has existed, and P9
+doubled the number of surfaces standing on it. Measured over a target orbiting a stationary
+player, at four headings:
+
+| Player facing | Worst error in P9's shipped bearing |
+|---|---|
+| yaw 0 | **0 deg** |
+| yaw 45 | **90 deg** |
+| yaw 90 | **180 deg** — the arrow points at the opposite side of the map |
+| yaw 180 | 0 deg (the error is `2 x yaw`, so it wraps back to zero here) |
+
+The two seats where it is right are yaw 0 and yaw 180, and yaw 0 is where a fresh spawn faces.
+That is the whole reason two rounds of playtesting did not catch the grenade arrow: the first
+thing anybody does after a respawn is look at what is in front of them.
+
+**The generalisable half, and it is a correction to P9's own conclusion.** P9's section says the
+two arrows are "one component rather than two that will drift". One *component* is not one
+*calculation*. Putting two callers behind one class removed the duplication that was visible in
+the file tree and preserved the one that mattered, because the arithmetic inside was never the
+thing being reviewed — it was pixels, and no probe in this project renders. The same sentence
+could have been written about `showHitDirection`, which was the correct implementation and stayed
+outside the new component entirely.
+
+### The fix is a function, not a component
+
+`shared/ui/ScreenProjection.ts` is the one place that turns a world point into a screen
+direction. It takes **matrices** rather than a yaw — `camera.matrixWorldInverse.elements` and
+`camera.projectionMatrix.elements`, column-major, which is what `THREE.Matrix4` already holds —
+so it describes exactly what the renderer will do rather than a hand-derived approximation of it,
+and it lives in `shared/` for the reason `Crosshair` and `HudSurfaces` do: `shared/` compiles
+without `three` and without the DOM, so this process can run it.
+
+It returns a `ScreenPoint`: ndc, pixels, `onScreen`, `depth`, `behind`, and `bearingRad`.
+
+Two decisions worth stating:
+
+- **`bearingRad` is taken from view space, before the perspective divide.** That is what makes it
+  defined for a target behind the camera and continuous all the way round. Projected position is
+  not: for a point behind the camera `w` is negative, so the ndc that comes out is a *mirrored*
+  position that looks entirely plausible and is 180 degrees wrong. An off-screen indicator that
+  trusts it tracks the reflection of the thing it is pointing at. `behind` is a returned flag
+  rather than a caller's `if`, for the same reason `null` and `[]` are different in the tag
+  channel: the caller has to be told, not left to notice.
+- **The camera's world matrix is refreshed before it is read.** `matrixWorldInverse` is maintained
+  by `WebGLRenderer.render`, and the HUD runs before the draw, so reading it unrefreshed gives
+  last frame's camera. One frame of lag on an arrow is invisible — and "invisible" is precisely
+  how a bearing stayed wrong for a milestone, so it is refreshed explicitly.
+
+All three call sites now go through it: the two ring arrows project once each in `MatchHud`,
+where the world positions are already assembled into one record per frame, and `MatchFeedback`
+projects the shooter. `BearingIndicator.update` takes `(active, bearingRad)` and does no
+geometry at all — it is a DOM write, which is all it should ever have been.
+
+### The intel filter, re-confirmed
+
+P9 required the arrow to respect the intel filter, and it still does, by construction rather than
+by a check. `MatchObjectives.bombBearing.active` has exactly two writers: `update` clears it to
+`false` at the top of every frame, and `updateBomb` sets it to
+`mode.bomb === 'CARRIED' && mode.carrierId < 0`. There is no code path that can hand the HUD a
+**carried** bomb's coordinates, so the arrow cannot track a living player through geometry, and
+Ghost — which is about players and never about a dropped object — has nothing to filter here.
+Changing the arithmetic did not touch that: `MatchHud` projects whatever
+`readObjectiveBearing` reports, and it reports nothing while the bomb is held or planted.
+
+Read rather than measured, and it is stated that way because it is a claim about which branches
+exist and this process builds no `MatchObjectives`.
+
+### Measured
+
+`npm run readability` — the projection half is new, and the three properties are the ones the
+brief named.
+
+| Probe | Result |
+|---|---|
+| A point 10 m ahead / 10 m behind | not behind (depth 10.00 m) / **behind** (depth -10.00 m) |
+| A behind point is never `onScreen` | holds |
+| A point on the view axis | **960.0, 540.0 px** at 1920x1080 — the exact centre — bearing **0.000000 rad** |
+| A target 45 deg to the right | **45.000 deg**, x = 1500 px |
+| Bearing tracks a target orbiting the player, 72 positions | worst error **2.5e-14 deg** at yaw 0, 45, 90 and 180 |
+| **Red control — P9's shipped bearing, same orbit** | **0 / 90 / 180 / 0 deg** of error at those four yaws |
+| Projection checks failed | **0**, and the run exits non-zero if any fail |
+
+The red control is the point of the table. It is the arithmetic that shipped, run against the
+same orbit, and it prints the size of the bug rather than a claim about it.
+
+Everything else, as regression controls — this session touches no simulation and no wire, so
+none of these should move and none did:
+
+| Probe | Result |
+|---|---|
+| `npm run harness`, 5 matches, seeds 1-5 | **75-59, 75-66, 62-75, 75-66, 60-75** — byte-identical to P5's and P9's baselines |
+| `npm run skirmish`, 3 clients, shipped timings | **FLOW CHECK PASSED**; divergence **0 / 7373** per client; mispredictions into a live match **0** |
+| Spectator invariants | 5692 selections while dead, **0 self / 0 enemy / 0 dead** |
+| Quick loadout window | 9257 ticks over 27 windows, **0 while alive** |
+| Per-life grenade stock | 102 life-starts, **0 partial / 0 empty**, 252 held against 252 expected |
+| `npm run leak`, 100 cycles | subscriptions **29 -> 29 (+0)**, heap 12.99 -> 13.69 MiB |
+| `npm run check` and `npm run build` | green — boundaries (297 files), cosmetics, unlocks, cheats, all three typecheck targets |
+
+No protocol change.
+
+### The sights report: what was checked, and what was not found
+
+The brief's other item was a sights regression, with the hypothesis that P9 mutates a `three`
+material or a uniform in place on an instance other weapons also hold. **That hypothesis is
+dead, and no replacement for it was found.** Recorded in full because a search that came up empty
+is worth exactly as much as one that did not, provided it says where it looked:
+
+- **P9 mutates no material and no uniform.** Its B2 change adds two `BoxPart`s (`lens`,
+  `reticle`) to the `scope` branch of `opticBoxes` and sets `openEnded: true` on two tubes. Both
+  are *geometry*. The only reads of the shared material map in the whole weapon path are
+  `WeaponMesh:170` and `KnifeMesh:154/177`, and all three assign a material to a mesh.
+- **Nothing disposes the shared set.** `disposeWeaponSurfaces` has no callers, which
+  `WeaponPreview`'s own comment already records — so P3's second WebGL context cannot pull the
+  materials out from under the first.
+- **The killfeed silhouettes are unaffected.** `WeaponSilhouette.drawable` filters on the surface
+  key, so the two new quads are skipped by construction and P3's "12 weapons, 12 distinct" still
+  describes the shipped icons.
+- **The new glass is nowhere near the near plane.** The viewmodel camera's near is 0.008 m and
+  the ADS pose puts the weapon root at z = -0.275; the LONGBOW's ocular lens sits at local
+  z = +0.0765, so it lands about 0.20 m in front of the camera. It cannot be clipped.
+- **The weapon files have not been touched since P9.** `git diff --name-only a30792b..HEAD` over
+  `src/client/weapons/` is empty, so whatever is wrong is either P9's or older than it.
+
+What that leaves is a real report with no mechanism attached to it yet, and P0 is explicit that a
+fix without a named mechanism is rejected. So nothing was changed in the weapon meshes this
+session, and the next step is a description of what the sights actually do — which weapon, iron
+sights or optic, hip or ADS — because the difference between "the LONGBOW's scope shows the world
+twice" and "every red dot has gone" points at opposite halves of the file.
+
+### Needs a browser
+
+`HeadlessClient` builds no `ClientMatch` and no DOM, and the preview pane never fires
+`requestAnimationFrame`. The projection is now arithmetic and is measured; that it is wired to
+the right camera, and that the arrow is where the eye expects it, are pixels.
+
+- **The bomb arrow, and this is the one that was broken.** Search & Destroy, as an attacker.
+  Stand still, put the loose bomb behind you, and **turn on the spot through a full circle**. The
+  arrow must sweep smoothly and always point at the bomb — before this it was correct facing one
+  way, ninety degrees out at the diagonals, and pointing at the exact opposite side of the map
+  when you faced yaw 90. Walk a circle around the bomb and check it again.
+- **The grenade threat arrow, which was wrong before P9 and is fixed here as a side effect.**
+  Have somebody throw a grenade at you while you are facing across the map rather than down it.
+  The chevron must point at the grenade. This has never been right.
+- **The two arrows together.** Get a grenade thrown at you while the bomb is loose: both arrows
+  up, pointing at different things, distinguishable at a glance.
+- **The arrow still goes away.** Watch somebody pick the bomb up: the arrow must vanish on that
+  frame and must not come back after a plant. That is the intel rule and it is the one thing here
+  a wrong fix would quietly remove.
+- **The directional hit indicator.** Get shot from behind and from each side while facing a
+  non-zero heading. This one was already correct and is now computed differently, so it is the
+  regression check on the change rather than a fix.
+
+Unchanged from the earlier lists: everything under P9's own "needs a browser", and the
+arena-return residual of 1-3 sub-25 cm mispredictions.
+
+### Found while here
+
+- **`Hud.showHitDirection` was the only correct one of the three, and it was the one P9 did not
+  reuse.** The brief that produced P9 named it explicitly. P9 read past the name to the
+  behaviour — transient versus persistent — concluded the *component* was the wrong one to copy,
+  and in doing so skipped the *calculation*, which was the half worth copying. Worth keeping: when
+  a brief names a thing to reuse, the reason it names it may not be the reason you find when you
+  open it.
+- **`viewMatrixFrom` and `perspectiveMatrixFrom` exist so the projection can be measured without
+  `three`.** They are not used by the client, which hands over the camera's real matrices. They
+  are the reason the table above is a measurement rather than an assertion, and the reason the red
+  control could be run at all — and they are a second implementation of something `three` already
+  does, which is a cost worth naming rather than hiding: if `CameraRig` ever changes its rotation
+  order away from `YXZ`, this file has to follow and nothing will notice on its own.
+- **`Math.sin`, `Math.cos` and `Math.tan` are banned in `shared/` and `server/`** by
+  `check-boundaries`, and `Math.atan2` is not. The ban list is about determinism, and the bearing
+  is presentation — but the rule caught this file twice on the way in and the substitution is
+  free, so it uses `simSin`/`simCos`/`simTan` and the exception was not widened. `atan2` staying
+  off the list is worth knowing before somebody assumes it is covered.

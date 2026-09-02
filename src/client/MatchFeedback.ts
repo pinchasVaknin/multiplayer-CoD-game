@@ -1,10 +1,10 @@
+import { makeScreenPoint, projectToScreen } from '../shared/ui/ScreenProjection';
 import * as THREE from 'three';
 import type { BotDirector } from '../shared/ai/BotDirector';
 import type { LocalIdentity } from '../shared/combat/LocalIdentity';
 import type { HitZone } from '../shared/combat/HitboxRig';
 import { EV, type GameBus } from '../shared/core/Events';
 import type { Input } from './input/Input';
-import { angleDelta } from '../shared/core/MathUtil';
 import { MIX } from './engine/AudioMix';
 import type { CameraRig } from './engine/CameraRig';
 import type { Fx } from './engine/Fx';
@@ -37,6 +37,9 @@ import type { WeaponSystem } from '../shared/weapons/WeaponSystem';
  * harnesses fire a full magazine and play whole matches with no renderer, no audio context and
  * no DOM: none of this is constructed in those runs.
  */
+
+/** Reused; a damage event must not allocate in the middle of a firefight. */
+const hitScreenScratch = makeScreenPoint();
 
 export interface FeedbackDeps {
   readonly bus: GameBus;
@@ -303,11 +306,29 @@ export class MatchFeedback {
 
     const shooter = this.deps.bodyAt(sourceId);
     if (shooter === null) return;
-    const sim = this.deps.player.sim;
-    const worldYaw = Math.atan2(-(shooter.x - sim.x), -(shooter.z - sim.z));
-    // Screen-relative: 0 is straight ahead, positive to the right. The view yaw grows
-    // anticlockwise, so the bearing is the negated delta.
-    this.deps.hud.showHitDirection(-angleDelta(sim.yaw, worldYaw));
+    /**
+     * The bearing, from the one projection (P9 follow-up).
+     *
+     * This expression was right — it is the one the other two disagreed with — but it was a
+     * *third* copy of the same idea, written in yaw rather than in the camera's own basis. With
+     * `projectToScreen` it is the same call the two ring arrows make, so there is nothing left
+     * for them to drift apart from, and the property that was silently false for a milestone is
+     * now measured in `readability` rather than reasoned about here.
+     */
+    const camera = this.deps.cameraRig.camera;
+    camera.updateMatrixWorld();
+    camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+    projectToScreen(
+      camera.matrixWorldInverse.elements,
+      camera.projectionMatrix.elements,
+      shooter.x,
+      camera.position.y,
+      shooter.z,
+      1,
+      1,
+      hitScreenScratch,
+    );
+    this.deps.hud.showHitDirection(hitScreenScratch.bearingRad);
   }
 
   /**

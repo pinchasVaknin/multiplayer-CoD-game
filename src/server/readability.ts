@@ -9,6 +9,13 @@ import { DUNES_MAP } from '../shared/world/maps/dunes';
 import type { MapDef } from '../shared/world/maps/types';
 import { allMaterialBaseColors, materialBaseColor } from '../shared/world/maps/albedo';
 import { linearLuminance, readFloor } from '../shared/world/MapLuminance';
+import { simCos, simSin } from '../shared/core/SimMath';
+import {
+  makeScreenPoint,
+  perspectiveMatrixFrom,
+  projectToScreen,
+  viewMatrixFrom,
+} from '../shared/ui/ScreenProjection';
 
 /**
  * The playtest round 4 P9 probe: crosshair geometry, team colour, and how dark a map is.
@@ -302,12 +309,14 @@ console.log('OPERATOR readability probe — playtest round 4, P9 (B2, B12, F9)')
 const crosshair = crosshairTable();
 scopedWeapons();
 const colourViolations = teamColourTable();
+const projectionFailures = projectionTable();
 albedoTable();
 lightingTable();
 
 console.log('\n== summary ==');
 console.log('  crosshair gaps at the floor: %d of %d hip-fire states', crosshair.atFloor, crosshair.examined);
 console.log('  team-colour violations:      %d', colourViolations);
+console.log('  projection checks failed:    %d', projectionFailures);
 
 /**
  * The exit code, and the one thing here that can fail a build.
@@ -320,8 +329,146 @@ if (colourViolations > 0) {
   console.error('\nTEAM COLOUR CHECK FAILED: %d viewer/subject pairs painted the wrong side.', colourViolations);
   process.exit(1);
 }
+if (projectionFailures > 0) {
+  console.error('\nPROJECTION CHECK FAILED: %d of the world-to-screen properties do not hold.', projectionFailures);
+  process.exit(1);
+}
 if (crosshair.examined === 0) {
   console.error('\nCROSSHAIR CHECK FAILED: no weapons examined.');
   process.exit(1);
 }
 console.log('\nreadability probe ok');
+
+// -- F2 follow-up: world to screen, as one measurable projection ------------
+
+/**
+ * The projection tests the P9 follow-up brief asked for, and the reason they are worth running.
+ *
+ * P9 built an off-screen indicator on a bearing that was wrong by twice the player's yaw, and
+ * nothing caught it because the only instrument was a browser. These three properties are what
+ * an indicator is made of, and all three are ordinary arithmetic:
+ *
+ *  1. a point behind the camera is reported behind;
+ *  2. a point on the view axis projects to the centre of the screen;
+ *  3. the bearing is monotonic as the target orbits the player, at every yaw.
+ *
+ * The third is the one that would have failed before. The old expression is included as a red
+ * control so the run shows it failing rather than asserting that it would have.
+ */
+function projectionTable(): number {
+  console.log('\n== F2: world-to-screen projection ==\n');
+
+  const view: number[] = new Array<number>(16).fill(0);
+  const proj: number[] = new Array<number>(16).fill(0);
+  const out = makeScreenPoint();
+  const W = 1920;
+  const H = 1080;
+  perspectiveMatrixFrom(FOV_DEG, W / H, 0.12, 400, proj);
+
+  let failures = 0;
+  const check = (name: string, ok: boolean, detail: string): void => {
+    if (!ok) failures++;
+    console.log('  %s %s  %s', ok ? 'ok  ' : 'FAIL', pad(name, 42), detail);
+  };
+
+  // -- 1. behind the camera --------------------------------------------------
+  // Player at the origin looking down -Z (yaw 0). Forward is (0, 0, -1).
+  viewMatrixFrom(0, 0, 0, 0, 0, view);
+  projectToScreen(view, proj, 0, 0, -10, W, H, out);
+  check('a point 10 m ahead is not behind', !out.behind, `depth ${out.depth.toFixed(2)} m`);
+  projectToScreen(view, proj, 0, 0, 10, W, H, out);
+  check('a point 10 m behind is behind', out.behind, `depth ${out.depth.toFixed(2)} m`);
+  projectToScreen(view, proj, 0, 0, 10, W, H, out);
+  check('a behind point is never onScreen', !out.onScreen, `ndc ${out.ndcX.toFixed(2)}`);
+
+  // -- 2. the centre ---------------------------------------------------------
+  projectToScreen(view, proj, 0, 0, -25, W, H, out);
+  check(
+    'a point on the view axis is screen centre',
+    Math.abs(out.x - W / 2) < 1e-6 && Math.abs(out.y - H / 2) < 1e-6,
+    `${out.x.toFixed(1)}, ${out.y.toFixed(1)} px`,
+  );
+  check('...and its bearing is 0', Math.abs(out.bearingRad) < 1e-9, `${out.bearingRad.toFixed(6)} rad`);
+  check('...and it is on screen', out.onScreen, `ndc ${out.ndcX.toFixed(3)}, ${out.ndcY.toFixed(3)}`);
+
+  // A target 25 m ahead and 25 m to the right is 45 degrees off the nose.
+  projectToScreen(view, proj, 25, 0, -25, W, H, out);
+  check(
+    'a target 45 deg right reads +45 deg',
+    Math.abs((out.bearingRad * 180) / Math.PI - 45) < 1e-9,
+    `${((out.bearingRad * 180) / Math.PI).toFixed(3)} deg, x ${out.x.toFixed(0)} px`,
+  );
+
+  // -- 3. monotonic as the target orbits, at four yaws ------------------------
+  //
+  // The target walks a full circle around a stationary player. The bearing must advance by the
+  // same step every time, whatever the player is facing — which is exactly what the old
+  // expression could not do, because its error was a function of yaw.
+  const STEPS = 72;
+  for (const yawDeg of [0, 45, 90, 180]) {
+    const yaw = (yawDeg * Math.PI) / 180;
+    viewMatrixFrom(0, 1.6, 0, yaw, 0, view);
+    let worstStepErr = 0;
+    let worstAhead = 0;
+    for (let i = 0; i < STEPS; i++) {
+      const theta = (i / STEPS) * Math.PI * 2;
+      // Place the target at `theta` measured from the player's own forward, so the bearing
+      // should come back as `theta` exactly, wrapped.
+      const fx = -simSin(yaw);
+      const fz = -simCos(yaw);
+      const rx = simCos(yaw);
+      const rz = -simSin(yaw);
+      const d = 20;
+      const tx = (fx * simCos(theta) + rx * simSin(theta)) * d;
+      const tz = (fz * simCos(theta) + rz * simSin(theta)) * d;
+      projectToScreen(view, proj, tx, 1.6, tz, W, H, out);
+      let err = out.bearingRad - theta;
+      while (err > Math.PI) err -= Math.PI * 2;
+      while (err <= -Math.PI) err += Math.PI * 2;
+      if (Math.abs(err) > worstStepErr) worstStepErr = Math.abs(err);
+      if (i === 0) worstAhead = Math.abs(out.bearingRad);
+    }
+    check(
+      `bearing tracks the target at yaw ${yawDeg} deg`,
+      worstStepErr < 1e-9 && worstAhead < 1e-9,
+      `worst error ${(worstStepErr * (180 / Math.PI)).toExponential(1)} deg over ${STEPS} positions`,
+    );
+  }
+
+  /**
+   * The red control: P9's expression, run against the same orbit.
+   *
+   * Included because a probe nobody has watched go red is a probe that has not been written.
+   * This is the arithmetic that shipped, and the number it prints is the size of the bug.
+   */
+  console.log('\n  red control — the bearing P9 shipped, same orbit:');
+  for (const yawDeg of [0, 45, 90, 180]) {
+    const yaw = (yawDeg * Math.PI) / 180;
+    let worst = 0;
+    for (let i = 0; i < STEPS; i++) {
+      const theta = (i / STEPS) * Math.PI * 2;
+      const fx = -simSin(yaw);
+      const fz = -simCos(yaw);
+      const rx = simCos(yaw);
+      const rz = -simSin(yaw);
+      const d = 20;
+      const tx = (fx * simCos(theta) + rx * simSin(theta)) * d;
+      const tz = (fz * simCos(theta) + rz * simSin(theta)) * d;
+      // P9's `BearingIndicator.update`, verbatim.
+      const shipped = Math.atan2(tx - 0, -(tz - 0)) - yaw;
+      let err = shipped - theta;
+      while (err > Math.PI) err -= Math.PI * 2;
+      while (err <= -Math.PI) err += Math.PI * 2;
+      if (Math.abs(err) > worst) worst = Math.abs(err);
+    }
+    console.log(
+      '    yaw %s deg: worst error %s deg%s',
+      padStart(String(yawDeg), 3),
+      padStart(((worst * 180) / Math.PI).toFixed(1), 6),
+      yawDeg === 0 ? '  (the one seat it is right in)' : '',
+    );
+  }
+
+  console.log('\nprojection checks failed: %d', failures);
+  return failures;
+}

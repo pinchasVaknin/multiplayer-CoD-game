@@ -54,6 +54,14 @@ export interface TacticalState {
   threatX: number;
   threatY: number;
   threatZ: number;
+  /**
+   * Screen bearing to that grenade, radians, 0 ahead and positive to the right.
+   *
+   * Computed by `MatchHud` through `shared/ui/ScreenProjection` rather than here (P9 follow-up).
+   * The world position stays in this record because the *fact* is where the grenade is; the
+   * angle is a view of it, and the view belongs to whoever holds the camera.
+   */
+  threatBearingRad: number;
 
   /**
    * Where the loose bomb is, when there is one to go and pick up (round 4, F2).
@@ -64,6 +72,8 @@ export interface TacticalState {
   objectiveActive: boolean;
   objectiveX: number;
   objectiveZ: number;
+  /** Screen bearing to the loose bomb, radians. Same source as `threatBearingRad`. */
+  objectiveBearingRad: number;
 
   /** 0 = irons, 1 = fully scoped. Draws the scope overlay. */
   scopeFraction: number;
@@ -94,9 +104,11 @@ export function makeTacticalState(): TacticalState {
     threatX: 0,
     threatY: 0,
     threatZ: 0,
+    threatBearingRad: 0,
     objectiveActive: false,
     objectiveX: 0,
     objectiveZ: 0,
+    objectiveBearingRad: 0,
     scopeFraction: 0,
     breath: 1,
     breathHeld: false,
@@ -243,7 +255,7 @@ export class HudTactical {
    * One frame. `playerYaw` turns the threat's world position into a screen-relative
    * bearing, which is the same maths the directional hit indicator uses.
    */
-  update(state: TacticalState, playerX: number, playerZ: number, playerYaw: number): void {
+  update(state: TacticalState): void {
     if (state.weaponName !== this.lastWeapon) {
       this.lastWeapon = state.weaponName;
       this.weaponPrimary.textContent = state.weaponName;
@@ -283,15 +295,8 @@ export class HudTactical {
 
     this.updateCook(state);
     this.updateBreath(state);
-    this.threatArrow.update(state.threatActive, state.threatX, state.threatZ, playerX, playerZ, playerYaw);
-    this.objectiveArrow.update(
-      state.objectiveActive,
-      state.objectiveX,
-      state.objectiveZ,
-      playerX,
-      playerZ,
-      playerYaw,
-    );
+    this.threatArrow.update(state.threatActive, state.threatBearingRad);
+    this.objectiveArrow.update(state.objectiveActive, state.objectiveBearingRad);
     this.updateFlash(state.flash);
     this.updateScope(state.scopeFraction);
   }

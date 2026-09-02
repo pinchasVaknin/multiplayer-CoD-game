@@ -1,3 +1,5 @@
+import type { CameraRig } from '../engine/CameraRig';
+import { makeScreenPoint, projectToScreen } from '../../shared/ui/ScreenProjection';
 import type { ViewerContext } from '../../shared/ui/TeamColour';
 import type { Combatant } from '../../shared/ai/Combatant';
 import type { ScoreSystem, ScoreTeam } from '../../shared/combat/ScoreSystem';
@@ -61,6 +63,16 @@ export interface MatchHudDeps {
    * derived, because `MatchHud` has no connection and no business acquiring one.
    */
   readonly warmupArena: boolean;
+
+  /**
+   * The camera, for the two bearing indicators (P9 follow-up).
+   *
+   * `MatchHud` is where the world positions of the grenade threat and the loose bomb are
+   * already assembled into one record per frame, so it is where they become screen directions
+   * — one projection, one place, rather than each arrow doing its own trigonometry. That is
+   * what P9 believed it had built and had not.
+   */
+  readonly cameraRig: CameraRig;
   /**
    * The mode's own one-line brief (playtest round 4, F10).
    *
@@ -181,6 +193,32 @@ export class MatchHud {
     tac.objectiveActive = objectiveScratch.active;
     tac.objectiveX = objectiveScratch.x;
     tac.objectiveZ = objectiveScratch.z;
+
+    /**
+     * The two arrows' angles, from the one projection (P9 follow-up).
+     *
+     * The camera's world matrix is refreshed first because the HUD runs *before* the renderer
+     * draws: `matrixWorldInverse` is maintained by `WebGLRenderer.render`, so reading it here
+     * without the refresh gives last frame's camera. One frame of lag on an arrow is invisible,
+     * but the whole reason this code exists is that a bearing nobody could measure was wrong for
+     * a milestone, and "close enough" is how that happened.
+     */
+    const camera = this.deps.cameraRig.camera;
+    camera.updateMatrixWorld();
+    camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+    const view = camera.matrixWorldInverse.elements;
+    const proj = camera.projectionMatrix.elements;
+    if (tac.threatActive) {
+      projectToScreen(view, proj, tac.threatX, tac.threatY, tac.threatZ, 1, 1, screenScratch);
+      tac.threatBearingRad = screenScratch.bearingRad;
+    }
+    if (tac.objectiveActive) {
+      // The bomb's own Y is not carried: an arrow around the crosshair is a compass, and a
+      // bomb three metres below you is still in the same direction. `projectToScreen` takes the
+      // player's own eye height so the view-space maths is the same one the renderer does.
+      projectToScreen(view, proj, tac.objectiveX, camera.position.y, tac.objectiveZ, 1, 1, screenScratch);
+      tac.objectiveBearingRad = screenScratch.bearingRad;
+    }
 
     this.fillFriendlies();
     this.streaks.update(this.streakState);
@@ -304,4 +342,6 @@ export class MatchHud {
 const threatScratch = { active: false, x: 0, y: 0, z: 0 };
 /** Module-level and reused, like the threat's: the render pass allocates nothing (S4.7). */
 const objectiveScratch = { active: false, x: 0, z: 0 };
+/** Reused by both bearing projections. The render pass allocates nothing (S4.7). */
+const screenScratch = makeScreenPoint();
 

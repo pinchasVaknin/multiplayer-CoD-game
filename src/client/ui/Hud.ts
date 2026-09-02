@@ -448,7 +448,7 @@ export class Hud {
     this.banner.update(state.banner);
     this.feed.update(dt);
     this.minimap.update(state.playerX, state.playerZ, state.playerYaw, dt);
-    this.tactical.update(state.tactical, state.playerX, state.playerZ, state.playerYaw);
+    this.tactical.update(state.tactical);
     this.lastUpdateMs = performance.now() - t0;
   }
 
