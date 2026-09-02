@@ -15,6 +15,7 @@ import {
   readSnapshotHeader,
   readSnapshotOwnerPresent,
   writeBye,
+  writeCheatRequest,
   writeCommands,
   writeHello,
   writeLoadout,
@@ -29,6 +30,7 @@ import {
   type VoteInfo,
   type WelcomeInfo,
 } from './Messages';
+import { CHEAT_SIMULATION } from '../cheats/Cheats';
 import { Prediction } from './Prediction';
 import type {
   NetLoadout,
@@ -137,6 +139,15 @@ export interface SkirmishSink {
   readonly onSummary?: ((info: SummaryInfo) => void) | undefined;
   /** A short line for the player: allocation failed, the arena was rebuilt. */
   readonly onNotice?: ((text: string) => void) | undefined;
+  /**
+   * What the server decided about a cheat code (playtest round 4, F14).
+   *
+   * The *outcome* only. The entitlements themselves are replicated as state on `cheatMask` and
+   * are already applied by the time this fires — this is the sentence the player reads beside
+   * the field they typed into, and it exists because a refusal and a revoke leave an identical
+   * mask behind.
+   */
+  readonly onCheats?: ((outcome: number, mask: number) => void) | undefined;
   /**
    * Objective state, once per snapshot tick (M11 Gate B, §6.8).
    *
@@ -362,6 +373,21 @@ export class NetClient {
     return this.ownSpawnSerial;
   }
 
+  /**
+   * This seat's cheat entitlements, as the server last stated them (playtest round 4, F14).
+   *
+   * Replicated in the owner block of **every** snapshot rather than carried only by the reply to
+   * a request, and that is a correctness property rather than belt and braces: two of the three
+   * simulation entitlements are invisible to a client holding the wrong answer, and the third —
+   * noclip — is a permanent misprediction, because the server would fly a body this client keeps
+   * in collision for the rest of the match. Repeated state cannot be lost; an edge can.
+   *
+   * Masked to `CHEAT_SIMULATION` on the way in. The server never sets `Cheat.Debug` and has no
+   * business doing so — that bit is the client's own — and masking here means the partition is
+   * enforced where the untrusted bytes arrive rather than remembered at each reader.
+   */
+  cheatMask = 0;
+
   /** Set when this client's own entity reports a new spawn serial. */
   private respawned = false;
   /**
@@ -497,6 +523,18 @@ export class NetClient {
     this.deps.link.send(writeStreakRequest(this.writer, kind, markX, markZ));
   }
 
+  /**
+   * Ask the server to honour a cheat code (playtest round 4, F14).
+   *
+   * A request, and nothing is applied locally — the same rule and the same reason as
+   * `sendStreak`. §4.16 makes the client untrusted, and an optimistic god mode would be a client
+   * telling itself it cannot be hurt while the server killed it.
+   */
+  sendCheat(code: string): void {
+    if (this.state !== 'joined') return;
+    this.deps.link.send(writeCheatRequest(this.writer, code));
+  }
+
   /** Report that the background build for `matchId` is finished (§6.5). */
   sendReady(matchId: number): void {
     if (this.state !== 'joined') return;
@@ -613,6 +651,12 @@ export class NetClient {
       case 'notice':
         this.deps.skirmish?.onNotice?.(msg.text);
         return;
+      case 'cheats':
+        // The mask is applied here as well as from the snapshot, so the pause screen can say
+        // what happened without waiting for a snapshot tick. Same masking, same reason.
+        this.cheatMask = msg.mask & CHEAT_SIMULATION;
+        this.deps.skirmish?.onCheats?.(msg.outcome, this.cheatMask);
+        return;
       case 'objectives':
         this.deps.skirmish?.onObjectives?.(msg.states);
         return;
@@ -721,6 +765,16 @@ export class NetClient {
     this.localAlive = true;
     this.respawned = false;
     this.ownSpawnSerial = -1;
+    /**
+     * F14: the cheat mask is state from the seat we are leaving, so it goes with the rest.
+     *
+     * A migration keeps the grants server-side — they live on the `Session` — so the next
+     * snapshot re-states them within one interval; a **reconnect** is a new connection with an
+     * empty store, and keeping the old bits would leave this client flying through walls the
+     * server has put back. Discarding is right in both cases, which is what makes it belong in
+     * this list rather than beside a test for which one happened.
+     */
+    this.cheatMask = 0;
     for (const cmd of this.pending) blankInto(cmd);
 
     /**
@@ -797,7 +851,11 @@ export class NetClient {
     // a respawn has to be recognised before the state it produced is reconciled against.
     const hasOwner = readSnapshotOwnerPresent(this.reader);
     if (hasOwner) readOwnerState(this.reader, this.owner);
+    // F14: after the optional state and always present, so a player who switches free cam on
+    // while dead — when there is no owner block at all — is still told.
+    const mask = this.reader.u8v();
     if (this.reader.overran) return;
+    this.cheatMask = mask & CHEAT_SIMULATION;
 
     // ---- removals ------------------------------------------------------------
     const removedCount = this.reader.u8v();

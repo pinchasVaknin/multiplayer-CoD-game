@@ -144,6 +144,17 @@ export interface MatchWorldDeps {
    */
   readonly inMatch: () => boolean;
 
+  /**
+   * This client's cheat entitlements (playtest round 4, F14).
+   *
+   * A supplier, like `inMatch` and for the same reason: the mask outlives every world it decides
+   * anything about, and `Game.cheatMask` is the one expression that merges the server's
+   * replicated answer with the bits this process authors for itself.
+   */
+  readonly cheats: () => number;
+  /** Ask to toggle entitlement bits. `Game.requestCheatBits`; see `SpectatorDeps.request`. */
+  readonly requestCheat: (bits: number) => void;
+
   // ---- M11 (§7): instrumentation owned by `Game`, shown by this world's panel ----
   readonly lastBuild: () => BuildReport | null;
   readonly buildProgress: () => { done: number; total: number; label: string } | null;
@@ -321,6 +332,7 @@ export class MatchWorld {
           : (id, markX, markZ) => {
               this.net?.client.sendStreak(streakKindIndex(id), markX, markZ);
             },
+      cheats: deps.cheats,
       scene: deps.scene,
       viewmodel: deps.viewmodel,
       cameraRig: deps.cameraRig,
@@ -503,6 +515,10 @@ export class MatchWorld {
       map,
       mapEntry: deps.mapEntry,
       transport: deps.transport,
+      // F14. The same two suppliers the match reads, so the panel, the codes and the
+      // simulation cannot hold three different opinions about one entitlement.
+      cheats: deps.cheats,
+      requestCheat: deps.requestCheat,
       netSession: () => this.net,
       match: this.match,
       movementConfig: deps.movementConfig,

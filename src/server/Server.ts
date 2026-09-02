@@ -10,6 +10,13 @@ import {
   MODE_BALLOT,
   sanitiseNetLoadout,
 } from '../shared/net/Skirmish';
+import {
+  Cheat,
+  CheatOutcome,
+  describeCheatMask,
+  parseCheatCode,
+  toggleCheat,
+} from '../shared/cheats/Cheats';
 import { describeConfig, type ServerConfig } from './Config';
 import { LiveMatch } from './instance/LiveMatch';
 import type { MatchInstance } from './instance/MatchInstance';
@@ -274,6 +281,7 @@ export class Server {
         onVote: (s, phase, option) => this.onVote(s, phase, option),
         onReady: (s, matchId) => this.onReady(s, matchId),
         onStreakRequest: (s, kind, x, z) => this.onStreakRequest(s, kind, x, z),
+        onCheatRequest: (s, code) => this.onCheatRequest(s, code),
       },
       () => this.loop.currentTick,
     );
@@ -524,6 +532,85 @@ export class Server {
       return;
     }
     log.info(`${session.displayName} called in ${def.id} in instance ${instance.id}.`);
+  }
+
+  /**
+   * A client typed a cheat code (playtest round 4, F14).
+   *
+   * **The server decides, and always answers.** God mode, invisibility and free cam are facts
+   * about the simulation, so a client that granted itself one would either be ignored or be
+   * exploiting a hole; and thirty unearned kills is a purchase nobody made. So the code arrives
+   * as text, is parsed against *this* process's copy of the table, and is honoured only if
+   * `ServerConfig.cheatsEnabled` says so — which is off unless an operator set
+   * `CHEATS_ENABLED=1`.
+   *
+   * Four things are worth reading in the order they happen:
+   *
+   * - **An unknown code is answered before the flag is consulted**, because it is a typo rather
+   *   than an attempt at anything, and telling somebody "cheats are disabled" about a string
+   *   that is not a code would send them looking for an operator they do not need.
+   * - **The flag is checked before the seat**, so a server with cheats off gives one answer to
+   *   everybody and never reveals whether the code would have worked.
+   * - **`DEBUG666` never arrives here.** It is `CHEAT_LOCAL`, the client authors it, and if a
+   *   crafted frame sends it anyway the toggle lands in a mask the simulation does not read.
+   *   Written down rather than guarded, because the guard is the partition.
+   * - **Every grant, revoke and refusal is logged with the resulting mask.** That is the second
+   *   half of F14's *"make it visible"*: a bug report from a player who had god mode on is
+   *   otherwise indistinguishable from one from a player who did not, and nobody can go back
+   *   and ask.
+   */
+  private onCheatRequest(session: Session, code: string): void {
+    const entry = parseCheatCode(code);
+    if (entry === null) {
+      session.sendCheats(CheatOutcome.RefusedUnknown, session.cheats.mask);
+      return;
+    }
+    if (!this.cfg.cheatsEnabled) {
+      log.warn(`${session.displayName} typed a cheat code and this server has cheats disabled.`);
+      session.sendCheats(CheatOutcome.RefusedDisabled, session.cheats.mask);
+      return;
+    }
+
+    const instance = this.router.instanceOf(session.playerId);
+    const player = session.player;
+    if (instance === null || player === null) {
+      session.sendCheats(CheatOutcome.RefusedNoSeat, session.cheats.mask);
+      return;
+    }
+
+    if (entry.effect.kind === 'kills') {
+      /**
+       * `MO951357`, and it is the test P7 said it would be for P4's separation.
+       *
+       * It needs no compensating deduction anywhere, because the balance is **not** a read of
+       * `PlayerScore.kills` — P4 built `credit` as a second door precisely so unearned kills can
+       * buy streaks without appearing in the match results. `creditKills` is that door, and it
+       * already applies the aliveness rule every other unearned credit does.
+       *
+       * The `Wallet` bit is latched with it: the payment leaves no other trace on screen, and a
+       * player who was handed thirty kills must not look like a player having a good match.
+       */
+      instance.match.streaks.creditKills(player.entityId, entry.effect.kills);
+      session.cheats.set(session.cheats.mask | Cheat.Wallet);
+      log.warn(
+        `CHEAT: ${session.displayName} (player ${session.playerId}) took ` +
+          `${entry.effect.kills} kills into their streak balance in instance ${instance.id}; ` +
+          `mask now ${describeCheatMask(session.cheats.mask)}.`,
+      );
+      session.sendCheats(CheatOutcome.WalletGranted, session.cheats.mask);
+      return;
+    }
+
+    const before = session.cheats.mask;
+    const after = toggleCheat(before, entry.effect.bits);
+    session.cheats.set(after);
+    const granted = (after & entry.effect.bits) !== 0;
+    log.warn(
+      `CHEAT: ${session.displayName} (player ${session.playerId}) ` +
+        `${granted ? 'enabled' : 'cleared'} a cheat in instance ${instance.id}; ` +
+        `mask now ${describeCheatMask(after)}.`,
+    );
+    session.sendCheats(granted ? CheatOutcome.Granted : CheatOutcome.Revoked, after);
   }
 
   /**

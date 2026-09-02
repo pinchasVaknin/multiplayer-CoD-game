@@ -580,13 +580,19 @@ export class StreakSystem implements ObjectiveProvider {
   /**
    * Pay kills into a wallet — the one door for everything that is not a scored kill.
    *
+   * Public since round 4's F14, which is the third caller and the one the door was named for:
+   * `MO951357` grants thirty kills of purchasing power without touching the scoreboard, and it
+   * is implementable *because* the balance is credited from `PlayerScore.kills` rather than read
+   * out of it. A model that derived the balance from the score could not have honoured that code
+   * without a compensating deduction in the match results.
+   *
    * Applies the same aliveness rule `checkEarned` does, and for the same reason: a wallet
    * belongs to a life, so a credit aimed at somebody who is already dead is dropped rather than
    * waiting there for their next one. Measured — the skirmish harness's repeating top-up pays
    * every seat including the dead ones, and without this it put 3 life-starts in 101 on the
    * wrong side of `dirtyLifeStarts`.
    */
-  private creditKills(entityId: number, kills: number): void {
+  creditKills(entityId: number, kills: number): void {
     if (this.combatant(entityId)?.health.alive === false) {
       this.ledger.dropCredit(kills);
       return;

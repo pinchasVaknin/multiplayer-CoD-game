@@ -461,6 +461,46 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Cheat tag (playtest round 4, F14).
+ *
+ * Bottom centre and deliberately loud. It exists so a screenshot of a bug report says whether
+ * the player was in a normal state, which means it has to survive being scaled down and has to
+ * be impossible to mistake for game information.
+ *
+ * A `--on` class rather than `[hidden]`, for the reason `.hud-phase` above uses one: the UA
+ * stylesheet's `[hidden] { display: none }` sits at the lowest specificity there is, and any
+ * author-level `display` here would silently outrank it. That is B13, and it cost two rounds.
+ */
+.hud-cheat {
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-med) var(--ease), visibility var(--dur-med);
+}
+
+.hud-cheat--on {
+  opacity: 1;
+  visibility: visible;
+}
+
+.hud-cheat span {
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-display);
+  text-transform: uppercase;
+  color: var(--c-warn);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--c-warn);
+  border-radius: 2px;
+  padding: 2px var(--s-2);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+}
+
 /* ---- killfeed (M4) ----------------------------------------------------- */
 
 .hud-feed {

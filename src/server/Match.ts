@@ -1,6 +1,7 @@
 import { DEFAULT_SCHEDULER, type SchedulerConfig } from '../shared/ai/AiScheduler';
 import { BOT_ID_BASE, BotDirector, RESPAWN_SECONDS } from '../shared/ai/BotDirector';
 import type { BotTeam, Combatant } from '../shared/ai/Combatant';
+import type { CheatGrants } from '../shared/cheats/Cheats';
 import { makeSpawnChoice, type SpawnChoice } from '../shared/ai/SpawnSelector';
 import { isObjectiveProvider } from '../shared/ai/ObjectiveIntent';
 import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
@@ -888,6 +889,14 @@ export class ServerMatch {
    */
   addPlayer(
     displayName: string,
+    /**
+     * The connection's cheat entitlements (playtest round 4, F14).
+     *
+     * Ahead of the optional arguments so it is **required**: it is a fact about the connection
+     * being seated, not an option, and a seating path that forgot it would hand out a body no
+     * grant could ever reach. `MatchInstance.seat` is the one caller and it has the session.
+     */
+    cheats: CheatGrants,
     loadout?: LoadoutSlot | null,
     reclaim?: ReclaimedSeat | null,
   ): NetPlayer | null {
@@ -950,6 +959,7 @@ export class ServerMatch {
       weaponDef: resolved?.primary ?? AR_DEFAULT,
       secondaryDef: resolved?.secondary ?? PISTOL_DEFAULT,
       perks: resolved?.perkState ?? NO_PERKS,
+      cheats,
     });
     this.loadouts.set(entityId, resolved);
 

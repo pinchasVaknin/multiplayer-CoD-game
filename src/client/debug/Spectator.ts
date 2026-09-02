@@ -1,5 +1,4 @@
-import type { Match } from '../ClientMatch';
-import type { PlayerController } from '../../shared/player/PlayerController';
+import { CHEAT_FULL_SPECTATOR, Cheat } from '../../shared/cheats/Cheats';
 
 /**
  * The QA spectator: god mode, invisibility and free-cam (post-M8).
@@ -22,46 +21,76 @@ import type { PlayerController } from '../../shared/player/PlayerController';
  *
  * So they are independent, and `full()` turns on all three for the common case.
  *
+ * ## Round 4 (F14): this is a request now, and it holds no state at all
+ *
+ * The three switches used to be three booleans here, written through to `Match` and
+ * `PlayerController`. They are cheat **entitlements** now — the same ones `SPEC[]1` to `SPEC[]4`
+ * grant — because a client cannot decide any of them over a network: invulnerability and
+ * perception are the server's, and a client that granted itself one would either be ignored or
+ * be exploiting a hole. So every method here asks, through the one door that knows which kind of
+ * match this is, and every getter reads the entitlement back.
+ *
+ * Two consequences worth knowing before using it:
+ *
+ * - **A request can be refused.** Against a server with `CHEATS_ENABLED` unset, nothing happens
+ *   and the panel's checkbox stays clear — which is the honest reflection of the answer, and the
+ *   reason the panel re-reads these getters on every refresh instead of remembering the click.
+ * - **Invisibility no longer turns god mode on with it.** It did, with a good reason (a grenade
+ *   already in the air does not know nobody is aiming at you), and that reason is now served by
+ *   `full()` instead. Coupled, the two entitlements were indistinguishable: an effect asking
+ *   *"am I unseen"* would have been answering *"am I unseen, or was god switched on beside it"*,
+ *   and no probe could tell perception from invulnerability. An entitlement that means two things
+ *   is not an entitlement.
+ *
  * ## Nothing here holds state that gameplay reads
  *
- * Every switch writes through to the object that already owns the behaviour — `Match` for the
- * two combat facts, `PlayerController` for the movement one — and those are re-applied from
- * state every tick by code that existed before this file (`Match.syncChopperBody` is the
- * example worth reading). This class is the *toggle*, not the mechanism, which is what makes
- * "turn it off and the match is exactly as it was" true by construction rather than by an
- * undo path that has to be maintained.
- *
- * That also means it needs no teardown: `MatchWorld` disposes the match and the controller,
- * and a spectator holding references to two objects that are gone is simply garbage.
+ * Even more so than before. Every effect is derived from the mask every tick by the object that
+ * owns the behaviour — `Match.syncChopperBody` for all three of them — so "turn it off and the
+ * match is exactly as it was" is true by construction rather than by an undo path that has to be
+ * maintained, and it needs no teardown.
  */
+export interface SpectatorDeps {
+  /** The live entitlement mask. `Game.cheatMask`, merged from both authorities. */
+  readonly cheats: () => number;
+  /**
+   * Ask to toggle these entitlement bits, through `Game.requestCheatBits`.
+   *
+   * Bits rather than a code string, and `check-cheats.mjs` is what made that the answer rather
+   * than a preference: it refuses a code literal anywhere outside the table, and it caught this
+   * file naming four of them on its first run. The bits are looked up against the same table by
+   * `cheatCodeToggling`, so there is still exactly one input to the feature and still nothing
+   * downstream that can grant an entitlement without asking the authority.
+   */
+  readonly request: (bits: number) => void;
+}
+
 export class Spectator {
-  private readonly match: Match;
-  private readonly player: PlayerController;
+  private readonly deps: SpectatorDeps;
 
-  private god = false;
-  private hidden = false;
-  private fly = false;
-
-  constructor(match: Match, player: PlayerController) {
-    this.match = match;
-    this.player = player;
+  constructor(deps: SpectatorDeps) {
+    this.deps = deps;
   }
 
   get godMode(): boolean {
-    return this.god;
+    return (this.deps.cheats() & Cheat.God) !== 0;
   }
 
   get invisible(): boolean {
-    return this.hidden;
+    return (this.deps.cheats() & Cheat.Unseen) !== 0;
   }
 
   get freeCam(): boolean {
-    return this.fly;
+    return (this.deps.cheats() & Cheat.NoClip) !== 0;
   }
 
-  /** True while any of the three is on. Read by the HUD banner and the debug read-out. */
+  /** True while any of the three is on. Read by the panel and the debug read-out. */
   get anyActive(): boolean {
-    return this.god || this.hidden || this.fly;
+    return this.godMode || this.invisible || this.freeCam;
+  }
+
+  /** All three on. */
+  get allActive(): boolean {
+    return this.godMode && this.invisible && this.freeCam;
   }
 
   /**
@@ -74,27 +103,23 @@ export class Spectator {
    * all of those firing and made the mode unusable for watching anything.
    */
   setGodMode(on: boolean): void {
-    this.god = on;
-    this.match.godMode = on;
+    this.toggleTo(on, this.godMode, Cheat.God);
   }
 
   /**
    * Bots stop looking for the player entirely.
    *
-   * `PlayerCombatant.active` false removes the body from perception, from bot target
-   * selection *and* from spawn scoring — the third one matters more than it looks. A hidden
-   * observer that still repelled spawns would silently reshape where the fight happens, and
-   * the tool would be changing the behaviour it was built to watch.
+   * `Combatant.participating` false removes the body from perception, from bot target selection
+   * *and* from spawn scoring — the third one matters more than it looks. A hidden observer that
+   * still repelled spawns would silently reshape where the fight happens, and the tool would be
+   * changing the behaviour it was built to watch.
    *
-   * God mode is turned on alongside it, and that is not a convenience: an entity nobody is
-   * aiming at can still be caught by a grenade, a mortar or a sentry burst that was already
-   * in the air, and dying while invisible would drop the observer into a respawn timer in the
-   * middle of the fight they were recording.
+   * It does **not** turn god mode on any more; see the note at the top of this file. A grenade,
+   * a mortar or a sentry burst already in the air still resolves against an invisible body, and
+   * dying while observing drops you into a respawn timer — which is what `full()` is for.
    */
   setInvisible(on: boolean): void {
-    this.hidden = on;
-    this.match.hiddenFromBots = on;
-    if (on) this.setGodMode(true);
+    this.toggleTo(on, this.invisible, Cheat.Unseen);
   }
 
   /**
@@ -104,20 +129,23 @@ export class Spectator {
    * and hands them straight back to gravity and collision, which is the honest behaviour —
    * teleporting them back to where they took off would hide the case where the geometry you
    * flew out to inspect is geometry you cannot get out of.
+   *
+   * Over a network the server flies the body too, from the same replicated entitlement. There is
+   * a window of up to one snapshot interval on each toggle where the two disagree about collision
+   * and prediction corrects; see `NetPlayer.step`.
    */
   setFreeCam(on: boolean): void {
-    this.fly = on;
-    this.player.noclip = on;
+    this.toggleTo(on, this.freeCam, Cheat.NoClip);
   }
 
   /** All three. The common case, and what the panel's headline button does. */
   full(on: boolean): void {
-    this.setGodMode(on);
-    this.setInvisible(on);
-    this.setFreeCam(on);
+    // The full-spectator code's own rule is "complete the set unless it is already complete",
+    // so asking for `on` when a subset is up is one request rather than three.
+    if (on ? !this.allActive : this.anyActive) this.deps.request(CHEAT_FULL_SPECTATOR);
   }
 
-  /** Put everything back. Called when the panel is closed and by `__operator.spectate.off()`. */
+  /** Put everything back. Called by `__operator.spectate.off()`. */
   reset(): void {
     this.full(false);
   }
@@ -126,9 +154,20 @@ export class Spectator {
   describe(): string {
     if (!this.anyActive) return 'off';
     const parts: string[] = [];
-    if (this.god) parts.push('god');
-    if (this.hidden) parts.push('unseen');
-    if (this.fly) parts.push('noclip');
+    if (this.godMode) parts.push('god');
+    if (this.invisible) parts.push('unseen');
+    if (this.freeCam) parts.push('noclip');
     return parts.join(' · ');
+  }
+
+  /**
+   * Ask only when the answer would change.
+   *
+   * The codes are toggles and these methods take a boolean, so a `setGodMode(true)` on a player
+   * who already has it must send nothing — otherwise the console's idempotent-looking call would
+   * turn the thing off.
+   */
+  private toggleTo(want: boolean, is: boolean, bits: number): void {
+    if (want !== is) this.deps.request(bits);
   }
 }

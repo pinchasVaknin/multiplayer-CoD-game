@@ -8,6 +8,7 @@ import type { BotTeam } from '../shared/ai/Combatant';
 import type { PerceptionConfig, TierTable } from '../shared/ai/DifficultyTiers';
 import { PlayerCombatant } from '../shared/ai/PlayerCombatant';
 import { makeSpawnChoice, type SpawnChoice } from '../shared/ai/SpawnSelector';
+import { Cheat } from '../shared/cheats/Cheats';
 import { DamageSystem, makeDamageRequest, type DamageRequest } from '../shared/combat/DamageSystem';
 import { LocalIdentity } from '../shared/combat/LocalIdentity';
 import { ScoreSystem } from '../shared/combat/ScoreSystem';
@@ -195,6 +196,16 @@ export interface MatchDeps {
    * is not a thing an untrusted client gets to choose (§4.16).
    */
   readonly onStreakRequest?: ((id: StreakId, markX: number, markZ: number) => void) | undefined;
+
+  /**
+   * This client's cheat entitlements, read every tick (playtest round 4, F14).
+   *
+   * A supplier rather than a value because the mask outlives this object: it comes from the
+   * replicated owner block on a networked client and from `Game`'s own store offline, and both
+   * survive the world being torn down and rebuilt by a rotation. `Game.cheatMask` is the one
+   * expression that merges the two authorities; nothing here needs to know which it is reading.
+   */
+  readonly cheats: () => number;
 
   /**
    * Where the drawable bodies come from (M10, S6.5).
@@ -1161,8 +1172,22 @@ export class Match {
    * for them — and both are already expressed on `PlayerCombatant`. The suite owns the
    * toggle and the panel; this owns what the toggle means.
    */
-  godMode = false;
-  hiddenFromBots = false;
+  /**
+   * `SPEC[]1` and `SPEC[]2`, read from the entitlement rather than stored (round 4, F14).
+   *
+   * These were two fields, written by `debug/Spectator.ts`. They are getters now because the
+   * entitlement is the store and a field beside it would be a second copy of it — and, over a
+   * network, a copy the client had written for itself while the server disagreed. `Spectator`
+   * still owns the *toggle*; what it toggles is the entitlement, through the same door a typed
+   * code goes through.
+   */
+  get godMode(): boolean {
+    return (this.deps.cheats() & Cheat.God) !== 0;
+  }
+
+  get hiddenFromBots(): boolean {
+    return (this.deps.cheats() & Cheat.Unseen) !== 0;
+  }
 
   get playerRespawnSeconds(): number {
     return this.playerRespawnTimer;
@@ -1183,6 +1208,17 @@ export class Match {
   /** The scoreboard's one writer, called once per frame from `Game.updateHudSurfaces`. */
   setScoreboardOpen(on: boolean): void {
     this.ui.setScoreboardOpen(on);
+  }
+
+  /**
+   * The cheat tag's one writer, from the same per-frame pass (round 4, F14).
+   *
+   * Routed through the match rather than written on the HUD from `Game`, because the HUD belongs
+   * to the match and `Game` is not allowed to hold a reference that outlives a rotation — the
+   * same argument `setScoreboardOpen` is here for.
+   */
+  setCheatTag(text: string): void {
+    this.ui.hud.setCheatTag(text);
   }
 
   get isActive(): boolean {
@@ -1500,6 +1536,16 @@ export class Match {
    */
   private syncChopperBody(): void {
     const flying = this.streaks.activeChopperFor(this.localId) !== null;
+    /**
+     * `SPEC[]3` — free cam — is written from here too (round 4, F14).
+     *
+     * Not because it is a combat flag, but because this is already the one place that re-applies
+     * the body's state from state every tick, and `PlayerController.spawn` does not clear
+     * `noclip`. A latch set once by the toggle would survive a revoke into the next life. The
+     * server writes the same bit from `NetPlayer.step`, from the same replicated mask, which is
+     * what makes flying predictable rather than a running argument with collision.
+     */
+    this.deps.player.noclip = (this.deps.cheats() & Cheat.NoClip) !== 0;
     // Post-M8: the QA spectator uses the same two levers, so it is folded in here rather
     // than written from a second place. Driven from state every tick means there is still
     // nothing to get stuck — turning god mode off puts the body back on the next tick,

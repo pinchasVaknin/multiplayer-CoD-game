@@ -53,6 +53,13 @@ export interface GameScreensDeps {
   readonly onQuitToMenu: () => void;
   readonly onResume: () => void;
   readonly onToggleOverlay: () => void;
+  /**
+   * A cheat code was typed on the pause screen (playtest round 4, F14).
+   *
+   * An intent like every other on this interface: the screen collects a string, `Game` decides
+   * what it means and whether the server has to be asked.
+   */
+  readonly onCheatCode: (code: string) => void;
   readonly onLeaveSummary: () => void;
   /** The summary's secondary: leave the server for the main menu (playtest round 4, B4). */
   readonly onExitSummary: () => void;
@@ -111,6 +118,7 @@ export class GameScreens {
       onToggleDebug: deps.onToggleOverlay,
       onQuit: deps.onQuitToMenu,
       statusLine: deps.pauseStatusLine,
+      onCheatCode: deps.onCheatCode,
     });
     this.pauseMenu.setOnSettings(deps.onSettings);
 

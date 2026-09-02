@@ -42,12 +42,24 @@ import { MatchHarness } from './debug/MatchHarness';
 import { Speedometer } from './debug/Speedometer';
 import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStates';
 import {
+  cheatTag,
   debugOverlayVisible,
+  debugUnlocked,
   quickLoadoutWindow,
   scoreboardOpen,
   type DebugOverlayRequest,
   type HudSurfaceState,
 } from '../shared/ui/HudSurfaces';
+import {
+  CHEAT_LOCAL,
+  CHEAT_SIMULATION,
+  Cheat,
+  CheatOutcome,
+  cheatCodeToggling,
+  cheatOutcomeText,
+  parseCheatCode,
+  toggleCheat,
+} from '../shared/cheats/Cheats';
 import type { Match } from './ClientMatch';
 import type { MatchResult } from '../shared/modes/GameMode';
 import type { XpReport } from '../shared/meta/XpRules';
@@ -421,6 +433,20 @@ export class Game {
    * `setVisible`. See `shared/ui/HudSurfaces.ts`.
    */
   private debugRequest: DebugOverlayRequest = 'none';
+  /**
+   * The cheat bits this client authors for itself (playtest round 4, F14).
+   *
+   * Two things live in here and the mask that reads it says which is which. `CHEAT_LOCAL` —
+   * `Cheat.Debug`, and nothing else — is always authored here, because the debug overlay is a
+   * client surface and no simulation reads it. `CHEAT_SIMULATION` bits are authored here **only
+   * when there is no server**, where this process is the authority and the QA spectator has
+   * worked exactly this way since M8.
+   *
+   * On `Game` rather than on the match for the same reason `debugRequest` and
+   * `NetClient.reconnectToken` are, and F8 already noted this was becoming a pattern: the
+   * surface is thrown away by a rotation and the fact is not.
+   */
+  private localCheats = 0;
   /** Where the settings screen's Back button goes. Captured on entry (M8). */
   private settingsReturn: GameStateId = 'MENU';
 
@@ -489,6 +515,7 @@ export class Game {
       onQuitToMenu: () => this.transitionTo('MENU'),
       onResume: () => this.resumeFromPause(),
       onToggleOverlay: () => this.toggleOverlayFromPause(),
+      onCheatCode: (code) => this.requestCheat(code),
       onLeaveSummary: () => this.leaveSummary(),
       onExitSummary: () => this.exitSummary(),
       statusLine: () => this.statusLine(),
@@ -982,6 +1009,116 @@ export class Game {
    * have to be cleared correctly on all of them. Asked every frame, there is nothing to get
    * stuck, and a panel stuck on screen is one eating the digit keys for the rest of the match.
    */
+  /**
+   * This client's entitlements, merged from the two authorities that own them (round 4, F14).
+   *
+   * One expression, in one place, so the partition is arithmetic rather than a rule somebody
+   * has to remember. Connected, the simulation bits are the server's replicated answer and
+   * whatever this process may have granted itself offline is ignored — which is also what makes
+   * cheating offline and then joining a server clean up after itself. Offline, there is no
+   * server to ask and this process is the authority.
+   *
+   * `CHEAT_LOCAL` is added from `localCheats` in both cases, and `check-cheats.mjs` is what
+   * guarantees the two masks are disjoint so no bit can be claimed by both halves.
+   */
+  private get cheatMask(): number {
+    const net = this.world?.net?.client;
+    const authority = net === undefined ? this.localCheats : net.cheatMask;
+    return (this.localCheats & CHEAT_LOCAL) | (authority & CHEAT_SIMULATION);
+  }
+
+  /**
+   * A code was typed on the pause screen (playtest round 4, F14).
+   *
+   * **The one door**, and it is the same shape as `ClientMatch.spendStreak` for the same reason:
+   * what a code means is one question and who is entitled to answer it is another, and the
+   * second depends on which kind of match this is. Nothing downstream ever asks whether a code
+   * was typed — every effect reads the entitlement.
+   *
+   * Three routes out, and the ordering is the policy:
+   *
+   * - **Unrecognised** is answered here, with no round trip. It is a typo, and asking a server
+   *   about it would mean a server that has cheats off answering *"cheats are disabled"* about a
+   *   string that is not a code — sending somebody to find an operator they do not need.
+   * - **A local code** is applied here, because the client is its authority. It also moves
+   *   `debugRequest`, and that is not a second writer of one fact: *may they* and *do they want
+   *   it* are two facts, and the code is the only input that has an opinion about both.
+   * - **Everything else** is a request. Connected, it goes to the server and nothing changes
+   *   locally until the answer arrives — §4.16, and the same rule as an unoptimistic streak.
+   *   Offline, the shared table is applied against `localCheats`, which is this process being
+   *   the authority rather than a second copy of the rule.
+   */
+  private requestCheat(code: string): void {
+    const entry = parseCheatCode(code);
+    if (entry === null) {
+      this.screens.pauseMenu.setCodeResult(cheatOutcomeText(CheatOutcome.RefusedUnknown));
+      return;
+    }
+
+    if (entry.local) {
+      const before = this.localCheats;
+      const after =
+        entry.effect.kind === 'toggle' ? toggleCheat(before, entry.effect.bits) : before;
+      this.localCheats = after;
+      /**
+       * Unlocking is also a request to see it, and revoking cancels the request.
+       *
+       * `'onPause'` because this is where it was typed and the tuning sliders need a cursor —
+       * exactly what that member of the tri-state means. Clearing the request on a revoke keeps
+       * a later re-unlock from popping the panel up on a screen nobody asked for it on.
+       */
+      const nowUnlocked = (after & Cheat.Debug) !== 0;
+      this.debugRequest = nowUnlocked ? 'onPause' : 'none';
+      this.screens.pauseMenu.setCodeResult(
+        cheatOutcomeText(nowUnlocked ? CheatOutcome.Granted : CheatOutcome.Revoked),
+      );
+      return;
+    }
+
+    const client = this.world?.net?.client;
+    if (client !== undefined) {
+      client.sendCheat(entry.code);
+      // No optimism, and no "asking..." either: the reply is one frame away at any playable
+      // ping, and a line that had to be corrected would be worse than a line that waits.
+      return;
+    }
+
+    const match = this.world?.match;
+    if (match === undefined) {
+      this.screens.pauseMenu.setCodeResult(cheatOutcomeText(CheatOutcome.RefusedNoSeat));
+      return;
+    }
+    if (entry.effect.kind === 'kills') {
+      // The same door the server uses, and the reason it is a door at all: P4's balance is
+      // credited from the score rather than read out of it, so unearned kills buy streaks
+      // without ever appearing in the match results.
+      match.streaks.creditKills(match.localId, entry.effect.kills);
+      this.localCheats |= Cheat.Wallet;
+      this.screens.pauseMenu.setCodeResult(cheatOutcomeText(CheatOutcome.WalletGranted));
+      return;
+    }
+    const after = toggleCheat(this.localCheats, entry.effect.bits);
+    this.localCheats = after;
+    const granted = (after & entry.effect.bits) !== 0;
+    this.screens.pauseMenu.setCodeResult(
+      cheatOutcomeText(granted ? CheatOutcome.Granted : CheatOutcome.Revoked),
+    );
+  }
+
+  /**
+   * Ask for an entitlement by bits, for the surfaces that are not a text field (round 4, F14).
+   *
+   * The QA spectator panel and `__operator.spectate.*` want *"god mode on"* rather than a string
+   * to type, and they must not become a second way to grant one — so the bits are resolved to the
+   * code that toggles them and go through the same door a typed code does. A bit combination with
+   * no code is not a request anybody can make, which is the point rather than an edge case.
+   */
+  private requestCheatBits(bits: number): void {
+    const code = cheatCodeToggling(bits);
+    if (code === null) return;
+    this.requestCheat(code);
+  }
+
   private updateHudSurfaces(): void {
     const state = this.hudSurfaceState();
 
@@ -1002,6 +1139,12 @@ export class Game {
 
     const overlay = this.world?.debug.overlay;
     if (overlay !== undefined) overlay.setVisible(debugOverlayVisible(state));
+
+    // F14. Both are surfaces in the round-4 sense — derived once per frame, from state that
+    // outlives them — and both are idempotent, which is what lets the pause screen's button
+    // appear on the frame the code is typed without anybody refreshing it.
+    if (match !== undefined) match.setCheatTag(cheatTag(state));
+    this.screens.pauseMenu.setDebugAvailable(debugUnlocked(state));
   }
 
   /**
@@ -1021,6 +1164,7 @@ export class Game {
       round: match?.flow.round ?? 1,
       scoreboardHeld: match?.scoreboardHeld ?? false,
       debugRequest: this.debugRequest,
+      cheatMask: this.cheatMask,
     };
   }
 
@@ -1206,6 +1350,9 @@ export class Game {
       },
       // The screen, read at the moment a command is built. See `MatchWorldDeps.inMatch`.
       inMatch: () => this.state === 'MATCH',
+      // F14. The same merge every surface reads, so the simulation and the tag cannot disagree.
+      cheats: () => this.cheatMask,
+      requestCheat: (bits) => this.requestCheatBits(bits),
       onConfigChanged: () => this.onConfigChanged(),
       onWeaponConfigChanged: () => this.onWeaponConfigChanged(),
       // M11 (§7). Suppliers rather than values: all three outlive this world, which is the
@@ -1430,6 +1577,22 @@ export class Game {
       },
       onSummary: (info) => {
         this.pendingNetSummary = info;
+      },
+      /**
+       * The server's answer to a cheat code (playtest round 4, F14).
+       *
+       * Only the sentence. The entitlements are already in `NetClient.cheatMask` — replicated
+       * state, applied before this fires — so there is nothing here to write and nothing that
+       * could disagree with what the simulation is doing.
+       *
+       * It goes to the pause screen's own line rather than through `voteOverlay.notice`, and
+       * that is not a preference: the vote overlay lives under `.op-screen`'s backdrop, so a
+       * notice raised while the player is looking at the field they typed into would be painted
+       * over by the screen it is answering.
+       */
+      onCheats: (outcome) => {
+        this.screens.pauseMenu.setCodeResult(cheatOutcomeText(outcome));
+        netLog.info(`cheat code answered: outcome ${outcome}.`);
       },
       onNotice: (text) => {
         /**

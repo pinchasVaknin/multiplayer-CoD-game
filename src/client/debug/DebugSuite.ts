@@ -71,6 +71,9 @@ export interface DebugSuiteContext {
   readonly mapEntry: MapEntry;
   /** M9 (S7): what the overlay reports as the source of simulation. */
   readonly transport: ICommandQueue;
+  /** This client's cheat entitlements, and the one door that asks for more (round 4, F14). */
+  readonly cheats: () => number;
+  readonly requestCheat: (bits: number) => void;
   readonly match: Match;
   /** M10: the live connection, or a supplier returning null in single-player. */
   readonly netSession: () => NetSession | null;
@@ -230,7 +233,14 @@ export class DebugSuite {
     this.metaPanel = new MetaPanel(this.overlay, ctx.match, ctx.profile, ctx.bus);
     this.streakPanel = new StreakPanel(this.overlay, ctx.match, ctx.bus);
 
-    this.spectator = new Spectator(ctx.match, ctx.player);
+    /**
+     * The QA spectator asks; it no longer writes (round 4, F14).
+     *
+     * Both suppliers come from `Game`, which is the only thing that outlives a world and the
+     * only thing that knows whether there is a server to ask. The suite deliberately does not
+     * reach for `ctx.match` any more: the entitlement is not the match's to hold.
+     */
+    this.spectator = new Spectator({ cheats: ctx.cheats, request: ctx.requestCheat });
     this.spectatorPanel = new SpectatorPanel(this.overlay, this.spectator);
 
     this.snagHarness = new SnagHarness({

@@ -1,4 +1,5 @@
 import type { BotTeam, Combatant } from '../shared/ai/Combatant';
+import { Cheat, type CheatGrants } from '../shared/cheats/Cheats';
 import {
   DEATH_VARIANTS,
   deathVariantFor,
@@ -55,6 +56,19 @@ export interface NetPlayerDeps {
   readonly secondaryDef: WeaponDef;
   /** The resolved perks this player is carrying. `NO_PERKS` for anything without a loadout. */
   readonly perks: PerkState;
+  /**
+   * What this connection has been granted (playtest round 4, F14).
+   *
+   * A **required** dep rather than a field set after construction, and that is the whole of the
+   * safety argument. It is owned by the `Session`, so it outlives every seat the player takes and
+   * dies with the connection; passing it in means the type system asks the question at every
+   * construction site instead of leaving a mutable field somebody has to remember to assign. This
+   * milestone's standing failure is a fact that moved and left its readers behind — a grant that
+   * silently defaulted to nothing on one seating path would be exactly that shape.
+   *
+   * `NO_CHEATS` for anything with no connection behind it, which is every bot.
+   */
+  readonly cheats: CheatGrants;
 }
 
 export class NetPlayer implements Combatant {
@@ -212,8 +226,34 @@ export class NetPlayer implements Combatant {
     const stance = this.controller.sim.stance;
     return stance === 'CROUCH' || stance === 'SLIDE';
   }
+  /**
+   * `SPEC[]2` — nothing comes looking (playtest round 4, F14).
+   *
+   * A **getter** over the entitlement rather than a field cleared alongside `active`, because
+   * `spawn` sets `active` true and a field would be undone by the player's next life. Derived,
+   * there is nothing to re-apply and nothing to forget: the answer is right on the tick the code
+   * is honoured and on every tick after it.
+   *
+   * The consequence to know about, and it is the same one DEBUG.md already records for the
+   * client-side QA switch: in Search & Destroy `anyAlive` counts participants, so an invisible
+   * attacker reads as eliminated and will end the round for their side. That is correct — you
+   * are spectating — and it is why `SPEC[]4` exists for watching a round through.
+   */
   get participating(): boolean {
-    return this.active && this.health.alive;
+    return this.active && this.health.alive && !this.deps.cheats.has(Cheat.Unseen);
+  }
+  /**
+   * `SPEC[]1` — takes no damage (playtest round 4, F14).
+   *
+   * Read at the damage door (`DamageSystem.apply`), which is what makes it whole: a god-mode
+   * player takes no damage *events* either, so there is no flinch, no vignette and no hit
+   * direction. Topping health up instead would have left all of those firing.
+   *
+   * This is the **first** writer of `Damageable.invulnerable` on the server — see PLAN.md's
+   * "found while here" for the pre-existing asymmetry that discovery turned up.
+   */
+  get invulnerable(): boolean {
+    return this.deps.cheats.has(Cheat.God);
   }
   get glinting(): boolean {
     return this.weapons.glinting;
@@ -280,6 +320,23 @@ export class NetPlayer implements Combatant {
    * makes the countdown read as a starting gun rather than a freeze frame.
    */
   step(tick: number, frozen: boolean): void {
+    /**
+     * `SPEC[]3` — free cam (playtest round 4, F14).
+     *
+     * Written from the entitlement every tick rather than once when the code is honoured, for
+     * the reason `Match.syncChopperBody` gives about the chopper: a mode driven from state has
+     * nothing to get stuck, and `PlayerController.spawn` does not clear this field, so a latch
+     * would survive a revoke into the player's next life.
+     *
+     * The client applies the same bit from the replicated mask, which is what makes flying
+     * predictable at all. There is a window of up to one snapshot interval — 50 ms at 20 Hz —
+     * between the server honouring the code and the client learning of it, during which the two
+     * disagree about collision and prediction corrects. Stated rather than papered over: it is
+     * the cost of an authority change inside a life, it happens only on a toggle, and the
+     * alternative — bumping the spawn serial to make it a clean discontinuity — would tell P5's
+     * per-life reset that a new life had begun, which is a worse lie than a 50 ms correction.
+     */
+    this.controller.noclip = this.deps.cheats.has(Cheat.NoClip);
     this.health.step();
 
     if (!this.alive_) {

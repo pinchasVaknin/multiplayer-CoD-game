@@ -1,6 +1,7 @@
 import type { HitZone } from '../combat/HitboxRig';
 import { HIT_ZONES } from '../combat/HitboxRig';
 import type { InputCommand, MutableInputCommand } from '../core/InputCommand';
+import { CHEAT_CODE_MAX } from '../cheats/Cheats';
 import type { PlayerSimState } from '../player/PlayerState';
 import {
   MAGIC,
@@ -641,6 +642,28 @@ export function writeStreakRequest(w: ByteWriter, kind: number, x: number, z: nu
 }
 
 /**
+ * "I typed this cheat code" (playtest round 4, F14).
+ *
+ * The text, not a parsed id — see `MsgC.Cheat` for why the decision stays the server's. Refused
+ * as malformed above `CHEAT_CODE_MAX` rather than truncated and compared: a code that arrives
+ * cut short would be answered *"unknown code"*, which is a lie about a frame that was too long
+ * rather than about a code that does not exist.
+ */
+export function writeCheatRequest(w: ByteWriter, code: string): Uint8Array {
+  head(w, MsgC.Cheat);
+  w.str(code.slice(0, CHEAT_CODE_MAX));
+  return w.bytes();
+}
+
+/** What the server decided about a code, and this seat's whole mask afterwards (F14). */
+export function writeCheats(w: ByteWriter, outcome: number, mask: number): Uint8Array {
+  head(w, MsgS.Cheats);
+  w.u8v(outcome & 0xff);
+  w.u8v(mask & 0xff);
+  return w.bytes();
+}
+
+/**
  * Everything one recipient is told about streaks (M11 Gate B, §6.8, §8.22).
  *
  * Encoded per seat, which is what makes the two private sections private — see `MsgS.Streaks`
@@ -866,14 +889,30 @@ export function writeSnapshotHeader(w: ByteWriter, h: SnapshotHeader): void {
   w.u8v(Math.min(255, Math.max(0, h.round)));
 }
 
-/** The owner block, flagged so a spectating or unspawned client can omit it entirely. */
-export function writeSnapshotOwner(w: ByteWriter, owner: PlayerSimState | null): void {
+/**
+ * The owner block, flagged so a spectating or unspawned client can omit it entirely.
+ *
+ * The cheat mask is written **after** the optional state and unconditionally (playtest round 4,
+ * F14). Unconditionally because the block is absent for a client with no body, and a player who
+ * switches free-cam on while dead would otherwise not be told until they spawned; after, because
+ * appending is the change that leaves every existing field where it was.
+ *
+ * One byte per snapshot per client, and it buys the property that matters: the entitlement is
+ * replicated as **state**, so no single dropped frame can leave the two sides disagreeing about
+ * whether a wall stops this player.
+ */
+export function writeSnapshotOwner(
+  w: ByteWriter,
+  owner: PlayerSimState | null,
+  cheatMask: number,
+): void {
   if (owner === null) {
     w.u8v(0);
-    return;
+  } else {
+    w.u8v(1);
+    writeOwnerState(w, owner);
   }
-  w.u8v(1);
-  writeOwnerState(w, owner);
+  w.u8v(cheatMask & 0xff);
 }
 
 export function writeSnapshotEntities(
@@ -1097,6 +1136,8 @@ export type Decoded =
       smoke: readonly SmokeState[];
     }
   | { kind: 'streakRequest'; streakKind: number; x: number; z: number }
+  | { kind: 'cheatRequest'; code: string }
+  | { kind: 'cheats'; outcome: number; mask: number }
   | { kind: 'bomb'; bomb: BombInfo }
   | { kind: 'bad' };
 
@@ -1191,6 +1232,18 @@ export function decodeHeader(r: ByteReader): Decoded {
       const x = dequantPos(r.i16());
       const z = dequantPos(r.i16());
       return r.overran ? BAD : { kind: 'streakRequest', streakKind, x, z };
+    }
+    case MsgC.Cheat: {
+      const code = r.str();
+      // Length is meaning, not shape, so it is refused here rather than clamped: an over-long
+      // code is a client this server does not recognise, and §4.16 answers that at the boundary.
+      if (r.overran || code.length > CHEAT_CODE_MAX) return BAD;
+      return { kind: 'cheatRequest', code };
+    }
+    case MsgS.Cheats: {
+      const outcome = r.u8v();
+      const mask = r.u8v();
+      return r.overran ? BAD : { kind: 'cheats', outcome, mask };
     }
     case MsgS.Vote: {
       const phase = r.u8v();

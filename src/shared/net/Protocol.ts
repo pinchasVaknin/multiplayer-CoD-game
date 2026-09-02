@@ -17,6 +17,17 @@
 /**
  * Bump on any layout change to any message in this file.
  *
+ * v12 (M11 Gate B, playtest round 4): **cheat codes** (F14). `MsgC.Cheat` carries the text a
+ * player typed and `MsgS.Cheats` carries what the server decided about it; the resulting
+ * entitlement mask rides the **owner block** of every snapshot.
+ *
+ * The mask is in the snapshot rather than only in the reply because it is *state* and not an
+ * edge. Two of the three simulation entitlements are invisible to a client that has the wrong
+ * answer, and the third — noclip — is a permanent misprediction: the server would fly a body the
+ * client keeps in collision, for the rest of the match, if the one reply carrying it were
+ * dropped. Repeated every snapshot there is nothing to lose. Same reasoning as P5's spawn serial:
+ * *a serial is still true on the tenth snapshot after the spawn.*
+ *
  * v11 (M11 Gate B, playtest round 4): a **reconnect token** in both directions. The seat
  * assignment carries one out, and `Hello` carries one back.
  *
@@ -74,7 +85,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
@@ -114,6 +125,20 @@ export const MsgC = {
    * Every other streak ignores them and is placed at the player's own body.
    */
   Streak: 8,
+  /**
+   * "I typed this cheat code" (playtest round 4, F14).
+   *
+   * A **request**, and the strongest case in the protocol for that word. God mode, invisibility
+   * and noclip are facts about the simulation, so a client that granted itself one would either
+   * be ignored (the server keeps killing you) or be exploiting a hole. The server parses the
+   * text against its own copy of the table, checks `ServerConfig.cheatsEnabled`, and answers
+   * with `MsgS.Cheats` — including when the answer is no.
+   *
+   * The **text** rather than a parsed code id, so the decision and the log line are the
+   * server's: "OP1 typed SPEC[]1 and this server has cheats off" is a sentence somebody can act
+   * on, where "OP1 asked for entitlement 2" is not. Bounded by `CHEAT_CODE_MAX`.
+   */
+  Cheat: 9,
 } as const;
 
 /** Server -> client message ids. */
@@ -201,6 +226,18 @@ export const MsgS = {
    * any earlier it would compare against a client holding tick N-1 and cry wolf on every sample.
    */
   StateHash: 144,
+  /**
+   * What the server decided about a cheat code (playtest round 4, F14).
+   *
+   * Carries the **outcome** and the seat's whole entitlement mask. The outcome is the half that
+   * cannot be inferred: a refusal and a revoke both leave the mask without the bit, and a player
+   * who cannot tell those apart retypes the code and reports it twice.
+   *
+   * The mask is here as well as in the snapshot's owner block deliberately — this message is the
+   * *answer*, and it must be complete on its own so the pause screen can say what happened
+   * without waiting for a snapshot tick it may not receive while paused.
+   */
+  Cheats: 145,
 } as const;
 
 export type MsgCId = (typeof MsgC)[keyof typeof MsgC];

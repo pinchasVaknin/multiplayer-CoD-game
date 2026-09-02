@@ -9,7 +9,7 @@ building a second overlay.
 
 | Key | Effect |
 |---|---|
-| `F1` | Toggle the debug overlay |
+| `F1` | *(unbound since M6)* — the overlay opens from the pause screen, and from round 4 only after `DEBUG666`. See "Cheat codes" below. |
 | `F2` | Toggle collision visualisation (wireframe capsule, contact normals, queried hash cells) |
 | `F3` | Reset the frame-time histogram and the speed measurement |
 | `F4` | Toggle the AI layer: navmesh, paths, sight lines, cover, spawn scores (M3/M4) |
@@ -915,15 +915,25 @@ bots actually doing?"* rather than *"how fast is this frame?"*.
 F1 → **Spectator (QA)**, or `__operator.spectate.*` from the console. They are independent on
 purpose, because they answer different questions:
 
-| Switch | What it does | The question it answers |
-|---|---|---|
-| **God mode** | `Damageable.invulnerable`, tested inside `DamageSystem.apply` | *How long does a VETERAN take to notice me, and how hard does it hit?* Stand in the open with a stopwatch. |
-| **Invisible** | `PlayerCombatant.active = false` | *What does this firefight look like when I am not in it?* Removes you from perception, bot target selection **and** spawn scoring. |
-| **Free-cam** | `PlayerController.noclip` | *Where exactly is this collider seam / spawn cluster / navmesh hole?* |
+| Switch | Code | What it does | The question it answers |
+|---|---|---|---|
+| **God mode** | `SPEC[]1` | `Damageable.invulnerable`, tested inside `DamageSystem.apply` | *How long does a VETERAN take to notice me, and how hard does it hit?* Stand in the open with a stopwatch. |
+| **Invisible** | `SPEC[]2` | `Combatant.participating = false` | *What does this firefight look like when I am not in it?* Removes you from perception, bot target selection **and** spawn scoring. |
+| **Free-cam** | `SPEC[]3` | `PlayerController.noclip` | *Where exactly is this collider seam / spawn cluster / navmesh hole?* |
+| **All three** | `SPEC[]4` | the set | *Watch a whole round from inside it.* |
 
-**Invisibility turns god mode on with it.** Nothing is aiming at you, but a grenade, a mortar
-or a sentry burst already in the air does not know that, and dying mid-observation drops you
-into a respawn timer in the middle of the thing you were watching.
+**From playtest round 4 these are cheat entitlements, and the server decides.** Against a
+dedicated server they need `CHEATS_ENABLED=1` in the environment; without it every request is
+refused and you are told so. Nothing changes offline, where this process is the authority and
+always was. The panel's checkboxes are redrawn from the live entitlement rather than from your
+click, so a refused switch simply springs back.
+
+**Invisibility no longer turns god mode on with it.** It did until round 4, for a good reason —
+a grenade, a mortar or a sentry burst already in the air does not know that nobody is aiming at
+you, and dying mid-observation drops you into a respawn timer in the middle of the thing you
+were watching. That reason is now served by `SPEC[]4` instead. Coupled, the two entitlements
+were indistinguishable, and no measurement could tell perception from invulnerability — which is
+exactly what F14's verification had to do.
 
 **God mode is not "regenerate very fast".** The check is at the damage door, before anything
 is subtracted, so you take no damage *events* either — no flinch, no hurt vignette, no
@@ -970,7 +980,53 @@ spectate is to *watch the screen*.
   There is no undo path to maintain — turn it off and the match is exactly as it was.
 - **In Search & Destroy, being invisible makes you non-participating**, so the round will
   count you as eliminated. That is correct — you are spectating — but it means you cannot
-  observe a full S&D round from the attacking side without ending it.
+  observe a full S&D round from the attacking side without ending it. True on the server too
+  since round 4, where `SearchAndDestroy.anyAlive` is what reads it.
+- **It does not hide your body from other players.** Invisible means nothing *looks* for you:
+  perception, target selection and spawn scoring. The mesh is still in everybody's snapshot, and
+  deliberately — removing an entity to hide a player is the mistake Ghost's implementation
+  records, and here it would additionally desync who can be shot from what the server resolves
+  rounds against.
+- **Free cam costs one snapshot interval of prediction on each toggle** over a network. The
+  server flies the body from the replicated entitlement and the client learns of it up to 50 ms
+  later, so collision disagrees for a few ticks and prediction corrects. It happens on the toggle
+  and nowhere else.
+
+---
+
+# Playtest round 4 — cheat codes (F14)
+
+Typed into the **code field on the pause screen**, which is the only input this feature has.
+A text field rather than a key sequence on purpose: `DEBUG666` shares D, E, B, U and G with
+movement and Use, and `SPEC[]n`'s brackets are not keystrokes on a keyboard that does not have
+them. Type the literal text, brackets included. Case does not matter.
+
+| Code | Effect | Who decides |
+|---|---|---|
+| `DEBUG666` | Unlocks the debug overlay, and puts it up. The pause screen's **Debug overlay** button appears with it. | The client. It is a client surface and no simulation reads it, so it works offline and against any server. |
+| `SPEC[]1` | God mode | The server, and only with `CHEATS_ENABLED=1` |
+| `SPEC[]2` | Invisible | " |
+| `SPEC[]3` | Free cam | " |
+| `SPEC[]4` | All three | " |
+| `MO951357` | +30 kills to the killstreak balance, **not** to the scoreboard | " |
+
+Every code is a **toggle**; typing it again clears it. `SPEC[]4` completes the set unless the
+whole set is already on, in which case it clears all of it — the same rule the spectator panel's
+headline button has always used, and now literally the same function.
+
+`MO951357` pays into the balance through `StreakSystem.creditKills`, the door round 4's B9
+built for exactly this: the balance is *credited from* `PlayerScore.kills` rather than read out
+of it, so unearned kills buy streaks and never appear in the match results.
+
+**A cheat that is on says so.** A tag reads `CHEATS · GOD · UNSEEN · …` at the bottom of the
+HUD, and the server logs every grant, revoke and refusal with the player and the resulting
+entitlements. `DEBUG666` is deliberately not on the tag: having the overlay unlocked says
+nothing about the simulation, and a warning that is up for most of a developer's session stops
+being one.
+
+**Nothing is applied optimistically.** A code goes to the server and the entitlement arrives
+back replicated, in the owner block of every snapshot — state rather than an edge, so a dropped
+frame cannot leave the two sides disagreeing about whether a wall stops you.
 
 ## Melee, for reference
 

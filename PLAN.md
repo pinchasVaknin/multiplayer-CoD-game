@@ -5677,11 +5677,19 @@ column with B13 in mind: it is where the failure was.
 |---|---|---|---|---|
 | Scoreboard | `Game.updateHudSurfaces` → `Match.setScoreboardOpen` | `scoreboardOpen` — screen, editor, held Tab | `Btn.Scoreboard`, a level read from the command (S4.2). Consumes nothing | `.sb--on` class |
 | Quick loadout | `Game.updateHudSurfaces` → `show`/`hide` | `quickLoadoutWindow` — respawn countdown, or round-one `WARMUP` | digits 1-5; **consumed** while shown, refused while hidden | `[hidden]` + `.ql[hidden]` |
-| Debug overlay | `Game.updateHudSurfaces` → `setVisible` | `debugOverlayVisible` — `debugRequest` and the screen | Escape closes it and stops there. The × asks through `onDismiss` | `[hidden]` + `.dbg-root[hidden]` |
+| Debug overlay | `Game.updateHudSurfaces` → `setVisible` | `debugOverlayVisible` — `debugRequest`, the screen, and **`Cheat.Debug`** (round 4, F14) | Escape closes it and stops there. The × asks through `onDismiss` | `[hidden]` + `.dbg-root[hidden]` |
 | Vote overlay | `VoteOverlay.apply`; `hide()` on migration (round 3) | the server's broadcast vote phase | digits 1-5, first refusal, only while not hidden | `[hidden]` + `.op-vote[hidden]` |
 | Pause | the `PAUSED` state's enter/exit | `Game.state` | Escape; its buttons take DOM focus, which is why `hide()` blurs | `[hidden]` + `.op-screen[hidden]` |
 | Summary | the `SUMMARY` state's enter/exit | `Game.state` | its own buttons | `[hidden]` + `.eom[hidden]` |
 | Mortar overlay | `MortarOverlay.open`/`cancel`/`confirm` | whether a mortar mark is being placed | Fire confirms, Escape cancels above the pause branches | `[hidden]` + `.hud-mortar[hidden]` |
+
+**Amended at F14.** The debug overlay's middle column gained a third term: the overlay is behind
+the `DEBUG666` entitlement now, and the pause menu's button exists only for a session that has
+typed it. `debugRequest` still means exactly what it meant — *do they want it, and from where* —
+and the entitlement is the separate fact *may they*. Both are needed, and the reason is the × in
+this row's fourth column: it closes the panel without revoking the code, so a single fact could
+not have carried both without making the × a one-way door. See "cheat codes, and the two
+authorities one store had to have" below.
 
 One honest footnote on the first row: `MatchHud.setVisible(false)` and `resetForMatch()` also
 force the board shut. They are teardown rather than a second opinion — both only ever write
@@ -6241,7 +6249,9 @@ what has been bought this life, and the audit. It replaces two maps on `StreakSy
   anything) and `streaks/` never re-decides the friendly-fire rule. The brief asked for the
   separation to be explicit in the code because F14's `MO951357` has to add thirty kills of
   purchasing power without touching the scoreboard: `credit` is that second door, and it exists
-  precisely because the balance is not a read of `PlayerScore.kills`.
+  precisely because the balance is not a read of `PlayerScore.kills`. **Used at F14, and it held:**
+  `MO951357` pays thirty kills into a wallet through `creditKills` with no compensating deduction
+  anywhere, measured at 30 credited against 0 added to any scoreboard row.
 - **The debit is the entitlement check.** `activate` no longer asks "do you hold it" — holding is
   not a thing any more — it asks `ledger.charge`, which refuses what the balance cannot cover and
   what has already been bought this life, and is the only place a refusal is counted. Asking
@@ -7796,3 +7806,494 @@ everything under "Open, and all of one kind".
   the one thing this design leans on hardest — that the returning client's first full snapshot
   arrives — but HARD RULE 9 puts that class of claim against a deployed server rather than
   loopback, so it belongs with the §7 battery rather than here.
+
+## Playtest round 4 — cheat codes, and the two authorities one store had to have
+
+Covers **F14** — `DEBUG666`, `SPEC[]1` to `SPEC[]4`, `MO951357`, and taking the debug overlay out
+of the ordinary options. Six codes in the report; one mechanism underneath them, and the shape of
+it is the only interesting decision in the session.
+
+### A code is input, an entitlement is state, and the partition is the security argument
+
+The naive build is six booleans written by six keypress handlers. Every effect then has to ask
+*"was the code typed"*, the server has no way to be the source of truth about any of it, and
+turning the whole thing off is six edits. So there is **one store** — a mask of entitlements in
+`shared/cheats/Cheats.ts` — a code is parsed into it exactly once, and every effect downstream
+reads the mask and nothing else.
+
+What made that more than tidiness is that the six codes do not have one authority. Four of them
+change what the **simulation** says:
+
+| Code | Entitlement | The line that reads it |
+|---|---|---|
+| `SPEC[]1` | god | `DamageSystem.apply`, at the `invulnerable` gate |
+| `SPEC[]2` | unseen | `Combatant.participating` — `Perception`, `SpawnSelector`, `SearchAndDestroy.anyAlive` |
+| `SPEC[]3` | noclip | `PlayerController.step` |
+| `SPEC[]4` | all three | the set |
+| `MO951357` | +30 kills | `StreakLedger.credit`, through `StreakSystem.creditKills` |
+
+Against a dedicated server a client granting itself any of those is not a cheat code, it is an
+exploit — it either does nothing, because the server keeps killing you, or it works and is a hole.
+So those bits are `CHEAT_SIMULATION`, the **server is their only author**, and a client's copy is
+replicated state it reads and never writes. `NetClient` masks the incoming byte with
+`CHEAT_SIMULATION` on arrival, so the partition is enforced where the untrusted bytes land rather
+than remembered at each reader.
+
+`DEBUG666` is the other half. It decides a client surface and says nothing about the simulation, so
+its bit is `CHEAT_LOCAL` and the client authors it for itself. That is not a convenience:
+
+- in single-player there is no server to ask, and the QA spectator has worked exactly this way
+  since M8;
+- against a **deployed** server, gating it would make the debug overlay unreachable — which is
+  precisely where every "needs a browser" list in this file sends somebody to read the NetPanel,
+  the divergence panel and the build report.
+
+The two masks are disjoint and every bit is in exactly one of them, which is what lets
+`Game.cheatMask` be one expression instead of a rule somebody has to remember:
+
+```
+(localCheats & CHEAT_LOCAL) | ((net?.cheatMask ?? localCheats) & CHEAT_SIMULATION)
+```
+
+Connected, the simulation half is the server's answer and anything this process granted itself
+offline is ignored — so cheating offline and then joining a server cleans up after itself.
+
+### The input is a text field, and a key-sequence detector could not have worked
+
+The brief left this open and asked for a decision. A key sequence is dead on arrival here:
+`DEBUG666` shares D, E, B, U and G with movement and Use, so typing it in a match walks, uses and
+reloads; and `SPEC[]n`'s brackets are not keystrokes at all on a keyboard that does not have them.
+
+So the input is a **text field on the pause screen**, and the player types the literal code —
+brackets included, case-insensitive. That home is not a compromise, it is the one place that
+satisfies both standing input rules *by construction* rather than by a check somebody has to
+write:
+
+- **"a hidden surface never consumes a key"** (round 3) — the field is on one screen and only
+  receives keys while it has focus. `Input.bindingsActive` is already false outside `MATCH`, and
+  `Input.domFocusGuard` already stops the game seeing a key while a form control has focus, so
+  nothing is taken from anybody. It is a `<form>`, so Enter submits as a form event and never
+  reaches `Input` at all.
+- **it is where the cursor is.** The pause screen is the only screen inside a match with a
+  released pointer, which is the same reason M5 put the debug button there.
+
+`PauseMenu.hide()` blurs the field beside the resume button, and that is the sharper of the two:
+a text input that kept focus into a live match would eat W, A, S and D.
+
+### DEBUG666 gates the button rather than deleting it, and the × is why
+
+F14 asks for the overlay to leave the ordinary options. Two readings, and the obvious one is
+wrong. Deleting `PauseMenu`'s button outright leaves the code as the only way in — and B1's
+tri-state means the × and Escape close the panel *without* revoking the entitlement, so the code
+would have to be retyped after every close and the × would have become exactly the one-way door
+P7 asks to confirm it has not become.
+
+So the button is **gated**: it exists only for a session that has typed `DEBUG666`. An ordinary
+player never sees it, which is what "removed from the ordinary options" means, and every
+documented B1 behaviour survives untouched.
+
+That makes the entitlement and `debugRequest` two facts rather than one, and both are load-bearing
+— *may they* and *do they want it, and from where*. The entitlement is read by the **predicate**,
+not just by the route, because the code is a toggle: clearing it while the panel is up has to take
+the panel down, and a gate that only guards the door cannot do that. `debugUnlocked` is that
+reader, and `Game.updateHudSurfaces` sets the button's presence from it every frame — idempotent,
+so it appears on the frame the code is typed with nobody having to remember to refresh it.
+
+### The wire (protocol v12), and why the mask is not carried by the reply alone
+
+`MsgC.Cheat` carries the **text** a player typed, not a parsed code id. The decision and the log
+line are then the server's: *"OP1 typed SPEC[]1 and this server has cheats off"* is a sentence
+somebody can act on. `MsgS.Cheats` carries the **outcome** and the mask.
+
+The outcome is the half that cannot be inferred, and it is what F14's *"if the server refuses, the
+client says so"* actually needs: a refusal and a revoke both leave the mask without the bit, and a
+player who cannot tell those apart retypes the code and reports it twice. It goes to the pause
+screen's own line rather than through `voteOverlay.notice`, and that is not a preference — the
+vote overlay sits under `.op-screen`'s near-opaque backdrop, so a notice raised while the player
+is looking at the field they typed into would be painted over by the screen answering them.
+
+**The entitlement mask also rides the owner block of every snapshot**, and that is the decision
+worth recording. A reply-only mask is an **edge**, and an edge can be dropped: under `--net bad`
+one lost frame would leave the client holding the wrong answer for the rest of the match. Two of
+the three simulation entitlements are invisible to a client with the wrong answer; the third,
+noclip, is a *permanent misprediction* — the server flying a body the client keeps in collision.
+Replicated as state, once per snapshot, there is nothing to lose. It is P5's lesson about the
+spawn serial met from a new direction: *a serial is still true on the tenth snapshot after the
+spawn.* One byte per client per snapshot, written after the optional state and unconditionally, so
+a player who switches free cam on while dead — when there is no owner block at all — is still
+told.
+
+It is discarded in `NetClient.onWelcome`, with the rest of §4.18's list. A migration keeps the
+grants (they live on the `Session`) so the next snapshot re-states them; a **reconnect** is a new
+connection with an empty store, and keeping the old bits would leave that client flying through
+walls the server had put back. Discarding is right in both cases, which is what makes it belong in
+the list rather than beside a test for which one happened.
+
+### Where the grants live, and the one door every seat comes through
+
+On the **`Session`**, beside `loadout` and `reconnectToken` and for the same reason: it is a fact
+about the connection, and a `NetPlayer` is thrown away and rebuilt by every migration. A grant on
+the seat would be lost the moment the player was moved from the arena into the match they typed
+the code to look at.
+
+`NetPlayerDeps.cheats` is **required**, not a field assigned afterwards, and that is the whole
+safety argument: the type system asks the question at every construction site instead of leaving a
+mutable field somebody has to remember. `MatchInstance.seat` is the single caller and it has the
+session. Bots get `NO_CHEATS`, a frozen shared instance.
+
+Every effect is then **derived**, never latched:
+
+| Effect | Where | Why a getter and not a field |
+|---|---|---|
+| god | `NetPlayer.invulnerable` | nothing to re-apply; there was no previous writer at all (see below) |
+| unseen | `NetPlayer.participating` | `spawn` sets `active = true`, so a field would be undone by the next life |
+| noclip | `NetPlayer.step`, `Match.syncChopperBody` | `PlayerController.spawn` does **not** clear `noclip`, so a latch would survive a revoke into the next life |
+
+The client's `godMode` and `hiddenFromBots` were two fields written by `debug/Spectator.ts`; they
+are getters over the mask now, because a field beside the entitlement is a second copy of it — and
+over a network a copy the client had written for itself while the server disagreed. `Spectator`
+keeps the *toggle* and has no state of its own left.
+
+**The cost, stated rather than glossed.** Free cam has a window of up to one snapshot interval —
+50 ms at 20 Hz — between the server honouring the code and the client learning of it, during which
+the two disagree about collision and prediction corrects. It happens on a toggle and nowhere else.
+The alternative was bumping the spawn serial to make it a clean discontinuity, which would tell
+P5's per-life reset that a new life had begun: a worse lie than a 50 ms correction.
+
+### MO951357 was the test P7 said it would be, and P4's separation held
+
+The brief said that if P4 had derived the balance from `PlayerScore.kills`, this code could not be
+implemented cleanly — and that hitting that was the signal the separation there was wrong. It is
+not wrong. P4 built `credit` as a **second door** for exactly this reason and said so at the time:
+the balance is *credited from* the score rather than read out of it, so `foldKills` keeps the score
+as the arbiter of what counts and unearned kills never appear in a match result.
+
+`StreakSystem.creditKills` — private until now, and already applying the aliveness rule every
+other unearned credit does — is that door made public. It is the third caller and the one it was
+named for. No compensating deduction anywhere, and measured: **30 credited, 0 added to any
+scoreboard row.**
+
+### Two reversals, and both are about a measurement
+
+**`SPEC[]2` no longer implies god mode.** `Spectator.setInvisible` has turned god mode on with it
+since M8, with a good reason — a grenade already in the air does not know nobody is aiming at you,
+and dying mid-observation drops you into a respawn timer. That reason is now served by `SPEC[]4`.
+Coupled, the two entitlements were **indistinguishable**: an effect asking *"am I unseen"* would
+have been answering *"am I unseen, or was god switched on beside it"*, and no probe could tell
+perception from invulnerability — which is exactly what F14's verification has to do. An
+entitlement that means two things is not an entitlement. `SpectatorPanel`'s help text is corrected
+and its "toggle full" button now calls the same `toggleCheat` the code does, so the two cannot
+disagree about what "full" means.
+
+**Invisible means nothing looks for you; it does not delete your body.** The mesh stays in
+everybody's snapshot. Removing an entity to hide a player is the mistake this milestone already
+recorded about Ghost — *"removing the entity makes the body invisible, which is not what Ghost
+does"* — and here it would additionally desync who can be shot from what the server resolves
+rounds against. Measured below, and the measurement is the honest version of the claim: one hit in
+a match where the control took twenty-six.
+
+### The audit found the defect in its own session's code
+
+`scripts/check-cheats.mjs`, wired into `npm run check`, tests the two things that would make the
+design's own sentence false, and both are silent:
+
+1. **No code string appears outside the table.** The failure that happens is not a second
+   entitlement store, it is one `if (code === 'SPEC[]1')` written downstream in a hurry — at which
+   point the server has stopped being the authority for whatever that line decides.
+2. **Every bit is in exactly one half of the partition.** A bit in both would let a client author
+   a simulation entitlement. A bit in neither could never be granted at all — the quieter failure,
+   and the one a playtest reports as "the code does nothing".
+
+It failed on its first real run, on this session's own code: `debug/Spectator.ts` named four codes
+as literals to request them. That is precisely the shape rule 1 exists to catch, and the fix is
+the better design — `SpectatorDeps.request` takes entitlement **bits** now, resolved to a code
+through `cheatCodeToggling` against the same table, so there is still exactly one input to the
+feature and still nothing downstream that can grant an entitlement without asking the authority.
+
+Watched red three ways:
+
+| Red control | What it said |
+|---|---|
+| `Cheat.God` added to `CHEAT_LOCAL` | *is in both CHEAT_SIMULATION and CHEAT_LOCAL … the bit is an exploit* |
+| `Cheat.Wallet` removed from `CHEAT_SIMULATION` | *is in neither … so nothing can ever grant it* |
+| an `=== 'SPEC[]1'` test added to `ClientMatch.godMode` | *names the cheat code SPEC[]1 as a literal* |
+
+### Making it visible, because otherwise the next report cannot be attributed
+
+A bug report from a player who had god mode on is indistinguishable from one from a player who did
+not, and by the time anybody asks the match is over. So:
+
+- **A HUD tag**, `CHEATS · GOD · UNSEEN · …`, bottom centre. `cheatTag` is a rule in
+  `shared/ui/HudSurfaces.ts` with one writer in the per-frame pass — a row in round four's surface
+  table rather than a new kind of thing — and it hides through a `--on` class rather than the
+  `hidden` attribute, which is B13's lesson applied on the way in instead of after somebody
+  reported it.
+- **`Cheat.Wallet`**, an entitlement with no effect whose only job is that a wallet grant leaves a
+  trace. Thirty free kills otherwise looks exactly like a good match.
+- **`Cheat.Debug` is deliberately not on the tag.** Having the overlay unlocked says nothing about
+  the simulation, and a warning that is up for most of a developer's session stops being one.
+- **The server log**, at `warn`, on every grant, revoke and refusal, naming the player and the
+  resulting entitlements; and `CHEAT CODES ENABLED` in the boot line, in the same shape as
+  `FAULT INJECTION ON`.
+
+### The HUD surface table, extended
+
+One row, and the last two columns are where the failures live:
+
+| Surface | Single writer | Derived from | Consumes from input | Hides by |
+|---|---|---|---|---|
+| Cheat tag | `Game.updateHudSurfaces` → `Match.setCheatTag` | `cheatTag` — the replicated mask and the screen | nothing | `.hud-cheat--on` class |
+
+The pause screen's debug button is driven from the same pass (`setDebugAvailable`) and is not a HUD
+surface, but it obeys the same rule for the same reason: it is a presence decided per frame from
+state that outlives it, so there is no moment at which somebody has to remember to refresh it.
+
+### Measured
+
+Every number below came out of a run in this session. **Protocol v12** — `MsgC.Cheat`,
+`MsgS.Cheats`, and one byte on the snapshot's owner block.
+
+**The refusal, which is the default and therefore the thing that matters most.**
+`npm run skirmish -- --cheats` — three clients, a real server, a real wire, shipped timings, the
+config flag left at its shipped **off**. One code each: `SPEC[]1`, `SPEC[]2`, `MO951357`.
+
+| Probe | Red control (flag off) | Green (`--cheats-on`) |
+|---|---|---|
+| Codes typed / answered | **3 / 3** | 3 / 3 |
+| Refused with *"cheats are disabled"* | **3 of 3** | 0 |
+| Granted | **0** | **3 of 3** |
+| Clients holding a non-zero entitlement | **0** | 3 — masks `god`, `unseen`, `wallet` |
+| Hits refused at the server's damage door | **0** | **239** |
+| The run | FLOW CHECK PASSED | FLOW CHECK PASSED |
+
+Both halves block. A run in which no client reached a live match to type anything fails as *"no
+client ever reached a live match to type a code"* rather than passing — the same shape as the
+divergence checker's `hashSamples === 0` branch, and for the reason this milestone has now shipped
+four probes that could not go red.
+
+**The four seats, in one run, and the fourth is the control.**
+`npm run skirmish -- --cheats --cheats-on --clients 4`, and the assignment is the whole design of
+the probe: one cheat per client and one client with none, so the cheated and un-cheated numbers
+come out of the same fight, on the same map, against the same bots.
+
+| Client | Code | Mask | Live health floor | Hits taken (after the grant) | Deaths |
+|---|---|---|---|---|---|
+| OP1 | `SPEC[]1` | god | **100** | **0** (0) | **0** |
+| OP2 | `SPEC[]2` | unseen | 49 | **1** (1) | **0** |
+| OP3 | `MO951357` | wallet | 0 | 6 (6) | 1 |
+| OP4 | — | none | 0 | **26** (0) | **6** |
+
+Read the god row against the door count and not on its own: god mode returns **before** the damage
+event, so from a client both the health and the hit count are absences, and a run where nobody
+engaged reports the same pair. The server refused **239 hits** at the `invulnerable` gate in that
+match. That is the claim *"god mode genuinely survives a damage tick on the server"*, measured on
+the server, at the line that decides it.
+
+And it is what tells the two cheats apart. The invisible client's zero is **not** the door's: 239
+refusals are all attributable to OP1, and OP2's single hit went through the arithmetic normally.
+One hit against the control's twenty-six is a **96% reduction**, with no deaths against six.
+
+**The residual hit is real and is the honest form of the claim.** `liveHitsWhileCheated` was added
+after the first green run reported three hits with no way to say when they landed — the count is
+split at the moment the mask arrives now, so a hit taken in the seconds before the answer came back
+cannot be mistaken for perception failing. The one hit landed *after* the grant, and that is
+correct behaviour rather than a leak: invisibility removes the body from perception, target
+selection and spawn scoring, and a bot firing at somebody else can still put a round through a body
+standing in the line, exactly as a grenade can still catch it. Nothing looks for you; rounds do not
+pass through you. That distinction is why `SPEC[]4` exists and why the two entitlements had to stop
+implying one another.
+
+**`MO951357`, against the scoreboard.** Same run: **70 kills banked and 30 credited**, spent 4,
+peak balance 30, one activation, most streaks bought in any one life **1**, life-starts inheriting
+a balance **0**. The thirty kills bought a streak and moved no scoreboard row — the separation P4
+built, exercised by the code P7 said would test it.
+
+**The standing run, which is the control for everything else.** `npm run skirmish`, three headless
+clients, shipped timings, no flags. Nothing in this session may move any of it, and nothing did:
+
+| Probe | Result |
+|---|---|
+| The run | **FLOW CHECK PASSED** |
+| Divergence checker | **0 / 7372** per client |
+| Mispredictions entering a live match | **0** (§8.9 requires 0); to the arena 0; spawn window 0 |
+| Migrations / live roster | 3 of 3, 0 failed; **3H + 7B = 10** |
+| Spectator invariants | 5742 selections while dead, **0 self / 0 enemy / 0 dead** |
+| Quick loadout window | 9006 ticks over 26 windows, **0 while alive** |
+| Tab surviving `neutralise` while dead | 2694 of 5425 dead ticks; board open 2694 |
+| Per-life grenade stock | 114 life-starts (23 human, 91 bot), **0 partial / 0 empty**, 274 held against 274 expected |
+| Arena (F7) | score rows **0**, health floor **100** over 89 hits taken, **0** deaths |
+| Arena (F12) | caption up 10 823 ticks in the room, **0** ticks of `WAITING` in a live match |
+| Streak life-starts inheriting a balance / round carry-overs | **0 / 0** |
+
+**`npm run harness` — 5 matches, seeds 1-5, TDM on Foundry.** The regression control, and this
+session is one where it has to be exact: nothing here touches a bot-only match, because a bot has
+no session and therefore no entitlement.
+
+| | |
+|---|---|
+| Scores | **75-59, 75-66, 62-75, 75-66, 60-75** — byte-identical to P5, P9, P6 and P8 on the same seeds |
+| Life-starts with partial grenade stock | **0** across all five; observed stock equals expected in every match |
+| Streak life-starts inheriting a balance / round carry-overs | **0 / 0** |
+| Negative balances / kill-anchor resyncs | **0 / 0** |
+| Kills credited (must be 0 — no cheat runs here) | **0** in all five |
+
+**`npm run netharness` at v12.** Two clients, 30 s, against a real `serve.js`: **1800 ticks each,
+0 snapshots lost, both still `joined`.** That is the half of a protocol bump that can silently
+reject everybody, and it is the half that matters most for v12 because the bump changed the
+snapshot's own layout rather than only adding a message.
+
+**`npm run leak` — 100 cycles.** Subscriptions **29 → 29 (+0)**, heap 12.97 → 13.65 MiB (+0.68).
+**LEAK CHECK PASSED.** The baseline is P8's 29 unchanged, which is the number to watch here: F14
+adds a `CheatState` per session and subscribes to nothing.
+
+**`npm run check` and `npm run build`** green — boundaries (296 files), the cosmetic audit (19
+snapshot fields, unchanged), the unlock audit and the **cheat audit** (6 codes, 5 entitlement bits,
+partition disjoint and complete) all pass, and all three typecheck targets.
+
+Unchanged and expected: `post-match hold: NOT EXERCISED` at shipped timings, for the reason the B4
+session recorded.
+
+### The p99 misprediction tail: the recommended experiment could not have settled it
+
+P8 left this open — a fat tail with an unmoved centre, isolated but unattributed, with the next
+step recorded as *"the cheap way to settle it is a seeded run rather than more samples of an
+unseeded one."*
+
+**That recommendation rested on a wrong premise, and finding out cost one grep.** Every seed in
+this harness is *already* fixed: `skirmishHarness` gives client *i* the seed `1000 + i * 37`, which
+also seeds its link's condition simulator, and the server's bot seed comes from `SEED` with a
+default of 1. There is no unseeded input anywhere in a standing run. So a seeded run is not a new
+experiment — it is the experiment that has been running all along, and pinning `SEED` explicitly
+cannot remove a variance that was never RNG.
+
+Run anyway, because a control on the record is worth more than an argument. `SEED=7 npm run
+skirmish`, three runs on this tree and three on a stashed clean tree, p99 per client:
+
+| Tree | p99 per client, one row per run |
+|---|---|
+| **This tree**, `SEED=7` | 0.164 / 0.264 / 0.164 · 0.149 / 0.362 / 0.164 · 0.159 / 0.299 / 0.165 |
+| **Clean tree**, `SEED=7` | 0.164 / 0.251 / 0.164 · 0.164 / 0.238 / 0.164 · 0.164 / 0.278 / 0.164 |
+| This tree, standing (`SEED=1`) | 0.164 / 0.360 / 0.164 |
+
+Three things fall out of that, and the third is the one worth having.
+
+1. **The two trees are indistinguishable.** Every sample on both sits in 0.149-0.362, and clients
+   1 and 3 return 0.164 to three decimal places in five runs out of six. Whatever P8 saw, it is
+   not this tree.
+2. **The seed is not a variable.** The standing run at the default `SEED=1` lands inside the
+   `SEED=7` band, which is what the grep predicted: pinning a seed that was already pinned changes
+   nothing.
+3. **P8's numbers do not reproduce at all**, on either tree. P8 recorded nine clean-tree samples
+   between 0.74 and 1.46 with two runs above 2.3; today's twenty-one samples across two trees have
+   a maximum of 0.362. The level itself moved by a factor of four between sessions on the same
+   machine, and no code explains that, because half of these runs *are* P8's own tree.
+
+The conclusion is the one the seeds already implied: **the variance is temporal, not
+stochastic.** This harness is driven by wall-clock timers against a real event loop, so what
+differs between two runs of one tree with every seed pinned is *when* each client's update landed
+relative to each server tick — which decides how many commands were in flight, how deep a replay
+went and therefore what the worst one per cent of corrections looked like.
+
+What is not in doubt, and is unchanged from P8: the p50 is the same on both trees, `spawn window`
+is 0 in every run on both, and §8.9's assertion — mispredictions in the 60 ticks after migrating
+into a live match — is **0** in every run on both.
+
+**So it is attributed now, and the attribution is "the instrument".** The next lever is a stepped
+clock rather than more samples: `installClock` is already the seam both runtimes take their time
+through, and a harness that advanced it deterministically instead of sleeping on it would make this
+number reproducible. That is a change to the instrument rather than to the game, it is not this
+session's item, and it is the honest place to leave it — P8's "unattributed rather than dismissed"
+can now say what it is attributed to.
+
+### What was not verified
+
+**Every claim about a screen, which is the whole client half of this session.**
+`HeadlessClient` drives `NetClient` and `Prediction` and builds no `ClientMatch`, no `Game` and no
+DOM, and the preview pane never fires `requestAnimationFrame`. What the harness proves is the
+*server's* answer — that the flag refuses, that a granted entitlement reaches the simulation, that
+the mask crosses the wire — and every one of those is a rule rather than a picture.
+
+Specifically unverified, each reasoned from the code:
+
+- **That the pause screen's field works at all.** It is a `<form>` whose submit never reaches
+  `Input`, and `domFocusGuard` is what stops the game seeing the keys — both true of the code and
+  neither observed.
+- **That the debug button appears and disappears with the entitlement.** The predicate is
+  measured; the button is a DOM node.
+- **That the HUD tag is legible and in the right place.** `cheatTag` is a pure function and is run
+  by the harness; whether it reads at the bottom of a screen is pixels. It is also the one surface
+  in this session that no headless run puts a non-zero value into, because the harness never grants
+  itself the debug bit and never renders.
+- **The free-cam window.** One snapshot interval is arithmetic; whether it *feels* like a lurch
+  when free cam is switched on mid-match is not a number.
+- **`MO951357` in single-player**, which takes the local branch of `requestCheat` and reaches
+  `ClientMatch.streaks` directly. The networked path is measured; the offline one compiles.
+
+### Needs a browser
+
+- **The refusal, and it is the one to check first.** Against a server without `CHEATS_ENABLED`,
+  pause and type `SPEC[]1`. The line under the field must read *"This server has cheats
+  disabled."* — not nothing, and not "code accepted". Then type `QWERTY`: it must read *"Unknown
+  code."*, with no round trip.
+- **`DEBUG666`.** Pause, type it. The overlay must come up **and** a "Debug overlay" button must
+  appear on the pause screen. Click the × — the panel closes and the button stays. Press the
+  button — it comes back. Type `DEBUG666` again: the panel goes and the button goes with it.
+  Then the whole of B1's sequence again on top of it, because this session put a gate in front of
+  that predicate: resume with the overlay up (it follows you in), pause (it goes off screen),
+  resume (it comes back), Escape with it open in a match (it closes and you are **not** dropped
+  onto the pause screen).
+- **`SPEC[]1`, with cheats on.** Stand in the open in a live match and get shot. The health bar
+  must not move, and — the part that distinguishes this from the arena's rule — you must see **no**
+  hit feedback at all: no vignette, no chevron, no flinch. The tag must read `CHEATS · GOD`.
+- **`SPEC[]2`.** Stand in front of a bot that is looking at you. It must lose interest and walk
+  off. You are still shootable: expect to take the occasional round from a firefight you are
+  standing in, and expect a grenade to hurt you. That is the design, not a leak.
+- **`SPEC[]3`.** Fly. Then turn it off in mid-air and confirm you fall from where you were rather
+  than being teleported back. Watch for a single correction at the moment of each toggle — one
+  snapshot interval of disagreement about collision is expected and anything longer is not.
+- **`SPEC[]4`, and moving between the modes**, which is what F14 asks for by name: `SPEC[]4` on,
+  then `SPEC[]1` (god goes off and the other two stay), then `SPEC[]4` again (it completes the set
+  rather than clearing it), then `SPEC[]4` once more (now it clears everything). The tag must
+  track all of it.
+- **`MO951357`.** Type it in a live match. The streak strip must go affordable, the balance must
+  jump by 30, and — the half that matters — **the scoreboard must not move**. Press a streak key:
+  it must fire and the balance must drop by its price. The tag must read `CHEATS · WALLET`.
+- **Single-player.** Every code except the refusal, offline: `SPEC[]n` and `MO951357` must all work
+  with no server involved, because this process is the authority there.
+- **The QA spectator panel.** Open it against a server with cheats **off** and tick "God mode":
+  the box must spring back. With cheats on it must stick, and the console's
+  `__operator.spectate.state()` must agree with the panel.
+- **Search & Destroy, invisible.** Confirm the round counts you as eliminated — it should, you are
+  spectating — and that this is now true over the network as well as offline.
+
+Unchanged from the earlier lists: the arena-return residual of 1-3 sub-25 cm mispredictions, and
+everything under "Open, and all of one kind".
+
+### Found while here
+
+- **`Damageable.invulnerable` had no server-side writer at all before this session**, and that is
+  a real defect with a familiar shape. `ClientMatch.syncChopperBody` takes a Chopper Gunner's
+  abandoned body out of play with `active` and `invulnerable`; `ServerMatch` does neither, and
+  `NetPlayer` did not so much as declare the field. So over the network a gunner's body is
+  invulnerable in its **own client's** opinion — which is not authoritative for anybody else's
+  shots — and fully killable on the server, where the bots can also still see it. M7's *"the
+  player body is out of play"* is a single-player claim that never crossed to the server. It is the
+  standing authority-migration failure again, it is a different mechanism from F14 (a rule that did
+  not migrate, not an entitlement), nobody reported it, and it is left. It is now at least
+  *observable*: `blockedByInvulnerable` counts what the door refuses, and in a match with no cheats
+  it should be zero — it is, in every run above.
+- **The cosmetic audit does not cover the snapshot's owner block.** `check-cosmetics.mjs` pins
+  `EntitySnapshot` and nothing else, so this session added a field to the owner block without the
+  audit having an opinion. The field is §4.15 gameplay state by any reading — it decides
+  invulnerability and collision — so nothing was smuggled past anything; but the gap is worth
+  knowing before somebody puts a cosmetic there. The owner block is `PlayerSimState` plus one byte,
+  and extending the audit to it is a ten-line change nobody has needed until now.
+- **`npm run netharness` needs a server and does not start one.** It exits with
+  `ECONNREFUSED 127.0.0.1:8080` in an empty environment, which is what a first run of it looks
+  like: `npm run serve` has to be up first. Every previous session's netharness number was taken
+  that way; nothing in `package.json` says so. Recorded rather than fixed, because the fix is a
+  decision about whether the harness owns a server process.
+- **`Session.cheats` is the third piece of connection state that must outlive the seat**, after
+  `loadout` and `reconnectToken`. F8 noted that pattern forming on the client (`debugRequest`,
+  `NetClient.reconnectToken`, both on `Game`); this is the server's side of the same shape, and the
+  next one belongs beside these.

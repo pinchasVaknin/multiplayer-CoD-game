@@ -442,6 +442,50 @@ body.op-locked #viewport {
   width: 100%;
 }
 
+/*
+ * The cheat-code field on the pause screen (playtest round 4, F14).
+ *
+ * 240px to match `.op-actions--stack`, so the field lines up under the buttons rather than
+ * floating at its own width. `.op-code__result` is the answer line and is deliberately the same
+ * faint style as the hint above it: it is feedback, not a heading.
+ */
+.op-code {
+  display: flex;
+  gap: var(--s-2);
+  width: 240px;
+  margin-top: var(--s-4);
+}
+
+.op-code__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--c-text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--c-line);
+  border-radius: 2px;
+  padding: var(--s-2);
+}
+
+.op-code__input:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+
+.op-code__go {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.op-code__result {
+  min-height: 1.2em;
+  margin-top: var(--s-2);
+}
+
 /* ==========================================================================
  * M8 — the settings screen, the FPS counter and the rebinding rows.
  *

@@ -217,7 +217,9 @@ export abstract class MatchInstance {
    * first join already got.
    */
   seat(session: Session, loadout: LoadoutSlot | null, reclaim?: ReclaimedSeat | null): NetPlayer | null {
-    const player = this.match.addPlayer(session.displayName, loadout, reclaim);
+    // The grants are the session's, so they follow this player across every migration and die
+    // with the connection rather than with the seat (playtest round 4, F14).
+    const player = this.match.addPlayer(session.displayName, session.cheats, loadout, reclaim);
     if (player === null) return null;
     this.seats.set(session.playerId, { session, player });
     this.encoders.set(player.entityId, new SnapshotEncoder());
@@ -380,6 +382,9 @@ export abstract class MatchInstance {
         player.simState,
         this.entities,
         this.entityCount,
+        // F14: replicated as state, once per snapshot, so no dropped frame can leave the two
+        // sides disagreeing about whether a wall stops this player. See `writeSnapshotOwner`.
+        session.cheats.mask,
       );
       if (frame.length === 0) continue;
       session.lastSnapshotId = h.snapshotId;

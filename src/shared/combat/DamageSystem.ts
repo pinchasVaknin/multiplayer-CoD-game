@@ -216,6 +216,21 @@ export class DamageSystem {
    */
   combatantsInvulnerable = false;
 
+  /**
+   * Hits refused because the target could not be hurt at all (playtest round 4, F14).
+   *
+   * The probe for `SPEC[]1`. God mode is implemented at the door and returns **before** the
+   * event, so a god-mode player produces no `Ev.Damage` and no health change — which means the
+   * two things a client can see about it are both absences, and an absence is exactly what a
+   * green run looks like when nothing engaged.
+   *
+   * So the claim *"god mode survives a damage tick on the server"* is measured here, on the
+   * server, at the line that decides it. It is also the number that tells `SPEC[]1` apart from
+   * `SPEC[]2`: an invisible player takes no hits because nobody shoots at them, and this stays
+   * at zero for them. Without it, one counter would have made the two indistinguishable.
+   */
+  blockedByInvulnerable = 0;
+
   private readonly entities = new Map<number, Damageable>();
 
   constructor(private readonly bus: GameBus) {}
@@ -245,7 +260,10 @@ export class DamageSystem {
   apply(req: DamageRequest): number {
     const target = this.entities.get(req.targetId);
     if (target === undefined || !target.health.alive) return 0;
-    if (target.invulnerable === true) return 0;
+    if (target.invulnerable === true) {
+      this.blockedByInvulnerable++;
+      return 0;
+    }
     if (!this.friendlyFire && req.sourceId !== req.targetId) {
       // The gate for every damage source, not just ballistics — which filters friendly
       // rigs out of target selection, so this is the one that will still be here when

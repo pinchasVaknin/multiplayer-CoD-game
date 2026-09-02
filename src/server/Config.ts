@@ -143,6 +143,29 @@ export interface ServerConfig {
    * `ModeDeps.roundSecondsOverride` for why there are two and what happens when only one moves.
    */
   readonly matchRoundSeconds: number;
+
+  // -- playtest round 4: cheat codes (F14) ------------------------------------
+
+  /**
+   * Honour the cheat codes that change the simulation (`CHEATS_ENABLED`, F14).
+   *
+   * **Off by default, and that default is the feature.** `SPEC[]1` to `SPEC[]4` and `MO951357`
+   * ask for invulnerability, invisibility, noclip and thirty unearned kills — every one of them
+   * a thing a client must never be able to grant itself, which is why the code is a *request*
+   * and this flag is the answer. With it off the server refuses every one and says so; the
+   * client is told, because a cheat that is silent when refused is a bug that gets reported
+   * twice.
+   *
+   * It does not gate `DEBUG666`. That code decides a client surface and nothing about the
+   * simulation, so it is authored by the client for itself — see `CHEAT_LOCAL` in
+   * `shared/cheats/Cheats.ts`. Gating it here would make the debug overlay unreachable against
+   * a deployed server, which is precisely where PLAN.md's "needs a browser" lists send somebody
+   * to read the NetPanel.
+   *
+   * Logged loudly at boot when it is on, in the same shape as `faultInjection`: an operator who
+   * left it set should find out in the first three lines rather than from a scoreboard.
+   */
+  readonly cheatsEnabled: boolean;
 }
 
 export function loadConfig(env: Record<string, string | undefined>): ServerConfig {
@@ -187,6 +210,7 @@ export function loadConfig(env: Record<string, string | undefined>): ServerConfi
       mapVoteSeconds: intOr(env['MAP_VOTE_SECONDS'], VOTE_CYCLE_CONFIG.mapVoteSeconds, 1, 120),
     },
     matchRoundSeconds: intOr(env['MATCH_ROUND_SECONDS'], 0, 0, 3600),
+    cheatsEnabled: (env['CHEATS_ENABLED'] ?? '') === '1',
   };
 }
 
@@ -213,6 +237,9 @@ export function describeConfig(cfg: ServerConfig): string {
     `${cfg.interpolationDelayMs}ms interpolation, ` +
     `${cfg.readyTimeoutMs}ms ready timeout, ${cfg.summaryHoldSeconds}s summary hold` +
     (cfg.faultInjection ? ', FAULT INJECTION ON' : '') +
+    // Same shape and the same reason as fault injection: a diagnostic left on in production is
+    // something an operator has to be able to see without reading the environment back.
+    (cfg.cheatsEnabled ? ', CHEAT CODES ENABLED' : '') +
     // The batch harnesses still drive a single match from `MAP`/`MODE`, so the rotation is
     // still described when it is set — it just no longer governs the dedicated server.
     (rotation === '' ? '' : ` (harness rotation${rotation})`)

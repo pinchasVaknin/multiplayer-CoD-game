@@ -89,6 +89,8 @@ export class SnapshotEncoder {
     owner: PlayerSimState | null,
     entities: readonly EntitySnapshot[],
     count: number,
+    /** This seat's cheat entitlements (playtest round 4, F14). See `writeSnapshotOwner`. */
+    cheatMask: number,
   ): Uint8Array {
     const id = this.nextId;
     // Ids wrap at 16 bits and zero is reserved to mean "no baseline", so it is skipped.
@@ -118,7 +120,7 @@ export class SnapshotEncoder {
 
     const w = this.writer;
     writeSnapshotHeader(w, header);
-    writeSnapshotOwner(w, owner);
+    writeSnapshotOwner(w, owner, cheatMask);
     writeSnapshotEntities(
       w,
       entities,

@@ -101,12 +101,19 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
 
     // ---- post-M8: the QA spectator ----------------------------------------
     /**
-     * God mode, invisibility and free-cam, from the console as well as from F1.
+     * God mode, invisibility and free-cam, from the console as well as from the overlay.
      *
      * Reachable without opening the overlay on purpose: the overlay is a large modal panel
      * and half the reason to spectate is to *watch the screen*. `__operator.spectate.all()`
      * is the one-liner; the three below are the individual switches, and each returns the
      * spectator's state line so a console session reads back what it just did.
+     *
+     * **From round 4's F14 these are cheat requests** (`SPEC[]1` to `SPEC[]4`) rather than
+     * direct writes. Against a dedicated server they are honoured only if the operator set
+     * `CHEATS_ENABLED`, and the state line each returns is read back from the entitlement — so
+     * a refused call returns `"off"` and says so, where a direct write would have returned the
+     * lie it had just told itself. Offline nothing changes: this process is the authority, which
+     * is what it has always been.
      */
     spectate: {
       all: (on = true) => {

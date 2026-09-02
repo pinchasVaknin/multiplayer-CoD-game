@@ -7,6 +7,7 @@ import {
   readCommand,
   writeBomb,
   writeBye,
+  writeCheats,
   writeNotice,
   writeObjectives,
   writePong,
@@ -23,6 +24,7 @@ import {
   type VoteInfo,
   type WelcomeInfo,
 } from '../../shared/net/Messages';
+import { CheatState } from '../../shared/cheats/Cheats';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
 import {
   sanitiseNetLoadout,
@@ -156,6 +158,13 @@ export interface SessionEvents {
   readonly onReady: (session: Session, matchId: number) => void;
   /** "Spend the streak I have earned" (§8.22). The instance decides whether they have. */
   readonly onStreakRequest: (session: Session, kind: number, x: number, z: number) => void;
+  /**
+   * "I typed this cheat code" (round 4, F14). The server decides, and always answers.
+   *
+   * The text is unparsed on purpose — see `MsgC.Cheat`. Length has already been bounded by the
+   * decoder, and that is the only thing about it this layer is entitled to conclude.
+   */
+  readonly onCheatRequest: (session: Session, code: string) => void;
 }
 
 /** Snapshot ids kept per client so a late ack can still be used as a delta baseline. */
@@ -217,6 +226,23 @@ export class Session {
    * not already have the process's memory.
    */
   reconnectToken: Uint8Array | null = null;
+
+  /**
+   * What this connection has been granted by cheat code (playtest round 4, F14).
+   *
+   * On the **session** rather than on the seat, and for the same reason `loadout` and
+   * `reconnectToken` are: it is a fact about the connection, and a `NetPlayer` is thrown away
+   * and rebuilt by every migration. A grant that lived on the seat would be lost the moment the
+   * player was moved from the arena into the match they typed the code to look at.
+   *
+   * It dies with the connection, and that is deliberate rather than an omission. A reconnect is
+   * a **new** connection with a fresh store, so a returning player comes back clean — the
+   * reservation gives back the seat, the score and the side, and nothing else.
+   *
+   * The server is the sole author of every bit in here: `Cheat.Debug` is client-side and never
+   * arrives, so this mask only ever holds `CHEAT_SIMULATION` bits.
+   */
+  readonly cheats = new CheatState();
 
   /**
    * The class this client last sent, already validated (Tier 1 #20).
@@ -416,6 +442,18 @@ export class Session {
         // *shape*, and the decoder above has already done that.
         this.events.onStreakRequest(this, msg.streakKind, msg.x, msg.z);
         return;
+      case 'cheatRequest':
+        if (this.state !== 'live') {
+          this.refuse(Reject.OutOfOrder, 'cheat before hello');
+          return;
+        }
+        // Whether the code exists, whether this server honours it and whether there is a seat
+        // to apply it to are all questions about the server's own state, so none of them is
+        // answered here. §4.16's boundary validation is about *shape*, and the decoder has
+        // already bounded the only thing with a shape. The link's `MAX_MESSAGES_PER_SEC` is
+        // what stops somebody typing codes at it in a loop.
+        this.events.onCheatRequest(this, msg.code);
+        return;
       case 'bad':
         this.refuse(Reject.Malformed, 'malformed frame');
         return;
@@ -585,6 +623,18 @@ export class Session {
   /** A short line for the player. Allocation failed, migration failed, the arena was rebuilt. */
   notice(text: string): void {
     this.send(writeNotice(this.out, text));
+  }
+
+  /**
+   * The answer to a cheat code: what happened, and the whole mask afterwards (round 4, F14).
+   *
+   * Sent for a refusal exactly as for a grant. A cheat that is silent when refused is a bug that
+   * gets reported twice — once as "the code does nothing" and again, later, as "cheats are
+   * broken on the server" — and neither report says the true thing, which is that this operator
+   * has them switched off.
+   */
+  sendCheats(outcome: number, mask: number): void {
+    this.send(writeCheats(this.out, outcome, mask));
   }
 
   /**

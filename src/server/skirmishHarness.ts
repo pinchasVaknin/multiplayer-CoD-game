@@ -2,6 +2,7 @@ import { installClock, nowMs } from '../shared/core/Clock';
 import { logger } from '../shared/core/Log';
 import { EventBus } from '../shared/core/EventBus';
 import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } from '../shared/net/NetSim';
+import { Cheat, CheatOutcome, describeCheatMask } from '../shared/cheats/Cheats';
 import { CLIENT_TIMEOUT_MS, RECONNECT_GRACE_MS } from '../shared/net/Protocol';
 import { votePhaseName, WARMUP_MATCH_ID, type NetLoadout } from '../shared/net/Skirmish';
 import type { StreakId } from '../shared/streaks/StreakDefs';
@@ -37,6 +38,8 @@ const log = logger('skirmish');
  *   npm run skirmish -- --summary-gate     # RED CONTROL: go silent for the post-match hold
  *   npm run skirmish -- --drop-return 3    # 3 drop/return cycles mid-match (F8)
  *   npm run skirmish -- --drop-return 1 --drop-hold 40000   # ...past the grace, on purpose
+ *   npm run skirmish -- --cheats            # F14: RED CONTROL — the server must refuse
+ *   npm run skirmish -- --cheats --cheats-on   # ...and, with the flag, must honour them
  * ```
  *
  * ## Loopback proves the flow, not the netcode
@@ -134,6 +137,27 @@ interface HarnessOptions {
    * is a flag rather than a constant.
    */
   readonly dropHoldMs: number;
+
+  /**
+   * Type a cheat code on every client, once the live match is running (round 4, F14).
+   *
+   * One code per client rather than the same one everywhere, and the assignment is the whole
+   * design of the probe: client 0 asks for god mode, client 1 for invisibility, client 2 for the
+   * wallet, and any client past the third asks for nothing and is the **control**. So a single
+   * run produces the cheat and the un-cheated comparison for the same fight, on the same map,
+   * against the same bots — which is the only way "an invisible player takes no hits" means
+   * anything, because a run in which nobody was shot at reports the same zero.
+   */
+  readonly cheats: boolean;
+  /**
+   * Turn `ServerConfig.cheatsEnabled` on for this run.
+   *
+   * The flag is environment configuration and defaults to off, so `--cheats` alone is the red
+   * control: every code must be refused, and the refusal must reach the client. This is the
+   * green half, as a flag rather than an environment variable so both halves are one command
+   * line each and neither depends on what a shell was left holding.
+   */
+  readonly cheatsOn: boolean;
 }
 
 /**
@@ -192,6 +216,17 @@ const LIGHTWEIGHT_CLASS: NetLoadout = {
   perks: ['lightweight', null, null],
   streaks: ['uav', null, null],
 };
+
+/**
+ * Which code each client types, by index (playtest round 4, F14).
+ *
+ * Atomic codes on purpose. `SPEC[]4` would grant all three at once and make the run unable to
+ * tell perception from invulnerability — which is exactly the coupling this session removed from
+ * `Spectator.setInvisible`, and it would be no better in a probe than it was in the tool.
+ *
+ * Index 3 and beyond are `undefined`, and that is the control seat.
+ */
+const CHEAT_SCRIPT: readonly (string | undefined)[] = ['SPEC[]1', 'SPEC[]2', 'MO951357'];
 
 async function main(): Promise<number> {
   installClock(nodeClock);
@@ -410,6 +445,9 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       // §8.9: if a residual misprediction survives it, the cause is not the loadout.
       loadout: streakHarnessClass(opts, i),
       throwEveryTicks: opts.throwEveryTicks,
+      // F14. See `HarnessOptions.cheats` for why the codes differ per client and why the
+      // fourth client onwards is deliberately handed nothing.
+      cheatCode: opts.cheats ? CHEAT_SCRIPT[i] : undefined,
       /**
        * A deliberate tie on the first two clients, then a spread.
        *
@@ -469,6 +507,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let observedEconomy: StreakEconomyReport | null = null;
   /** What every life in the live match started holding (round 4, B3). Sampled beside the economy. */
   let observedStock: LifeStockReport | null = null;
+  /** Damage the door refused because the target could not be hurt (round 4, F14). */
+  let observedBlockedDamage = 0;
   /** When the streak wallet was last topped up, and how many times. See the grant below. */
   let grantedAtMs = 0;
   let grants = 0;
@@ -541,6 +581,16 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       // Same reason, same instant: the audit is folded out of the running match and reads as
       // a clean zero once it is gone.
       observedStock = running.match.equipmentAudit;
+      /**
+       * Hits the damage door refused outright, sampled here for the same reason (F14).
+       *
+       * This is the server-side half of `SPEC[]1`, and it is the only half that can be positive:
+       * god mode returns *before* the damage event, so from a client both the health and the hit
+       * count are absences — and an absence is what a run where nobody engaged looks like too.
+       * Counted on the server, at the line that decides it, a non-zero number is a damage tick
+       * that reached a god-mode body and was refused.
+       */
+      observedBlockedDamage = running.match.damage.blockedByInvulnerable;
 
       /**
        * Put a streak in every seated player's hand, once per match (§8.22).
@@ -744,6 +794,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     droppedAtMs,
     economy: observedEconomy,
     stock: observedStock,
+    blockedDamage: observedBlockedDamage,
     grants,
     returnCycles,
   });
@@ -924,6 +975,14 @@ interface FlowReportInput {
    * copy is the one both halves are supposed to agree with.
    */
   readonly stock: LifeStockReport | null;
+  /**
+   * Hits the live match's damage door refused outright (playtest round 4, F14).
+   *
+   * Sampled off the server while the match was running, for the same reason the two above are.
+   * It is the only positive evidence god mode actually reached the simulation: the client-side
+   * symptoms are both absences, and this is the line that produced them.
+   */
+  readonly blockedDamage: number;
   /** How many times `--grant-streak` topped the wallets up. Zero without the flag. */
   readonly grants: number;
   /**
@@ -1033,6 +1092,9 @@ function reportFlow(input: FlowReportInput): number {
    * and the brief is explicit that it is not to be explained away.
    */
   const problems: string[] = [];
+  // F14's block reads its own numbers and returns its own failures, so they join this gate
+  // rather than logging beside it and passing.
+  if (opts.cheats) problems.push(...reportCheats(input));
   /**
    * One client is *supposed* to be gone under `--drop-gunner` (§8.23 case 4).
    *
@@ -1456,6 +1518,110 @@ function reportFlow(input: FlowReportInput): number {
   return 1;
 }
 
+/**
+ * F14's block, and every number in it is printed next to the control that makes it mean
+ * something (playtest round 4).
+ *
+ * Three claims, and none of them is checkable on its own:
+ *
+ * - **Refusal.** With `cheatsEnabled` off, every code must come back refused. Counted against
+ *   the codes *sent*, because "0 grants" is also what a run in which nobody typed anything says.
+ * - **God mode reached the simulation.** The client sees two absences — full health, no hits —
+ *   and a run where nothing engaged reports the same pair. `blockedDamage` is the server's own
+ *   count of hits the door refused, and it is what turns the absence into evidence.
+ * - **Invisibility is perception and not invulnerability.** The invisible client must take no
+ *   hits *while* `blockedDamage` accounts only for the god-mode one — otherwise the two codes
+ *   are indistinguishable and one counter is measuring both. The control client is what says the
+ *   bots were shooting at people at all.
+ *
+ * Returns the failures rather than logging them, so they join the run's own gate.
+ */
+function reportCheats(input: FlowReportInput): string[] {
+  const { cfg, reports, blockedDamage } = input;
+  const problems: string[] = [];
+
+  const sent = reports.reduce((n, r) => n + r.cheatRequests, 0);
+  const answered = reports.reduce((n, r) => n + r.cheatOutcomes.length, 0);
+  const refusals = reports.reduce(
+    (n, r) => n + r.cheatOutcomes.filter((o) => o === CheatOutcome.RefusedDisabled).length,
+    0,
+  );
+  const grants = reports.reduce(
+    (n, r) =>
+      n +
+      r.cheatOutcomes.filter(
+        (o) => o === CheatOutcome.Granted || o === CheatOutcome.WalletGranted,
+      ).length,
+    0,
+  );
+
+  log.info(
+    `cheats (F14): flag ${cfg.cheatsEnabled ? 'ON' : 'off'}, ` +
+      `${sent} code(s) typed, ${answered} answered, ${refusals} refused, ${grants} granted`,
+  );
+  for (const r of reports) {
+    log.info(
+      `  ${r.name}: code ${r.cheatRequests > 0 ? 'sent' : 'none'}, ` +
+        `mask ${r.cheatMask} (${describeCheatMask(r.cheatMask)}), ` +
+        `outcomes [${r.cheatOutcomes.join(',')}], ` +
+        `live health floor ${r.liveMinHealth > 100 ? 'never sampled' : r.liveMinHealth}, ` +
+        `${r.liveHitsTaken} hit(s) taken (${r.liveHitsWhileCheated} after the grant), ` +
+        `${r.liveDeaths} death(s)`,
+    );
+  }
+  log.info(`  server refused ${blockedDamage} hit(s) at the damage door (god mode)`);
+
+  // A probe that never fired is not a probe that passed. Same shape as the divergence
+  // checker's `hashSamples === 0` branch and F8's "no drop/return cycle completed".
+  if (sent === 0) {
+    problems.push('--cheats was set but no client ever reached a live match to type a code');
+    return problems;
+  }
+  if (answered < sent) {
+    problems.push(`${sent} cheat code(s) typed and only ${answered} were answered`);
+  }
+
+  if (!cfg.cheatsEnabled) {
+    // The red control, and it is the assertion rather than a reading: a server with cheats off
+    // must refuse every one, must say so, and must grant nothing.
+    if (refusals !== sent) {
+      problems.push(`cheats are disabled and only ${refusals} of ${sent} codes were refused`);
+    }
+    if (grants !== 0) problems.push(`cheats are disabled and ${grants} code(s) were granted`);
+    const leaked = reports.filter((r) => r.cheatMask !== 0);
+    if (leaked.length > 0) {
+      problems.push(
+        `cheats are disabled and ${leaked.length} client(s) hold a non-zero entitlement mask`,
+      );
+    }
+    return problems;
+  }
+
+  if (grants !== sent) problems.push(`${sent} codes typed with the flag on and ${grants} granted`);
+
+  const god = reports[0];
+  const unseen = reports[1];
+  const control = reports.length > 3 ? reports[3] : undefined;
+
+  if (god !== undefined) {
+    if (god.cheatMask !== Cheat.God) {
+      problems.push(`the god-mode client holds mask ${god.cheatMask}, expected ${Cheat.God}`);
+    }
+    if (blockedDamage === 0) {
+      // Not "god mode is broken" — it may be that nothing shot at anybody. The distinction is
+      // the reason the control's hits are printed above.
+      problems.push('god mode was granted and the damage door refused nothing all match');
+    }
+  }
+  if (unseen !== undefined && unseen.cheatMask !== Cheat.Unseen) {
+    problems.push(`the invisible client holds mask ${unseen.cheatMask}, expected ${Cheat.Unseen}`);
+  }
+  if (control !== undefined && control.cheatMask !== 0) {
+    problems.push('the control client holds an entitlement it never asked for');
+  }
+  return problems;
+}
+
 function harnessConfig(opts: HarnessOptions): ServerConfig {
   const base = loadConfig(process.env);
   return {
@@ -1464,6 +1630,9 @@ function harnessConfig(opts: HarnessOptions): ServerConfig {
     host: '127.0.0.1',
     faultInjection: opts.fault !== 'none',
     metricsSeconds: 0,
+    // F14. `--cheats` on its own leaves this at the shipped default of off, which is what makes
+    // the plain run the red control rather than a second thing to remember to arrange.
+    cheatsEnabled: opts.cheatsOn || base.cheatsEnabled,
   };
 }
 
@@ -1759,6 +1928,8 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     throwEveryTicks: Math.max(0, num('--throw', 0)),
     dropReturn: Math.max(0, num('--drop-return', 0)),
     dropHoldMs: Math.max(0, num('--drop-hold', 3000)),
+    cheats: argv.includes('--cheats'),
+    cheatsOn: argv.includes('--cheats-on'),
   };
 }
 

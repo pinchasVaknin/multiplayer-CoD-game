@@ -1,3 +1,4 @@
+import { Cheat, describeCheats } from '../cheats/Cheats';
 import type { GameStateId } from '../core/GameStates';
 import type { MatchPhase } from '../modes/MatchFlow';
 import { DT } from '../core/Loop';
@@ -88,6 +89,15 @@ export interface HudSurfaceState {
   /** The scoreboard key, as of the last command the match consumed. */
   readonly scoreboardHeld: boolean;
   readonly debugRequest: DebugOverlayRequest;
+  /**
+   * This seat's cheat entitlements (playtest round 4, F14).
+   *
+   * Two surfaces read it and they read different bits: the debug overlay needs `Cheat.Debug`
+   * before it may be shown at all, and the HUD tag names the simulation bits. It is in the state
+   * record rather than passed separately because both are per-frame questions about the same
+   * client, which is what this record is.
+   */
+  readonly cheatMask: number;
 }
 
 /**
@@ -127,16 +137,50 @@ export function quickLoadoutWindow(s: HudSurfaceState): QuickLoadoutWindow {
 }
 
 /**
- * The debug overlay (B1). See `DebugOverlayRequest` for why this is a tri-state.
+ * Whether this client may open the debug overlay at all (playtest round 4, F14).
+ *
+ * `DEBUG666`. It is a **second** fact and not a restatement of `debugRequest`, and the pair is
+ * what makes the × survive: *may they* and *do they want it, and from where* are different
+ * questions, and collapsing them would mean closing the panel revoked the entitlement and the
+ * code had to be retyped every time.
+ *
+ * It is read by the predicate below rather than only by the route that sets the request,
+ * because the code is a **toggle**: clearing it while the panel is up has to take the panel
+ * down, and a gate that only guards the door cannot do that.
+ */
+export function debugUnlocked(s: HudSurfaceState): boolean {
+  return (s.cheatMask & Cheat.Debug) !== 0;
+}
+
+/**
+ * The debug overlay (B1, and F14's gate). See `DebugOverlayRequest` for the tri-state.
  *
  * `PAUSED` is a legal screen for it — the tuning sliders need a released cursor and that is
  * the only screen with one — but only for a request made *there*. Everything else is off.
  */
 export function debugOverlayVisible(s: HudSurfaceState): boolean {
-  if (!s.hasWorld || s.debugRequest === 'none') return false;
+  if (!s.hasWorld || !debugUnlocked(s) || s.debugRequest === 'none') return false;
   if (s.screen === 'MATCH') return true;
   if (s.screen === 'PAUSED') return s.debugRequest === 'onPause';
   return false;
+}
+
+/**
+ * The cheat tag, or `''` for none (playtest round 4, F14).
+ *
+ * F14's *"make it visible"*, and the reason is attribution rather than honesty for its own
+ * sake: a bug report from a player who had god mode on is indistinguishable from one from a
+ * player who did not, and by the time anybody asks the match is over. So the tag says what is
+ * active, persistently, and the server logs the same fact from its side.
+ *
+ * `Cheat.Debug` is deliberately **not** named on it. Having the debug overlay unlocked says
+ * nothing about the simulation, and a tag that appeared for it would be up for most of a
+ * developer's session and stop meaning anything — which is how a warning becomes furniture.
+ * `describeCheats` is what draws that line, in the file that owns the entitlements.
+ */
+export function cheatTag(s: HudSurfaceState): string {
+  if (!s.hasWorld || s.screen !== 'MATCH') return '';
+  return describeCheats(s.cheatMask);
 }
 
 /**

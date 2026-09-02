@@ -169,6 +169,9 @@ export class Hud {
   private readonly deadOverlay: HTMLElement;
   private readonly deadCount: HTMLElement;
   private readonly lowVignette: HTMLElement;
+  /** F14's tag, and the last text written to it. See `setCheatTag`. */
+  private readonly cheatTag: HTMLElement;
+  private lastCheatTag = '';
 
   private hurtTimer = 0;
   private hurtPeak = 0;
@@ -298,6 +301,23 @@ export class Hud {
     this.deadOverlay.append(deadLabel, this.deadCount);
     this.root.appendChild(this.deadOverlay);
 
+    /**
+     * The cheat tag (playtest round 4, F14).
+     *
+     * Bottom centre, under everything a player is actually reading, because it is a state
+     * warning rather than information: it has to be *findable in a screenshot* and must not sit
+     * where the ammo count or the objective banner does.
+     *
+     * Hidden through a `--on` class rather than the `hidden` attribute, and that is B13's lesson
+     * applied on the way in rather than after somebody reported it: `[hidden]` only hides an
+     * element because the UA stylesheet says so at the lowest specificity there is, so any
+     * author-level `display` outranks it. `.hud-phase` beside it already uses the class.
+     */
+    this.cheatTag = document.createElement('div');
+    this.cheatTag.className = 'hud-cheat';
+    this.cheatTag.appendChild(document.createElement('span'));
+    this.root.appendChild(this.cheatTag);
+
     // ---- M4 ---------------------------------------------------------------
     this.root.append(
       this.banner.element,
@@ -316,6 +336,21 @@ export class Hud {
   setVisible(on: boolean): void {
     this.root.hidden = !on;
     if (!on) this.clearMarkers();
+  }
+
+  /**
+   * The cheat tag's text, or `''` to take it down (playtest round 4, F14).
+   *
+   * Called every frame from `Game.updateHudSurfaces` through `Match.setCheatTag`, and guarded on
+   * the text so sixty DOM writes a second become one write per change — the same shape as
+   * `HudBanner.updatePhase`.
+   */
+  setCheatTag(text: string): void {
+    if (text === this.lastCheatTag) return;
+    this.lastCheatTag = text;
+    this.cheatTag.classList.toggle('hud-cheat--on', text !== '');
+    const span = this.cheatTag.firstElementChild;
+    if (span instanceof HTMLElement) span.textContent = text;
   }
 
   /** 0 while healthy, rising to 1 at zero health. Drives the muffle and the heartbeat. */

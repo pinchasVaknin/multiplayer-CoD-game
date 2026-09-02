@@ -181,6 +181,19 @@ export interface HeadlessClientOptions {
    * watched red.
    */
   readonly gateOnSummary?: boolean;
+
+  /**
+   * Type this cheat code once the live match is running (playtest round 4, F14).
+   *
+   * The literal text, exactly as a player types it into the pause screen's field, because the
+   * server parses the text and this harness's whole job is to be the client that sends what a
+   * browser sends. A code with no seat to apply it to proves nothing, so it waits for the live
+   * match rather than firing in the arena.
+   *
+   * It is sent **once**. A code is a toggle, so a repeating request would spend the run turning
+   * god mode on and off again at whatever rate the timer fired at.
+   */
+  readonly cheatCode?: string;
 }
 
 export interface HeadlessClientReport {
@@ -289,6 +302,37 @@ export interface HeadlessClientReport {
   readonly warmupMinHealth: number;
   readonly warmupHitsTaken: number;
   readonly warmupDeaths: number;
+  /**
+   * The same three, in a **live match** (playtest round 4, F14).
+   *
+   * The arena's copies cannot answer F14's questions: since F7 nobody in the room can be hurt at
+   * all, so a health floor of 100 there is the room's rule rather than god mode. These are the
+   * live-match numbers, and they are what `SPEC[]1` and `SPEC[]2` are measured through.
+   *
+   * `liveHitsTaken` is the one that makes the pair honest, exactly as `warmupHitsTaken` does for
+   * F7: a run in which nobody shot at this client would report a floor of 100 and prove nothing.
+   * Read it against `DamageSystem.blockedByInvulnerable` on the server, which is what tells the
+   * two cheats apart — an invisible player takes no hits because nobody fires, and a god-mode
+   * player takes no hits because the door refuses them.
+   */
+  readonly liveMinHealth: number;
+  readonly liveHitsTaken: number;
+  readonly liveDeaths: number;
+  /**
+   * Of those, the ones that landed **after** the entitlement arrived (playtest round 4, F14).
+   *
+   * The discriminator the first green run turned out to need. `SPEC[]2` is typed once the client
+   * is already in the live match, so a hit taken in the seconds before the answer came back is
+   * counted by `liveHitsTaken` and says nothing about invisibility. Splitting the count at the
+   * moment the mask arrives is what separates *"perception did not stop this"* from *"this
+   * happened before perception was asked"* — and only the first of those is a claim about F14.
+   */
+  readonly liveHitsWhileCheated: number;
+  /** The entitlement mask this client currently holds, replicated (F14). */
+  readonly cheatMask: number;
+  /** Codes sent, and the outcomes the server answered with, in order (F14). */
+  readonly cheatRequests: number;
+  readonly cheatOutcomes: readonly number[];
   /**
    * F13. Ballot-sound edges against the broadcasts that carried the same phase.
    *
@@ -552,6 +596,14 @@ export class HeadlessClient {
   private warmupMinHealth = 101;
   private warmupHitsTaken = 0;
   private warmupDeaths = 0;
+  private liveMinHealth = 101;
+  private liveHitsTaken = 0;
+  private liveDeaths = 0;
+  private liveHitsWhileCheated = 0;
+  /** F14. Sent once; see `HeadlessClientOptions.cheatCode`. */
+  private cheatSent = false;
+  private cheatRequests = 0;
+  private readonly cheatOutcomes: number[] = [];
   private mapBallotOpens = 0;
   private mapBallotBroadcasts = 0;
   private lastVotePhaseHeard: number = VotePhase.IDLE;
@@ -672,6 +724,14 @@ export class HeadlessClient {
             this.warmupHitsTaken++;
             if (e.lethal) this.warmupDeaths++;
           }
+          // F14's half of the same pair, in a match where damage is real. Split by instance
+          // rather than counted together, because the arena refuses the deduction for everybody
+          // and a combined number could not tell a cheat from the room's own rule.
+          if (e.targetId === this.net.entityId && this.net.matchId !== WARMUP_MATCH_ID) {
+            this.liveHitsTaken++;
+            if (e.lethal) this.liveDeaths++;
+            if (this.net.cheatMask !== 0) this.liveHitsWhileCheated++;
+          }
         },
         onFired: (e) => {
           if (e.sourceId === this.net.entityId) this.shotsFired++;
@@ -697,6 +757,16 @@ export class HeadlessClient {
         },
         onNotice: (text) => {
           this.notices.push(text);
+        },
+        /**
+         * The server's answer to a cheat code (playtest round 4, F14).
+         *
+         * Every outcome is recorded in order, because the shape of the list is the measurement:
+         * a run with the flag off must be all refusals and a run with it on must be all grants,
+         * and a probe that counted only "did anything come back" would go green on either.
+         */
+        onCheats: (outcome) => {
+          this.cheatOutcomes.push(outcome);
         },
         /**
          * Objective replication (Gate B, §6.8).
@@ -1154,6 +1224,26 @@ export class HeadlessClient {
      * The mark is this client's own position, which is meaningless for five of the six and is
      * a legitimate mortar target for the sixth.
      */
+    /**
+     * Type the cheat code, once, in the live match (playtest round 4, F14).
+     *
+     * Gated on being seated somewhere other than the arena rather than on a tick count, because
+     * what makes the code meaningful is having a body the entitlement can act on — the same
+     * reasoning F8's probe arrived at after two wrong gates on a clock. `matchId` is already on
+     * the wire in `Welcome`.
+     */
+    const code = this.opts.cheatCode;
+    if (
+      code !== undefined &&
+      !this.cheatSent &&
+      this.net.entityId >= 0 &&
+      this.net.matchId !== WARMUP_MATCH_ID
+    ) {
+      this.cheatSent = true;
+      this.cheatRequests++;
+      this.net.sendCheat(code);
+    }
+
     if (this.wantStreak >= 0 && this.ticks - this.lastStreakRequestTick > 30) {
       this.lastStreakRequestTick = this.ticks;
       this.streakRequests++;
@@ -1348,6 +1438,13 @@ export class HeadlessClient {
       warmupMinHealth: this.warmupMinHealth,
       warmupHitsTaken: this.warmupHitsTaken,
       warmupDeaths: this.warmupDeaths,
+      liveMinHealth: this.liveMinHealth,
+      liveHitsTaken: this.liveHitsTaken,
+      liveDeaths: this.liveDeaths,
+      liveHitsWhileCheated: this.liveHitsWhileCheated,
+      cheatMask: this.net.cheatMask,
+      cheatRequests: this.cheatRequests,
+      cheatOutcomes: [...this.cheatOutcomes],
       mapBallotOpens: this.mapBallotOpens,
       mapBallotBroadcasts: this.mapBallotBroadcasts,
       captionArenaTicks: this.captionArenaTicks,
@@ -1677,6 +1774,9 @@ export class HeadlessClient {
       round: h.round,
       scoreboardHeld: (cmd.buttons & Btn.Scoreboard) !== 0,
       debugRequest: 'none',
+      // F14. Replicated, so the surface rules can be evaluated against what the server actually
+      // granted rather than against what this process asked for.
+      cheatMask: this.net.cheatMask,
     };
 
     if (!alive) this.deadTicks++;
@@ -1694,10 +1794,14 @@ export class HeadlessClient {
      * test the whole session turns on and it is already on the wire in `Welcome`.
      */
     const inArena = this.net.matchId === WARMUP_MATCH_ID;
-    if (inArena) {
-      const own = this.net.entityId >= 0 ? this.net.remotes.get(this.net.entityId) : undefined;
-      if (own !== undefined && own.latest.health < this.warmupMinHealth) {
-        this.warmupMinHealth = own.latest.health;
+    const own = this.net.entityId >= 0 ? this.net.remotes.get(this.net.entityId) : undefined;
+    if (own !== undefined) {
+      // Two floors, one sample, split by instance. F7 asks about the room and F14 asks about a
+      // match, and the same number cannot answer both — see `liveMinHealth`.
+      if (inArena) {
+        if (own.latest.health < this.warmupMinHealth) this.warmupMinHealth = own.latest.health;
+      } else if (own.latest.health < this.liveMinHealth) {
+        this.liveMinHealth = own.latest.health;
       }
     }
     const caption = matchCaption(state.phase, inArena);
