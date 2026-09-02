@@ -36,7 +36,7 @@ import type { WelcomeInfo } from '../shared/net/Messages';
 import { LocalIdentity } from '../shared/combat/LocalIdentity';
 import type { BrowserLink } from './net/BrowserLink';
 import type { SkirmishSink } from '../shared/net/NetClient';
-import { ownerFromCode, type NetLoadout } from '../shared/net/Skirmish';
+import { ownerFromCode, WARMUP_MATCH_ID, type NetLoadout } from '../shared/net/Skirmish';
 import { NetSession } from './net/NetSession';
 import { logger } from '../shared/core/Log';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
@@ -344,6 +344,15 @@ export class MatchWorld {
       loadout: deps.loadout,
       profile: deps.profile,
       banksProgress: deps.modeEntry.banksProgress,
+      /**
+       * Which instance this is (M11 §6.3; playtest round 4, F7 and F12).
+       *
+       * Off the welcome rather than off the mode: the arena runs `FFA`, and so does a live
+       * Free-for-All the ballot elected. `applyRotation` rebuilds this world from each new
+       * welcome, so a player migrating into a match and back again gets the answer for the
+       * instance they are actually in, both times, without anything having to be reset.
+       */
+      warmupArena: server !== null && server.welcome.matchId === WARMUP_MATCH_ID,
     });
 
     /**

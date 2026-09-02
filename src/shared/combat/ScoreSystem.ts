@@ -119,6 +119,22 @@ export class ScoreSystem {
    */
   freeForAll = false;
 
+  /**
+   * Whether this match records anything at all (playtest round 4, F7).
+   *
+   * False in the permanent warmup arena, and nowhere else. §6.3 said the room has *"no score
+   * and no win condition"*, and that was built as two zeroed limits in `FFA_WARMUP_CONFIG` —
+   * *nothing to count toward*, which is not the same claim as *nothing is counted*. The room
+   * went on registering a row per player, tallying shots, hits and damage into it, and putting
+   * the result on Tab and on the Free-for-All banner as a live ladder. That ladder is the
+   * *"rating and results"* F7 asks to be taken out of the waiting room.
+   *
+   * Enforced at `register` rather than in each handler, because every counter above and below
+   * already begins by looking a row up and giving up when there is not one. One absence at the
+   * top therefore switches the whole class off, and there is no second place to forget.
+   */
+  records = true;
+
   private readonly rowsById = new Map<number, PlayerScore>();
   /** Flat array as well as a map: the scoreboard sorts this every time it opens. */
   private readonly all: PlayerScore[] = [];
@@ -183,8 +199,15 @@ export class ScoreSystem {
     this.tick = tick;
   }
 
-  /** Add a combatant. Called once per roster entry when a match is composed. */
-  register(entityId: number, displayName: string, team: ScoreTeam): PlayerScore {
+  /**
+   * Add a combatant. Called once per roster entry when a match is composed.
+   *
+   * `undefined` when this match keeps no record — see `records`. The absence is in the return
+   * type rather than hidden behind a row nobody can find, because a caller that starts wanting
+   * the row should have to say what it does in a match that has none.
+   */
+  register(entityId: number, displayName: string, team: ScoreTeam): PlayerScore | undefined {
+    if (!this.records) return undefined;
     const existing = this.rowsById.get(entityId);
     if (existing !== undefined) return existing;
     const row: PlayerScore = {

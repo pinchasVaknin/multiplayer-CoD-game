@@ -9,6 +9,7 @@ import { NetClient, type NetClientStats } from '../../shared/net/NetClient';
 import type { NetConditions } from '../../shared/net/NetSim';
 import {
   MAP_BALLOT,
+  mapBallotOpened,
   MODE_BALLOT,
   sanitiseNetLoadout,
   VotePhase,
@@ -39,6 +40,7 @@ import {
   // `debugOverlayVisible` is deliberately absent: it reads only the front-end screen and the
   // request, and this process has neither. It is on the browser list rather than measured
   // here under a state sequence it does not depend on.
+  matchCaption,
   quickLoadoutWindow,
   scoreboardOpen,
   stepRespawnDisplay,
@@ -272,6 +274,39 @@ export interface HeadlessClientReport {
   readonly scoreboardHeldTicks: number;
   readonly scoreboardHeldWhileDeadTicks: number;
   readonly scoreboardOpenWhileDeadTicks: number;
+  /**
+   * F7. The lowest health this client was ever seen at **inside the arena**, and how many of
+   * its deaths happened there.
+   *
+   * Read off the replicated owner entity rather than from a damage event, because the claim is
+   * about health and not about being shot at: the room keeps *"damage live"*, so a run in which
+   * nothing ever shot at this client would go green on a damage counter while proving nothing.
+   * `warmupHitsTaken` is what makes the pair honest — it is the number that must stay non-zero.
+   *
+   * 101 rather than 100 as the initial value, so "never sampled" is distinguishable from "never
+   * hurt" in a report.
+   */
+  readonly warmupMinHealth: number;
+  readonly warmupHitsTaken: number;
+  readonly warmupDeaths: number;
+  /**
+   * F13. Ballot-sound edges against the broadcasts that carried the same phase.
+   *
+   * The second number is the red control and it is the whole point of printing both: a sound
+   * played level-triggered on the broadcast would fire `mapBallotBroadcasts` times, and the
+   * requirement is that it fires `mapBallotOpens` times, which must be one per cycle.
+   */
+  readonly mapBallotOpens: number;
+  readonly mapBallotBroadcasts: number;
+  /**
+   * F12. Ticks the centred caption was up in the arena, and in a live match.
+   *
+   * The second is written to go red rather than green: `WAITING` on screen during a live match
+   * is the surface outliving the thing it describes, which is the failure mode every rule in
+   * `shared/ui/HudSurfaces.ts` exists to make measurable.
+   */
+  readonly captionArenaTicks: number;
+  readonly captionWaitingInLiveTicks: number;
   /** §6.8 spectator picks, and the three invariant violations. All three must be zero. */
   readonly spectatePicks: number;
   readonly spectateSelfPicks: number;
@@ -484,6 +519,15 @@ export class HeadlessClient {
   private scoreboardHeldTicks = 0;
   private scoreboardHeldWhileDeadTicks = 0;
   private scoreboardOpenWhileDeadTicks = 0;
+  /** F7/F12/F13. See the fields of the same name on `HeadlessClientReport`. */
+  private warmupMinHealth = 101;
+  private warmupHitsTaken = 0;
+  private warmupDeaths = 0;
+  private mapBallotOpens = 0;
+  private mapBallotBroadcasts = 0;
+  private lastVotePhaseHeard: number = VotePhase.IDLE;
+  private captionArenaTicks = 0;
+  private captionWaitingInLiveTicks = 0;
   private projectileFrames = 0;
   private readonly remoteSerials = new Set<number>();
   private ownProjectileSeen = 0;
@@ -565,6 +609,17 @@ export class HeadlessClient {
             if (e.lethal) this.killsDealt++;
           }
           if (e.targetId === this.net.entityId && e.lethal) this.deaths++;
+          /**
+           * F7's two halves, counted separately on purpose.
+           *
+           * `warmupHitsTaken` is the *"damage live"* half §6.3 keeps and this session must not
+           * break: a run in which the arena's bots never engaged would report a health floor of
+           * 100 and prove nothing at all. `warmupDeaths` is the half F7 removes.
+           */
+          if (e.targetId === this.net.entityId && this.net.matchId === WARMUP_MATCH_ID) {
+            this.warmupHitsTaken++;
+            if (e.lethal) this.warmupDeaths++;
+          }
         },
         onFired: (e) => {
           if (e.sourceId === this.net.entityId) this.shotsFired++;
@@ -820,6 +875,17 @@ export class HeadlessClient {
    * does and is what the tally is meant to reflect.
    */
   private onVoteState(info: VoteInfo): void {
+    /**
+     * F13's edge, measured against the broadcast that would have fired a level-triggered sound.
+     *
+     * Read **before** `votePhase` is overwritten, because the previous phase is the whole rule
+     * and this method is the only thing that moves it. The browser hangs the same edge off
+     * `VoteOverlay.apply`, which holds its previous phase in exactly the same way.
+     */
+    if (mapBallotOpened(this.lastVotePhaseHeard, info.phase)) this.mapBallotOpens++;
+    if (info.phase === VotePhase.MAP_VOTE) this.mapBallotBroadcasts++;
+    this.lastVotePhaseHeard = info.phase;
+
     this.votePhase = info.phase;
     this.votePhaseEndsTick = info.phaseEndsTick;
     this.voteTally = info.tally;
@@ -1141,6 +1207,13 @@ export class HeadlessClient {
       scoreboardHeldTicks: this.scoreboardHeldTicks,
       scoreboardHeldWhileDeadTicks: this.scoreboardHeldWhileDeadTicks,
       scoreboardOpenWhileDeadTicks: this.scoreboardOpenWhileDeadTicks,
+      warmupMinHealth: this.warmupMinHealth,
+      warmupHitsTaken: this.warmupHitsTaken,
+      warmupDeaths: this.warmupDeaths,
+      mapBallotOpens: this.mapBallotOpens,
+      mapBallotBroadcasts: this.mapBallotBroadcasts,
+      captionArenaTicks: this.captionArenaTicks,
+      captionWaitingInLiveTicks: this.captionWaitingInLiveTicks,
       spectatePicks: this.spectatePicks,
       spectateSelfPicks: this.spectateSelfPicks,
       spectateEnemyPicks: this.spectateEnemyPicks,
@@ -1468,6 +1541,26 @@ export class HeadlessClient {
       if (!alive) this.scoreboardHeldWhileDeadTicks++;
     }
     if (scoreboardOpen(state) && !alive) this.scoreboardOpenWhileDeadTicks++;
+
+    /**
+     * F7 and F12, both of which are questions about *where this client is* (playtest round 4).
+     *
+     * Sampled here rather than from a snapshot handler because this runs once per real tick and
+     * never on a replay, which is what makes a tick count mean a tick. `matchId` is the arena
+     * test the whole session turns on and it is already on the wire in `Welcome`.
+     */
+    const inArena = this.net.matchId === WARMUP_MATCH_ID;
+    if (inArena) {
+      const own = this.net.entityId >= 0 ? this.net.remotes.get(this.net.entityId) : undefined;
+      if (own !== undefined && own.latest.health < this.warmupMinHealth) {
+        this.warmupMinHealth = own.latest.health;
+      }
+    }
+    const caption = matchCaption(state.phase, inArena);
+    if (caption !== '') {
+      if (inArena) this.captionArenaTicks++;
+      else if (caption === 'WAITING') this.captionWaitingInLiveTicks++;
+    }
 
     // Named `qlWindow` rather than `window`: `scripts/check-boundaries.mjs` bans the bare
     // identifier in `server/`, and it is right to — a headless process has no such object.

@@ -3,7 +3,7 @@ import { logger } from '../shared/core/Log';
 import { EventBus } from '../shared/core/EventBus';
 import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } from '../shared/net/NetSim';
 import { CLIENT_TIMEOUT_MS } from '../shared/net/Protocol';
-import { votePhaseName, type NetLoadout } from '../shared/net/Skirmish';
+import { votePhaseName, WARMUP_MATCH_ID, type NetLoadout } from '../shared/net/Skirmish';
 import type { StreakId } from '../shared/streaks/StreakDefs';
 import type { StreakEconomyReport } from '../shared/streaks/StreakLedger';
 import type { LifeStockReport } from '../shared/equipment/LifeStockAudit';
@@ -753,6 +753,8 @@ function reportFlow(input: FlowReportInput): number {
     for (const notice of r.notices) log.info(`  notice: ${notice}`);
   }
 
+  reportArena(server, reports);
+
   metric('skirmish', 'flow', {
     clients: reports.length,
     conditions: describeConditions(opts.conditions),
@@ -1082,6 +1084,61 @@ function harnessConfig(opts: HarnessOptions): ServerConfig {
     faultInjection: opts.fault !== 'none',
     metricsSeconds: 0,
   };
+}
+
+/**
+ * The waiting room, and the four things F7 and F12 say must not be true of it (round 4, §P6).
+ *
+ * Printed as one block rather than folded into the per-client line because all of it is about
+ * one instance, and because three of the numbers are only meaningful next to their control:
+ * a health floor next to the hits that produced it, an edge count next to the broadcasts a
+ * level-triggered effect would have fired on, and a caption count next to where it must never
+ * have appeared.
+ *
+ * The score rows are read off the arena's own `ScoreSystem` rather than inferred from a
+ * client, because that is where the room's "results" live — the client's board is a copy of it.
+ */
+function reportArena(server: Server, reports: readonly HeadlessClientReport[]): void {
+  const arena = server.instances.find((i) => i.id === WARMUP_MATCH_ID);
+  const rows = arena?.match.score.rows.length ?? -1;
+  const sampled = reports.filter((r) => r.warmupMinHealth <= 100);
+  const floor = sampled.length === 0 ? -1 : Math.min(...sampled.map((r) => r.warmupMinHealth));
+  const hits = reports.reduce((sum, r) => sum + r.warmupHitsTaken, 0);
+  const deaths = reports.reduce((sum, r) => sum + r.warmupDeaths, 0);
+  const opens = reports.reduce((sum, r) => sum + r.mapBallotOpens, 0);
+  const broadcasts = reports.reduce((sum, r) => sum + r.mapBallotBroadcasts, 0);
+  const captionArena = reports.reduce((sum, r) => sum + r.captionArenaTicks, 0);
+  const captionLive = reports.reduce((sum, r) => sum + r.captionWaitingInLiveTicks, 0);
+
+  log.info(
+    `arena (F7): score rows ${rows}, ` +
+      `health floor ${floor < 0 ? 'never sampled' : floor} over ${hits} hit(s) taken, ` +
+      `${deaths} death(s) in the room`,
+  );
+  const worstOpens = Math.max(0, ...reports.map((r) => r.mapBallotOpens));
+  const worstBroadcasts = Math.max(0, ...reports.map((r) => r.mapBallotBroadcasts));
+  log.info(
+    `arena (F13): ballot sound fires ${opens} time(s) across ${reports.length} client(s), ` +
+      `worst ${worstOpens} for one client; level-triggered on the broadcast it would fire ` +
+      `${broadcasts} (worst ${worstBroadcasts})`,
+  );
+  log.info(
+    `arena (F12): caption up ${captionArena} tick(s) in the room, ` +
+      `${captionLive} tick(s) of WAITING in a live match (must be 0)`,
+  );
+
+  metric('skirmish', 'arena', {
+    scoreRows: rows,
+    healthFloor: floor,
+    hitsTaken: hits,
+    deaths,
+    ballotOpens: opens,
+    ballotBroadcasts: broadcasts,
+    worstBallotOpens: worstOpens,
+    worstBallotBroadcasts: worstBroadcasts,
+    captionArenaTicks: captionArena,
+    captionWaitingInLiveTicks: captionLive,
+  });
 }
 
 /**

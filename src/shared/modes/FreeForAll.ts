@@ -60,9 +60,16 @@ export const FFA_CONFIG: FreeForAllConfig = {
 /**
  * The permanent warmup arena's rules (M11, §6.3).
  *
- * §6.3: *"Free-for-all rules with damage live and instant respawn. **No score, no win
- * condition, no match timer.** Killing and being killed carries no consequence beyond the
- * respawn."*
+ * §6.3, as amended at playtest round 4: *"Free-for-all rules with damage live. **No score, no
+ * win condition, no match timer, and nobody in the room can be killed.**"* The original clause
+ * ended *"and instant respawn ... killing and being killed carries no consequence beyond the
+ * respawn"*, and F7 removed the dying rather than the consequence.
+ *
+ * **The two limits here are not what implements any of that**, and the distinction is the whole
+ * of F7's second half. Zeroing them says there is nothing to count *toward*; it does not say
+ * nothing is counted, and the room tallied kills, damage and accuracy into a live ladder for
+ * three milestones. What implements the amended clause is `ScoreSystem.records` and
+ * `DamageSystem.combatantsInvulnerable`, both set from the variant in `ServerMatch`.
  *
  * Both limits are zero, and zero means *absent* rather than *immediate* — see
  * `checkWinCondition`, which is where that convention is enforced. `Range` has used the same

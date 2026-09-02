@@ -2,10 +2,12 @@ import { DT } from '../../shared/core/Loop';
 import type { VoteInfo } from '../../shared/net/Messages';
 import {
   MAP_BALLOT,
+  mapBallotOpened,
   MODE_BALLOT,
   VOTE_CYCLE_CONFIG,
   VotePhase,
 } from '../../shared/net/Skirmish';
+import type { ProceduralAudio } from '../engine/ProceduralAudio';
 import { findMap, findMode } from '../../shared/modes/ModeRegistry';
 import type { GameModeId } from '../../shared/modes/GameMode';
 
@@ -57,6 +59,8 @@ export interface VoteOverlayDeps {
   readonly onVote: (phase: number, option: number) => void;
   /** The client's current tick, from the synced server clock. Drives the countdown. */
   readonly currentTick: () => number;
+  /** For the cue when the map ballot opens (playtest round 4, F13). */
+  readonly audio: ProceduralAudio;
 }
 
 interface Row {
@@ -130,6 +134,21 @@ export class VoteOverlay {
    * timer is a second opinion about a number §4.20 gives exactly one authority.
    */
   apply(info: VoteInfo): void {
+    /**
+     * The cue for the map ballot, on the **edge** (playtest round 4, F13).
+     *
+     * Taken before `this.info` is overwritten, because the previous phase is the entire rule
+     * and this line is the only thing that moves it — no flag beside it, and nothing to reset.
+     * The server broadcasts at 4 Hz, so a sound played from the body of this method would play
+     * forty times over a ten-second ballot; that is the general trap with any effect hung off a
+     * periodic broadcast, and holding the previous value is the general answer.
+     *
+     * `hide()` drops `info` on migration, which re-arms this deliberately: a player put back in
+     * the arena during a ballot has genuinely just had it appear in front of them.
+     */
+    if (mapBallotOpened(this.info?.phase ?? VotePhase.IDLE, info.phase)) {
+      this.deps.audio.playBallotOpen();
+    }
     this.info = info;
     const balloting = info.phase === VotePhase.MODE_VOTE || info.phase === VotePhase.MAP_VOTE;
     /**

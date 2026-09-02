@@ -79,6 +79,27 @@ export function votePhaseName(phase: number): string {
   return 'UNKNOWN';
 }
 
+/**
+ * Did the map ballot just *appear* (playtest round 4, F13)?
+ *
+ * The vote state is broadcast at 4 Hz, and the whole of F13's trap is that an effect hung off
+ * a periodic broadcast fires at the broadcast rate: a sound played on receipt of `MAP_VOTE`
+ * plays forty times over a ten-second ballot. The general form of the fix is to hold the
+ * previous phase and act only on the change, and this is that rule as a pure function so the
+ * *rate* can be measured headlessly — the sound itself is a browser claim, the edge is not.
+ *
+ * Deliberately the **map** ballot and not either ballot. F13 asks for a cue when the map choice
+ * appears, and the cycle reaches `MAP_VOTE` exactly once, which is what makes "one sound per
+ * cycle" a fact about the phase machine rather than a debounce interval somebody tuned.
+ *
+ * `previous` is whatever phase this client last heard, or `IDLE` for a client that has heard
+ * nothing. That is not a special case: a client which has just migrated back into the arena
+ * mid-ballot has genuinely just had the ballot appear in front of it, and should be told.
+ */
+export function mapBallotOpened(previous: number, next: number): boolean {
+  return next === VotePhase.MAP_VOTE && previous !== VotePhase.MAP_VOTE;
+}
+
 export interface VoteCycleConfig {
   /** Free warmup play before the ballot opens, seconds. */
   readonly playSeconds: number;

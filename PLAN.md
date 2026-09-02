@@ -4639,6 +4639,16 @@ discontinuity.
    free-for-all rules with damage live; `RANGE` sets `populatesRoster: false`, which is right for
    a testbed and wrong for an arena two people are meant to duel in. The M2 dummies survive
    because they are *map* data, not mode data. See `FFA_WARMUP_CONFIG`.
+
+   **§6.3 is amended at playtest round 4 (F7), and this is the amendment.** The clause read
+   *"free-for-all rules with damage live and instant respawn ... killing and being killed
+   carries no consequence beyond the respawn"*. It now reads: **free-for-all rules with damage
+   live; no score, no win condition, no match timer; nobody in the room can be killed; and the
+   room records nothing.** The respawn is gone from the clause because there is nothing left to
+   respawn from. What is *not* amended is "damage live": the range's boards still take damage,
+   still drop and still time a kill, and the bots still shoot at you. See "the waiting room, and
+   two facts that were one flag" below for the implementation and for why the two limits in
+   `FFA_WARMUP_CONFIG` were never what enforced any of it.
 3. **A `VotePhase.IDLE` that is not in the brief's table.** §4.20 requires the cycle to cancel
    when every human leaves; an arena with nobody in it is not in a phase of a countdown.
 4. **The instance panel is split across two places.** §7 wants both instances side by side with
@@ -7138,3 +7148,262 @@ everything under "Open, and all of one kind".
   all. Not a defect (it is midday sun on open sand) and not this session's item, but it is the one
   map where the lighting has no spatial structure whatsoever, and it is worth knowing before
   anybody asks why it feels flat.
+
+## Playtest round 4 — the waiting room, and two facts that were one flag
+
+F7, F11, F12 and F13. Three of the four are the same shape, and it is the shape §6.3 was
+written in: **a rule expressed as a limit rather than as an absence, and an effect hung on the
+wrong thing.** The arena's "no score" was two zeroed numbers in `FFA_WARMUP_CONFIG`; F13's trap
+is a cue hung on a broadcast instead of on a transition; F11 is a width hung on a positioned
+layer instead of on its content. F7's own two halves turned out to be one fact with two
+consequences, which is why they are one paragraph below rather than two sessions.
+
+### F7 — "damage live" and "players killable" were never the same claim
+
+§6.3 asked for the greybox room *"with damage live and instant respawn"*, and the fourth
+playtest changed the requirement to no dying in the waiting area at all. The amended clause is
+in "Deviations, and why" above; the code now says the same thing, which it did not before.
+
+The distinction the brief asked to keep is real and it is already in the type. `Damageable.team`
+has said since M2 that it is *"absent for anything that is not on one — M2's range dummies are
+damageable and belong to nobody"*, so "is this a person" is a question the damage door can
+already answer without being told anything new. `DamageSystem.combatantsInvulnerable` skips the
+health deduction for a target that has a team and leaves everything else alone: the dummies take
+damage, drop, and time a kill exactly as they did, which is what keeps the room a range rather
+than a corridor with people standing in it.
+
+**The damage is still computed and still reported, and that was the decision the brief asked
+for.** It was made on what a networked client actually predicts, which is less than it looks:
+
+- Another combatant's health is replicated (S4.15). The client holds no opinion about it.
+- The client's own rounds already pass **through** remote bodies. `Ballistics.nearestTarget`
+  selects from `DamageSystem.list`, and on a networked client that list holds the local body and
+  the range's dummies — nothing registers a `RemoteActor`. Their rigs exist for drawing and for
+  the rewind panel.
+- So the hitmarker, the damage numbers and the hurt vignette all arrive from the server's
+  `Ev.Damage`, and nothing local produces them.
+
+Refusing the *deduction* therefore changes exactly one number, and it is one the client is told
+rather than one it works out. Refusing the *computation* would have to happen in target
+selection, and that moves where the round stops — `FiredEvent` carries the terminus, and every
+client in the room draws a tracer and an impact from it. One of those two is invisible to
+prediction and the other is a visible change to what everybody sees a bullet do.
+
+### The room kept a leaderboard, and the limits were never what stopped it
+
+The brief asked me to trace `ScoreSystem` and `MatchProgression` from the warmup path and report
+what I found. They are opposite results.
+
+**Progression, challenges and XP: not fed, and it is worth saying why not.** The server has no
+`MatchProgression` at all — S4.16 gives it no store, and `Match.ts` says so. The client's banks
+in exactly one place, `Profile.bankMatch`, reached only from the SUMMARY state's `enter`; the
+arena cannot reach SUMMARY because `FFA_WARMUP_CONFIG` has no win condition, and `applyRotation`
+tears the world down and rebuilds it on migration, so the in-memory tally is dropped rather than
+carried into the match. All true, and all of it structural rather than intended: not one line
+anywhere says *the arena does not bank*. It is now also true by construction, because a client in
+the arena registers no row either and there is nothing for the progression to count.
+
+**The scoreboard: fed, and reported as such.** `ServerMatch.seat` registers a `ScoreSystem` row
+per human and per bot; the client mirrors it from the roster channel. The two subscriptions in
+`ScoreSystem` then tally `shotsFired`, `shotsHit` and `damageDealt` into those rows for as long
+as anybody is in the room, Tab renders them, and the Free-for-All banner puts a `LEADER` and a
+`YOU` score over the crosshair. **The waiting room had a live ladder**, which is exactly the
+*"rating and results"* F7 asks to be taken out of it. Zeroing `scoreLimit` and
+`timeLimitSeconds` says there is nothing to count *toward*; it never said nothing is counted, and
+the difference went unnoticed for three milestones because a ladder nobody can win looks like a
+feature nobody has finished.
+
+`ScoreSystem.records` is the absence, and it is enforced at `register` rather than in each
+handler for one reason: every counter in that class already starts by looking a row up and gives
+up when there is not one. One refusal at the top switches the whole class off and there is no
+second place to forget — which is the failure mode this milestone keeps producing. `register`
+returns `PlayerScore | undefined` now; no caller ever used the value, and putting the absence in
+the type is better than handing back a row that nothing can find.
+
+Both flags are set from `variant === 'WARMUP'` in `ServerMatch` and from `warmupArena` in
+`ClientMatch`, beside `friendlyFire`, which is set in both runtimes for the reason its own
+comment gives: they are one fact about the match, and setting it in one runtime and not the
+other is what produced a mode where you could shoot somebody but not score them. The variant is
+the source rather than the mode id, because a ballot can elect Free-for-All and a live FFA must
+kill and score exactly as it always has.
+
+### F12 — the caption is the room's, not the phase's
+
+There is already a convention for centred-above-the-crosshair text and it already had a single
+writer: `HudBanner` builds `hud-phase`, `Hud` mounts it, and `MatchHud.update` is the only thing
+that writes `phaseLabel`. What it did not have was any notion of *which instance you are in* — it
+derived the caption from `MatchFlow.currentPhase` alone, which in the arena means `GET READY` for
+ten seconds and then nothing for as long as you stand there.
+
+`matchCaption` moves into `shared/ui/HudSurfaces.ts` beside the round-4 rules, with the arena
+outranking the phase. It is there for the reason everything else in that file is: the label is a
+pure function of state that outlives the element, so a headless client with no DOM can count the
+ticks it was up in the room and — the half that matters — assert it was never up anywhere else.
+
+One detail that would have shipped as a bug: `MatchFlow.phaseSecondsRemaining` counts the
+round-end hold down *through* `LIVE`, so a caption that took the seconds it was offered would
+have opened on `WAITING · 5` and counted toward nothing. `captionHasCountdown` is the other half
+of the rule, and `MatchHud.update` remains the single writer of both fields.
+
+### F13 — the ballot is broadcast at 4 Hz, and the cue is not
+
+The trap the brief named up front, and it is worth recording what it would have cost: measured
+on a real cycle, a client receives **43** `MAP_VOTE` broadcasts. A sound played from the body of
+`VoteOverlay.apply` plays 43 times over one ten-second ballot.
+
+`mapBallotOpened(previous, next)` is the edge, in `shared/net/Skirmish.ts`, and `apply` takes it
+from `this.info` **before** overwriting it — the previous phase is the whole rule, and `apply` is
+the only thing that moves it, so there is no flag beside it and nothing to reset. `hide()` drops
+`info` on migration, which re-arms the cue deliberately: a player put back in the arena during a
+ballot has genuinely just had it appear in front of them.
+
+It is the **map** ballot and not either ballot, which is what F13 asks for literally and is also
+the only reading under which "one sound per cycle" is a fact about the phase machine rather than
+a debounce somebody tuned. The sound itself is two rising notes on the `ui` bus in
+`ProceduralAudio.playBallotOpen` — rising because every falling cue already in the project means
+something bad, and it has to cut through a firefight without reading as a threat.
+
+### F11 — the width was on the layer, so the layer stopped being full-screen
+
+`.op-screen` is `position: absolute; inset: 0`, and `.op-screen--wide` put `max-width: 780px` on
+it. That box is over-constrained — left, right and a width cannot all hold — and CSS resolves it
+by dropping `right`. So the settings screen was a 780 px column **pinned to the left edge**. The
+confirming detail is that the backdrop is painted by the same element: the right-hand two-thirds
+of the screen was also undimmed, which is one rule producing both halves of the report.
+
+The convention already in the file is the opposite one, and every other overlaid screen uses it:
+the layer stays full-bleed and centres its children, and the *content* carries the cap —
+`.sb`, `.sb--embedded`, `.eom__xp`, `.lo-head` and `.lo-columns` are all `width: min(px, vw)`.
+`--wide` now caps the two elements that need the width and leaves the title and the Back row
+shrink-to-fit, centred by the layer's own `align-items` as they already were.
+
+### Measured
+
+Every number came out of a run in this session, and the arena block is a new probe:
+`reportArena` in the skirmish harness, printing each figure next to the control that makes it
+mean something. **No protocol change** — every fact this session needs was already on the wire
+(`Welcome.matchId` since v3), so there is no version to bump.
+
+**`npm run skirmish` — 3 headless clients, a real server, a real wire, shipped timings.** Red
+control first, on the same tree with the probes in and no behaviour changed:
+
+| Probe | Red control | After |
+|---|---|---|
+| Score rows in the arena | **6** (3 humans + 3 bots) | **0** |
+| Lowest health seen in the arena | **0** | **100** |
+| Hits taken in the arena — *"damage live"*, and it must not go to zero | 20 | **85** |
+| Deaths in the arena | **4** | **0** |
+| Ballot cue fires, per client per cycle | — | **1** |
+| `MAP_VOTE` broadcasts, per client — what a level-triggered cue would have fired | **43** | 43 |
+| Caption ticks in the arena / `WAITING` ticks in a live match | — | 10 821 / **0** |
+
+The hits number went *up*, which is the right direction and worth stating: a body that no longer
+dies stays in front of the bots that are shooting it, so the room is now demonstrably more live
+fire than it was, not less. It is also the number that stops the health floor being a green light
+for a run in which nothing ever engaged.
+
+Everything else in the same run is a control and none of it moved:
+
+| Probe | Result |
+|---|---|
+| The run | **FLOW CHECK PASSED** |
+| Migrations | 3 of 3, **0 failed**; live roster 3H + 7B = 10 |
+| Mispredictions entering a live match | **0** (S8.9 requires 0); to the arena 0; spawn window 0 |
+| Divergence checker | **0 / 7373** per client |
+| Spectator invariants | 5223 selections while dead, **0 self / 0 enemy / 0 dead** |
+| Quick loadout window | 8733 ticks over 25 windows, **0 while alive** |
+| Per-life grenade stock | 106 life-starts (22 human, 84 bot), **0 partial / 0 empty**, 256 held against 256 expected |
+| Streak life-starts inheriting a balance / round carry-overs | **0 / 0** |
+
+**`npm run harness` — 5 matches, seeds 1-5, TDM on Foundry.** The regression control, and the
+one that has to be exact: nothing in this session may touch a live match.
+
+| | |
+|---|---|
+| Scores | **75-59, 75-66, 62-75, 75-66, 60-75** — byte-identical to P5's and P9's baseline on the same seeds |
+| Life-starts with partial grenade stock | **0** across all five |
+| Streak life-starts inheriting a balance / round carry-overs | **0 / 0** |
+| Negative balances / kill-anchor resyncs | **0 / 0** |
+
+**`npm run leak` — 100 allocate/destroy cycles.** Subscriptions **29 -> 29 (+0)**, heap 12.78 ->
+13.44 MiB (+0.66). **LEAK CHECK PASSED.** The baseline is P9's 29 unchanged, which is the number
+to watch here specifically: the leak harness builds the arena deliberately empty, and this
+session put two new flags and a caption rule on that path without subscribing to anything.
+
+**`npm run check`** and **`npm run build`** green — boundaries (294 files), the cosmetic audit
+(19 snapshot fields) and the unlock audit all pass, and all three typecheck targets.
+
+Unchanged and expected: `post-match hold: NOT EXERCISED` at shipped timings, for the reason the
+B4 session recorded.
+
+### What was not verified
+
+**Every visual claim in this session, which is most of it.** Three of the four items are
+presentation, `HeadlessClient` builds no `ClientMatch` and no DOM, and the preview pane never
+fires `requestAnimationFrame`. Specifically:
+
+- **The sound.** `ProceduralAudio` needs an `AudioContext`; the harness has none. What was
+  measured is the **rate** — that the edge fires once where the broadcast fires 43 times — which
+  is the half that could be wrong invisibly. Whether two rising notes are the right two notes is
+  not a thing a number answers.
+- **That the caption is where the human wants it.** 10 821 ticks says the rule is up in the room
+  and the 0 says it is nowhere else; neither says a pixel was drawn. The B13 correction earlier in
+  this file is the standing warning about exactly that confusion.
+- **That the settings screen is centred.** Reasoned from the box model and from the convention the
+  other four screens follow, and it compiles, which for CSS means nothing at all.
+- **That being shot without losing health reads as intended rather than as broken.** The hurt
+  vignette, the hit-direction chevron and the damage numbers all still fire in the arena, because
+  they are driven from the server's damage event and the damage is still real. That is §6.3's
+  "damage live" surviving the amendment, and it is a deliberate choice that only a person can
+  judge.
+
+### Needs a browser
+
+- **F7, and it is the one to check first.** In the arena, get shot by a bot and stand there. The
+  health bar must not move, you must not die, and you must still see the hit feedback — the
+  vignette and the chevron. Then shoot a bot: hitmarker, damage numbers, and it does not drop.
+  Then shoot a **target board**: it must take damage, fall, and print a time-to-kill exactly as it
+  always has. That last one is the whole distinction this change is built on, and it is the one
+  that fails silently if the `team` test is wrong.
+- **F7's second half.** Press Tab in the arena. The board must be **empty** — no rows, not rows of
+  zeroes — and the banner over the crosshair must show no `LEADER` and no `YOU` score. Then vote
+  into a match and press Tab there: the full board must be back, with everybody on it. That pair
+  is the test, because one flag set on the wrong instance would pass the first half.
+- **F12.** The caption must read `WAITING`, centred, with **no number beside it**, for the whole
+  time you are in the arena — including the first ten seconds, which is where a phase-derived
+  caption would have said `GET READY`. It must be gone the moment you are migrated. If it wants to
+  sit higher than the objective banner's line, that is one number in `.hud-phase`.
+- **F13.** Stand in the arena through a full cycle. Exactly one cue, at the moment the **map**
+  ballot replaces the mode ballot — not at the mode ballot, and not repeating for the ten seconds
+  the map ballot is up. Then check it is audible over sustained fire, which is the condition it
+  exists for.
+- **F11.** Open Settings from the main menu and from the pause screen. It must be centred, and the
+  darkened backdrop must cover the **whole** screen rather than a column down the left. Then check
+  the Back button is still centred under the panel and that the binding list still scrolls and
+  still holds its scroll position across a rebind, because the rule that moved is the one those
+  two sit inside.
+
+Unchanged from the earlier lists: the arena-return residual of 1-3 sub-25 cm mispredictions, and
+everything under "Open, and all of one kind".
+
+### Found while here
+
+- **Nothing in the codebase ever said "the arena does not bank progression".** It does not, and
+  four separate structural facts have to stay true for that to hold: no server-side
+  `MatchProgression`, no win condition, banking only from the SUMMARY `enter`, and a world rebuilt
+  on migration. Any one of them changing — a warmup with a time limit, a banking call moved to
+  teardown — turns the waiting room into an XP farm silently. It is now also enforced at the row,
+  which is one guard instead of four coincidences, but the four coincidences are still
+  load-bearing for everything else and are worth knowing about.
+- **The arena's bots cannot be killed either, and that is the decision rather than a side
+  effect.** F7 names player-to-player damage; the rule is written on "is this a combatant"
+  because a bot dying in the waiting room produces exactly the things F7 removes — a killfeed
+  line, a score row, a streak credit and a respawn. The room is a live-fire range with company:
+  the bots shoot at you, you shoot back, the boards are what falls over.
+- **`TargetRange` and `TargetDummy` are client-only.** The server has no dummies at all, so
+  "dummies keep taking damage" is entirely a client-side claim about a client-side damage system,
+  and the flag set on the client is the only one that could ever have broken it. Worth knowing
+  before anyone tries to make the boards authoritative: the server does not know they exist.
+- **`ScoreSystem.register`'s return value has never been used**, by any of its six call sites, in
+  five milestones. That is what made changing its type free, and it is a small sign that the
+  registration is a roster fact rather than a scoring one.

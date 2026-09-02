@@ -17,10 +17,23 @@ const log = logger('warmup');
  * ## Why it is a range and not a lobby
  *
  * §6.3 asks for the M1 greybox room with the M2 target dummies, free-for-all rules with damage
- * live and instant respawn, no score and no win condition, and two to three bots. That is not
- * a waiting room with a gun bolted on — it is the shooting range this project already had,
- * with other people in it. *"Waiting for a match should feel like standing on a range, because
- * that is what it is."*
+ * live, no score and no win condition, and two to three bots. That is not a waiting room with a
+ * gun bolted on — it is the shooting range this project already had, with other people in it.
+ * *"Waiting for a match should feel like standing on a range, because that is what it is."*
+ *
+ * ## Nobody dies here, and nothing is recorded (playtest round 4, F7)
+ *
+ * §6.3 originally said *"damage live and instant respawn"*, and the fourth playtest changed the
+ * requirement: no dying in the waiting area, and no rating or results in it. The amended clause
+ * is in PLAN.md and the code says the same thing in two places, both set from `variant`:
+ *
+ *  - `DamageSystem.combatantsInvulnerable` — a hit on a person is resolved and reported and
+ *    takes no health. **The dummies are unaffected**, because "damage live" and "players
+ *    killable" turned out to be two facts wearing one flag, and the first is the one that makes
+ *    this a range rather than a corridor. There is no instant respawn any more because there is
+ *    nothing to respawn from.
+ *  - `ScoreSystem.records` — no row, so no kills, no deaths, no accuracy and no ladder on Tab.
+ *    §6.3's "no score" was built as a zeroed *limit*, which is a different claim.
  *
  * The consequence worth stating: **there is nothing to wait for here**. A player who never
  * votes and never migrates has a working game. That is what makes the flow's promise — *"click
@@ -87,9 +100,10 @@ function buildDeps(options: WarmupOptions): MatchInstanceDeps {
    * FFA on the greybox room, with the range's dummies still standing.
    *
    * `FFA` rather than `RANGE` is the deliberate choice, and it is what §6.3 asks for: *"free-
-   * for-all rules with damage live and instant respawn"*. `RANGE` sets `populatesRoster:
-   * false` — nobody shooting back — which is right for a testbed and wrong for an arena two
-   * people are meant to duel in.
+   * for-all rules with damage live"*. `RANGE` sets `populatesRoster: false` — nobody shooting
+   * back — which is right for a testbed and wrong for an arena two people are meant to duel in.
+   * That is still true after F7 took the killing out of it: the bots shoot at you, they are
+   * scored by nothing and they cannot be dropped, and the room is a range with company.
    *
    * The dummies survive that choice because they are **map data**, not mode data: they are
    * authored into `GREYBOX_MAP` and loaded by the shared collision loader regardless of which

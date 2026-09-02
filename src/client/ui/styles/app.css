@@ -450,8 +450,25 @@ body.op-locked #viewport {
  * what lets colourblind mode change a hitmarker without touching a stylesheet.
  * ========================================================================== */
 
-.op-screen--wide {
-  max-width: 780px;
+/*
+ * A wide screen caps its **content**, never the layer (playtest round 4, F11).
+ *
+ * This was `max-width: 780px` on `.op-screen` itself, and `.op-screen` is `position: absolute;
+ * inset: 0`. That box is over-constrained — left, right and a width cannot all hold — and CSS
+ * resolves it by ignoring `right`, so the settings screen was 780 px wide and pinned to the
+ * **left edge** of the viewport rather than centred. The backdrop is painted by the same
+ * element, which is why the right-hand two-thirds of the screen was also undimmed: one rule,
+ * both halves of the report.
+ *
+ * The convention it now follows is the one every other overlaid screen already uses — the layer
+ * stays full-bleed and centres its children, and the content carries the cap:
+ * `.sb`, `.sb--embedded`, `.eom__xp`, `.lo-head` and `.lo-columns` are all `width: min(px, vw)`.
+ * Only the two elements that need the width take it; the title and the Back row keep their
+ * shrink-to-fit size and are centred by the layer's own `align-items`.
+ */
+.op-screen--wide .op-tabs,
+.op-screen--wide .op-settings {
+  width: min(780px, 94vw);
 }
 
 .op-tabs {

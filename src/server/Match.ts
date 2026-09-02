@@ -314,6 +314,19 @@ export class ServerMatch {
      */
     this.bots.freeForAll = this.modeEntry.freeForAll === true;
     if (this.modeEntry.freeForAll === true) this.damage.friendlyFire = true;
+    /**
+     * The waiting room takes no health and keeps no record (§6.3, playtest round 4, F7).
+     *
+     * One fact — this match is the permanent arena — and both consequences are set from it
+     * here, beside `friendlyFire`, for the reason that one is set here: *"the two facts are the
+     * same fact and setting one without the other is what produced a mode where you could shoot
+     * someone but not score them"*. `ClientMatch` sets the identical pair from `warmupArena`.
+     *
+     * The variant is the right source rather than the mode id: `FFA` is also a mode a ballot
+     * can elect, and a live Free-for-All must kill and score exactly as it always has.
+     */
+    const arena = options.variant === 'WARMUP';
+    this.damage.combatantsInvulnerable = arena;
 
     // ---- the match ---------------------------------------------------------
     this.score = new ScoreSystem(this.bus);
@@ -321,6 +334,7 @@ export class ServerMatch {
     // one flag decides who can be *shot*, the other decides whose death **counts**. See
     // `ScoreSystem.freeForAll` for the FFA ladder that crawled without it.
     this.score.freeForAll = this.modeEntry.freeForAll === true;
+    this.score.records = !arena;
     this.mode = this.modeEntry.create({
       bus: this.bus,
       score: this.score,

@@ -529,6 +529,7 @@ export class Game {
       host: uiHost,
       onVote: (phase, option) => this.world?.net?.client.sendVote(phase, option),
       currentTick: () => this.syncedServerTick(),
+      audio: this.audio,
     });
 
     this.buildQueue = new MapBuildQueue({

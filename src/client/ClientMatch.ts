@@ -174,6 +174,19 @@ export interface MatchDeps {
   readonly networked?: boolean;
 
   /**
+   * This world is the permanent warmup arena (M11 §6.3; playtest round 4, F7 and F12).
+   *
+   * Derived by `MatchWorld` from `Welcome.matchId === WARMUP_MATCH_ID`, which has been on the
+   * wire since v3 — the arena is not a mode and cannot be read off the registry, because a
+   * ballot can elect Free-for-All and a live Free-for-All must kill and score as it always has.
+   *
+   * Three things read it and all three are the room's own rules: nobody is killable, nothing is
+   * recorded, and the caption over the crosshair says what you are doing there. Absent — and
+   * therefore false — in single-player, which has no arena at all.
+   */
+  readonly warmupArena?: boolean;
+
+  /**
    * Ask the server to spend a streak (M11 Gate B, §8.22).
    *
    * Supplied only by a networked match; single-player activates locally and never calls it.
@@ -560,6 +573,22 @@ export class Match {
     // There is no such thing as a teammate in FFA, so the friendly-fire gate at the damage
     // door has to come off or half the lobby is unkillable by the other half.
     if (deps.mode.freeForAll === true) this.damage.friendlyFire = true;
+    /**
+     * The waiting room's two rules, from the one fact (playtest round 4, F7).
+     *
+     * The same pair `ServerMatch` sets from `variant`, and set here for the same reason
+     * `friendlyFire` is set in both runtimes: they are one fact about the match, and a client
+     * whose copy disagreed with the server's would be a client predicting a different game.
+     *
+     * Over the network neither is load-bearing today — the server resolves every shot at a
+     * person and owns every row — and both are still set, because "the client happens not to
+     * reach this path" is the reasoning that left `friendlyFire` unset on the server for four
+     * milestones. `combatantsInvulnerable` does reach one path here: the debug self-damage.
+     */
+    if (deps.warmupArena === true) {
+      this.damage.combatantsInvulnerable = true;
+      this.score.records = false;
+    }
     this.bots.pushAggressionScale = deps.mode.pushAggressionScale ?? 1;
 
     this.fx = new Fx(deps.anisotropy);
@@ -611,6 +640,7 @@ export class Match {
       roster: this.bots.roster,
       teamSize: deps.map.teamSize,
       freeForAll: deps.mode.freeForAll === true,
+      warmupArena: deps.warmupArena === true,
     });
     this.weaponAudio = new WeaponAudio(deps.audio);
 

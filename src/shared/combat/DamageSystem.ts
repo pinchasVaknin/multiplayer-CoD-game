@@ -190,6 +190,32 @@ export class DamageSystem {
    */
   friendlyFire = false;
 
+  /**
+   * Whether a hit on a **combatant** leaves their health alone (M11 §6.3; playtest round 4, F7).
+   *
+   * The permanent warmup arena, and nothing else. §6.3 asked for *"free-for-all rules with
+   * damage live and instant respawn"*, and round four changed the requirement: no dying in the
+   * waiting area at all. Those were one flag and they are two facts — **damage live** and
+   * **players killable** — and this is the second one, off.
+   *
+   * `team !== undefined` is what separates the two populations, and it is the meaning that
+   * field already carries: see `Damageable.team`, *"absent for anything that is not on one —
+   * M2's range dummies are damageable and belong to nobody"*. So the range's boards keep taking
+   * damage, keep dropping and keep timing a kill, which is the entire purpose of the room a
+   * player is waiting in; the people in it stop being killable.
+   *
+   * **The damage is still resolved, and still reported.** That is the deliberate half. A
+   * networked client predicts nothing about another combatant's health — it is replicated
+   * (S4.15) — and its own rounds already pass through remote bodies, because `Ballistics`
+   * selects targets from this system's list and a client has no remote player registered in it.
+   * So refusing the *deduction* changes only a number the client is told. Refusing the
+   * *computation* would have to happen in `nearestTarget`, which moves where the round stops —
+   * and the terminus is replicated in `FiredEvent`, drawn as a tracer and an impact on every
+   * other client, and is the difference between a hit marker and a spark on the wall behind.
+   * One of those is invisible to prediction and the other is not.
+   */
+  combatantsInvulnerable = false;
+
   private readonly entities = new Map<number, Damageable>();
 
   constructor(private readonly bus: GameBus) {}
@@ -235,7 +261,15 @@ export class DamageSystem {
     const retain = clamp01(req.penetrationRetain);
     const amount = beforePenetration * retain;
 
-    const lethal = target.health.applyDamage(amount);
+    /**
+     * The one door, and the arena's rule is applied at it (F7).
+     *
+     * After the arithmetic rather than before it, so `report` and the event below carry what
+     * the hit *would* have cost — which is what the hitmarker, the damage numbers and the range
+     * read-out are for — while the health behind it does not move.
+     */
+    const spares = this.combatantsInvulnerable && target.team !== undefined;
+    const lethal = spares ? false : target.health.applyDamage(amount);
 
     const report = this.lastHit;
     report.valid = true;

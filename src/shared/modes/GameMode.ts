@@ -122,10 +122,11 @@ export interface ModeDeps {
 /**
  * See `ModeDeps.variant`.
  *
- * `'WARMUP'` is the permanent arena (§6.3): free-for-all rules with damage live and instant
- * respawn, and **no score, no win condition and no match timer**. It is a variant rather than
- * a sixth mode because it is Free-for-All with two limits switched off, and §9 puts new modes
- * out of scope for good reason.
+ * `'WARMUP'` is the permanent arena (§6.3): free-for-all rules with damage live, and **no
+ * score, no win condition, no match timer, and nobody killable** (the last from playtest round
+ * 4, F7). It is a variant rather than a sixth mode because it is Free-for-All with its limits
+ * switched off and its consequences unwired, and §9 puts new modes out of scope for good
+ * reason. `ServerMatch` reads it for the two consequences; `FreeForAll` reads it for the limits.
  */
 export type MatchVariant = 'STANDARD' | 'SKIRMISH' | 'WARMUP';
 

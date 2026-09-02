@@ -405,6 +405,44 @@ export class ProceduralAudio extends AudioGraph {
   }
 
   /**
+   * The map ballot opening (M11 §6.4; playtest round 4, F13).
+   *
+   * Two rising notes a fourth apart on the `ui` bus, non-positional, because it is a thing the
+   * *interface* just did rather than a thing that happened somewhere in the room. It has to cut
+   * through a firefight — §4.20's whole premise is that the ballot arrives while you are still
+   * shooting — without reading as a threat: a rising pair asks a question, and every falling
+   * cue in the project already means something bad (`playUiSweep(720, 300, ...)` is the dry
+   * fire). The second note is scheduled by decay rather than by a timer, which is the same
+   * reason `playLevelUp` layers rather than sequences: nothing here may outlive the match.
+   *
+   * Fired on the phase **edge** and never on the broadcast — see `mapBallotOpened`, and
+   * `VoteOverlay.apply` for where the edge is taken.
+   */
+  playBallotOpen(): void {
+    if (!this.hasContext) return;
+    this.playUiSweep(587, 784, 0.22, 0.16);
+
+    const second = this.oscScratch;
+    second.x = 0;
+    second.y = 0;
+    second.z = 0;
+    second.positional = false;
+    second.bus = 'ui';
+    second.type = 'triangle';
+    second.freq = 784;
+    second.freqEnd = 1046;
+    second.level = 0.16;
+    // The delay that makes it two notes rather than a chord: a slow attack on the second
+    // voice, so the pair arrives inside one `oscHit` pool slot and needs no scheduling.
+    second.attack = 0.14;
+    second.decay = 0.28;
+    second.wet = 0.12;
+    second.filterFreq = 9000;
+    second.filterQ = 0.7;
+    this.oscHit(second);
+  }
+
+  /**
    * One XP row landing on the summary screen (M6, S6.1).
    *
    * A short bright blip that climbs a fifth over the first eight rows and then holds. The

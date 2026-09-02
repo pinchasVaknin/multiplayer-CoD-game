@@ -6,6 +6,7 @@ import type { ProceduralAudio } from '../engine/ProceduralAudio';
 import type { ColumnDef } from '../../shared/modes/GameMode';
 import type { MatchFlow } from '../../shared/modes/MatchFlow';
 import type { MapDef } from '../../shared/world/maps/types';
+import { captionHasCountdown, matchCaption } from '../../shared/ui/HudSurfaces';
 import { Hud, makeHudState, type HudState } from './Hud';
 import { Scoreboard } from './Scoreboard';
 import { HudStreaks, makeStreakHudState, type StreakHudState } from './HudStreaks';
@@ -53,6 +54,13 @@ export interface MatchHudDeps {
    * place the seam is visible" — this closes it.
    */
   readonly freeForAll: boolean;
+  /**
+   * This match is the permanent warmup arena (playtest round 4, F12).
+   *
+   * Read by exactly one thing here — the caption over the crosshair — and passed rather than
+   * derived, because `MatchHud` has no connection and no business acquiring one.
+   */
+  readonly warmupArena: boolean;
 }
 
 export class MatchHud {
@@ -130,8 +138,15 @@ export class MatchHud {
     const banner = state.banner;
     banner.secondsRemaining = flow.secondsRemaining;
     banner.round = flow.round;
-    banner.phaseSeconds = flow.phaseSecondsRemaining;
-    banner.phaseLabel = phaseLabel(flow);
+    /**
+     * The caption over the crosshair, and it is the **one writer** of both fields (F12).
+     *
+     * The countdown is dropped in the arena rather than shown at zero: `phaseSecondsRemaining`
+     * counts the round-end hold down through `LIVE`, so a caption that took it would open on
+     * `WAITING · 5` and count toward nothing. See `captionHasCountdown`.
+     */
+    banner.phaseSeconds = captionHasCountdown(this.deps.warmupArena) ? flow.phaseSecondsRemaining : 0;
+    banner.phaseLabel = matchCaption(flow.currentPhase, this.deps.warmupArena);
 
     // The flash and the threat are pushed into the HUD from the sim tick they happen on;
     // fold them into the state here so `HudTactical` still sees one record per frame.
@@ -270,15 +285,3 @@ const threatScratch = { active: false, x: 0, y: 0, z: 0 };
 /** Module-level and reused, like the threat's: the render pass allocates nothing (S4.7). */
 const objectiveScratch = { active: false, x: 0, z: 0 };
 
-function phaseLabel(flow: MatchFlow): string {
-  switch (flow.currentPhase) {
-    case 'WARMUP':
-      return 'GET READY';
-    case 'ROUND_END':
-      return 'ROUND OVER';
-    case 'MATCH_END':
-      return 'MATCH OVER';
-    case 'LIVE':
-      return '';
-  }
-}

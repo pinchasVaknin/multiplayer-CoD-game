@@ -140,6 +140,53 @@ export function debugOverlayVisible(s: HudSurfaceState): boolean {
 }
 
 /**
+ * The caption centred over the crosshair, or `''` for no caption (playtest round 4, F12).
+ *
+ * This is `MatchHud`'s own `phaseLabel` with one fact added, and it is here rather than there
+ * for the reason everything else in this file is: the label is a pure function of state that
+ * outlives the element, so a harness with no DOM can still say how many ticks the caption was
+ * up and — the half that matters — that it was never up anywhere else.
+ *
+ * **The arena's caption outranks the phase's.** F12 asks for a "waiting" caption in the waiting
+ * room, and the room is not a phase of a match: it is a whole instance whose `MatchFlow` runs
+ * `WARMUP` into `LIVE` and then sits there for as long as the process lives. Deriving the
+ * caption from the phase alone would put `GET READY` over the crosshair for the first ten
+ * seconds a player is in the arena and nothing at all for the rest of it, which describes a
+ * match starting rather than a room being waited in.
+ *
+ * Two arguments rather than a `HudSurfaceState`: both facts outlive the surface, and no other
+ * rule in this file reads which instance the client is seated in. Threading the whole record
+ * through `MatchHud` to carry one boolean would put `matchId` into a state object built for
+ * something else.
+ */
+export function matchCaption(phase: MatchPhase, inWarmupArena: boolean): string {
+  if (inWarmupArena) return 'WAITING';
+  switch (phase) {
+    case 'WARMUP':
+      return 'GET READY';
+    case 'ROUND_END':
+      return 'ROUND OVER';
+    case 'MATCH_END':
+      return 'MATCH OVER';
+    case 'LIVE':
+      return '';
+  }
+}
+
+/**
+ * Does that caption carry a countdown beside it?
+ *
+ * `HudBanner` appends the phase's remaining seconds whenever there are any, which is right for
+ * a warm-up and wrong for the arena: `MatchFlow.phaseSecondsRemaining` counts the round-end
+ * hold down from its authored value during `LIVE`, so an arena caption would spend its first
+ * few seconds reading `WAITING · 5` and counting toward nothing. There is nothing to wait out
+ * in the waiting room, which is §6.3's whole point about it.
+ */
+export function captionHasCountdown(inWarmupArena: boolean): boolean {
+  return !inWarmupArena;
+}
+
+/**
  * The death screen's countdown, as a function rather than as a method on a match.
  *
  * Presentational and clamped at zero: the authoritative *"you are alive again"* is the
