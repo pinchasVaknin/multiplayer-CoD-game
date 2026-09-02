@@ -123,7 +123,35 @@ export const WEAPON_MODEL_SPECS: Readonly<Record<string, WeaponModelSpec>> = {
     optic: 'reddot',
     sightHeight: 0.098,
   },
-  /** Long, thin, scoped: reads as a marksman rifle from across the screen. */
+  /**
+   * Long and thin: reads as a marksman rifle from across the screen.
+   *
+   * **The optic is a red dot, and that is B2's actual fix** (playtest round 4, and corrected
+   * after it). This spec used to say `optic: 'scope'` while `AR_LONGBOW` has no `scope` block in
+   * `WeaponDefs` — and those two facts drive different machinery. `WeaponDef.scope` is what
+   * `ClientMatch` tests to hide the viewmodel at `SCOPE_VIEWMODEL_HIDDEN` and hand the picture to
+   * `HudTactical`'s overlay; `WeaponModelSpec.optic` is what decides the geometry. With the
+   * first false and the second `'scope'`, aiming this rifle put the tube's own end cap on the
+   * sight line with nothing to replace it. That is the reported *"closed crosshair on one
+   * particular AR"*, and it was one weapon because it was the only disagreement.
+   *
+   * Round 4 fixed the mesh instead of the mismatch — it opened the tube's ends so the eye could
+   * see through — and that was wrong twice over. It did not restore a sight *picture*, only a
+   * hole; and an open cylinder is a single-sided surface, so at hip fire, where the camera sits
+   * behind the weapon and looks along it, all three scoped weapons became a hollow trough with a
+   * reticle floating in it. Reported immediately, with screenshots.
+   *
+   * So the tube geometry is back to exactly what it was, and the mismatch is fixed at the end
+   * that was actually wrong. A red dot is a sight this weapon can aim through, built by the same
+   * M7 code the SMGs and the HALCYON use — which the same report confirms works — and it costs
+   * nothing in the simulation: no magnification, no scope-in time, no breath, no sway, no
+   * `WeaponDefs` edit at all. The rifle keeps its identity from its proportions, which is where
+   * it always came from: the longest handguard and barrel in the game, a skeleton stock and a
+   * short magazine.
+   *
+   * `check-optics` now fails the build if a spec ever pairs a scope model with an unscoped def
+   * again, because this is the second playtest in a row to report the consequence.
+   */
   ar_longbow: {
     ...AR_BASE,
     receiverLength: 0.34,
@@ -134,8 +162,7 @@ export const WEAPON_MODEL_SPECS: Readonly<Record<string, WeaponModelSpec>> = {
     magazineLength: 0.13,
     stock: 'skeleton',
     stockLength: 0.2,
-    optic: 'scope',
-    opticLength: 0.19,
+    optic: 'reddot',
     sightHeight: 0.106,
   },
 

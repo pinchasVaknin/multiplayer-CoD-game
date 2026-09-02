@@ -9260,3 +9260,156 @@ arena-return residual of 1-3 sub-25 cm mispredictions.
   is presentation — but the rule caught this file twice on the way in and the substitution is
   free, so it uses `simSin`/`simCos`/`simTan` and the exception was not widened. `atan2` staying
   off the list is worth knowing before somebody assumes it is covered.
+
+---
+
+## Playtest round 4 — the scope with no hole in it had no hole for a reason
+
+The second half of the P9 follow-up, reported with four screenshots: `LONGBOW MK3` and both
+snipers. Everything else was confirmed good — *"in all other weapons the sights work great"* —
+and, importantly, *"with the sniper scopes that enter scope mode it also works well"*.
+
+Those two sentences are the diagnosis. The three weapons that are wrong are exactly the three
+with `optic: 'scope'` in their model spec, the part that still works is the ADS **overlay**, and
+what is broken is the **viewmodel at hip fire**.
+
+### What P9 did, and why it could not have worked
+
+P9's B2 fix set `openEnded: true` on the scope tube and its objective bell, so that a player
+aiming the LONGBOW could see through the optic rather than at the flat back of a capped cylinder.
+The diagnosis behind it was right and is unchanged: `ar_longbow` is the only weapon whose *model*
+carries a scope and whose *def* does not, so it gets neither the viewmodel hand-off nor the
+overlay, and the tube sits on the sight line with nothing to replace it.
+
+The fix was wrong twice.
+
+**It did not restore a sight picture, only a hole.** An optic is not a tube you look down; the
+picture through it is drawn by `HudTactical`'s scope overlay, which is exactly the machinery the
+LONGBOW was excluded from. Opening the tube let the eye through to the world at ADS with a
+26 mm square of glass and a 2.6 mm speck floating in it — not a sight.
+
+**And an open cylinder is a single-sided surface.** `CylinderGeometry` with `openEnded` builds
+the side wall and nothing else, and the material is `FrontSide`. From outside, the near wall's
+faces are drawn and the far wall's are culled, so the moment the camera can see into either end
+the tube stops being an object and becomes a curved sheet. At hip fire the camera sits *behind*
+the weapon and looks along it, which is precisely into the ocular end. All three scoped weapons
+became a hollow trough with a red dot floating in the middle of it. The screenshots show it
+exactly, and they show it on the two snipers too — weapons whose sight picture was never broken
+and which P9 changed anyway, on the argument that the two extra quads were "invisible" on them.
+
+P9's own record put "an open-ended tube looks right from outside at hip" on the **needs a
+browser** list, with the note that backface culling makes the interior invisible *"but it is a
+claim about a rasteriser"*. It came back red. That list is doing its job; what it cannot do is
+stop a change shipping on the strength of a claim it has flagged as unverified.
+
+### The fix is the mismatch, not the mesh
+
+`WeaponMeshParts` and `WeaponMesh` are restored to exactly their pre-P9 state — solid capped
+tubes, no `openEnded` flag, no lens, no reticle, no `scopeOcularZ`. `git checkout a30792b~1` on
+both files, so this is byte-identical to the geometry that shipped for eleven milestones.
+
+**`ar_longbow` gets `optic: 'reddot'`.** That is where the bug always was. P9 named the mismatch
+correctly and then fixed the wrong end of it: a scope model on a weapon the simulation does not
+scope is a sight the player cannot see through, and the answer is to stop modelling a scope on
+it rather than to drill a hole in the scope. A red dot is built by the same M7 code the two SMGs,
+the HALCYON and the MONOLITH use — the code the report confirms *"works great"* — its aperture is
+clear by construction, and it costs the simulation nothing: no magnification, no scope-in time,
+no breath, no sway, and not one line of `WeaponDefs`.
+
+What it costs is the word "scoped" in the spec's comment. The rifle keeps its identity where it
+came from in the first place: the longest handguard and barrel in the game, a skeleton stock and
+a short magazine. B2 stays fixed, by the mechanism that was already proven rather than a new one.
+
+### The class of bug is a check that fails
+
+`scripts/check-optics.mjs`, wired into `npm run check` between the cosmetic and unlock audits.
+One rule, both ways round:
+
+- a weapon modelled `optic: 'scope'` **must** have a `scope` block in its def — otherwise aiming
+  it puts a tube on the sight line and nothing hands the picture to the overlay;
+- a weapon whose def **has** a scope block must be modelled with one — otherwise the overlay
+  replaces a viewmodel that never had a scope on it, which is the same defect wearing the other
+  hat and would be reported as *"my sniper has no scope"* and diagnosed from scratch.
+
+Watched red both ways, and the first control is the bug exactly as it shipped:
+
+| Red control | What it said |
+|---|---|
+| `ar_longbow` restored to `optic: 'scope'` — **the bug as reported** | *is modelled with optic: 'scope' but its WeaponDef has no scope block* |
+| `sniper_kestrel` set to `optic: 'reddot'` | *has a scope block in its WeaponDef but is modelled with optic: 'reddot'* |
+
+**And the audit was wrong on its first run, in the way this milestone keeps producing.** It
+reported *"10 model specs"* against twelve weapons and passed, because it only recorded entries
+that named an `optic:` — and most specs are `{ ...AR_BASE, ... }` and inherit it. `ar_vulcan` was
+being skipped silently. It resolves `AR_BASE` now and prints its denominators: **12 weapons
+examined, 11 with their own spec, 1 inheriting**. A check that quietly examines five sixths of
+its subject is the third probe in this milestone to have shipped as a false green, and the only
+reason this one did not is that the count looked wrong on the line it printed.
+
+Its limits are `check-cosmetics`' and `check-unlocks`': it reads sources with regular
+expressions, so it knows a spec *names* a scope and a def *has* one, and it knows nothing about
+what either renders.
+
+### Measured
+
+Nothing in this session touches the simulation or the wire, so every harness number below is a
+control and none of them should have moved.
+
+| Probe | Result |
+|---|---|
+| `npm run check` | boundaries (297 files), cosmetics, **optics**, unlocks, cheats, all three typecheck targets — green |
+| Optic audit red controls | **2 of 2 went red**, including the bug as it shipped |
+| `npm run readability` | crosshair 0 of 48 at the floor · team colour 0 of 12 violations · **projection 11 of 11**, red control still 0/90/180/0 deg |
+| `npm run harness`, seeds 1-5 | **75-59, 75-66, 62-75, 75-66, 60-75** — byte-identical to P5, P9 and the projection session |
+| `npm run skirmish`, shipped timings | **FLOW CHECK PASSED**; divergence **0 / 7374** per client; mispredictions into a live match **0** |
+| Spectator invariants | 4812 selections while dead, **0 self / 0 enemy / 0 dead** |
+| Per-life grenade stock | 110 life-starts, **0 partial / 0 empty**, 260 held against 260 expected |
+| `npm run leak`, 100 cycles | subscriptions **29 -> 29 (+0)**, heap 13.02 -> 13.69 MiB |
+| `npm run build` | green |
+
+No protocol change.
+
+### What was not verified
+
+**The thing this session is about is a picture, and this process draws nothing.** The geometry is
+restored to a state that shipped for eleven milestones and was never reported, which is the
+strongest evidence available here and is not the same as having looked. The red dot on the
+LONGBOW is new on that weapon and has not been seen on it.
+
+One measured claim from P3 is now stale and is not re-measured here: **the killfeed silhouettes.**
+`weaponSilhouettePath` projects the model's parts, and removing the LONGBOW's scope tube removes
+several quads from its outline, so P3's *"12 weapons, 12 distinct silhouettes, 19-25 quads each"*
+no longer describes the shipped roster. `WeaponSilhouette` is in `client/` and the probe is in
+`server/`, which `check-boundaries` forbids from importing it, so this could not be re-run. The
+rifle keeps the longest barrel and handguard in the game and a skeleton stock, so it should stay
+distinct — that is a reasoned expectation, not a measurement, and it is on the browser list.
+
+### Needs a browser
+
+- **The three weapons in the report, at hip fire, first.** `LONGBOW MK3`, `KESTREL .338` and
+  `VANTAGE SR`. Each must read as a **solid object**. The snipers must look exactly as they did
+  before round 4 — that is the whole of their fix, and if either still shows a trough the revert
+  did not take.
+- **The LONGBOW aimed.** A red dot on the sight line and a clear view past it, the same picture
+  the HALCYON and the SMGs give. This is B2, fixed a second time and a different way.
+- **The snipers aimed.** Unchanged: the viewmodel goes at `SCOPE_VIEWMODEL_HIDDEN` and the
+  overlay draws. The report confirms this already works; it is here as the regression check.
+- **The killfeed icon for the LONGBOW**, at its real size, against the other three ARs. It has
+  lost its scope and this is the claim above that could not be measured.
+- **Everything on the projection session's list**, unchanged — the bomb arrow through a full turn
+  is still the one to check first.
+
+### Found while here
+
+- **P9 changed two weapons it had no reason to touch.** The mismatch was `ar_longbow` alone; the
+  snipers were named in P9's own record as weapons where the change would be "invisible", and
+  they are two of the three in the screenshots. A change justified by "this cannot matter here"
+  applied to things outside the reported defect is the cheapest thing to leave out and was the
+  larger half of the damage.
+- **`openEnded` is gone from `TubePart` entirely.** It had one user and that user is reverted, so
+  it is a flag with no writer — the shape P3 removed `uiFocus` and `editorOpen` for. Restoring the
+  files from `a30792b~1` took it out by construction rather than by remembering to.
+- **The two failed B2 fixes bracket the right one.** The first said the mesh must change and the
+  def must not; the second said the same thing more aggressively. The answer was that neither
+  had to change — the *pairing* did, and the pairing was a third thing that no file owned. That
+  is what `check-optics` now owns.
