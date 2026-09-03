@@ -36,7 +36,7 @@ import type { WelcomeInfo } from '../shared/net/Messages';
 import { LocalIdentity } from '../shared/combat/LocalIdentity';
 import type { BrowserLink } from './net/BrowserLink';
 import type { SkirmishSink } from '../shared/net/NetClient';
-import { ownerFromCode, WARMUP_MATCH_ID, type NetLoadout } from '../shared/net/Skirmish';
+import { isArenaInstance, ownerFromCode, type NetLoadout } from '../shared/net/Skirmish';
 import { NetSession } from './net/NetSession';
 import { logger } from '../shared/core/Log';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
@@ -370,7 +370,7 @@ export class MatchWorld {
        * welcome, so a player migrating into a match and back again gets the answer for the
        * instance they are actually in, both times, without anything having to be reset.
        */
-      warmupArena: server !== null && server.welcome.matchId === WARMUP_MATCH_ID,
+      warmupArena: server !== null && isArenaInstance(server.welcome.matchId),
     });
 
     /**

@@ -7261,7 +7261,9 @@ derived the caption from `MatchFlow.currentPhase` alone, which in the arena mean
 ten seconds and then nothing for as long as you stand there.
 
 `matchCaption` moves into `shared/ui/HudSurfaces.ts` beside the round-4 rules, with the arena
-outranking the phase. It is there for the reason everything else in that file is: the label is a
+outranking the phase. (**Amended below**: the arena fact was threaded to each surface as a loose
+boolean, which is the shape the regression session collapsed into `HudSurfaceState.inWarmupArena`
+and one predicate.) It is there for the reason everything else in that file is: the label is a
 pure function of state that outlives the element, so a headless client with no DOM can count the
 ticks it was up in the room and — the half that matters — assert it was never up anywhere else.
 
@@ -7287,6 +7289,12 @@ the only reading under which "one sound per cycle" is a fact about the phase mac
 a debounce somebody tuned. The sound itself is two rising notes on the `ui` bus in
 `ProceduralAudio.playBallotOpen` — rising because every falling cue already in the project means
 something bad, and it has to cut through a firefight without reading as a threat.
+
+**Reversed below.** Choosing the map ballot alone bought that clean assertion by leaving the
+*mode* ballot — the first one, and the one that opens the whole question — silent. `ballotOpened`
+replaces `mapBallotOpened` and fires once per ballot *opening*, two per cycle, with the two
+pitched differently from one generator. See "one edge over the ballot phase, and the mode ballot
+was silent".
 
 ### F11 — the width was on the layer, so the layer stopped being full-screen
 
@@ -9699,3 +9707,220 @@ everything under "Open, and all of one kind".
   false there. Every number about the debug overlay's gate is therefore reasoned rather than
   measured, and that was true in F14 as well — it is on the browser list above and has been on the
   previous one.
+
+## Playtest round 4 — a bar with nothing left to cross, and two facts that were spreading
+
+Three regressions, and only one of them is a defect somebody wrote this round. The other two are
+P6's own shapes propagating, which is the more useful half of the session: both were correct
+where they were written and wrong as soon as a second thing needed the same fact.
+
+### The XP bar never finished, and it is M9 code that P2 made survivable
+
+*The symptom exists because `XpSummary.stepBar` computed its own span as
+`Math.max(1, xpForLevel(level))`, and `xpForLevel` returns **0** at the cap on purpose.* That
+`max(1, …)` invented a one-XP level above level 55. `nextLevelAt` therefore landed *below* the
+target, so every frame "crossed" it, replayed the flourish for a level that never changed, and
+put the bar back just under the line it had already passed. `phase` never reached `DONE`, and
+`XpSummary`'s own `requestAnimationFrame` loop stops on `DONE` and nothing else.
+
+**Which of the two mechanisms it is, since they sound the same.** It is the loop, not a pooled
+voice that is never released, and that was settled by reading the pool rather than by guessing:
+`AudioGraph.oscHit` copies the spec into the voice synchronously and sets
+`endsAt = now + decay + 0.05`, and `AudioGraph.update` runs once a frame and releases every
+voice past it. Nothing can hold a voice open. The sound repeats because something replays it.
+
+**On the provenance, the file history does not support blaming a round-4 session.**
+`git log -S "Math.max(1, xpForLevel(level))"` puts the line at `939e7d4` (M9), and neither
+`XpSummary.ts` nor `Levels.ts` has been touched by any session in this round. What changed is the
+screen's *lifetime*. Before **P2** the client stopped servicing its socket the moment the board
+appeared, the server closed the connection ten seconds into a fourteen-second hold, and the
+player was dropped to the main menu — which runs `hideSummary()` and with it `xpSummary.stop()`.
+The loop was cut off by a disconnection before anybody could name it. P2 made the board survive
+its full hold with a live connection, and a defect that used to be interrupted now runs to the
+end of the screen. The round's other work supplies the state that triggers it: B7 and F1 both
+turn on account level, and the way a tester reaches a level is `SaveInspector.grantXp`.
+
+The guard is the general one rather than the max-level one, and that distinction is the fix.
+`stepLevelBar` in `shared/meta/Levels.ts` owns the decision now — advance, hold, or stop — and it
+stops when **the next boundary is not ahead of where the bar already is**. Reaching the cap is one
+way to be in that position, because `span` is genuinely zero there. A report already at its target
+is another, and it needs no separate early return: the same comparison answers both. `XpSummary`
+keeps the DOM, the flourish and the frame loop and no longer does any arithmetic.
+
+### The room's rules were spreading as a bare id comparison
+
+*The symptom exists because P6 took the arena's score **data** away and left its **surfaces**.*
+`ScoreSystem.records = false` means the room registers no rows, and the score banner, the Tab
+board and the streak strip all went on painting from nothing: the banner fell back to the literal
+string `LEADER` with two zeroed bars, Tab opened on an empty board, and the streak strip counted
+toward a kill that cannot happen there. A ladder showing zeroes is still a ladder, which is what
+F7 asked to have taken out of the waiting room.
+
+The second half is the shape rather than the bug. P6 derived "am I in the arena" as
+`server.welcome.matchId === WARMUP_MATCH_ID` in `MatchWorld` and threaded it as a constructor dep
+into `ClientMatch` and again into `MatchHud`, where `matchCaption` and `captionHasCountdown` took
+it as a loose boolean. P10 then copied the pattern for `briefVisible`. Three functions, one bare
+comparison, and every new surface obliged to remember it — which is a rule that fails by
+*omission*, and an omitted comparison looks like nothing at all in a diff.
+
+Three changes, and the third is the one that generalises:
+
+- **The fact belongs to the instance kind.** `MatchInstance.isArena` is abstract and declared by
+  the two subclasses: `WarmupMatch` is the arena because of what it is, not because of the id it
+  holds. The id exists so a *client* can name the same instance on the wire.
+- **One comparison in the project.** `isArenaInstance(matchId)` in `shared/net/Skirmish.ts` is
+  now the only place `WARMUP_MATCH_ID` is compared against outside a debug label, and the
+  harness's seven scattered copies were routed through it in the same pass.
+- **One predicate, and every result surface reads it.** `inWarmupArena` moved into
+  `HudSurfaceState`, and `resultSurfacesVisible` decides the banner, the board and the streak
+  strip together. They are grouped rather than given a predicate each because they are three
+  views of `ScoreSystem`, which is the object F7 switched off — they fail and succeed together.
+  `Game.updateHudSurfaces` evaluates it once a frame beside every other surface rule and pushes
+  the answer down, so nothing inside the HUD asks the question at all.
+
+The rule is deliberately *not* "hide the board when it is empty". That is a second way of saying
+the same thing, it goes wrong the first time a room legitimately holds a row, and it is a rule
+each surface would have to implement for itself. It is: **this instance keeps no record, so
+nothing that displays one is up.** The caption is pointedly outside the group — it is the one
+surface the room adds rather than removes.
+
+Both new `[hidden]` rules in `hud.css` are required rather than defensive, and for the reason
+B13 established: `hidden` hides an element only because the UA stylesheet says
+`[hidden] { display: none }` at the lowest specificity there is, and `.hud-banner`'s
+`display: grid` and `.hud-streaks`' `display: flex` both outrank it.
+
+### One edge over the ballot phase, and the mode ballot was silent
+
+*The symptom exists because P6 wrote the edge detector as `mapBallotOpened` — literally
+`next === MAP_VOTE && previous !== MAP_VOTE`.* P6 chose that to make "one cue per cycle" a clean
+assertion, and it bought the assertion by leaving the **mode** ballot silent: the first ballot,
+the one that opens the whole twenty-second question while the player is mid-firefight, arrived
+with no cue at all. The cue was missing exactly where it was most needed.
+
+`ballotOpened(previous, next)` replaces it and returns *which* ballot opened, or `null`. The rule
+is a property of the phase machine rather than of either ballot: a ballot has opened when the
+phase becomes a ballot it was not already, so `PLAY -> MODE_VOTE` and `MODE_VOTE -> MAP_VOTE` are
+both openings and the forty broadcasts inside either one are not. One detector, not two — a
+second copy beside the first is how the trap gets fixed twice and diverges once.
+
+**Mode and map sound different, from one generator.** They are two stages of one question, so the
+cue should be recognisably the same event and distinguishable without looking up from the fight:
+`playBallotOpen` takes the phase and pitches the same two-note rising figure from it, the map a
+fourth above the mode. The second cue says *the mode is settled, the map is the question now*.
+Two separate sounds would have to be designed against each other and would drift.
+
+Fixed in the same pass, and it was P6's too: the second note was delayed with `attack = 0.14`,
+which fights the pool. `oscHit` schedules the voice's release from `decay` alone
+(`endsAt = now + decay + 0.05`, `osc.stop(now + decay + 0.02)`), so an attack that long is an
+envelope the voice is recycled out from under. `oscHit`'s own `delay` argument is the mechanism
+this file already has for a multi-part sting, and it moves the whole voice onto the audio clock.
+
+### Measured
+
+Every number came out of a run in this session. **No protocol change** — nothing here touches the
+wire, and the arena fact was already on it as `Welcome.matchId`.
+
+**`npm run progression` — the new probe, and the reason the bar is now checkable at all.** A
+summary that never finishes its animation is invisible to every instrument this project has:
+`HeadlessClient` builds no `ClientMatch` and no DOM, the skirmish harness at shipped timings has
+never once reached a summary, and the preview pane never fires `requestAnimationFrame`. Moving
+the decision out of `XpSummary` is what makes it an ordinary function call with an ordinary
+answer.
+
+| Case | Steps | Level-ups |
+|---|---|---|
+| Level 1, no XP earned | 1 | 0 |
+| Level 1, half a level | 27 | 0 |
+| Level 1 -> 2, exactly one level | 68 | 1 |
+| Level 1 -> 4, three levels | 200 | 3 |
+| Mid-curve, level 30 -> 31 | 68 | 1 |
+| The whole curve, level 1 -> 55 | **3 566** | 54 |
+| **At the cap, earning more** | **1** | **0** |
+| At the cap, a match worth nothing | 1 | 0 |
+| Level 54 -> 55, then past it | 68 | 1 |
+
+**The red control is kept, permanently, and it is the half that makes the probe an instrument.**
+`runBarLegacy` is the pre-fix arithmetic verbatim, run on the max-level case: **it did not
+terminate in 36 000 steps and produced 35 934 boundary crossings.** The count is crossings and not
+flourishes — on screen each one sets `phase = 'LEVELUP'`, which holds 0.85 s before handing back,
+so the player hears roughly one a second rather than one a frame. What the number establishes is
+the thing the pacing hides: there is no last crossing. If a future change to the level table ever
+makes that version terminate, the run says so and fails, because a control that cannot go red is
+not controlling anything.
+
+**`npm run skirmish` — 3 headless clients, a real server, shipped timings.**
+
+| Probe | Result |
+|---|---|
+| Result surfaces up in the room | **0 ticks** — and **55 280** in a live match, which is the control that proves the probe can see them |
+| Ballot cue, per client per cycle | **2** — one per ballot opening — against **86** broadcasts that a level-triggered cue would have fired on |
+| Arena score rows / health floor / deaths in the room | **0** / **100** over 24 hits taken / **0** |
+| Caption in the room / `WAITING` in a live match | 10 818 ticks / **0** |
+| The run | **FLOW CHECK PASSED**; 3 of 3 migrations, 0 failed |
+| Mispredictions entering a live match | **0** (S8.9 requires 0); spawn window 0 |
+| Divergence checker | **0 / 7369** per client |
+| Spectator invariants | 7012 selections while dead, **0 self / 0 enemy / 0 dead** |
+| Quick loadout window | 10 279 ticks over 31 windows, **0 while alive** |
+| Per-life grenade stock | 109 life-starts, **0 partial / 0 empty**, 274 held against 274 expected |
+
+**`npm run harness` — 5 matches, seeds 1-5, TDM on Foundry.** The regression control:
+**75-59, 75-66, 62-75, 75-66, 60-75**, byte-identical to the standing baseline. Nothing in a live
+match moved, which is the claim every change here has to be able to make.
+
+**`npm run leak` — 100 cycles.** Subscriptions **29 -> 29 (+0)**, heap 13.03 -> 13.72 MiB (+0.69).
+**LEAK CHECK PASSED.**
+
+**`npm run check`** and **`npm run build`** green — boundaries (298 files), the cosmetic, optic,
+unlock and cheat audits, and all three typecheck targets.
+
+### What was not verified
+
+- **That the bar looks right at the cap.** What is measured is that it terminates in one step and
+  fires no flourish. Whether an instant jump to a full bar reads as finished or as broken is a
+  frame, and the probe has no opinion about it. It is the first thing on the browser list.
+- **Both ballot cues.** The rate is measured; the sound is not, because `ProceduralAudio` needs an
+  `AudioContext` and the harness has none. Whether a fourth is far enough apart to tell the two
+  stages apart mid-firefight is a question for ears.
+- **That the HUD actually goes down in the arena.** 0 ticks says the *rule* is never true there
+  and the 55 280 says the rule can be true; neither says a pixel was hidden. The two new
+  `[hidden]` rules are exactly the class of thing that compiles and does nothing, which is what
+  B13 was.
+
+### Needs a browser
+
+- **The XP bar at the cap, and it is the one to check first.** Grant yourself past 676,400 XP in
+  the save inspector, play a match, and watch the summary to the end. The bar must fill, the total
+  must land, and the tail must appear — **once**. No `LEVEL 55` flourish, and no repeating chime.
+  Then do the same at level 3 with a normal match: the flourish must still play on the level-up
+  and the bar must still stop on the boundary, because that is the behaviour the fix must not have
+  cost.
+- **The waiting room's HUD.** In the arena there must be **no score banner at the top of the
+  screen, no streak strip at the bottom left, and Tab must open nothing at all** — not an empty
+  board. The `WAITING` caption must still be there, centred, with no number beside it. Then vote
+  into a match: all three must come back on the same frame the world does, and the caption must be
+  gone.
+- **Both ballot cues, in one cycle.** Stand in the arena through a full sixty seconds. One cue as
+  the mode ballot opens, a second and higher one as the map ballot replaces it, and **nothing** in
+  the ten seconds either ballot is up. Check both are audible over sustained fire.
+- **The second note.** It should read as two notes rather than one; if it sounds clipped, the
+  delay and the decay are the two numbers, and `oscHit`'s release schedule is what they have to
+  agree with.
+
+Unchanged from the earlier lists: everything under "Open, and all of one kind".
+
+### Found while here
+
+- **`XpSummary` drives its own `requestAnimationFrame` loop and stops on one condition.** Nothing
+  outside it ticks the animation — `EndOfMatch` has no `tick` any more, and `Game` only pushes the
+  countdown — so `phase === 'DONE'` is the sole exit, alongside `stop()` and `finish()`, both of
+  which are tied to a button press. Any future phase that can fail to reach `DONE` is a loop that
+  runs until the player clicks something, and there is no supervisor above it to notice.
+- **The arena fact now has three names and they are deliberately different.**
+  `MatchInstance.isArena` is the instance kind on the server, `isArenaInstance(matchId)` is the
+  one comparison a client can make, and `HudSurfaceState.inWarmupArena` is the per-frame record
+  every surface rule reads. They are separate because they answer at different levels; what must
+  not happen again is a fourth one spelled out inline.
+- **`AudioGraph` releases voices on `decay` and ignores `attack` entirely.** That is fine for
+  every sound in the project except one that tries to use a slow attack as a delay, which is what
+  P6 did. `oscHit(spec, delay)` exists for that and is the only correct way to schedule a second
+  note. Worth knowing before the next multi-part cue.

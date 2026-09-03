@@ -2,7 +2,7 @@ import { DT } from '../../shared/core/Loop';
 import type { VoteInfo } from '../../shared/net/Messages';
 import {
   MAP_BALLOT,
-  mapBallotOpened,
+  ballotOpened,
   MODE_BALLOT,
   VOTE_CYCLE_CONFIG,
   VotePhase,
@@ -135,7 +135,7 @@ export class VoteOverlay {
    */
   apply(info: VoteInfo): void {
     /**
-     * The cue for the map ballot, on the **edge** (playtest round 4, F13).
+     * The cue for a ballot opening, on the **edge** (playtest round 4, F13).
      *
      * Taken before `this.info` is overwritten, because the previous phase is the entire rule
      * and this line is the only thing that moves it — no flag beside it, and nothing to reset.
@@ -146,9 +146,8 @@ export class VoteOverlay {
      * `hide()` drops `info` on migration, which re-arms this deliberately: a player put back in
      * the arena during a ballot has genuinely just had it appear in front of them.
      */
-    if (mapBallotOpened(this.info?.phase ?? VotePhase.IDLE, info.phase)) {
-      this.deps.audio.playBallotOpen();
-    }
+    const opened = ballotOpened(this.info?.phase ?? VotePhase.IDLE, info.phase);
+    if (opened !== null) this.deps.audio.playBallotOpen(opened);
     this.info = info;
     const balloting = info.phase === VotePhase.MODE_VOTE || info.phase === VotePhase.MAP_VOTE;
     /**

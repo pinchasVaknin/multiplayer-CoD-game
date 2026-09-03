@@ -41,6 +41,9 @@ export default defineConfig({
         // Playtest round 4 P9. Content rather than a run: crosshair geometry, the team-colour
         // invariant and per-map ground luminance, all pure functions of the shipped tables.
         readability: 'src/server/readability.ts',
+        // Playtest round 4 regression. The summary bar's arithmetic, stepped to completion
+        // without a screen: a pure function of the level table, so one run is a fact.
+        progression: 'src/server/progression.ts',
       },
       output: { entryFileNames: '[name].js', format: 'esm' },
     },

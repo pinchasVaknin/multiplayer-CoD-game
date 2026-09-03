@@ -62,6 +62,9 @@ export interface LiveMatchOptions {
 }
 
 export class LiveMatch extends MatchInstance {
+  /** A match a ballot elected, however much it looks like the arena. See `MatchInstance.isArena`. */
+  override readonly isArena = false;
+
   readonly mapId: string;
   readonly modeId: string;
 

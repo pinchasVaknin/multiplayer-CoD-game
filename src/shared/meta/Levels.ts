@@ -157,3 +157,80 @@ const PRESTIGE_LABELS: readonly string[] = [
 export function prestigeLabel(prestige: number): string {
   return PRESTIGE_LABELS[Math.max(0, Math.min(PRESTIGE_MAX, prestige))] ?? '';
 }
+
+/**
+ * One frame of the summary screen's XP bar (M6, S6.1; playtest round 4 regression).
+ *
+ * ## Why the arithmetic is here and the animation is not
+ *
+ * `XpSummary` owns the DOM, the flourish and the `requestAnimationFrame` loop; this owns the
+ * only question that can be *wrong*: where the bar goes next and whether it has arrived. That
+ * split is the one `shared/ui/HudSurfaces.ts` and `shared/modes/SpectatorTarget.ts` already
+ * make, and for the same reason — a claim about a rendered bar needs a browser, and a claim
+ * about a number does not. `npm run progression` steps this to completion and reports how many
+ * steps it took, which is a fact a headless process can establish.
+ *
+ * ## The bug it exists to make impossible
+ *
+ * The caller used to compute its own span as `Math.max(1, xpForLevel(level))`. `xpForLevel`
+ * returns **0** at the cap, correctly — there is no level 56 to save for — and that `max(1, …)`
+ * invented a one-XP level above it. The next boundary therefore landed *below* the target, so
+ * every frame "crossed" it, replayed the level-up flourish for a level that never changed, and
+ * set the bar back to just under the boundary it had already passed. The animation never
+ * reached its end state, so the frame loop never stopped and the flourish repeated every
+ * `LEVELUP_HOLD` for as long as the screen was up.
+ *
+ * **The guard is the general one, not the max-level one.** A step whose next boundary is not
+ * *ahead* of where the bar already is has nowhere to advance to, and says so. Reaching the cap
+ * is one way to be in that position — `span` is genuinely zero there. A report whose target is
+ * already the current value is another, and it needs no separate early return.
+ */
+export interface LevelBarStep {
+  /** Where the bar sits after this step. */
+  readonly xp: number;
+  /** A level boundary was reached: hold here and play the flourish. */
+  readonly levelUp: boolean;
+  /** Nothing left to advance. The caller stops; there is no further frame to ask for. */
+  readonly done: boolean;
+}
+
+/**
+ * Advance `shownXp` toward `targetXp` by one frame of `dt`.
+ *
+ * The rate is in **levels** per second rather than XP per second, which is what makes the fill
+ * feel the same at level 3 and at level 40 where the same XP is a tenth of the distance.
+ */
+export function stepLevelBar(
+  shownXp: number,
+  targetXp: number,
+  dt: number,
+  secondsPerLevel: number,
+): LevelBarStep {
+  if (shownXp >= targetXp) return { xp: shownXp, levelUp: false, done: true };
+
+  const level = levelForXp(shownXp);
+  const span = xpForLevel(level);
+  const nextLevelAt = xpAtLevelStart(level) + span;
+
+  /**
+   * No boundary ahead of us. **This is the whole fix.**
+   *
+   * At the cap `span` is zero and `nextLevelAt` is the start of the level we are already in,
+   * which is at or below `shownXp`. There is no crossing to animate and no flourish to play, so
+   * the bar goes straight to the target and reports that it is finished — the same answer it
+   * gives for a report that had nothing to add.
+   */
+  if (nextLevelAt <= shownXp) return { xp: targetXp, levelUp: false, done: true };
+
+  const rate = span / Math.max(secondsPerLevel, 1e-6);
+  const advanced = Math.min(targetXp, shownXp + rate * Math.max(0, dt));
+  if (advanced >= nextLevelAt && targetXp >= nextLevelAt) {
+    /**
+     * Nudge past the seam rather than landing on it: `levelForXp` returns the *old* level for a
+     * total exactly equal to the next level's start, so a bar parked on the boundary would ask
+     * the same question again next frame and cross the same line twice.
+     */
+    return { xp: nextLevelAt + 1e-6, levelUp: true, done: false };
+  }
+  return { xp: advanced, levelUp: false, done: advanced >= targetXp };
+}

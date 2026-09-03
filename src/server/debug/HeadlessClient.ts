@@ -8,12 +8,12 @@ import type { VoteInfo, WelcomeInfo } from '../../shared/net/Messages';
 import { NetClient, type NetClientStats } from '../../shared/net/NetClient';
 import type { NetConditions } from '../../shared/net/NetSim';
 import {
+  ballotOpened,
+  isArenaInstance,
   MAP_BALLOT,
-  mapBallotOpened,
   MODE_BALLOT,
   sanitiseNetLoadout,
   VotePhase,
-  WARMUP_MATCH_ID,
   type NetLoadout,
 } from '../../shared/net/Skirmish';
 import { resolveLoadout } from '../../shared/meta/Loadouts';
@@ -44,6 +44,7 @@ import {
   cheatTag,
   matchCaption,
   quickLoadoutWindow,
+  resultSurfacesVisible,
   scoreboardOpen,
   stepRespawnDisplay,
   type HudSurfaceState,
@@ -247,7 +248,7 @@ export interface HeadlessClientReport {
 
   // -- M11 ---------------------------------------------------------------------
 
-  /** Which instance this client is in. `WARMUP_MATCH_ID` is the arena. */
+  /** Which instance this client is in. See `isArenaInstance`. */
   readonly matchId: number;
   readonly migrations: number;
   /**
@@ -369,14 +370,15 @@ export interface HeadlessClientReport {
   /** Ticks the HUD tag rendered non-empty in an instance the code was not typed in. */
   readonly cheatTagTicksInOtherInstance: number;
   /**
-   * F13. Ballot-sound edges against the broadcasts that carried the same phase.
+   * F13. Ballot-cue edges against the broadcasts that carried a ballot phase.
    *
    * The second number is the red control and it is the whole point of printing both: a sound
-   * played level-triggered on the broadcast would fire `mapBallotBroadcasts` times, and the
-   * requirement is that it fires `mapBallotOpens` times, which must be one per cycle.
+   * played level-triggered on the broadcast would fire `ballotBroadcasts` times, and the
+   * requirement is that it fires `ballotOpens` times — **one per ballot opening**, so two per
+   * cycle now that the mode ballot is cued as well as the map one.
    */
-  readonly mapBallotOpens: number;
-  readonly mapBallotBroadcasts: number;
+  readonly ballotOpens: number;
+  readonly ballotBroadcasts: number;
   /**
    * F12. Ticks the centred caption was up in the arena, and in a live match.
    *
@@ -386,6 +388,14 @@ export interface HeadlessClientReport {
    */
   readonly captionArenaTicks: number;
   readonly captionWaitingInLiveTicks: number;
+  /**
+   * F7's result surfaces — the score banner, the Tab board and the streak strip.
+   *
+   * The arena count is the violation and must be 0; the live count is its control, because a
+   * run in which the HUD was down everywhere would report 0 and prove nothing.
+   */
+  readonly resultSurfacesInArenaTicks: number;
+  readonly resultSurfacesLiveTicks: number;
   /**
    * F10. Ticks the mode brief was up, and the two numbers that make that one mean something.
    *
@@ -663,11 +673,13 @@ export class HeadlessClient {
   private cheatTicks = 0;
   private cheatTicksInOtherInstance = 0;
   private cheatTagTicksInOtherInstance = 0;
-  private mapBallotOpens = 0;
-  private mapBallotBroadcasts = 0;
+  private ballotOpens = 0;
+  private ballotBroadcasts = 0;
   private lastVotePhaseHeard: number = VotePhase.IDLE;
   private captionArenaTicks = 0;
   private captionWaitingInLiveTicks = 0;
+  private resultSurfacesInArenaTicks = 0;
+  private resultSurfacesLiveTicks = 0;
   private briefTicks = 0;
   private briefWindows = 0;
   private briefArenaTicks = 0;
@@ -783,14 +795,14 @@ export class HeadlessClient {
            * break: a run in which the arena's bots never engaged would report a health floor of
            * 100 and prove nothing at all. `warmupDeaths` is the half F7 removes.
            */
-          if (e.targetId === this.net.entityId && this.net.matchId === WARMUP_MATCH_ID) {
+          if (e.targetId === this.net.entityId && isArenaInstance(this.net.matchId)) {
             this.warmupHitsTaken++;
             if (e.lethal) this.warmupDeaths++;
           }
           // F14's half of the same pair, in a match where damage is real. Split by instance
           // rather than counted together, because the arena refuses the deduction for everybody
           // and a combined number could not tell a cheat from the room's own rule.
-          if (e.targetId === this.net.entityId && this.net.matchId !== WARMUP_MATCH_ID) {
+          if (e.targetId === this.net.entityId && !isArenaInstance(this.net.matchId)) {
             this.liveHitsTaken++;
             if (e.lethal) this.liveDeaths++;
             if (this.net.cheatMask !== 0) this.liveHitsWhileCheated++;
@@ -944,7 +956,7 @@ export class HeadlessClient {
            * instance: the contacts seen there, and the id this client held there.
            */
           for (const c of view.contacts) this.contactIds.add(c.entityId);
-          if (this.net.matchId !== WARMUP_MATCH_ID) {
+          if (!isArenaInstance(this.net.matchId)) {
             this.liveEntityId = this.net.entityId;
             for (const c of view.contacts) this.liveContactIds.add(c.entityId);
           }
@@ -1072,8 +1084,10 @@ export class HeadlessClient {
      * and this method is the only thing that moves it. The browser hangs the same edge off
      * `VoteOverlay.apply`, which holds its previous phase in exactly the same way.
      */
-    if (mapBallotOpened(this.lastVotePhaseHeard, info.phase)) this.mapBallotOpens++;
-    if (info.phase === VotePhase.MAP_VOTE) this.mapBallotBroadcasts++;
+    if (ballotOpened(this.lastVotePhaseHeard, info.phase) !== null) this.ballotOpens++;
+    if (info.phase === VotePhase.MODE_VOTE || info.phase === VotePhase.MAP_VOTE) {
+      this.ballotBroadcasts++;
+    }
     this.lastVotePhaseHeard = info.phase;
 
     this.votePhase = info.phase;
@@ -1167,7 +1181,7 @@ export class HeadlessClient {
      * migration into a *live* match does not close it — that would report the next match's
      * start as the previous match's return.
      */
-    if (this.awaitingReturn && welcome.matchId === WARMUP_MATCH_ID) {
+    if (this.awaitingReturn && isArenaInstance(welcome.matchId)) {
       this.summaryHoldMs = Math.round(nowMs() - this.summaryAtMs);
       this.awaitingReturn = false;
       this.gatedUntilMs = -1;
@@ -1204,7 +1218,7 @@ export class HeadlessClient {
       // match is what Tier 1 #20 and §8.9 are about, because that is where the loadout is
       // locked and where a movement perk could diverge. Returning to the arena is the same
       // machinery run backwards into a world that was already running.
-      intoLive: welcome.matchId !== WARMUP_MATCH_ID,
+      intoLive: !isArenaInstance(welcome.matchId),
     };
     this.votedInPhase = -1;
   }
@@ -1300,8 +1314,8 @@ export class HeadlessClient {
     const seatedWhereWanted =
       this.net.entityId >= 0 &&
       (wantArena
-        ? this.net.matchId === WARMUP_MATCH_ID
-        : this.net.matchId !== WARMUP_MATCH_ID);
+        ? isArenaInstance(this.net.matchId)
+        : !isArenaInstance(this.net.matchId));
     if (code !== undefined && !this.cheatSent && seatedWhereWanted) {
       this.cheatSent = true;
       this.cheatRequests++;
@@ -1514,10 +1528,12 @@ export class HeadlessClient {
       cheatTicks: this.cheatTicks,
       cheatTicksInOtherInstance: this.cheatTicksInOtherInstance,
       cheatTagTicksInOtherInstance: this.cheatTagTicksInOtherInstance,
-      mapBallotOpens: this.mapBallotOpens,
-      mapBallotBroadcasts: this.mapBallotBroadcasts,
+      ballotOpens: this.ballotOpens,
+      ballotBroadcasts: this.ballotBroadcasts,
       captionArenaTicks: this.captionArenaTicks,
       captionWaitingInLiveTicks: this.captionWaitingInLiveTicks,
+      resultSurfacesInArenaTicks: this.resultSurfacesInArenaTicks,
+      resultSurfacesLiveTicks: this.resultSurfacesLiveTicks,
       briefTicks: this.briefTicks,
       briefWindows: this.briefWindows,
       briefArenaTicks: this.briefArenaTicks,
@@ -1858,6 +1874,14 @@ export class HeadlessClient {
        * seconds are a browser claim and are on the list.
        */
       instantCheatLabel: '',
+      /**
+       * F7/F12, and it is in the record now rather than beside it (round 4 regression).
+       *
+       * `isArenaInstance` is the only comparison against `WARMUP_MATCH_ID` in the project, and
+       * asking it here means every surface rule below sees the same answer as the browser's —
+       * including `resultSurfacesVisible`, which is the one three surfaces share.
+       */
+      inWarmupArena: isArenaInstance(this.net.matchId),
     };
 
     if (!alive) this.deadTicks++;
@@ -1874,7 +1898,21 @@ export class HeadlessClient {
      * never on a replay, which is what makes a tick count mean a tick. `matchId` is the arena
      * test the whole session turns on and it is already on the wire in `Welcome`.
      */
-    const inArena = this.net.matchId === WARMUP_MATCH_ID;
+    const inArena = state.inWarmupArena;
+
+    /**
+     * The banner, the board and the streak strip, from the one predicate (round 4 regression).
+     *
+     * Written to go **red rather than green**: a result surface up inside the arena is the
+     * defect, so what is counted is the violation and not the feature. F7 removed the room's
+     * score rows and left all three painting the absence, which no number then existing could
+     * have caught — an empty board and a hidden board look identical to a client that never
+     * asked.
+     */
+    if (resultSurfacesVisible(state)) {
+      if (inArena) this.resultSurfacesInArenaTicks++;
+      else this.resultSurfacesLiveTicks++;
+    }
     const own = this.net.entityId >= 0 ? this.net.remotes.get(this.net.entityId) : undefined;
     if (own !== undefined) {
       // Two floors, one sample, split by instance. F7 asks about the room and F14 asks about a

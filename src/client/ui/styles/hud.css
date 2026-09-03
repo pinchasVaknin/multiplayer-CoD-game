@@ -353,6 +353,17 @@
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
 }
 
+/*
+ * Required, not defensive — the same trap `.hud-mortar[hidden]` and `.ql[hidden]` document
+ * below. The `hidden` attribute hides an element only because the UA stylesheet says
+ * `[hidden] { display: none }` at the lowest specificity there is, and the `display: grid`
+ * above outranks it. Playtest round 4, F7: the waiting room keeps no result, so the surfaces
+ * that report one are down there — see `resultSurfacesVisible`.
+ */
+.hud-banner[hidden] {
+  display: none;
+}
+
 .hud-banner__team {
   display: flex;
   flex-direction: column;
@@ -899,6 +910,11 @@
   flex-direction: column;
   gap: var(--s-1);
   pointer-events: none;
+}
+
+/* Same rule and same reason as `.hud-banner[hidden]`: `display: flex` above outranks the UA's. */
+.hud-streaks[hidden] {
+  display: none;
 }
 
 .hud-streaks__slots {

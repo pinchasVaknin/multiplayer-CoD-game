@@ -1,6 +1,6 @@
 import { camoDef, isCamoId } from '../../shared/meta/Camos';
 import { challengeDef } from '../../shared/meta/Challenges';
-import { levelProgress, prestigeLabel, xpAtLevelStart, xpForLevel } from '../../shared/meta/Levels';
+import { levelProgress, prestigeLabel, stepLevelBar } from '../../shared/meta/Levels';
 import { unlocksAtLevel } from '../../shared/meta/Unlocks';
 import type { XpReport } from '../../shared/meta/XpRules';
 import { requireWeapon } from '../../shared/weapons/WeaponDefs';
@@ -218,38 +218,33 @@ export class XpSummary {
   /**
    * Advance the bar, one level at a time.
    *
-   * The rate is expressed in *levels* per second rather than XP per second, which is what
-   * makes the fill feel the same at level 3 and at level 40 — where the same XP is a tenth
-   * of the distance. When the bar reaches the top of a level it stops there and hands over
-   * to the flourish rather than rolling through, because rolling through is precisely the
-   * moment the player is here for.
+   * When the bar reaches the top of a level it stops there and hands over to the flourish
+   * rather than rolling through, because rolling through is precisely the moment the player is
+   * here for.
+   *
+   * **Where the bar goes is `stepLevelBar`'s decision and not this method's** (playtest round 4
+   * regression). This used to do the arithmetic itself, and it invented a one-XP level above
+   * the cap — `Math.max(1, xpForLevel(level))` against a function that returns zero there on
+   * purpose — so a max-level summary crossed the same boundary every frame, replayed the
+   * flourish for a level that never changed, and never reached `DONE`. The frame loop below
+   * stops on `DONE` and nothing else, so it ran for as long as the screen was up. Everything
+   * left here is presentation: the text, the bar, the flourish and the phase.
    */
   private stepBar(dt: number, report: XpReport): void {
-    if (this.shownXp >= this.targetXp) {
+    const step = stepLevelBar(this.shownXp, this.targetXp, dt, BAR_SECONDS_PER_LEVEL);
+    this.shownXp = step.xp;
+    this.shownTotal = Math.min(report.total, Math.round(this.shownXp - report.xpBefore));
+    this.paintBar();
+
+    if (step.done) {
       this.phase = 'TAIL';
       this.timer = 0;
       this.totalEl.textContent = `+${report.total.toLocaleString()} XP`;
       return;
     }
 
-    const level = levelProgress(this.shownXp).level;
-    const span = Math.max(1, xpForLevel(level));
-    const rate = span / BAR_SECONDS_PER_LEVEL;
-    const nextLevelAt = xpAtLevelStart(level) + span;
-
-    const advanced = Math.min(this.targetXp, this.shownXp + rate * dt);
-    const crossed = advanced >= nextLevelAt && this.targetXp >= nextLevelAt;
-
-    this.shownXp = crossed ? nextLevelAt : advanced;
-    this.shownTotal = Math.min(report.total, Math.round(this.shownXp - report.xpBefore));
     this.totalEl.textContent = `+${this.shownTotal.toLocaleString()} XP`;
-    this.paintBar();
-
-    if (!crossed) return;
-    // Nudge past the boundary so the next frame is inside the new level rather than
-    // exactly on the seam, where `levelForXp` would keep returning the old one.
-    this.shownXp = nextLevelAt + 1e-6;
-    this.playLevelUp(levelProgress(this.shownXp).level);
+    if (step.levelUp) this.playLevelUp(levelProgress(this.shownXp).level);
   }
 
   private playLevelUp(level: number): void {

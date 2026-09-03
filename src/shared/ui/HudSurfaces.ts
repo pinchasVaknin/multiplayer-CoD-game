@@ -111,6 +111,20 @@ export interface HudSurfaceState {
    * separate fields here because they have separate lifetimes, and that is the fix.
    */
   readonly instantCheatLabel: string;
+  /**
+   * This client is seated in the permanent warmup arena (playtest round 4, F7 and F12).
+   *
+   * In the record rather than handed to each surface separately, and that is the point. F7 took
+   * the room's score rows away and left three surfaces painting the absence — a banner falling
+   * back to the literal word `LEADER`, a Tab board with no rows in it, a streak strip counting
+   * toward a kill that cannot happen. Answering that surface by surface means the arena test
+   * written three more times and a fourth surface added later with nothing to remind it.
+   *
+   * `isArenaInstance` derives it once, in `MatchWorld`, from the id in the `Welcome`, and it is
+   * the only comparison against `WARMUP_MATCH_ID` outside a debug label. Server-side the fact
+   * needs no id at all: `MatchInstance.isArena` is a property of the instance kind.
+   */
+  readonly inWarmupArena: boolean;
 }
 
 /**
@@ -123,8 +137,30 @@ export interface HudSurfaceState {
  * pressing. Asked once per frame from state that outlives the tick, there is nothing to stick.
  */
 export function scoreboardOpen(s: HudSurfaceState): boolean {
-  if (!s.hasWorld || s.screen !== 'MATCH') return false;
+  if (!resultSurfacesVisible(s)) return false;
   return s.scoreboardHeld;
+}
+
+/**
+ * The surfaces that report a **result**: the score banner, the Tab board, the streak strip.
+ *
+ * **One predicate, and all three read it** (playtest round 4, F7). §6.3 as amended says the
+ * waiting room keeps no rating and no results, and a surface that paints zeroes is still
+ * reporting a result — the ladder is the shape, not the numbers in it. So the rule deliberately
+ * is not *"hide the board when it is empty"*: that is a second way of stating the same thing,
+ * it goes wrong the first time a room legitimately has a row in it, and it is a rule each
+ * surface would have to implement for itself.
+ *
+ * They are grouped rather than given a predicate each because they fail and succeed together —
+ * three views of `ScoreSystem`, which is the object F7 switched off. Anything added later that
+ * displays a score belongs behind this and nowhere else.
+ *
+ * The caption is pointedly *not* in this group. It is the one surface the room adds rather than
+ * removes, and `matchCaption` already ranks the arena above the phase.
+ */
+export function resultSurfacesVisible(s: HudSurfaceState): boolean {
+  if (!s.hasWorld || s.screen !== 'MATCH') return false;
+  return !s.inWarmupArena;
 }
 
 /**

@@ -47,6 +47,7 @@ import {
   debugOverlayVisible,
   debugUnlocked,
   quickLoadoutWindow,
+  resultSurfacesVisible,
   scoreboardOpen,
   type DebugOverlayRequest,
   type HudSurfaceState,
@@ -1195,6 +1196,15 @@ export class Game {
 
     const match = this.world?.match;
     if (match !== undefined) match.setScoreboardOpen(scoreboardOpen(state));
+    /**
+     * The score banner and the streak strip, from the same predicate the board reads (F7).
+     *
+     * Pushed from here rather than decided inside the HUD, for the reason every other line in
+     * this method exists: one place evaluates the rules, once a frame, from one record. The
+     * alternative — each surface asking whether it is in the arena — is three copies of a
+     * comparison and a fourth surface that forgets to make it.
+     */
+    if (match !== undefined) match.setResultSurfacesVisible(resultSurfacesVisible(state));
 
     const overlay = this.world?.debug.overlay;
     if (overlay !== undefined) overlay.setVisible(debugOverlayVisible(state));
@@ -1225,6 +1235,9 @@ export class Game {
       debugRequest: this.debugRequest,
       cheatMask: this.cheatMask,
       instantCheatLabel: this.instantCheatCaption,
+      // A fact about the world, not about this frame: `MatchWorld` asks `isArenaInstance` once,
+      // when the world is built, and a migration rebuilds the world.
+      inWarmupArena: match?.inWarmupArena ?? false,
     };
   }
 

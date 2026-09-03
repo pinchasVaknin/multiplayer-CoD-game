@@ -107,6 +107,20 @@ export abstract class MatchInstance {
   readonly match: ServerMatch;
   readonly clock: InstanceClock;
 
+  /**
+   * Is this the permanent warmup arena (playtest round 4, F7)?
+   *
+   * A property of the **instance kind**, declared by the two subclasses, rather than a
+   * comparison against `WARMUP_MATCH_ID` performed wherever the answer is wanted. `WarmupMatch`
+   * is the arena because of what it is, not because of the id it happens to hold — the id is
+   * fixed at 0 only so a client can name the same instance on the wire.
+   *
+   * The room's rules already read it through `ServerMatch`'s `variant`; this is the same fact
+   * at the level the *instance* is chosen, and it is what the harness asks rather than
+   * re-deriving the arena by scanning ids.
+   */
+  abstract readonly isArena: boolean;
+
   protected state_: InstanceStateId = InstanceState.BOOTING;
 
   /** Sessions seated in this instance, keyed by the stable connection id. */

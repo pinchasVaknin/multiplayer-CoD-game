@@ -69,6 +69,9 @@ export interface WarmupOptions {
 }
 
 export class WarmupMatch extends MatchInstance {
+  /** This is the room. See `MatchInstance.isArena`. */
+  override readonly isArena = true;
+
   constructor(options: WarmupOptions) {
     super(buildDeps(options));
     this.setState(InstanceState.RUNNING, 'arena is always live');

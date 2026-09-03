@@ -27,6 +27,24 @@ export type MatchId = number;
 export const WARMUP_MATCH_ID: MatchId = 0;
 
 /**
+ * Is this instance the permanent arena (playtest round 4, F7 and F12)?
+ *
+ * **The only place in the codebase that compares against `WARMUP_MATCH_ID`**, and it is a
+ * function rather than a constant for that reason alone. The room's rules are spreading — no
+ * combatant takes health, nothing is recorded, the caption says where you are, three HUD
+ * surfaces stay down — and each of those is somewhere a bare `matchId === WARMUP_MATCH_ID`
+ * could be written instead. Written enough times, the id becomes the fact; and then the next
+ * surface added forgets it, silently, because forgetting a comparison looks like nothing.
+ *
+ * Server-side the fact needs no id at all: it is the **kind of instance**, and
+ * `MatchInstance.isArena` carries it. This is the same question asked from the one place a
+ * client can ask it — the id in its `Welcome` — and it is asked exactly once, in `MatchWorld`.
+ */
+export function isArenaInstance(matchId: MatchId): boolean {
+  return matchId === WARMUP_MATCH_ID;
+}
+
+/**
  * Instance lifecycle (§4.18).
  *
  * `WarmupMatch` only ever occupies `BOOTING` and `RUNNING`; there is no path from it to
@@ -80,24 +98,44 @@ export function votePhaseName(phase: number): string {
 }
 
 /**
- * Did the map ballot just *appear* (playtest round 4, F13)?
+ * Which ballot just *appeared*, or `null` for no opening (playtest round 4, F13).
  *
- * The vote state is broadcast at 4 Hz, and the whole of F13's trap is that an effect hung off
- * a periodic broadcast fires at the broadcast rate: a sound played on receipt of `MAP_VOTE`
- * plays forty times over a ten-second ballot. The general form of the fix is to hold the
- * previous phase and act only on the change, and this is that rule as a pure function so the
- * *rate* can be measured headlessly — the sound itself is a browser claim, the edge is not.
+ * ## One detector over the phase, not one per ballot
  *
- * Deliberately the **map** ballot and not either ballot. F13 asks for a cue when the map choice
- * appears, and the cycle reaches `MAP_VOTE` exactly once, which is what makes "one sound per
- * cycle" a fact about the phase machine rather than a debounce interval somebody tuned.
+ * The first version of this answered only the map ballot, because F13 names the map and because
+ * "one sound per cycle" was a tidy thing to be able to assert. Both were wrong reasons. The
+ * **mode** ballot is the one that opens the whole twenty-second question while the player is
+ * mid-firefight, and it arrived in silence — so the cue was missing from the moment it was most
+ * needed, and a second detector beside this one is how that gets fixed twice.
  *
- * `previous` is whatever phase this client last heard, or `IDLE` for a client that has heard
- * nothing. That is not a special case: a client which has just migrated back into the arena
- * mid-ballot has genuinely just had the ballot appear in front of it, and should be told.
+ * The rule is a property of the phase machine rather than of either ballot: a ballot has opened
+ * when the phase becomes a ballot it was not already. `PLAY -> MODE_VOTE` and
+ * `MODE_VOTE -> MAP_VOTE` are both openings; the forty broadcasts inside either one are not.
+ *
+ * ## Why the two do not sound the same
+ *
+ * They are two stages of one question, so they should be recognisably the same event and
+ * distinguishable without looking up. `ProceduralAudio.playBallotOpen` takes the phase and
+ * pitches the same two-note figure from it — the map ballot a fourth above the mode ballot — so
+ * the second cue says *the mode is settled, the map is the question now* to a player who never
+ * takes their eyes off the fight. One generator, two pitches, rather than two sounds.
+ *
+ * ## The trap this exists to avoid
+ *
+ * Vote state is broadcast at 4 Hz. Anything hung off the broadcast rather than off the change
+ * fires at the broadcast rate — measured, 43 times across one ten-second ballot. Holding the
+ * previous phase and acting only on the difference is the general form, and it is why this takes
+ * `previous` as an argument instead of keeping a flag: the caller already has the old phase,
+ * `VoteOverlay.apply` in the browser and `HeadlessClient.onVoteState` in the harness, and
+ * neither has anything extra to reset.
+ *
+ * `IDLE` for `previous` is not a special case: a client that has just been migrated back into
+ * the arena mid-ballot has genuinely just had one appear in front of it.
  */
-export function mapBallotOpened(previous: number, next: number): boolean {
-  return next === VotePhase.MAP_VOTE && previous !== VotePhase.MAP_VOTE;
+export function ballotOpened(previous: number, next: number): VotePhaseId | null {
+  if (next !== VotePhase.MODE_VOTE && next !== VotePhase.MAP_VOTE) return null;
+  if (previous === next) return null;
+  return next;
 }
 
 export interface VoteCycleConfig {

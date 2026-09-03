@@ -187,7 +187,7 @@ export interface MatchDeps {
   /**
    * This world is the permanent warmup arena (M11 §6.3; playtest round 4, F7 and F12).
    *
-   * Derived by `MatchWorld` from `Welcome.matchId === WARMUP_MATCH_ID`, which has been on the
+   * Derived by `MatchWorld` through `isArenaInstance`, from an id that has been on the
    * wire since v3 — the arena is not a mode and cannot be read off the registry, because a
    * ballot can elect Free-for-All and a live Free-for-All must kill and score as it always has.
    *
@@ -936,6 +936,21 @@ export class Match {
     this.rosterRegistered = true;
     this.score.register(this.localId, this.deps.localName ?? PLAYER_NAME, this.deps.localTeam ?? PLAYER_TEAM);
     for (const bot of this.bots.bots) this.score.register(bot.entityId, bot.displayName, bot.team);
+  }
+
+  /**
+   * Is this world the permanent arena? See `HudSurfaceState.inWarmupArena`.
+   *
+   * A world is built per instance and rebuilt on migration, so this is a constant for the life
+   * of the object rather than something to re-derive per frame.
+   */
+  get inWarmupArena(): boolean {
+    return this.deps.warmupArena === true;
+  }
+
+  /** The score banner, the Tab board and the streak strip. One predicate decides all three (F7). */
+  setResultSurfacesVisible(on: boolean): void {
+    this.ui.setResultSurfacesVisible(on);
   }
 
   get isPlayerDead(): boolean {

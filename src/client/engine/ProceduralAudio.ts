@@ -1,5 +1,6 @@
 import type { AnnouncerCue } from '../../shared/core/Events';
 import { surfaceAtIndex } from '../../shared/world/maps/materials';
+import { VotePhase, type VotePhaseId } from '../../shared/net/Skirmish';
 import { AudioGraph } from './AudioGraph';
 
 /**
@@ -405,22 +406,35 @@ export class ProceduralAudio extends AudioGraph {
   }
 
   /**
-   * The map ballot opening (M11 §6.4; playtest round 4, F13).
+   * A ballot opening (M11 §6.4; playtest round 4, F13).
    *
-   * Two rising notes a fourth apart on the `ui` bus, non-positional, because it is a thing the
-   * *interface* just did rather than a thing that happened somewhere in the room. It has to cut
-   * through a firefight — §4.20's whole premise is that the ballot arrives while you are still
-   * shooting — without reading as a threat: a rising pair asks a question, and every falling
-   * cue in the project already means something bad (`playUiSweep(720, 300, ...)` is the dry
-   * fire). The second note is scheduled by decay rather than by a timer, which is the same
-   * reason `playLevelUp` layers rather than sequences: nothing here may outlive the match.
+   * Two rising notes on the `ui` bus, non-positional, because it is a thing the *interface* just
+   * did rather than a thing that happened somewhere in the room. It has to cut through a
+   * firefight — §4.20's whole premise is that the ballot arrives while you are still shooting —
+   * without reading as a threat: a rising pair asks a question, and every falling cue in the
+   * project already means something bad (`playUiSweep(720, 300, ...)` is the dry fire).
    *
-   * Fired on the phase **edge** and never on the broadcast — see `mapBallotOpened`, and
+   * **One generator, two pitches.** The mode ballot and the map ballot are two stages of one
+   * question, so the map's cue is the same figure a fourth higher rather than a different sound:
+   * recognisably the same event, and distinguishable without looking up from the fight. A second
+   * sound would have to be designed against this one and would drift from it.
+   *
+   * The second note is delayed with `oscHit`'s own `delay` argument, which is the mechanism this
+   * file already has for a multi-part sting. It was a slow `attack` in the first version, and
+   * that was wrong: `AudioGraph.oscHit` schedules the voice's release from `decay` alone
+   * (`endsAt = now + decay + 0.05`, `osc.stop(now + decay + 0.02)`), so an attack longer than a
+   * moment is an envelope the voice is recycled out from under. `delay` moves the whole voice —
+   * envelope, sweep and source — onto the audio clock instead.
+   *
+   * Fired on the phase **edge** and never on the broadcast — see `ballotOpened`, and
    * `VoteOverlay.apply` for where the edge is taken.
    */
-  playBallotOpen(): void {
+  playBallotOpen(phase: VotePhaseId): void {
     if (!this.hasContext) return;
-    this.playUiSweep(587, 784, 0.22, 0.16);
+    // A fourth up for the map, which is the second half of the same question.
+    const root = phase === VotePhase.MAP_VOTE ? 587 : 440;
+
+    this.playUiSweep(root, root * 4 / 3, 0.22, 0.16);
 
     const second = this.oscScratch;
     second.x = 0;
@@ -429,17 +443,15 @@ export class ProceduralAudio extends AudioGraph {
     second.positional = false;
     second.bus = 'ui';
     second.type = 'triangle';
-    second.freq = 784;
-    second.freqEnd = 1046;
+    second.freq = root * 4 / 3;
+    second.freqEnd = root * 2;
     second.level = 0.16;
-    // The delay that makes it two notes rather than a chord: a slow attack on the second
-    // voice, so the pair arrives inside one `oscHit` pool slot and needs no scheduling.
-    second.attack = 0.14;
+    second.attack = 0.006;
     second.decay = 0.28;
     second.wet = 0.12;
     second.filterFreq = 9000;
     second.filterQ = 0.7;
-    this.oscHit(second);
+    this.oscHit(second, 0.12);
   }
 
   /**

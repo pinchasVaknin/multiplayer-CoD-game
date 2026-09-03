@@ -141,6 +141,27 @@ export class MatchHud {
     if (!on) this.setScoreboardOpen(false);
   }
 
+  /**
+   * The surfaces that report a result (playtest round 4, F7).
+   *
+   * The score banner and the streak strip; the Tab board is `setScoreboardOpen`, which reads the
+   * same predicate one level up. Toggled through the `hidden` attribute paired with an explicit
+   * `[hidden]` rule in `hud.css` — B13's lesson, applied on the way in: `hidden` only hides an
+   * element because the UA stylesheet says so at the lowest specificity there is, and both of
+   * these carry an author-level `display`.
+   *
+   * The **caption is not touched here**, which is the distinction worth keeping: it is the one
+   * surface the arena adds rather than removes.
+   */
+  setResultSurfacesVisible(on: boolean): void {
+    if (on === this.resultSurfacesVisible) return;
+    this.resultSurfacesVisible = on;
+    this.hud.banner.element.hidden = !on;
+    this.streaks.element.hidden = !on;
+  }
+
+  private resultSurfacesVisible = true;
+
   setScoreboardOpen(on: boolean): void {
     if (on === this.scoreboardOpen) return;
     this.scoreboardOpen = on;

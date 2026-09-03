@@ -4,7 +4,7 @@ import { EventBus } from '../shared/core/EventBus';
 import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } from '../shared/net/NetSim';
 import { Cheat, CheatOutcome, describeCheatMask } from '../shared/cheats/Cheats';
 import { CLIENT_TIMEOUT_MS, RECONNECT_GRACE_MS } from '../shared/net/Protocol';
-import { votePhaseName, WARMUP_MATCH_ID, type NetLoadout } from '../shared/net/Skirmish';
+import { isArenaInstance, votePhaseName, type NetLoadout } from '../shared/net/Skirmish';
 import type { StreakId } from '../shared/streaks/StreakDefs';
 import type { StreakEconomyReport } from '../shared/streaks/StreakLedger';
 import type { LifeStockReport } from '../shared/equipment/LifeStockAudit';
@@ -1663,7 +1663,7 @@ function reportCheats(input: FlowReportInput): string[] {
      * A run where a client never reached the arena, or reached it after the ballot, would type
      * nothing and pass the leak assertion by never having anything to leak.
      */
-    const inArena = reports.filter((r) => r.cheatMatchId === WARMUP_MATCH_ID).length;
+    const inArena = reports.filter((r) => isArenaInstance(r.cheatMatchId)).length;
     if (inArena !== sent) {
       problems.push(
         `--cheats-early: ${sent} code(s) typed and only ${inArena} of them in the arena`,
@@ -1755,14 +1755,15 @@ function harnessConfig(opts: HarnessOptions): ServerConfig {
  * client, because that is where the room's "results" live — the client's board is a copy of it.
  */
 function reportArena(server: Server, reports: readonly HeadlessClientReport[]): void {
-  const arena = server.instances.find((i) => i.id === WARMUP_MATCH_ID);
+  // The instance kind, not the id. See `MatchInstance.isArena`.
+  const arena = server.instances.find((i) => i.isArena);
   const rows = arena?.match.score.rows.length ?? -1;
   const sampled = reports.filter((r) => r.warmupMinHealth <= 100);
   const floor = sampled.length === 0 ? -1 : Math.min(...sampled.map((r) => r.warmupMinHealth));
   const hits = reports.reduce((sum, r) => sum + r.warmupHitsTaken, 0);
   const deaths = reports.reduce((sum, r) => sum + r.warmupDeaths, 0);
-  const opens = reports.reduce((sum, r) => sum + r.mapBallotOpens, 0);
-  const broadcasts = reports.reduce((sum, r) => sum + r.mapBallotBroadcasts, 0);
+  const opens = reports.reduce((sum, r) => sum + r.ballotOpens, 0);
+  const broadcasts = reports.reduce((sum, r) => sum + r.ballotBroadcasts, 0);
   const captionArena = reports.reduce((sum, r) => sum + r.captionArenaTicks, 0);
   const captionLive = reports.reduce((sum, r) => sum + r.captionWaitingInLiveTicks, 0);
   const briefTicks = reports.reduce((sum, r) => sum + r.briefTicks, 0);
@@ -1774,16 +1775,22 @@ function reportArena(server: Server, reports: readonly HeadlessClientReport[]): 
       `health floor ${floor < 0 ? 'never sampled' : floor} over ${hits} hit(s) taken, ` +
       `${deaths} death(s) in the room`,
   );
-  const worstOpens = Math.max(0, ...reports.map((r) => r.mapBallotOpens));
-  const worstBroadcasts = Math.max(0, ...reports.map((r) => r.mapBallotBroadcasts));
+  const worstOpens = Math.max(0, ...reports.map((r) => r.ballotOpens));
+  const worstBroadcasts = Math.max(0, ...reports.map((r) => r.ballotBroadcasts));
   log.info(
-    `arena (F13): ballot sound fires ${opens} time(s) across ${reports.length} client(s), ` +
-      `worst ${worstOpens} for one client; level-triggered on the broadcast it would fire ` +
-      `${broadcasts} (worst ${worstBroadcasts})`,
+    `arena (F13): ballot cue fires ${opens} time(s) across ${reports.length} client(s), ` +
+      `worst ${worstOpens} for one client — one per ballot opening, so two per cycle; ` +
+      `level-triggered on the broadcast it would fire ${broadcasts} (worst ${worstBroadcasts})`,
   );
   log.info(
     `arena (F12): caption up ${captionArena} tick(s) in the room, ` +
       `${captionLive} tick(s) of WAITING in a live match (must be 0)`,
+  );
+  const resultsInArena = reports.reduce((sum, r) => sum + r.resultSurfacesInArenaTicks, 0);
+  const resultsLive = reports.reduce((sum, r) => sum + r.resultSurfacesLiveTicks, 0);
+  log.info(
+    `arena (F7 surfaces): banner/board/streaks up ${resultsInArena} tick(s) in the room ` +
+      `(must be 0), ${resultsLive} tick(s) in a live match (the control — must not be 0)`,
   );
   /**
    * F10, printed here because it is the same question as F12 — *where is this client* — and the
@@ -1806,6 +1813,8 @@ function reportArena(server: Server, reports: readonly HeadlessClientReport[]): 
     worstBallotBroadcasts: worstBroadcasts,
     captionArenaTicks: captionArena,
     captionWaitingInLiveTicks: captionLive,
+    resultSurfacesInArenaTicks: resultsInArena,
+    resultSurfacesLiveTicks: resultsLive,
     briefTicks,
     briefWindows,
     briefArenaTicks: briefArena,
