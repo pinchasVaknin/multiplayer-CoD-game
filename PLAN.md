@@ -7936,6 +7936,14 @@ about the connection, and a `NetPlayer` is thrown away and rebuilt by every migr
 the seat would be lost the moment the player was moved from the arena into the match they typed
 the code to look at.
 
+**That last sentence was the bug, and the session below is the correction.** Losing the grant at
+the migration is exactly right: an entitlement is granted against the entity whose `invulnerable`
+and `participating` read it, and the migration destroys that entity. Held for the life of the
+connection, a code typed in the arena — where god mode does nothing, because F7 spares every
+combatant there — took effect in the match the ballot sent the player to. The store still lives on
+the session; its **lifetime is the seat**, and `MatchInstance.unseat` clears it. Measured at 37 028
+ticks of leaked entitlement and 313 refused hits before the fix.
+
 `NetPlayerDeps.cheats` is **required**, not a field assigned afterwards, and that is the whole
 safety argument: the type system asks the question at every construction site instead of leaving a
 mutable field somebody has to remember. `MatchInstance.seat` is the single caller and it has the
@@ -8029,7 +8037,10 @@ not, and by the time anybody asks the match is over. So:
   `hidden` attribute, which is B13's lesson applied on the way in instead of after somebody
   reported it.
 - **`Cheat.Wallet`**, an entitlement with no effect whose only job is that a wallet grant leaves a
-  trace. Thirty free kills otherwise looks exactly like a good match.
+  trace. Thirty free kills otherwise looks exactly like a good match. **Reversed in the session
+  below**: a payment is a transaction and not a state, this file's own `CheatEffect` comment said
+  so, and the bit outlived the ledger row it described. An instant cheat is announced for a
+  display duration now and holds no bit at all.
 - **`Cheat.Debug` is deliberately not on the tag.** Having the overlay unlocked says nothing about
   the simulation, and a warning that is up for most of a developer's session stops being one.
 - **The server log**, at `warn`, on every grant, revoke and refusal, naming the player and the
@@ -8042,7 +8053,7 @@ One row, and the last two columns are where the failures live:
 
 | Surface | Single writer | Derived from | Consumes from input | Hides by |
 |---|---|---|---|---|
-| Cheat tag | `Game.updateHudSurfaces` → `Match.setCheatTag` | `cheatTag` — the replicated mask and the screen | nothing | `.hud-cheat--on` class |
+| Cheat tag | `Game.updateHudSurfaces` → `Match.setCheatTag` | `cheatTag` — the replicated mask, the instant caption's deadline, and the screen | nothing | `.hud-cheat--on` class |
 
 The pause screen's debug button is driven from the same pass (`setDebugAvailable`) and is not a HUD
 surface, but it obeys the same rule for the same reason: it is a presence decided per frame from
@@ -9413,3 +9424,278 @@ distinct — that is a reasoned expectation, not a measurement, and it is on the
   def must not; the second said the same thing more aggressively. The answer was that neither
   had to change — the *pairing* did, and the pairing was a third thing that no file owned. That
   is what `check-optics` now owns.
+
+## Playtest round 4 — F14's entitlements outlived the seats they were granted on
+
+A regression from the session above, reported from a browser: the cheat tag reading
+`CHEATS · WALLET` still on screen in the pre-match freeze of round one of a Search & Destroy
+match. The caption is the smallest part of what was wrong.
+
+**The element, described rather than linked**, because the screenshot belongs to the session it
+was taken in: `.hud-cheat` is a small dark box with an amber border and amber uppercase text,
+horizontally centred, sitting about 12% of the viewport up from the bottom edge — just above the
+killstreak strip. In the report it read `CHEATS · WALLET` over a fresh match: `GET READY · 8`,
+`ROUND 1`, the S&D brief line under it, the quick class panel open down the left.
+
+### What in the previous session's own change produced it
+
+One sentence: **F14 put the entitlement store on the `Session`, and a `Session` outlives the thing
+every entitlement in it was granted against.**
+
+The reasoning at the time is quoted in the section above — *"on the Session rather than on the
+seat, and for the same reason `loadout` and `reconnectToken` are: it is a fact about the
+connection"*. That is right for those two and wrong for this one, and the difference is what the
+fact is *about*:
+
+- a `loadout` is deliberately re-applied to the next seat, which is the whole point of holding it
+  across a migration;
+- a `reconnectToken` identifies the connection itself;
+- an **entitlement** is granted against an entity in one instance — the entity whose
+  `invulnerable` and `participating` read it — and `MatchInstance.unseat` destroys that entity,
+  its streak ledger row (`removePlayer` runs `StreakSystem.onOwnerRemoved`, which is `onDeath`
+  plus `ledger.forget`) and its snapshot encoder.
+
+So every grant crossed a boundary that had already thrown away its subject. `unseat` deleted the
+entity, the encoder and the seat and said nothing about the entitlements, because when it was
+written there were none.
+
+### Two consequences, and the caption is the smaller one
+
+**1. God mode, invisibility and free cam survived a migration.** This is the one the brief asked
+to have reported if it were true, and it is. A code typed in the arena followed the player into
+the live match the ballot sent them to. It is the *silent* form of the bug, and the reason it is
+silent is the reason it matters: god mode in the arena does **nothing at all**, because F7 already
+spares every combatant in that room — so the entitlement's first observable effect was in a match
+nobody had typed a code in. Measured below at 313 hits refused at the live match's damage door for
+a client whose code was typed before the migration.
+
+**2. The wallet receipt outlived the wallet.** `MO951357` pays into a streak ledger row that
+`onOwnerRemoved` forgets at the migration, and the `Cheat.Wallet` bit that recorded the payment
+did not. The tag went on claiming an audit trail for a balance that no longer existed — which is
+worse than no tag, because the tag exists so that a bug report can be attributed and this one was
+attributing a state the player was not in.
+
+### The modelling error under (2), which this file had already argued against
+
+F14's own `CheatEffect` comment says it: *"a wallet top-up is a transaction, not a state anybody
+can be **in**, and modelling it as an entitlement would have meant a bit that means 'has been
+paid', which is true forever and pays only once."* And then it gave the payment a bit anyway, as
+an attribution flag, and rendered the whole tag from the mask. The argument was written and not
+followed.
+
+So transient-versus-continuous is a **declared property of the code** now rather than a special
+case for one of them:
+
+```
+export type CheatKind = 'toggle' | 'instant';
+```
+
+A `'toggle'` is a state: it has a bit, it is replicated, and the tag shows it for as long as it is
+true. An `'instant'` is a transaction: it has no bit, nothing replicates it, and the HUD
+*announces* it. `cheatCaption(mask, instantLabel)` composes the two, so the next instant cheat
+needs nothing in the HUD — which was the point of the change rather than a side effect of it.
+`Cheat.Wallet` is gone from the bit table entirely, and the durable record of a payment is where a
+transaction's record belongs: the server's log line and `StreakEconomyReport.credited`.
+
+The two lifetimes **compose rather than displace**: with god mode on, typing the code reads
+`CHEATS · GOD · +30 KILLS` for four seconds and then `CHEATS · GOD`. Hiding a standing warning to
+show a transient one would have been the wrong way round.
+
+### Every entitlement, its lifetime, and where it is cleared
+
+The table F14 should have contained. It is in `shared/cheats/Cheats.ts` as well, beside the bits.
+
+| Entitlement | Kind | Lifetime | Cleared, server | Cleared, client |
+|---|---|---|---|---|
+| `Cheat.Debug` | toggle | **the session** — the tab | never granted server-side | retyping `DEBUG666`. Deliberately survives a migration and a rotation, exactly as `debugRequest` does |
+| `Cheat.God` | toggle | **the seat** — one instance | `MatchInstance.unseat` | `NetClient.onWelcome`'s §4.18 discard |
+| `Cheat.Unseen` | toggle | the seat | `MatchInstance.unseat` | same |
+| `Cheat.NoClip` | toggle | the seat | `MatchInstance.unseat` | same |
+| the wallet payment | **instant** | the payment is over when it lands; what it pays *into* belongs to a life (`StreakLedger.resetLife`) | nothing to clear — no bit is kept | expires after `CHEAT_NOTICE_SECONDS`; `onMigrated` drops it |
+
+Two rows are worth reading twice.
+
+**`Cheat.Debug` is the one that must *not* be cleared on a migration**, and it is the reason the
+client half of the fix is not simply "clear everything". It is a client surface with no simulation
+behind it, and P1 built `debugRequest` to survive a world being torn down and rebuilt for exactly
+this reason — *"the request lives on `Game` rather than on the overlay because it has to outlive
+the surface"*. A developer who unlocked the overlay and then got migrated should still have it.
+
+**The server clears the entitlement and the client's caption is cleared separately**, and the
+brief asked whether the two could disagree. They cannot, and the reason is that neither half is
+load-bearing alone:
+
+- the server's `unseat` clear is what ends the *effect*;
+- `NetClient.onWelcome` discards the replica with the rest of §4.18's list, so the client does not
+  hold a stale bit for the snapshot interval before the new instance's first frame;
+- and the instant caption is a client-only presentation with no server state behind it, so it is
+  cleared on the client and nowhere else.
+
+If the server's clear were the only half, the tag would linger for one snapshot interval. If the
+client's were the only half, the tag would go and god mode would stay — which is precisely the
+shape of the bug being fixed, and the reason the caption was never the thing to fix.
+
+### Where the clear went, and it was already the right place
+
+`Game.skirmishSink().onMigrated` already discards the replicated streaks, the replicated
+projectiles and the vote overlay, under one heading that has been in this file since round three:
+*state from an instance you have left.* The instant caption is the fourth entry in that list and
+needed no new mechanism. On the server the matching place is `MatchInstance.unseat`, beside
+`releaseEntity` and `encoders.delete` — everything of this seat, in one function, for both causes.
+
+Cleared for a **disconnect** as well as a migration, deliberately. A disconnect takes the session
+with it, so on that path it is a no-op that costs nothing; the alternative was a `cause` test whose
+two arms would have to be kept in step with a rule that has no reason to distinguish them.
+
+### The display duration, and why it is not the thing P0 bans
+
+`CHEAT_NOTICE_SECONDS` is **4**, named and written down rather than picked silently.
+
+P0 bans *"a timer or delay to let state settle"* — a timer standing in for a signal that has not
+arrived yet. This is not that, and the distinction is worth stating rather than asserting: nothing
+waits on this number. The payment has already landed, been debited into the ledger and logged by
+the time the caption goes up; the caption expiring changes no state at all, and if it never
+expired the only consequence would be a word on a screen. It is the same kind of number as
+`HudTactical`'s 1.1 s hit-direction chevron and the damage numbers' fade — presentation with a
+lifetime.
+
+It is counted down from a **deadline** rather than integrated as a duration, which is B4's lesson
+taken at its word: a duration is only true at the instant it is created, and one integrated per
+frame keeps counting through a pause, a rotation and a migration. `Game.instantCheatUntilMs`
+against `nowMs()` cannot, and the caption is *derived* from it every frame rather than cleared by
+a callback — so there is no expiry to get stuck.
+
+### Why F14's own green run was green about a bug that was already in it
+
+Worth recording, because it is the fourth probe in this milestone that could not fail for the
+reason it claimed. F14's harness typed its code **once the client was already seated in the live
+match** — and the only migration in a skirmish cycle happens on the way *into* that match. So no
+entitlement in that run ever existed while a migration happened, and the probe could not have seen
+one cross a boundary however broken the lifetime was.
+
+`--cheats-early` types it in the arena instead. The generalisation, since this keeps happening:
+**a probe has to be armed on the far side of the boundary it is testing**, and "when does this
+probe fire relative to the event" is a question to ask before reading its output, not after.
+
+### Measured
+
+Every number came out of a run in this session. **No protocol change**: the frame layouts are
+byte-identical — `MsgS.Cheats` is still an outcome and a mask, the owner block still carries one
+byte — and the only wire-visible difference is that bit 4 is no longer a legal mask bit.
+`NetClient` masks the incoming byte with `CHEAT_SIMULATION` on arrival, which now excludes that
+bit by construction, so a frame carrying it is filtered rather than misread. That is why the
+version is not bumped, and it is a decision rather than an omission.
+
+**The lifetime, red before green.** `npm run skirmish -- --cheats --cheats-on --cheats-early` —
+three clients, a real server, a real wire, shipped timings. One code each, typed in the **arena**;
+the ballot then migrates all three into a live match. The red control is this tree with the one
+line in `unseat` removed and the probe left alone.
+
+| Probe | Red (the fix reverted) | Green |
+|---|---|---|
+| Entitlement ticks held **in an instance it was not granted in** | **37 028** of 44 220 | **0** of 7 214 |
+| Tag ticks in an instance it was not granted in | **37 024** | **0** |
+| Hits refused at the **live match's** damage door | **313** | **0** |
+| The god client's live health floor / hits taken / deaths | 100 / 0 / 0 | 0 / 43 / 10 |
+| The unseen client's live health floor / hits taken / deaths | 100 / 0 / 0 | 0 / 22 / 3 |
+| The run | **FLOW CHECK FAILED**, twice | PASSED |
+
+The red column is the whole report. Two clients typed a code in a room where neither code does
+anything, and arrived in a live match invulnerable and unseen — 313 rounds refused for a cheat
+nobody typed in that match, while the same three clients on the fixed tree took 43, 22 and 47 hits
+and died ten, three and twelve times. The 44 220 denominator is printed next to the 37 028 on
+purpose: a zero that means *"never held anything"* has to fail as loudly as a zero that means
+*"never leaked"*. The red run was taken twice, at 37 024 and 37 028 ticks.
+
+**The assertion inverts under `--cheats-early`, and it is written as a branch rather than
+loosened.** Typed in the live match, the mask must be *held* and the door must refuse something,
+or nothing was granted; typed in the arena, the identical numbers mean the opposite. The same
+shape as F8's `--drop-hold 35000` run, and the first green run of this session failed all three of
+the late-run assertions for exactly that reason before the branch was written. A check that
+accepts either answer is a check that has stopped asking.
+
+**F14's original run still passes**, which is the other half of the fix being correct rather than
+just quiet. `npm run skirmish -- --cheats --cheats-on --clients 4`, codes typed in the live match:
+
+| Client | Code | Mask | Live health floor | Hits taken (after the grant) | Deaths |
+|---|---|---|---|---|---|
+| OP1 | god | 2 | **100** | **0** (0) | **0** |
+| OP2 | unseen | 4 | 1 | 7 (7) | **0** |
+| OP3 | wallet | **0** | 0 | 33 (0) | 7 |
+| OP4 | — | 0 | 0 | 25 (0) | 6 |
+
+with **102 hits refused** at the damage door and **0** of 37 016 entitlement ticks outside the
+instance the codes were typed in. OP3's mask is 0 where F14 measured 16, and that is the model change: an
+instant cheat holds no entitlement, so there is no bit for anything to leak.
+
+**The rest of the gate, unmoved.** Nothing in this session may touch a match with no cheats in
+it, and nothing did.
+
+| Probe | Result |
+|---|---|
+| `npm run skirmish`, standing, no flags | **FLOW CHECK PASSED** — divergence **0 / 7374** per client, mispredictions into a live match **0** (spawn window 0), spectator 6440 picks **0 self / 0 enemy / 0 dead**, quick loadout 10 024 ticks over 31 windows **0 while alive**, Tab 3188 of 6441 dead ticks, per-life stock 114 life-starts (26 human, 88 bot) **0 partial / 0 empty**, 280 grenades against 280 expected, arena health floor **100** over 125 hits |
+| `npm run harness`, 5 matches, seeds 1-5 | Scores **75-59, 75-66, 62-75, 75-66, 60-75** — byte-identical to P5/P9/P6/P8 and to F14 on the same seeds. `partialStock` **0** in all five, `dirtyLifeStarts`/`roundCarryOvers` **0 / 0** in all five, `credited` **0** in all five |
+| `npm run leak`, 100 cycles | subscriptions **29 → 29 (+0)**, heap 13.02 → 13.71 MiB (+0.69). **LEAK CHECK PASSED** — the baseline is unchanged, because removing a bit and clearing a `Map` entry subscribes to nothing |
+| `npm run check` and `npm run build` | boundaries (297 files), the cosmetic audit (19 snapshot fields), the optic audit, the unlock audit and the cheat audit (**6 codes, 4 entitlement bits** — one fewer than F14, and the partition still disjoint and complete) all pass, and all three typecheck targets |
+
+The cheat audit's bit count going 5 → 4 is the model change showing up in the gate, which is the
+sort of thing an allowlist-shaped check is for.
+
+### What was not verified
+
+**The caption itself, which is the half that was reported.** `Game` raises it from a wall-clock
+deadline and `HeadlessClient` has no `Game`, so `instantCheatLabel` is always `''` in every number
+above — every tag tick counted is a **toggle** tick. That is stated as a limit in the code rather
+than left to be discovered: the four seconds, the composition with a standing `GOD`, and the fade
+are all browser claims.
+
+What the harness does prove is the part that was dangerous: the entitlement no longer crosses a
+migration, on the server, where the effect lives.
+
+Also unverified, and reasoned from the code:
+
+- **That `onMigrated` drops the caption** — the call is one line beside three that were already
+  there, and no headless run builds a `Game` to reach it.
+- **`MO951357` in single-player**, which takes the local branch and raises the caption without a
+  server round trip at all.
+
+### Needs a browser
+
+- **The regression itself, and it is the one to check first.** With `CHEATS_ENABLED=1`: join the
+  arena, pause, type `SPEC[]1`, resume. Wait for the ballot to migrate you into a match. On
+  arrival the tag must be **gone** and you must be mortal — stand in front of a bot and confirm
+  you take damage. Then pause and type `SPEC[]1` again *in the match*: now it must stick.
+- **The caption's four seconds.** In a live match, type `MO951357`. The tag must read
+  `CHEATS · +30 KILLS`, and must be gone about four seconds later while the balance stays up by
+  30. Type it twice in quick succession: the caption restarts rather than stacking, and the
+  balance goes up by 60.
+- **The composition.** Type `SPEC[]1`, then `MO951357`. It must read `CHEATS · GOD · +30 KILLS`
+  and then fall back to `CHEATS · GOD` — the standing warning must not disappear with the
+  announcement.
+- **`DEBUG666` must survive the migration.** Unlock it in the arena, get migrated, and the pause
+  screen's Debug overlay button must still be there. This is the row that is deliberately *not*
+  cleared, so it is the one that would break if the client half were written as "clear
+  everything".
+- **The caption does not cross a migration.** Type `MO951357` in the arena a second or two before
+  the ballot resolves, so the announcement is still up when you migrate. It must go with the
+  migration rather than finishing its four seconds in the new match.
+- **Free cam across a migration.** `SPEC[]3` in the arena, then migrate: you must land on the
+  floor, in collision, not flying. Watch for one correction at the boundary and no more.
+
+Unchanged from the earlier lists: the arena-return residual of 1-3 sub-25 cm mispredictions, and
+everything under "Open, and all of one kind".
+
+### Found while here
+
+- **`unseat` is the only door out of a seat, and it had no list.** `releaseEntity`,
+  `encoders.delete`, `seats.delete` and now the entitlement clear are four things that must all
+  happen there, and nothing enumerates them — a fifth piece of per-seat state added next
+  milestone will be forgotten the same way this one was. The `Session` fields are the other half
+  of the same gap: `loadout`, `reconnectToken` and `cheats` all live there with three *different*
+  lifetimes and nothing says which is which except prose. Recorded rather than restructured,
+  because the fix is a decision about where per-seat state should live rather than a line.
+- **`Cheat.Debug` has never been exercised by any headless run.** The server never grants it, so
+  `cheatMask` is always `CHEAT_SIMULATION`-only in the harness and `debugUnlocked` is always
+  false there. Every number about the debug overlay's gate is therefore reasoned rather than
+  measured, and that was true in F14 as well — it is on the browser list above and has been on the
+  previous one.

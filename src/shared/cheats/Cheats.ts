@@ -30,6 +30,29 @@
  * merge be one expression rather than a rule somebody has to remember (see `Game.cheatMask`).
  * `check-cheats.mjs` fails if a bit is in both or in neither.
  *
+ * ## Every entitlement's lifetime, and where it is cleared
+ *
+ * F14 shipped without this table and the omission was the whole of the regression that followed:
+ * the store was put on the `Session`, which outlives a seat, and every entitlement in it was
+ * therefore granted for longer than the thing it was granted against. A cheat typed in the arena
+ * followed the player into the live match; the receipt for a wallet payment outlived the wallet.
+ *
+ * | Entitlement | Kind | Lifetime | Cleared, server | Cleared, client |
+ * |---|---|---|---|---|
+ * | `Cheat.Debug` | toggle | **the session** — the tab | never granted server-side | retyping the code. Deliberately survives a migration and a rotation, exactly as `debugRequest` does |
+ * | `Cheat.God` | toggle | **the seat** — one instance | `MatchInstance.unseat` | `NetClient.onWelcome`'s S4.18 discard |
+ * | `Cheat.Unseen` | toggle | the seat | same | same |
+ * | `Cheat.NoClip` | toggle | the seat | same | same |
+ * | the wallet payment | **instant** | the payment is over the moment it lands; what it pays *into* belongs to a life (`StreakLedger.resetLife`) | nothing to clear — no bit is kept | the caption expires after `CHEAT_NOTICE_SECONDS`, and `onMigrated` drops it |
+ *
+ * **The seat, not the connection, is the unit.** A migration destroys the entity, the scoreboard
+ * seat's streak ledger row (`removePlayer` runs `StreakSystem.onOwnerRemoved`, which is `onDeath`
+ * plus `ledger.forget`) and the encoder — so an entitlement that survived it was an entitlement
+ * against an entity that no longer existed. It is also the *silent* case rather than the loud one:
+ * god mode in the arena does nothing at all, because F7 already spares every combatant in that
+ * room, so the only place it means anything is a live match — and carrying it in from a room where
+ * it was a no-op is exactly how nobody notices.
+ *
  * ## Why `shared/`
  *
  * The same reason `HudSurfaces` and `pickSpectatorTarget` are here: the server parses codes and
@@ -40,10 +63,12 @@
 /**
  * One entitlement per bit. The mask crosses the wire as a single byte.
  *
- * `Wallet` is deliberately an entitlement with **no effect**. It records that this seat's
- * killstreak balance contains kills nobody scored, so a future bug report can be attributed —
- * "was this player in a normal state" is otherwise unanswerable, and a wallet grant leaves no
- * other trace on screen. See `MO951357` below.
+ * **Every bit here is a state a player can be *in*.** F14 also gave a bit to the wallet payment,
+ * as an attribution flag with no effect, and that was a modelling error this file had already
+ * argued against two paragraphs further down: a payment is a transaction, and a transaction is
+ * not a state. The bit outlived its own subject — the ledger row it described is destroyed by
+ * the next migration — so the HUD went on claiming an audit trail for a balance that no longer
+ * existed. Instant effects are announced (see `CheatKind`) rather than latched.
  */
 export const Cheat = {
   /** The debug overlay is reachable. Client-authored; see the partition below. */
@@ -54,20 +79,12 @@ export const Cheat = {
   Unseen: 1 << 2,
   /** Flies through the world. `PlayerController.noclip`. */
   NoClip: 1 << 3,
-  /** This seat's streak balance includes granted kills. Attribution only, no effect. */
-  Wallet: 1 << 4,
 } as const;
 
 export type CheatBit = (typeof Cheat)[keyof typeof Cheat];
 
-/**
- * The bits the simulation owns. Authored by the server, and by nobody else when there is one.
- *
- * `Wallet` is in here because the grant it records is a server decision even though the bit
- * itself drives nothing: a client that could set it would be claiming an audit trail it had
- * written itself, which is worse than having none.
- */
-export const CHEAT_SIMULATION = Cheat.God | Cheat.Unseen | Cheat.NoClip | Cheat.Wallet;
+/** The bits the simulation owns. Authored by the server, and by nobody else when there is one. */
+export const CHEAT_SIMULATION = Cheat.God | Cheat.Unseen | Cheat.NoClip;
 
 /** The bits a client may author for itself, because no simulation reads them. */
 export const CHEAT_LOCAL = Cheat.Debug;
@@ -76,16 +93,29 @@ export const CHEAT_LOCAL = Cheat.Debug;
 export const CHEAT_FULL_SPECTATOR = Cheat.God | Cheat.Unseen | Cheat.NoClip;
 
 /**
- * What a recognised code asks for.
+ * Continuous or transient, **declared** rather than inferred at each reader.
  *
- * `toggle` is a mask to flip; `kills` is a one-shot payment. They are different kinds of thing
- * and the type says so — a wallet top-up is a transaction, not a state anybody can be *in*, and
- * modelling it as an entitlement would have meant a bit that means "has been paid", which is
- * true forever and pays only once.
+ * A `'toggle'` is a state a player is in until they leave it: it has a bit, it is replicated, and
+ * the HUD shows it for as long as it is true. An `'instant'` is a transaction that is over the
+ * moment it lands: it has no bit, nothing replicates it, and the HUD *announces* it for a fixed
+ * display duration.
+ *
+ * It is a property of the code rather than a special case in the HUD, and that is the whole point
+ * of the field. F14 rendered one persistent tag and gave the wallet payment a latched bit to be
+ * rendered by, which put a receipt on screen for the rest of the session; the next instant cheat
+ * would have repeated it. Keyed by kind, the next one is already handled.
+ */
+export type CheatKind = 'toggle' | 'instant';
+
+/**
+ * What a recognised code asks for. The discriminant is the kind above.
+ *
+ * A toggle carries the bits it flips. An instant carries its payload — today only `kills`, and a
+ * second kind of payment would add a field here rather than a branch anywhere downstream.
  */
 export type CheatEffect =
   | { readonly kind: 'toggle'; readonly bits: number }
-  | { readonly kind: 'kills'; readonly kills: number };
+  | { readonly kind: 'instant'; readonly kills: number };
 
 /** A recognised code: what it is called, what it does, and who decides. */
 export interface CheatCode {
@@ -123,7 +153,7 @@ const CODES: readonly CheatCode[] = [
   { code: 'SPEC[]2', effect: { kind: 'toggle', bits: Cheat.Unseen }, local: false },
   { code: 'SPEC[]3', effect: { kind: 'toggle', bits: Cheat.NoClip }, local: false },
   { code: 'SPEC[]4', effect: { kind: 'toggle', bits: CHEAT_FULL_SPECTATOR }, local: false },
-  { code: 'MO951357', effect: { kind: 'kills', kills: CHEAT_WALLET_KILLS }, local: false },
+  { code: 'MO951357', effect: { kind: 'instant', kills: CHEAT_WALLET_KILLS }, local: false },
 ];
 
 /**
@@ -143,6 +173,25 @@ export function cheatCodeToggling(bits: number): string | null {
   }
   return null;
 }
+
+/**
+ * How long an **instant** cheat's caption stays on screen, seconds.
+ *
+ * Four: long enough to read three words while a firefight is going on, short enough that it is
+ * gone before the next thing happens. Chosen and written down rather than picked silently,
+ * because a number nobody argued for is a number nobody can change.
+ *
+ * **This is a display duration, not a delay.** P0 bans *"a timer or delay to let state settle"* —
+ * a timer standing in for a signal that has not arrived. Nothing waits on this one: the payment
+ * has already landed and been logged by the time the caption goes up, and the caption expiring
+ * changes no state at all. It is the same kind of number as `HudTactical`'s 1.1 s hit-direction
+ * chevron and the damage numbers' own fade.
+ *
+ * Counted down from a **deadline** rather than integrated as a duration, which is B4's lesson: a
+ * duration is only true at the instant it is created, and it goes on counting through a pause the
+ * screen it belongs to did not survive.
+ */
+export const CHEAT_NOTICE_SECONDS = 4;
 
 /**
  * Longest code the wire will carry, in bytes.
@@ -199,8 +248,8 @@ export const CheatOutcome = {
   RefusedDisabled: 3,
   /** No such code. */
   RefusedUnknown: 4,
-  /** `MO951357` paid out. */
-  WalletGranted: 5,
+  /** An `'instant'` cheat was applied. Its caption is the client's to raise; nothing latches. */
+  InstantApplied: 5,
   /** Recognised, but there is no seat to apply it to. */
   RefusedNoSeat: 6,
 } as const;
@@ -216,7 +265,7 @@ export function cheatOutcomeText(outcome: number): string {
       return 'Code cleared.';
     case CheatOutcome.RefusedDisabled:
       return 'This server has cheats disabled.';
-    case CheatOutcome.WalletGranted:
+    case CheatOutcome.InstantApplied:
       return `${CHEAT_WALLET_KILLS} kills added to your killstreak balance.`;
     case CheatOutcome.RefusedNoSeat:
       return 'Not in a match.';
@@ -226,21 +275,33 @@ export function cheatOutcomeText(outcome: number): string {
 }
 
 /**
- * The HUD tag's text for a mask, or `''` for none.
+ * What an `'instant'` cheat's caption says while it is up.
  *
- * Named here rather than in the HUD because the words are about the entitlements and the HUD's
- * business is only whether to show them. `Wallet` is listed with the rest precisely because it
- * has no other symptom — a player with thirty free kills looks exactly like a player having a
- * good match.
+ * Derived from the code's own payload, so a second instant cheat gets a caption without anybody
+ * writing one. Empty for a toggle, which has no announcement — it has a tag.
  */
-export function describeCheats(mask: number): string {
-  if ((mask & ~Cheat.Debug) === 0) return '';
+export function instantCheatLabel(entry: CheatCode): string {
+  return entry.effect.kind === 'instant' ? `+${entry.effect.kills} KILLS` : '';
+}
+
+/**
+ * The HUD tag's whole text, or `''` for none. Rendered **by kind**.
+ *
+ * Two lifetimes in one string, and they compose rather than one hiding the other: the toggles are
+ * on for as long as they are on, and an instant's announcement joins them for
+ * `CHEAT_NOTICE_SECONDS`. Hiding `GOD` for four seconds to say `+30 KILLS` would take a standing
+ * warning off screen to show a transient one, which is the wrong way round.
+ *
+ * `Cheat.Debug` is deliberately never named. Having the debug overlay unlocked says nothing about
+ * the simulation, and a warning that is up for most of a developer's session stops being one.
+ */
+export function cheatCaption(mask: number, instantLabel: string): string {
   const parts: string[] = [];
   if ((mask & Cheat.God) !== 0) parts.push('GOD');
   if ((mask & Cheat.Unseen) !== 0) parts.push('UNSEEN');
   if ((mask & Cheat.NoClip) !== 0) parts.push('NOCLIP');
-  if ((mask & Cheat.Wallet) !== 0) parts.push('WALLET');
-  return `CHEATS · ${parts.join(' · ')}`;
+  if (instantLabel !== '') parts.push(instantLabel);
+  return parts.length === 0 ? '' : `CHEATS · ${parts.join(' · ')}`;
 }
 
 /** One line for a log, including the debug bit. Never empty, so a revoke logs something. */
@@ -251,7 +312,6 @@ export function describeCheatMask(mask: number): string {
   if ((mask & Cheat.God) !== 0) parts.push('god');
   if ((mask & Cheat.Unseen) !== 0) parts.push('unseen');
   if ((mask & Cheat.NoClip) !== 0) parts.push('noclip');
-  if ((mask & Cheat.Wallet) !== 0) parts.push('wallet');
   return parts.join('+');
 }
 

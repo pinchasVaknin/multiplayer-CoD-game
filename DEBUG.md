@@ -1010,19 +1010,46 @@ them. Type the literal text, brackets included. Case does not matter.
 | `SPEC[]4` | All three | " |
 | `MO951357` | +30 kills to the killstreak balance, **not** to the scoreboard | " |
 
-Every code is a **toggle**; typing it again clears it. `SPEC[]4` completes the set unless the
-whole set is already on, in which case it clears all of it — the same rule the spectator panel's
-headline button has always used, and now literally the same function.
+## Toggles and instants, which behave differently on purpose
+
+Every code declares a `CheatKind`, and the HUD renders by it:
+
+- **Toggles** — `DEBUG666` and the four `SPEC[]n` — are states you are *in*. Typing one again
+  clears it. `SPEC[]4` completes the set unless the whole set is already on, in which case it
+  clears all of it; that is the same rule the spectator panel's headline button has always used
+  and is now literally the same function.
+- **Instants** — `MO951357` — are transactions. They cannot be "on", so there is nothing to type
+  again to undo; typing it twice pays twice. The HUD *announces* one for **4 seconds**
+  (`CHEAT_NOTICE_SECONDS`) and then stops, and the announcement joins any standing toggle tag
+  rather than replacing it: `CHEATS · GOD · +30 KILLS` becomes `CHEATS · GOD`.
+
+## Lifetimes — a cheat does not follow you into the next match
+
+| Entitlement | Lifetime |
+|---|---|
+| `DEBUG666` | **the session.** Survives a migration and a map rotation, exactly as the overlay's own open/closed request does. |
+| `SPEC[]1` – `SPEC[]4` | **the seat.** `MatchInstance.unseat` clears them, so being migrated from the arena into a match — or dropping out — ends them. Type them again in the match you want them in. |
+| `MO951357` | the payment lands and is over. What it pays *into* is a killstreak balance, which belongs to a life and is forgotten when you leave an instance. |
+
+That is a fix rather than a design: F14 shipped with all of them held for the life of the
+connection, so a code typed in the arena took effect in the match the ballot sent you to — and
+god mode in the arena does nothing at all, so nobody would have noticed until they were
+invulnerable somewhere it mattered.
 
 `MO951357` pays into the balance through `StreakSystem.creditKills`, the door round 4's B9
 built for exactly this: the balance is *credited from* `PlayerScore.kills` rather than read out
 of it, so unearned kills buy streaks and never appear in the match results.
 
 **A cheat that is on says so.** A tag reads `CHEATS · GOD · UNSEEN · …` at the bottom of the
-HUD, and the server logs every grant, revoke and refusal with the player and the resulting
-entitlements. `DEBUG666` is deliberately not on the tag: having the overlay unlocked says
-nothing about the simulation, and a warning that is up for most of a developer's session stops
-being one.
+HUD for as long as a toggle is on, and the server logs every grant, revoke and refusal with the
+player and the resulting entitlements. `DEBUG666` is deliberately not on the tag: having the
+overlay unlocked says nothing about the simulation, and a warning that is up for most of a
+developer's session stops being one.
+
+An **instant** leaves no tag behind it, because there is no state for one to describe — its
+durable record is the server's log line and `StreakEconomyReport.credited`, which is where a
+transaction's record belongs. F14 gave the wallet payment a latched bit instead and the tag
+outlived the balance it was describing.
 
 **Nothing is applied optimistically.** A code goes to the server and the entitlement arrives
 back replicated, in the owner block of every snapshot — state rather than an edge, so a dropped

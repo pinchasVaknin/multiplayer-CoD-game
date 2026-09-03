@@ -11,7 +11,6 @@ import {
   sanitiseNetLoadout,
 } from '../shared/net/Skirmish';
 import {
-  Cheat,
   CheatOutcome,
   describeCheatMask,
   parseCheatCode,
@@ -577,7 +576,7 @@ export class Server {
       return;
     }
 
-    if (entry.effect.kind === 'kills') {
+    if (entry.effect.kind === 'instant') {
       /**
        * `MO951357`, and it is the test P7 said it would be for P4's separation.
        *
@@ -586,17 +585,21 @@ export class Server {
        * buy streaks without appearing in the match results. `creditKills` is that door, and it
        * already applies the aliveness rule every other unearned credit does.
        *
-       * The `Wallet` bit is latched with it: the payment leaves no other trace on screen, and a
-       * player who was handed thirty kills must not look like a player having a good match.
+       * **Nothing is latched.** F14 set a `Wallet` bit here so the payment would leave a trace on
+       * screen, and that bit outlived its own subject: the ledger row it described is destroyed
+       * by the next migration (`removePlayer` runs `StreakSystem.onOwnerRemoved`), so the tag
+       * went on claiming an audit trail for a balance that no longer existed. An instant is
+       * *announced* by the client for a display duration — see `CheatKind` — and the durable
+       * record of it is this log line and `StreakEconomyReport.credited`, which is where a
+       * transaction's record belongs.
        */
       instance.match.streaks.creditKills(player.entityId, entry.effect.kills);
-      session.cheats.set(session.cheats.mask | Cheat.Wallet);
       log.warn(
         `CHEAT: ${session.displayName} (player ${session.playerId}) took ` +
           `${entry.effect.kills} kills into their streak balance in instance ${instance.id}; ` +
-          `mask now ${describeCheatMask(session.cheats.mask)}.`,
+          `entitlements unchanged at ${describeCheatMask(session.cheats.mask)}.`,
       );
-      session.sendCheats(CheatOutcome.WalletGranted, session.cheats.mask);
+      session.sendCheats(CheatOutcome.InstantApplied, session.cheats.mask);
       return;
     }
 

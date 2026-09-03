@@ -40,6 +40,7 @@ import { installConsoleApi } from './debug/ConsoleApi';
 import { Harness } from './debug/Harness';
 import { MatchHarness } from './debug/MatchHarness';
 import { Speedometer } from './debug/Speedometer';
+import { nowMs } from '../shared/core/Clock';
 import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStates';
 import {
   cheatTag,
@@ -52,13 +53,16 @@ import {
 } from '../shared/ui/HudSurfaces';
 import {
   CHEAT_LOCAL,
+  CHEAT_NOTICE_SECONDS,
   CHEAT_SIMULATION,
   Cheat,
   CheatOutcome,
   cheatCodeToggling,
   cheatOutcomeText,
+  instantCheatLabel,
   parseCheatCode,
   toggleCheat,
+  type CheatCode,
 } from '../shared/cheats/Cheats';
 import type { Match } from './ClientMatch';
 import type { MatchResult } from '../shared/modes/GameMode';
@@ -447,6 +451,22 @@ export class Game {
    * surface is thrown away by a rotation and the fact is not.
    */
   private localCheats = 0;
+  /**
+   * The instant cheat this client is currently announcing, and when the announcement ends.
+   *
+   * A **deadline** rather than a countdown, which is B4's lesson taken at its word: a duration is
+   * only true at the instant it was created, and one integrated per frame goes on counting
+   * through a pause, a rotation and a migration. `nowMs` against a deadline cannot.
+   *
+   * `pendingInstant` is the client half of one request/reply exchange — the code that was sent,
+   * held until the server answers, because the answer carries an outcome and not a label. It is
+   * not a second copy of anything: nothing else knows what was typed, the next send replaces it,
+   * and a reply that never arrives leaves a field nothing reads. Both are cleared on migration,
+   * beside the streak and ballot discards.
+   */
+  private pendingInstant: CheatCode | null = null;
+  private instantCheatLabelText = '';
+  private instantCheatUntilMs = 0;
   /** Where the settings screen's Back button goes. Captured on entry (M8). */
   private settingsReturn: GameStateId = 'MENU';
 
@@ -1081,6 +1101,10 @@ export class Game {
 
     const client = this.world?.net?.client;
     if (client !== undefined) {
+      // Held so the reply can be captioned. The server answers with an outcome rather than a
+      // label, deliberately — a label on the wire would be the server deciding how a client
+      // words its own HUD — and this is the only thing that knows which code produced it.
+      this.pendingInstant = entry.effect.kind === 'instant' ? entry : null;
       client.sendCheat(entry.code);
       // No optimism, and no "asking..." either: the reply is one frame away at any playable
       // ping, and a line that had to be corrected would be worse than a line that waits.
@@ -1092,13 +1116,13 @@ export class Game {
       this.screens.pauseMenu.setCodeResult(cheatOutcomeText(CheatOutcome.RefusedNoSeat));
       return;
     }
-    if (entry.effect.kind === 'kills') {
+    if (entry.effect.kind === 'instant') {
       // The same door the server uses, and the reason it is a door at all: P4's balance is
       // credited from the score rather than read out of it, so unearned kills buy streaks
       // without ever appearing in the match results.
       match.streaks.creditKills(match.localId, entry.effect.kills);
-      this.localCheats |= Cheat.Wallet;
-      this.screens.pauseMenu.setCodeResult(cheatOutcomeText(CheatOutcome.WalletGranted));
+      this.raiseInstantCheat(entry);
+      this.screens.pauseMenu.setCodeResult(cheatOutcomeText(CheatOutcome.InstantApplied));
       return;
     }
     const after = toggleCheat(this.localCheats, entry.effect.bits);
@@ -1117,6 +1141,37 @@ export class Game {
    * code that toggles them and go through the same door a typed code does. A bit combination with
    * no code is not a request anybody can make, which is the point rather than an edge case.
    */
+  /**
+   * Start announcing an instant cheat (F14's fix).
+   *
+   * One writer of both fields, and it is idempotent in the way that matters: typing the code
+   * again while the caption is up restarts the four seconds rather than stacking anything.
+   */
+  private raiseInstantCheat(entry: CheatCode): void {
+    this.instantCheatLabelText = instantCheatLabel(entry);
+    this.instantCheatUntilMs = nowMs() + CHEAT_NOTICE_SECONDS * 1000;
+  }
+
+  /** Drop it. Called on migration, beside the streak and ballot discards. */
+  private clearInstantCheat(): void {
+    this.pendingInstant = null;
+    this.instantCheatLabelText = '';
+    this.instantCheatUntilMs = 0;
+  }
+
+  /**
+   * The caption, or `''` once the deadline has passed.
+   *
+   * Derived rather than cleared by a callback, so there is no expiry to get stuck: the answer is
+   * right on the frame the deadline passes whether or not anything happened on it. That is the
+   * same reasoning `updateHudSurfaces` gives about every other surface, applied to a value with
+   * a clock in it.
+   */
+  private get instantCheatCaption(): string {
+    if (this.instantCheatLabelText === '') return '';
+    return nowMs() < this.instantCheatUntilMs ? this.instantCheatLabelText : '';
+  }
+
   private requestCheatBits(bits: number): void {
     const code = cheatCodeToggling(bits);
     if (code === null) return;
@@ -1169,6 +1224,7 @@ export class Game {
       scoreboardHeld: match?.scoreboardHeld ?? false,
       debugRequest: this.debugRequest,
       cheatMask: this.cheatMask,
+      instantCheatLabel: this.instantCheatCaption,
     };
   }
 
@@ -1577,6 +1633,22 @@ export class Game {
          * projectiles above — it is the same rule about state from an instance you have left.
          */
         this.voteOverlay.hide();
+        /**
+         * And the instant cheat's caption, for the third time and the same reason (F14 fix).
+         *
+         * It is *"state from an instance you have left"* exactly as the streaks and the ballot
+         * above are. The payment it announces was made against a streak ledger row that
+         * `removePlayer` has just forgotten, so a caption that crossed the migration would be
+         * describing a balance that no longer exists — which is what the regression looked like
+         * on screen.
+         *
+         * The toggles need nothing here: the server clears them at `unseat` and
+         * `NetClient.onWelcome` discards its replica, so by the time this runs there is no
+         * simulation bit left to drop. `Cheat.Debug` is deliberately **not** cleared — it is a
+         * client surface with a session lifetime, and it survives a migration for the same
+         * reason `debugRequest` survives a rotation.
+         */
+        this.clearInstantCheat();
         this.pendingMigration = welcome;
         this.openMigrationWindow(welcome.matchId);
       },
@@ -1597,6 +1669,13 @@ export class Game {
        */
       onCheats: (outcome) => {
         this.screens.pauseMenu.setCodeResult(cheatOutcomeText(outcome));
+        // An instant cheat is announced on the reply and never before it: the payment is the
+        // server's, and a caption raised on the send would be claiming one that may be refused.
+        const pending = this.pendingInstant;
+        this.pendingInstant = null;
+        if (outcome === CheatOutcome.InstantApplied && pending !== null) {
+          this.raiseInstantCheat(pending);
+        }
         netLog.info(`cheat code answered: outcome ${outcome}.`);
       },
       onNotice: (text) => {

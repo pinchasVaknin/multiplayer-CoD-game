@@ -230,13 +230,22 @@ export class Session {
   /**
    * What this connection has been granted by cheat code (playtest round 4, F14).
    *
-   * On the **session** rather than on the seat, and for the same reason `loadout` and
-   * `reconnectToken` are: it is a fact about the connection, and a `NetPlayer` is thrown away
-   * and rebuilt by every migration. A grant that lived on the seat would be lost the moment the
-   * player was moved from the arena into the match they typed the code to look at.
+   * **Held here; owned by the seat.** The distinction is the whole of the regression F14
+   * shipped. The store lives on the session because that is what a code is typed on and what
+   * survives long enough to answer with, but its *lifetime* is the seat: `MatchInstance.unseat`
+   * clears it, so a migration ends every entitlement in it.
    *
-   * It dies with the connection, and that is deliberate rather than an omission. A reconnect is
-   * a **new** connection with a fresh store, so a returning player comes back clean — the
+   * The original reasoning put it beside `loadout` and `reconnectToken` as *"a fact about the
+   * connection"*, and that is right for those two and wrong for this one. A loadout is
+   * deliberately re-applied to the next seat; a reconnect token identifies the connection
+   * itself. An entitlement is granted **against an entity in one instance** — the entity whose
+   * `invulnerable` and `participating` read it — and a migration destroys that entity. So a
+   * grant that crossed the boundary was a grant against nothing, and it crossed silently: god
+   * mode in the arena is a no-op, because F7 spares every combatant in that room, so the only
+   * place it means anything is the live match it followed the player into.
+   *
+   * It dies with the connection too, and that is deliberate rather than an omission. A reconnect
+   * is a **new** connection with a fresh store, so a returning player comes back clean — the
    * reservation gives back the seat, the score and the side, and nothing else.
    *
    * The server is the sole author of every bit in here: `Cheat.Debug` is client-side and never

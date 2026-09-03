@@ -1,4 +1,4 @@
-import { Cheat, describeCheats } from '../cheats/Cheats';
+import { Cheat, cheatCaption } from '../cheats/Cheats';
 import type { GameStateId } from '../core/GameStates';
 import type { MatchPhase } from '../modes/MatchFlow';
 import { DT } from '../core/Loop';
@@ -98,6 +98,19 @@ export interface HudSurfaceState {
    * client, which is what this record is.
    */
   readonly cheatMask: number;
+  /**
+   * The caption an **instant** cheat has raised, or `''` for none (F14, and its fix).
+   *
+   * A string rather than a countdown, because the *expiry* is not this file's business: an
+   * instant cheat is announced for `CHEAT_NOTICE_SECONDS` and `Game` holds the deadline. What
+   * this record needs is the same thing it needs for every other row — a value that outlives the
+   * element and can be evaluated once per frame.
+   *
+   * F14 gave the wallet payment a bit in `cheatMask` instead, which made a transaction look like
+   * a state and kept it on screen after the balance it described had been forgotten. The two are
+   * separate fields here because they have separate lifetimes, and that is the fix.
+   */
+  readonly instantCheatLabel: string;
 }
 
 /**
@@ -166,21 +179,25 @@ export function debugOverlayVisible(s: HudSurfaceState): boolean {
 }
 
 /**
- * The cheat tag, or `''` for none (playtest round 4, F14).
+ * The cheat tag, or `''` for none (playtest round 4, F14, and its fix).
  *
  * F14's *"make it visible"*, and the reason is attribution rather than honesty for its own
  * sake: a bug report from a player who had god mode on is indistinguishable from one from a
- * player who did not, and by the time anybody asks the match is over. So the tag says what is
- * active, persistently, and the server logs the same fact from its side.
+ * player who did not, and by the time anybody asks the match is over.
  *
- * `Cheat.Debug` is deliberately **not** named on it. Having the debug overlay unlocked says
- * nothing about the simulation, and a tag that appeared for it would be up for most of a
- * developer's session and stop meaning anything — which is how a warning becomes furniture.
- * `describeCheats` is what draws that line, in the file that owns the entitlements.
+ * **Two lifetimes, one surface, composed rather than special-cased.** The toggles come from the
+ * replicated mask and are up for as long as they are true; an instant cheat's announcement joins
+ * them for a display duration and then leaves. `cheatCaption` is where that composition lives,
+ * keyed by `CheatKind`, so the next instant cheat needs nothing here — which is the half F14 got
+ * wrong by giving one payment a latched bit and rendering everything from the mask.
+ *
+ * `Cheat.Debug` is deliberately never named. Having the debug overlay unlocked says nothing about
+ * the simulation, and a tag that appeared for it would be up for most of a developer's session
+ * and stop meaning anything — which is how a warning becomes furniture.
  */
 export function cheatTag(s: HudSurfaceState): string {
   if (!s.hasWorld || s.screen !== 'MATCH') return '';
-  return describeCheats(s.cheatMask);
+  return cheatCaption(s.cheatMask, s.instantCheatLabel);
 }
 
 /**

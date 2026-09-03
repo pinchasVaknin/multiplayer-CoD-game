@@ -41,6 +41,7 @@ import {
   // request, and this process has neither. It is on the browser list rather than measured
   // here under a state sequence it does not depend on.
   briefVisible,
+  cheatTag,
   matchCaption,
   quickLoadoutWindow,
   scoreboardOpen,
@@ -195,6 +196,21 @@ export interface HeadlessClientOptions {
    * god mode on and off again at whatever rate the timer fired at.
    */
   readonly cheatCode?: string;
+
+  /**
+   * Type it in the **arena**, before the migration, instead of in the live match (F14's fix).
+   *
+   * The reproduction for the regression F14 shipped, and the reason it needs a flag of its own:
+   * the original probe typed its code once the client was already seated in the live match, so
+   * the only migration in the run happened *before* any entitlement existed and no run could
+   * have seen one cross it. Typing it in the arena puts a live entitlement on the seat that the
+   * ballot is about to take away.
+   *
+   * It is also the case that matters most, because it is the silent one: god mode in the arena
+   * does nothing at all — F7 spares every combatant in that room — so an entitlement that
+   * followed the player out of it would first take effect in a match nobody typed it in.
+   */
+  readonly cheatInArena?: boolean;
 }
 
 export interface HeadlessClientReport {
@@ -334,6 +350,24 @@ export interface HeadlessClientReport {
   /** Codes sent, and the outcomes the server answered with, in order (F14). */
   readonly cheatRequests: number;
   readonly cheatOutcomes: readonly number[];
+  /** Which instance the code was typed in, or -1 if none was. */
+  readonly cheatMatchId: number;
+  /**
+   * Ticks this client held an entitlement **in an instance it was not granted in** (F14's fix).
+   *
+   * The blocking assertion, and it is deliberately about the mask rather than about the caption.
+   * The caption was the visible half of the regression; the mask surviving a migration was the
+   * dangerous half, because god mode following a player out of the arena — where it is a no-op —
+   * into a live match is a cheat nobody typed in the match it took effect in.
+   *
+   * Must be **0**. Counted per real tick, against `cheatTicks` below so a zero that means "never
+   * held anything" fails as loudly as a zero that means "never leaked".
+   */
+  readonly cheatTicksInOtherInstance: number;
+  /** Ticks an entitlement was held at all, anywhere. The denominator for the row above. */
+  readonly cheatTicks: number;
+  /** Ticks the HUD tag rendered non-empty in an instance the code was not typed in. */
+  readonly cheatTagTicksInOtherInstance: number;
   /**
    * F13. Ballot-sound edges against the broadcasts that carried the same phase.
    *
@@ -625,6 +659,10 @@ export class HeadlessClient {
   private cheatSent = false;
   private cheatRequests = 0;
   private readonly cheatOutcomes: number[] = [];
+  private cheatMatchId = -1;
+  private cheatTicks = 0;
+  private cheatTicksInOtherInstance = 0;
+  private cheatTagTicksInOtherInstance = 0;
   private mapBallotOpens = 0;
   private mapBallotBroadcasts = 0;
   private lastVotePhaseHeard: number = VotePhase.IDLE;
@@ -1258,14 +1296,16 @@ export class HeadlessClient {
      * the wire in `Welcome`.
      */
     const code = this.opts.cheatCode;
-    if (
-      code !== undefined &&
-      !this.cheatSent &&
+    const wantArena = this.opts.cheatInArena === true;
+    const seatedWhereWanted =
       this.net.entityId >= 0 &&
-      this.net.matchId !== WARMUP_MATCH_ID
-    ) {
+      (wantArena
+        ? this.net.matchId === WARMUP_MATCH_ID
+        : this.net.matchId !== WARMUP_MATCH_ID);
+    if (code !== undefined && !this.cheatSent && seatedWhereWanted) {
       this.cheatSent = true;
       this.cheatRequests++;
+      this.cheatMatchId = this.net.matchId;
       this.net.sendCheat(code);
     }
 
@@ -1470,6 +1510,10 @@ export class HeadlessClient {
       cheatMask: this.net.cheatMask,
       cheatRequests: this.cheatRequests,
       cheatOutcomes: [...this.cheatOutcomes],
+      cheatMatchId: this.cheatMatchId,
+      cheatTicks: this.cheatTicks,
+      cheatTicksInOtherInstance: this.cheatTicksInOtherInstance,
+      cheatTagTicksInOtherInstance: this.cheatTagTicksInOtherInstance,
       mapBallotOpens: this.mapBallotOpens,
       mapBallotBroadcasts: this.mapBallotBroadcasts,
       captionArenaTicks: this.captionArenaTicks,
@@ -1805,6 +1849,15 @@ export class HeadlessClient {
       // F14. Replicated, so the surface rules can be evaluated against what the server actually
       // granted rather than against what this process asked for.
       cheatMask: this.net.cheatMask,
+      /**
+       * Always empty here, and that is a limit rather than a value (F14's fix).
+       *
+       * An instant cheat's caption is raised by `Game` from a deadline in wall time, and this
+       * process has no `Game`. So every tag tick counted below is a **toggle** tick, which is
+       * exactly the half that has to be zero after a migration; the announcement's own four
+       * seconds are a browser claim and are on the list.
+       */
+      instantCheatLabel: '',
     };
 
     if (!alive) this.deadTicks++;
@@ -1832,6 +1885,28 @@ export class HeadlessClient {
         this.liveMinHealth = own.latest.health;
       }
     }
+    /**
+     * The entitlement's lifetime, sampled per real tick (F14's fix).
+     *
+     * `cheatMatchId` is the instance the code was typed in. Anything held outside it crossed a
+     * boundary that destroys the entity the entitlement was granted against, which is the whole
+     * of the regression. The tag is counted beside it rather than instead of it: the mask is the
+     * defect and the caption is what made it visible.
+     */
+    if (this.net.cheatMask !== 0) {
+      this.cheatTicks++;
+      if (this.cheatMatchId >= 0 && this.net.matchId !== this.cheatMatchId) {
+        this.cheatTicksInOtherInstance++;
+      }
+    }
+    if (
+      this.cheatMatchId >= 0 &&
+      this.net.matchId !== this.cheatMatchId &&
+      cheatTag(state) !== ''
+    ) {
+      this.cheatTagTicksInOtherInstance++;
+    }
+
     const caption = matchCaption(state.phase, inArena);
     if (caption !== '') {
       if (inArena) this.captionArenaTicks++;

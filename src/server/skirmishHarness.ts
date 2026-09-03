@@ -40,6 +40,7 @@ const log = logger('skirmish');
  *   npm run skirmish -- --drop-return 1 --drop-hold 40000   # ...past the grace, on purpose
  *   npm run skirmish -- --cheats            # F14: RED CONTROL — the server must refuse
  *   npm run skirmish -- --cheats --cheats-on   # ...and, with the flag, must honour them
+ *   npm run skirmish -- --cheats --cheats-on --cheats-early  # type it in the ARENA (F14 fix)
  * ```
  *
  * ## Loopback proves the flow, not the netcode
@@ -158,6 +159,14 @@ interface HarnessOptions {
    * line each and neither depends on what a shell was left holding.
    */
   readonly cheatsOn: boolean;
+  /**
+   * Type the code in the **arena**, so a live entitlement crosses the migration (F14's fix).
+   *
+   * The run that reproduces the regression F14 shipped, and the run that proves it gone. Without
+   * it every code is typed after the only migration in the cycle, so nothing ever crosses one —
+   * which is exactly why F14's own green run was green about a bug that was already in it.
+   */
+  readonly cheatsEarly: boolean;
 }
 
 /**
@@ -448,6 +457,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       // F14. See `HarnessOptions.cheats` for why the codes differ per client and why the
       // fourth client onwards is deliberately handed nothing.
       cheatCode: opts.cheats ? CHEAT_SCRIPT[i] : undefined,
+      cheatInArena: opts.cheatsEarly,
       /**
        * A deliberate tie on the first two clients, then a spread.
        *
@@ -1560,7 +1570,7 @@ function reportFlow(input: FlowReportInput): number {
  * Returns the failures rather than logging them, so they join the run's own gate.
  */
 function reportCheats(input: FlowReportInput): string[] {
-  const { cfg, reports, blockedDamage } = input;
+  const { opts, cfg, reports, blockedDamage } = input;
   const problems: string[] = [];
 
   const sent = reports.reduce((n, r) => n + r.cheatRequests, 0);
@@ -1573,7 +1583,7 @@ function reportCheats(input: FlowReportInput): string[] {
     (n, r) =>
       n +
       r.cheatOutcomes.filter(
-        (o) => o === CheatOutcome.Granted || o === CheatOutcome.WalletGranted,
+        (o) => o === CheatOutcome.Granted || o === CheatOutcome.InstantApplied,
       ).length,
     0,
   );
@@ -1593,6 +1603,31 @@ function reportCheats(input: FlowReportInput): string[] {
     );
   }
   log.info(`  server refused ${blockedDamage} hit(s) at the damage door (god mode)`);
+
+  /**
+   * The lifetime assertion (F14's fix), and it blocks.
+   *
+   * An entitlement is granted against an entity in one instance, and a migration destroys that
+   * entity along with its streak ledger row. So a mask held anywhere other than the instance the
+   * code was typed in is the regression, whatever the tag happens to say. `cheatTicks` is printed
+   * beside it so a zero that means *"never held anything"* is distinguishable from a zero that
+   * means *"never leaked"* — the same property the divergence checker's `hashSamples` carries.
+   */
+  const leakedTicks = reports.reduce((n, r) => n + r.cheatTicksInOtherInstance, 0);
+  const heldTicks = reports.reduce((n, r) => n + r.cheatTicks, 0);
+  const leakedTagTicks = reports.reduce((n, r) => n + r.cheatTagTicksInOtherInstance, 0);
+  log.info(
+    `  entitlement held ${heldTicks} tick(s); ${leakedTicks} of them in an instance it was not ` +
+      `granted in (must be 0), tag up ${leakedTagTicks} tick(s) there`,
+  );
+  if (leakedTicks > 0) {
+    problems.push(
+      `${leakedTicks} tick(s) of cheat entitlement held in an instance it was not granted in`,
+    );
+  }
+  if (leakedTagTicks > 0) {
+    problems.push(`${leakedTagTicks} tick(s) of cheat tag shown in an instance it was not granted in`);
+  }
 
   // A probe that never fired is not a probe that passed. Same shape as the divergence
   // checker's `hashSamples === 0` branch and F8's "no drop/return cycle completed".
@@ -1622,9 +1657,57 @@ function reportCheats(input: FlowReportInput): string[] {
 
   if (grants !== sent) problems.push(`${sent} codes typed with the flag on and ${grants} granted`);
 
+  if (opts.cheatsEarly) {
+    /**
+     * `--cheats-early` only means something if the codes really were typed before the migration.
+     * A run where a client never reached the arena, or reached it after the ballot, would type
+     * nothing and pass the leak assertion by never having anything to leak.
+     */
+    const inArena = reports.filter((r) => r.cheatMatchId === WARMUP_MATCH_ID).length;
+    if (inArena !== sent) {
+      problems.push(
+        `--cheats-early: ${sent} code(s) typed and only ${inArena} of them in the arena`,
+      );
+    }
+    const migrated = reports.filter((r) => r.migrations > 0).length;
+    if (migrated === 0) {
+      problems.push('--cheats-early: nobody migrated, so no entitlement ever crossed a boundary');
+    }
+  }
+
   const god = reports[0];
   const unseen = reports[1];
   const control = reports.length > 3 ? reports[3] : undefined;
+
+  /**
+   * **These three assertions invert under `--cheats-early`**, and saying so is the point.
+   *
+   * The same shape as F8's `--drop-hold 35000` run: judged by the ordinary gate, a correct
+   * refusal reads as a failure. Typed in the live match, the entitlement must be *held* and the
+   * damage door must refuse something, or nothing was granted. Typed in the **arena**, the
+   * migration must have taken all of it away, so the identical numbers mean the opposite — and a
+   * run that demanded a live mask there would fail on the fix and pass on the bug.
+   *
+   * Written as one branch rather than as a loosened test that accepts both, because a check that
+   * accepts either answer is a check that has stopped asking.
+   */
+  if (opts.cheatsEarly) {
+    for (const r of reports) {
+      if (r.cheatMask !== 0) {
+        problems.push(
+          `${r.name} typed a code in the arena and still holds mask ${r.cheatMask} after ` +
+            'migrating; the entitlement belongs to the seat it was granted on',
+        );
+      }
+    }
+    if (blockedDamage !== 0) {
+      problems.push(
+        `god mode was typed in the arena and the live match's damage door still refused ` +
+          `${blockedDamage} hit(s) — the entitlement crossed the migration`,
+      );
+    }
+    return problems;
+  }
 
   if (god !== undefined) {
     if (god.cheatMask !== Cheat.God) {
@@ -1968,6 +2051,7 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     dropHoldMs: Math.max(0, num('--drop-hold', 3000)),
     cheats: argv.includes('--cheats'),
     cheatsOn: argv.includes('--cheats-on'),
+    cheatsEarly: argv.includes('--cheats-early'),
   };
 }
 

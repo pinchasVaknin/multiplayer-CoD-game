@@ -244,6 +244,22 @@ export abstract class MatchInstance {
     if (seat === undefined) return;
     this.releaseEntity(seat.player.entityId, cause);
     this.encoders.delete(seat.player.entityId);
+    /**
+     * The cheat entitlements go with the seat, and F14 got this wrong (round 4, and the fix).
+     *
+     * They were held on the `Session` on the reasoning that a grant is a fact about the
+     * connection — true of `loadout`, which is deliberately re-applied to the next seat, and
+     * false of an entitlement, which is granted **against an entity in this instance**. The line
+     * above has just destroyed that entity, its scoreboard row's streak ledger
+     * (`removePlayer` runs `StreakSystem.onOwnerRemoved`) and its encoder; an entitlement that
+     * outlived all three was an entitlement against nothing.
+     *
+     * Cleared for **both** causes rather than only for a migration. A disconnect takes the
+     * session with it, so on that path this is a no-op that costs nothing and cannot rot — and
+     * the alternative is a `cause` test whose two arms would have to be kept in step with a rule
+     * that has no reason to distinguish them.
+     */
+    seat.session.cheats.clear();
     this.seats.delete(playerId);
   }
 
