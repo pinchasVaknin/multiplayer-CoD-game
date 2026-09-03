@@ -180,9 +180,9 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
     },
     /** The effective price of a streak, after Hardline. */
     streakPrice: (id: string) => game.activeMatch?.streaks.priceOf(id as StreakId, PLAYER_ENTITY_ID),
-    /** Kills banked and unspent, and what has already been bought this life (round 4). */
+    /** Kills banked and unspent, and every key currently locked out with its wait (round 4). */
     streakBalance: () => game.activeMatch?.streaks.balanceOf(PLAYER_ENTITY_ID),
-    streakUsed: () => game.activeMatch?.streaks.usedBy(PLAYER_ENTITY_ID),
+    streakLockouts: () => game.activeMatch?.streaks.lockoutsFor(PLAYER_ENTITY_ID),
     /** The whole economy for this match, as the harnesses read it. */
     streakEconomy: () => game.activeMatch?.streaks.economyReport(),
 

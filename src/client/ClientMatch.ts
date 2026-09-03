@@ -1715,9 +1715,9 @@ export class Match {
       if (!justPressed(cmd.buttons, this.prevButtons, bit)) continue;
       const id = this.streakSlots[i];
       if (id === undefined || id === null) continue;
-      // Affordable and not already bought this life, or the press is simply not honoured. The
-      // slot has already said which of the two it is — the price, or USED — so a press that
-      // does nothing is a press the player was told about before they made it.
+      // Affordable, cool, and not already in the sky, or the press is simply not honoured. The
+      // slot has already said which — a price it cannot meet, or a fill draining — so a press
+      // that does nothing is a press the player was told about before they made it.
       if (!this.canAffordStreak(id)) continue;
 
       const sim = this.deps.player.sim;
@@ -1780,8 +1780,8 @@ export class Match {
    * The server's answer in a networked match and the local system's otherwise. Routed through
    * these rather than branched at each call site, because the failure when one of them is
    * missed is a HUD that offers a streak the server will refuse, or a key that charges a price
-   * the screen never showed. There were two of these before round 4; the balance model adds
-   * price and availability, which is what a currency needs on screen to be playable at all.
+   * the screen never showed. There were two of these before round 4; the balance model added
+   * price and availability, and the pivot turned availability from a bit into a duration.
    */
   private streakBalance(): number {
     return this.isNetworked ? this.replicatedStreaks.balance : this.streaks.balanceOf(this.localId);
@@ -1791,8 +1791,17 @@ export class Match {
     return this.isNetworked ? this.replicatedStreaks.priceOf(id) : this.streaks.priceOf(id, this.localId);
   }
 
-  private streakUsed(id: StreakId): boolean {
-    return this.isNetworked ? this.replicatedStreaks.hasUsed(id) : this.streaks.usedBy(this.localId).includes(id);
+  /**
+   * Seconds until this key works again, or 0 (round 4, the pivot).
+   *
+   * One number for the cooldown and for a previous instance still being in the world, because
+   * the strip draws them the same way and the player experiences them as the same thing: the
+   * key does nothing, and the slot says how long for without saying it in words.
+   */
+  private streakLockout(id: StreakId): number {
+    return this.isNetworked
+      ? this.replicatedStreaks.lockoutSeconds(id)
+      : this.streaks.lockoutSecondsFor(this.localId, id);
   }
 
   private canAffordStreak(id: StreakId): boolean {
@@ -2169,11 +2178,12 @@ export class Match {
       if (slot === undefined) continue;
       const id = this.streakSlots[i] ?? null;
       slot.name = id === null ? '' : streakDef(id).name;
-      // Four states now, not three (round 4, B9 + B10). A slot that is dark because the
-      // player cannot afford it and a slot that is dark because they already spent it are
-      // different sentences, and the key does nothing in both — so the strip has to say which.
+      // Four states, and the fourth is now a duration rather than a flag (round 4, the pivot).
+      // A slot dark because the player cannot afford it shows a price; a slot dark because the
+      // key is locked out shows how much of the wait is left, as a fill. The key does nothing in
+      // both, and the strip has to say which.
       slot.price = id === null ? 0 : this.streakPrice(id);
-      slot.used = id !== null && this.streakUsed(id);
+      slot.lockoutSeconds = id === null ? 0 : this.streakLockout(id);
       slot.ready = id !== null && this.canAffordStreak(id);
     }
     // The **balance**, and the server's when there is one: it is the number a purchase is

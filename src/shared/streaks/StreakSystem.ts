@@ -1,4 +1,5 @@
 import { nowMs } from '../core/Clock';
+import { SIM_HZ } from '../core/Loop';
 import type { Combatant } from '../ai/Combatant';
 import type { BotTeam } from '../ai/Combatant';
 import type { ObjectiveProvider, ObjectiveTarget } from '../ai/ObjectiveIntent';
@@ -11,7 +12,13 @@ import { CounterUav } from './CounterUav';
 import { Killstreak, type StreakContext } from './KillstreakBase';
 import { MortarStrike } from './MortarStrike';
 import { SentryGun } from './SentryGun';
-import { STREAK_DEFS, streakDef, type StreakDef, type StreakId } from './StreakDefs';
+import {
+  STREAK_COOLDOWN_SECONDS,
+  STREAK_DEFS,
+  streakDef,
+  type StreakDef,
+  type StreakId,
+} from './StreakDefs';
 import { StreakLedger, type StreakEconomyReport, type StreakPrice } from './StreakLedger';
 import { Uav } from './Uav';
 
@@ -27,8 +34,23 @@ import { Uav } from './Uav';
  * moved nothing.
  *
  * The economy is a **balance** now, and it lives in `StreakLedger`: kills accumulate,
- * activation debits the price, death zeroes the balance and clears the set of streaks already
- * bought this life. Twelve kills buys a chopper, *or* a UAV and a sentry, and not both.
+ * activation debits the price, death zeroes the balance. Twelve kills buys a chopper, *or* a
+ * UAV and a sentry, and not both.
+ *
+ * ## What bounds a repeat, now that "once per life" does not (round 4, the pivot)
+ *
+ * B10's once-per-life rule is gone. Re-using a streak costs its price a second time, and two
+ * rules about *time* sit on top of the wallet — both of them here, because both are decided
+ * against the world this class owns:
+ *
+ *  - **The cooldown.** `STREAK_COOLDOWN_SECONDS` from the moment the streak's **effect ends**,
+ *    which `StreakDef.effectEnds` names for each of the six. For a lasting streak that is its
+ *    own duration plus the cooldown; for a mortar or a crate the effect is over at the press.
+ *    Armed as an estimate in `activate` and replaced by the fact in `retire`, so a sentry shot
+ *    down early gets its thirty seconds from when it stopped shooting.
+ *  - **Concurrency.** A streak whose previous instance is still in `active` cannot be called in
+ *    again — the ledger asks through `liveTicksFor` rather than keeping a list of its own, and
+ *    the refusal is counted where every other refusal is.
  *
  * This class still never counts a kill. It folds `PlayerScore.kills` — the score stays the one
  * authority on what a kill is — but the number it folds *into* is a wallet rather than a second
@@ -94,12 +116,16 @@ export interface StreakSystemDeps {
 /** Entity ids for streak-owned world objects. Above the bots' range, below nothing. */
 const STREAK_ENTITY_BASE = 900;
 
+/** The cooldown, in sim ticks. Seconds are the authored unit; ticks are the clock (S4.1). */
+const COOLDOWN_TICKS = Math.round(STREAK_COOLDOWN_SECONDS * SIM_HZ);
+
 export class StreakSystem implements ObjectiveProvider {
   /** Everything alive in the world right now. Read by the debug panel and the frame stats. */
   readonly active: Killstreak[] = [];
 
   /**
-   * The balance, the spend and what has already been bought this life (round 4, B9 + B10).
+   * The balance, the spend, and how long each streak is locked out for (round 4, B9 + B10 and
+   * the pivot that followed).
    *
    * Replaces the two maps that were here — a list of earned entitlements and the highest
    * requirement already paid for — because neither of them was a price. See `StreakLedger`.
@@ -115,6 +141,20 @@ export class StreakSystem implements ObjectiveProvider {
   /** Wall time inside the last `simulate`, ms. Reported in F1 (S7). */
   lastMs = 0;
 
+  /**
+   * The last sim tick this system stepped. The cooldown clock, and the only one it has.
+   *
+   * Ticks rather than wall time for the reason S4.1 gives for everything else in the
+   * simulation: a lockout measured in seconds of wall clock would run at a different rate on a
+   * server catching up a backlog than on one that is not. Read by `activate`, which is called
+   * *between* ticks from `Server.onStreakRequest` and is therefore at most one tick stale — 16
+   * ms against a thirty-second cooldown.
+   *
+   * A networked client never simulates this system (S4.15), so this stays at 0 there and every
+   * lockout the HUD shows comes off the wire instead. See `ClientMatch.streakLockout`.
+   */
+  private lastTick = 0;
+
   private readonly evProgress = { entityId: 0, streak: 0, nextId: null as string | null, requirement: 0 };
   private readonly evEarned = { entityId: 0, streakId: '', name: '', requirement: 0 };
   /** Reused by `pricesFor`, which the ledger's per-life audit calls once per closed life. */
@@ -124,7 +164,10 @@ export class StreakSystem implements ObjectiveProvider {
 
   constructor(deps: StreakSystemDeps) {
     this.deps = deps;
-    this.ledger = new StreakLedger({ pricesOf: (id) => this.pricesFor(id) });
+    this.ledger = new StreakLedger({
+      pricesOf: (id) => this.pricesFor(id),
+      liveTicksFor: (entityId, id) => this.liveTicksFor(entityId, id),
+    });
     this.ctx = {
       ...deps.context,
       targetable: deps.targetable,
@@ -155,9 +198,47 @@ export class StreakSystem implements ObjectiveProvider {
     return this.ledger.balanceOf(entityId);
   }
 
-  /** The streaks this entity has already bought this life, and may not buy again (B10). */
-  usedBy(entityId: number): readonly StreakId[] {
-    return this.ledger.usedBy(entityId);
+  /**
+   * Seconds until this entity may activate this streak again. Zero means the key works.
+   *
+   * The one number the HUD paints and the one the wire carries. It collapses the two rules that
+   * can refuse a press for a reason other than money — the cooldown, and an instance of the same
+   * streak still in the world — because to a player they are one event, and because the strip is
+   * asked to say so with a fill rather than with words.
+   */
+  lockoutSecondsFor(entityId: number, id: StreakId): number {
+    return this.ledger.lockoutTicks(entityId, id, this.lastTick) / SIM_HZ;
+  }
+
+  /** Every streak this entity is currently locked out of, and for how long. The debug panel. */
+  lockoutsFor(entityId: number): Array<{ id: StreakId; seconds: number }> {
+    return this.ledger
+      .lockoutsOf(entityId, this.lastTick)
+      .map((l) => ({ id: l.id, seconds: l.ticks / SIM_HZ }));
+  }
+
+  /**
+   * Ticks left on this entity's own live instance of this streak, or 0 (round 4, the pivot).
+   *
+   * The ledger's concurrency question, answered from `active` — the list that already *is* the
+   * answer to "what is in the world" — rather than from a second record that could disagree
+   * with it. The maximum is taken rather than the first match because a care package dropped
+   * before the rule existed could still have two crates down; one of them keeps the key shut.
+   *
+   * A streak with no duration reports a full cooldown's worth and keeps reporting it every tick
+   * it is alive, so "no two at once" holds for something that ends on its own terms without this
+   * having to express an infinity on a wire that has no room for one. All six shipped streaks
+   * have a duration, so today this is a guard rather than a case.
+   */
+  private liveTicksFor(entityId: number, id: StreakId): number {
+    let ticks = 0;
+    for (const streak of this.active) {
+      if (streak.ownerId !== entityId || streak.def.id !== id) continue;
+      const left = streak.secondsRemaining;
+      const t = Number.isFinite(left) ? Math.ceil(left * SIM_HZ) : COOLDOWN_TICKS;
+      if (t > ticks) ticks = t;
+    }
+    return ticks;
   }
 
   /** Everything this entity has equipped, priced. In `STREAK_DEFS` order. */
@@ -172,9 +253,9 @@ export class StreakSystem implements ObjectiveProvider {
     return out;
   }
 
-  /** Whether this entity could buy this streak right now: affordable and not yet used. */
+  /** Whether this entity could buy this streak right now: affordable, cool, and not already up. */
   canAfford(entityId: number, id: StreakId): boolean {
-    return this.ledger.canAfford(entityId, id, this.priceOf(id, entityId));
+    return this.ledger.canAfford(entityId, id, this.priceOf(id, entityId), this.lastTick);
   }
 
   /**
@@ -184,7 +265,10 @@ export class StreakSystem implements ObjectiveProvider {
    * consecutive-kill counter, which is the whole difference between the two models: after
    * buying a UAV the line goes back up, because the money is gone.
    *
-   * Streaks already bought this life are skipped — there is no progress toward one of those.
+   * A streak on cooldown is **not** skipped, which changed with the pivot: under B10 there was
+   * no progress to be made toward something that could not be bought again this life, and now
+   * there always is — the cooldown runs out on its own and the kills are what decide whether it
+   * can be paid for when it does.
    */
   nextFor(entityId: number): { def: StreakDef; price: number } | null {
     const balance = this.ledger.balanceOf(entityId);
@@ -192,7 +276,6 @@ export class StreakSystem implements ObjectiveProvider {
     const equipped = this.deps.equippedStreaks(entityId);
     for (const def of STREAK_DEFS) {
       if (!equipped.includes(def.id)) continue;
-      if (this.ledger.hasUsed(entityId, def.id)) continue;
       const price = this.priceOf(def.id, entityId);
       if (price <= balance) continue;
       if (best === null || price < best.price) best = { def, price };
@@ -210,9 +293,10 @@ export class StreakSystem implements ObjectiveProvider {
    *
    * **The debit is the entitlement check.** There is no separate "do they hold it" test any
    * more, because holding is no longer a thing: `charge` refuses a streak the balance cannot
-   * cover and one already bought this life, and only the verdict `'ok'` moves any money. It is
-   * also the only place a refusal is counted, which is why the caller asks it rather than
-   * asking `canAfford` first and then charging — two questions is how a refusal goes unrecorded.
+   * cover, one still cooling down and one whose previous instance is still in the world, and
+   * only the verdict `'ok'` moves any money. It is also the only place a refusal is counted,
+   * which is why the caller asks it rather than asking `canAfford` first and then charging —
+   * two questions is how a refusal goes unrecorded.
    *
    * **Whether the class carries this streak is deliberately not asked here.** It used to be
    * answered implicitly, because the pending list could only hold what had been earned; under a
@@ -220,14 +304,22 @@ export class StreakSystem implements ObjectiveProvider {
    * other three untrusted questions already live. Keeping it here as well would have taken the
    * debug panel's "buy and use" buttons away from the three streaks a class does not carry,
    * which is acceptance criterion 1's whole instrument.
+   *
+   * **The cooldown is armed here, and it is an estimate.** `effectEndTicks` reads the def for
+   * how long the effect is expected to run, so the strip shows the whole wait from the first
+   * frame instead of jumping when the streak expires. `retire` replaces it with what actually
+   * happened. This is also the door bots would come through if anything ever gave them one, and
+   * they would inherit the debit, the cooldown and the concurrency rule without a line of their
+   * own — which is the only way there is one economy rather than two.
    */
   activate(entityId: number, id: StreakId, x: number, y: number, z: number, yaw: number): Killstreak | null {
     const owner = this.combatant(entityId);
     if (owner === undefined) return null;
-    if (this.ledger.charge(entityId, id, this.priceOf(id, entityId)) !== 'ok') return null;
+    if (this.ledger.charge(entityId, id, this.priceOf(id, entityId), this.lastTick) !== 'ok') return null;
 
     const streak = this.build(id, entityId, owner.team, x, y, z, yaw);
     this.active.push(streak);
+    this.ledger.armCooldown(entityId, id, this.lastTick + this.effectEndTicks(streak.def) + COOLDOWN_TICKS);
     streak.onActivate();
 
     const ev = this.evActivated;
@@ -293,6 +385,7 @@ export class StreakSystem implements ObjectiveProvider {
    */
   simulate(tick: number): void {
     const t0 = nowMs();
+    this.lastTick = tick;
     for (let i = this.active.length - 1; i >= 0; i--) {
       const streak = this.active[i];
       if (streak === undefined) continue;
@@ -404,8 +497,28 @@ export class StreakSystem implements ObjectiveProvider {
 
   // -- internals -------------------------------------------------------------
 
+  /**
+   * A streak leaves the world: expired, shot down, ended by the round, or destroyed with its
+   * owner.
+   *
+   * For a streak whose effect ends with its instance, **this is when the cooldown starts**, and
+   * the estimate armed at activation is overwritten with the truth. Every exit comes through
+   * here — §8.23's four Chopper Gunner cases included — so there is one answer to "when did the
+   * effect end" rather than one per way of ending.
+   *
+   * The consequence worth knowing about is §8.23 case 4 and its twin: a gunner who dies or
+   * disconnects brings the chopper down, so the effect ends early and the thirty seconds start
+   * early. Dying is therefore the one thing that *shortens* a lockout — see PLAN.md, where it
+   * is a decision rather than a side effect.
+   *
+   * A streak whose effect ended at the press is deliberately not re-armed: an unclaimed crate
+   * expiring sixty seconds later must not restart a cooldown that has long since run out.
+   */
   private retire(index: number, streak: Killstreak): void {
     this.active.splice(index, 1);
+    if (streak.def.effectEnds === 'expiry') {
+      this.ledger.armCooldown(streak.ownerId, streak.def.id, this.lastTick + COOLDOWN_TICKS);
+    }
     streak.phase = 'EXPIRED';
     streak.onExpire();
     const ev = this.evExpired;
@@ -413,6 +526,17 @@ export class StreakSystem implements ObjectiveProvider {
     ev.streakId = streak.def.id;
     ev.instanceId = streak.instanceId;
     this.deps.bus.emit(EV.StreakExpired, ev);
+  }
+
+  /**
+   * Ticks from activation until this streak's effect is expected to be over.
+   *
+   * The definition decides, not this function: `effectEnds` is a field on `StreakDef` precisely
+   * so that the seventh streak has to answer the question in the table where every other number
+   * about it lives, rather than in a `switch` here that a new id would fall through.
+   */
+  private effectEndTicks(def: StreakDef): number {
+    return def.effectEnds === 'expiry' ? Math.round(def.durationSeconds * SIM_HZ) : 0;
   }
 
   private build(
@@ -447,8 +571,8 @@ export class StreakSystem implements ObjectiveProvider {
 
     this.unsubscribe.push(
       bus.on(EV.EntityKilled, (p) => {
-        // Death first: whoever died loses the balance and everything bought this life is
-        // available again. The killer is credited afterwards, from the score's own count.
+        // Death first: whoever died loses the balance, and their cooldowns keep running. The
+        // killer is credited afterwards, from the score's own count.
         this.onDeath(p.targetId);
         if (p.sourceId === p.targetId) return;
         this.checkEarned(p.sourceId);
@@ -459,11 +583,11 @@ export class StreakSystem implements ObjectiveProvider {
      * A claimed care package pays out in kills (round 4, B9).
      *
      * The crate used to hand over its contents directly, and under a currency that is the one
-     * shape that breaks both rules at once: it could drop a streak the claimant has not
-     * equipped, which no key indexes and no price is shown for, and it could hand back a
-     * second use of a streak already bought this life. Paying the roll's price into the
-     * balance keeps a single currency and a single once-per-life rule, and the gamble is
-     * intact — a crate is still worth between five and twelve kills depending on the roll.
+     * shape that breaks the model: it could drop a streak the claimant has not equipped, which
+     * no key indexes and no price is shown for, and the copy it handed over would arrive having
+     * paid nothing and started no cooldown — a second door into an economy with one. Paying the
+     * roll's price into the balance keeps a single currency, and the gamble is intact: a crate
+     * is still worth between five and twelve kills depending on the roll.
      */
     this.unsubscribe.push(
       bus.on(EV.CarePackageClaimed, (p) => {
@@ -472,13 +596,13 @@ export class StreakSystem implements ObjectiveProvider {
     );
 
     /**
-     * A new life reached the world (round 4, B10).
+     * A new life reached the world (round 4, B10 and the pivot).
      *
      * Subscribed for the **audit** and nothing else: the reset hangs off death, and measuring
      * it from the spawn means a life that arrived through some other door — a round start, a
      * networked spawn that emits no death — is counted rather than silently inheriting a
-     * wallet. `StreakEconomyReport.dirtyLifeStarts` is that count, and it is the row P5's
-     * per-life table has to decide about.
+     * wallet. `StreakEconomyReport.walletsAtLifeStart` is that count — a fact about the
+     * **wallet**, which is why the cooldowns, which are meant to cross a life, are not in it.
      *
      * `EV.PlayerSpawned` alone, and it covers bots too. `PlayerController.spawn` emits it and
      * **every** combatant goes through that door — `Bot.spawn` calls it at line 285 and
@@ -494,13 +618,13 @@ export class StreakSystem implements ObjectiveProvider {
      * A round boundary, which under this economy is **not** a life boundary (round 4, P5).
      *
      * The decision, made explicitly rather than defaulted: a Search & Destroy survivor carries
-     * their banked kills into the next round and stays blocked from re-buying a streak they
-     * already spent. Only dying clears either, which is B10's wording taken literally —
-     * *"until death resets it"* — and it means surviving a round is worth something.
+     * their banked kills into the next round. Only dying clears the wallet, and it means
+     * surviving a round is worth something.
      *
      * So the ledger is not reset here. It is only **counted**, so that the carry-overs the next
      * round's spawns will report have a number to be checked against. See
-     * `StreakEconomyReport.roundCarryOvers`.
+     * `StreakEconomyReport.walletsAtRoundBoundary`. Cooldowns are not part of either count: a
+     * round boundary is not a life boundary and a cooldown does not care about either.
      */
     this.unsubscribe.push(bus.on(EV.RoundStarted, () => this.ledger.noteRoundBoundary()));
 
@@ -516,17 +640,19 @@ export class StreakSystem implements ObjectiveProvider {
    * — neither of which moves `PlayerScore.kills` — cannot pay for a streak, and this class
    * never has to learn the friendly-fire rule a second time.
    *
-   * The announcement fires once per streak per life. It used to be "the requirement has just
-   * been crossed", which under a balance would fire again every time a spend dropped the
-   * balance under a price and later kills brought it back — the same streak, announced twice,
-   * for a purchase the player already knows about.
+   * The announcement fires once per streak per **purchase cycle**, not once per life. It used
+   * to be "the requirement has just been crossed", which under a balance would fire again every
+   * time a spend dropped the balance under a price and later kills brought it back — the same
+   * streak, announced twice, for a purchase the player already knows about. `charge` drops the
+   * announcement when it takes the money, so the second time a streak becomes affordable in one
+   * life is announced and the intervening kills are not.
    */
   private checkEarned(entityId: number): void {
     const row = this.deps.score.row(entityId);
     if (row === undefined) return;
 
     /**
-     * A kill credited to somebody already dead is not banked (round 4, B10).
+     * A kill credited to somebody already dead is not banked (round 4, B9).
      *
      * A mutual kill is two `EntityKilled` events in one tick, and in one of the two orders the
      * loser's own death is processed first: `onDeath` zeroes the wallet, and then the kill they
@@ -551,7 +677,6 @@ export class StreakSystem implements ObjectiveProvider {
       if (!this.deps.equippedStreaks(entityId).includes(def.id)) continue;
       const price = this.priceOf(def.id, entityId);
       if (price > balance) continue;
-      if (this.ledger.hasUsed(entityId, def.id)) continue;
       if (this.ledger.hasAnnounced(entityId, def.id)) continue;
       this.ledger.noteAnnounced(entityId, def.id);
       const ev = this.evEarned;
@@ -590,7 +715,7 @@ export class StreakSystem implements ObjectiveProvider {
    * belongs to a life, so a credit aimed at somebody who is already dead is dropped rather than
    * waiting there for their next one. Measured — the skirmish harness's repeating top-up pays
    * every seat including the dead ones, and without this it put 3 life-starts in 101 on the
-   * wrong side of `dirtyLifeStarts`.
+   * wrong side of `walletsAtLifeStart`.
    */
   creditKills(entityId: number, kills: number): void {
     if (this.combatant(entityId)?.health.alive === false) {
@@ -602,14 +727,16 @@ export class StreakSystem implements ObjectiveProvider {
   }
 
   /**
-   * Dying zeroes the balance and clears what was bought this life.
+   * Dying zeroes the balance, and does nothing else.
    *
-   * Both halves of the report: B9's "everything earned but not spent is lost", which was
-   * already the rule, and B10's "until death resets it", which is new and is what stops one
-   * life buying the same streak twice.
+   * B9's half stands: everything earned and not spent is lost. B10's half — "until death resets
+   * it" — is gone with the rule it belonged to, and what took its place deliberately does *not*
+   * hang off this moment: a cooldown a death cleared would make dying the fast way back to a
+   * streak, which is the opposite of what a killstreak is for. `resetLife` is told the tick only
+   * so it can count the cooldowns it is leaving alone.
    */
   private onDeath(entityId: number): void {
-    this.ledger.resetLife(entityId, this.deps.score.row(entityId)?.kills ?? 0);
+    this.ledger.resetLife(entityId, this.deps.score.row(entityId)?.kills ?? 0, this.lastTick);
     this.publishProgress(entityId);
 
     // A chopper gunner who is shot out of their own body comes back to it. This is one of the

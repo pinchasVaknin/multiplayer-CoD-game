@@ -394,14 +394,15 @@ export interface UavContactState {
 }
 
 /**
- * One streak this player has equipped, as the server prices and gates it (round 4, B9 + B10).
+ * One streak this player has equipped, as the server prices and gates it (round 4, B9 + B10 and
+ * the pivot that followed).
  *
  * Replaces the list of "earned and unspent kind indices" that used to be here. Under a balance
  * there is nothing to hold, so what a client needs is not an inventory but a **price list**:
- * what each of my three keys costs, and whether I have already spent that one this life. Both
- * facts are the server's — the price carries Hardline, and the used set is per life and per
- * entity — and a client that recomputed either would be the second authority §4.15 exists to
- * prevent.
+ * what each of my three keys costs, and how long until it works again. Both facts are the
+ * server's — the price carries Hardline, and the lockout is per entity and comes off a clock
+ * only the simulation is running — and a client that recomputed either would be the second
+ * authority §4.15 exists to prevent.
  *
  * Keyed by `kind` rather than delivered in slot order. The server drops empty slots when it
  * resolves a class, so position here does not survive a class with a gap in it; the client
@@ -412,8 +413,16 @@ export interface StreakOfferState {
   readonly kind: number;
   /** Kills it costs this player, already discounted by Hardline. */
   readonly price: number;
-  /** Bought this life. B10: not available again until death. */
-  readonly used: boolean;
+  /**
+   * Hundredths of a second until this key works again; 0 means it works now.
+   *
+   * Was `used`, a boolean that meant "not until you die". One number covers both rules that
+   * replaced it — the cooldown and a previous instance still being in the world — because to
+   * the player they are the same event, and because the HUD is asked to show the wait as a fill
+   * rather than as words. **Remaining time is still a number here and in the server's state**;
+   * what is free of digits is the strip that draws it.
+   */
+  readonly lockoutCs: number;
 }
 
 /**

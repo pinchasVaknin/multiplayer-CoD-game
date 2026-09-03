@@ -193,11 +193,12 @@ function reportMatch(
     ticksDropped: jitter?.dropped ?? null,
     heapMb: heapMb(),
     /**
-     * The killstreak economy (playtest round 4, B9 + B10).
+     * The killstreak economy (playtest round 4, B9 + B10 and the pivot).
      *
      * `lives`/`lifeStarts` are the denominators: a zero in `negativeBalances` means nothing
-     * unless something was actually banked and spent. `thresholdGrants` against
-     * `balancePurchases` is the model change itself — the same lives, priced both ways.
+     * unless something was actually banked and spent. `thresholdGrants`, `balancePurchases` and
+     * `balanceRepeatPurchases` are the three models the economy has had, priced from the same
+     * lives in the same run — which is the only way a pacing comparison is not two fights.
      *
      * `activations` is zero in a bot-only run and that is not a measurement failure: no bot has
      * ever had a call site that spends a streak. See PLAN.md, "Found while here".

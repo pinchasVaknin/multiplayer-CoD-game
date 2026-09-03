@@ -923,6 +923,7 @@
 }
 
 .hud-streaks__slot {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--s-1);
@@ -931,6 +932,16 @@
   border: 1px solid var(--c-line);
   background: rgba(12, 14, 17, 0.55);
   opacity: 0.35;
+  overflow: hidden;
+  /*
+   * So the cooldown fill can sit *behind* the key, the name and the price.
+   * An absolutely positioned child paints above its in-flow siblings whatever the DOM order,
+   * so the fill needs a negative z-index — and a negative z-index only means "behind the
+   * content, in front of the background" inside a stacking context this element owns. `opacity`
+   * below happens to create one for three of the four states, which is exactly the kind of
+   * accident that stops being true the first time somebody sets a state to `opacity: 1`.
+   */
+  isolation: isolate;
   transition: opacity 120ms linear, border-color 120ms linear;
 }
 
@@ -951,17 +962,30 @@
 }
 
 /*
- * Spent. Struck through rather than merely dim: dim is what unaffordable already says, and a
- * player who cannot tell "not yet" from "not again" will keep pressing the key.
+ * Locked out: the cooldown is running, or this player's own previous one is still up.
+ *
+ * Round 4's pivot asked for this to be *visual only* — a fill, no digits, nothing counting
+ * seconds — so the slot is darkened by a bar that drains rather than labelled. The two reasons
+ * a key can be locked share one appearance because they are one event to the player: the key
+ * does nothing, and this is how much longer that is true for.
  */
-.hud-streaks__slot.is-used {
-  opacity: 0.45;
+.hud-streaks__slot.is-cooling {
+  opacity: 0.5;
   border-color: var(--c-line);
 }
 
-.hud-streaks__slot.is-used .hud-streaks__name {
-  text-decoration: line-through;
-  color: var(--c-text-faint);
+/*
+ * The fill. Absolutely positioned so it takes no part in layout, scaled on a transform so the
+ * per-frame write composites, and behind the text by one z-index inside the stacking context
+ * the slot declares above. Full when the wait starts, empty when the key comes back.
+ */
+.hud-streaks__cool {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transform-origin: bottom;
+  background: rgba(12, 14, 17, 0.78);
+  pointer-events: none;
 }
 
 .hud-streaks__key {

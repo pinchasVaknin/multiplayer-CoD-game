@@ -163,7 +163,7 @@ export interface ServerMatchOptions {
  * scratch, because the return is a **new life**: the one they left was played out by the bot
  * that stood in for them, and `StreakSystem.onOwnerRemoved` already cleared the wallet on the
  * way out. That is P4's model taken literally, and the alternative — a balance that survived
- * something which was not a death — is exactly what P5's `dirtyLifeStarts` invariant exists to
+ * something which was not a death — is exactly what P5's `walletsAtLifeStart` invariant exists to
  * catch.
  */
 export interface ReclaimedSeat {

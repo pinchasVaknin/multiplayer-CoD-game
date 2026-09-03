@@ -672,9 +672,9 @@ export function writeCheats(w: ByteWriter, outcome: number, mask: number): Uint8
 export function writeStreaks(w: ByteWriter, view: StreakView): Uint8Array {
   head(w, MsgS.Streaks);
 
-  // Three bytes per offer rather than one per held streak (round 4, B9). A price list is
-  // bigger than an inventory and has to be: a client cannot decide what a key does, or say why
-  // it did nothing, from a list of what it is allowed to press.
+  // Four bytes per offer rather than one per held streak (round 4, B9 and the pivot). A price
+  // list is bigger than an inventory and has to be: a client cannot decide what a key does, or
+  // say why it did nothing, from a list of what it is allowed to press.
   const offers = Math.min(view.offers.length, MAX_STREAK_OFFERS);
   w.u8v(offers);
   for (let i = 0; i < offers; i++) {
@@ -682,7 +682,10 @@ export function writeStreaks(w: ByteWriter, view: StreakView): Uint8Array {
     if (o === undefined) continue;
     w.u8v(o.kind & 0xff);
     w.u8v(Math.max(0, Math.min(255, o.price)));
-    w.u8v(o.used ? 1 : 0);
+    // Centiseconds in sixteen bits: the longest lockout in the table is a sentry's ninety
+    // seconds plus the cooldown, which is 12000 and well inside it. Hundredths rather than
+    // tenths because the fill is drawn every frame and a tenth of a second is a visible step.
+    w.u16(Math.max(0, Math.min(0xffff, Math.round(o.lockoutCs))));
   }
 
   w.u8v(Math.max(0, Math.min(255, view.balance)));
@@ -1393,8 +1396,8 @@ export function decodeHeader(r: ByteReader): Decoded {
       for (let i = 0; i < offerCount; i++) {
         const kind = r.u8v();
         const price = r.u8v();
-        const used = r.u8v() === 1;
-        offers.push({ kind, price, used });
+        const lockoutCs = r.u16();
+        offers.push({ kind, price, lockoutCs });
       }
 
       const balance = r.u8v();

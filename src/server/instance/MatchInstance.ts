@@ -531,12 +531,14 @@ export abstract class MatchInstance {
       if (session.closed) continue;
 
       /**
-       * The price list, not an inventory (round 4, B9 + B10).
+       * The price list, not an inventory (round 4, B9 + B10 and the pivot).
        *
        * Built from `pricesFor`, which is the same accessor the ledger's own audit uses, so the
-       * number on the player's HUD and the number they are charged cannot come apart. `used` is
-       * read per offer rather than sent as a second list, because a price and its availability
-       * are one fact about one key and splitting them is how the two get out of step.
+       * number on the player's HUD and the number they are charged cannot come apart. The
+       * lockout is read per offer rather than sent as a second list, because a price and its
+       * availability are one fact about one key and splitting them is how the two get out of
+       * step — and it is the *server's* seconds, off the sim tick, because the client is not
+       * running the clock they are measured on.
        */
       this.offerScratch.length = 0;
       for (const priced of streaks.pricesFor(player.entityId)) {
@@ -544,7 +546,7 @@ export abstract class MatchInstance {
         this.offerScratch.push({
           kind: streakKindIndex(priced.id),
           price: priced.price,
-          used: streaks.usedBy(player.entityId).includes(priced.id),
+          lockoutCs: Math.round(streaks.lockoutSecondsFor(player.entityId, priced.id) * 100),
         });
       }
 

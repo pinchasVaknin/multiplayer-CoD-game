@@ -482,9 +482,10 @@ export class Server {
    * - **Whether they may buy it, and whether they can pay.** Two questions since round 4's B9,
    *   because a balance answers only the second. The class check is here: `pricesFor` is the
    *   list the server offered this seat, and a request for anything outside it is a client
-   *   asking for a streak it never had a key for. The payment check is inside
+   *   asking for a streak it never had a key for. Everything else is inside
    *   `StreakSystem.activate`, which debits through the one door that also refuses a streak
-   *   already bought this life (B10).
+   *   still cooling down and one whose previous instance is still in the world — and it is the
+   *   same door a bot would come through, which is what stops there being two economies.
    * - **Where it goes.** At the player's own body, from the *server's* copy of their position.
    *   The only coordinates taken from the client are the mortar's marked point, which is a
    *   genuine choice the player makes on the map overlay and is clamped to the map by
@@ -526,7 +527,10 @@ export class Server {
       sim.yaw,
     );
     if (granted === null) {
-      log.debug(`${session.displayName} asked for ${def.id} and cannot pay for it.`);
+      // Cannot pay, still cooling, or their last one is still up. Which of the three is in the
+      // economy report's refusal counters; here it is one line, because the next `Streaks`
+      // frame tells the client the same thing more precisely than a reply could.
+      log.debug(`${session.displayName} asked for ${def.id} and was refused.`);
       return;
     }
     log.info(`${session.displayName} called in ${def.id} in instance ${instance.id}.`);

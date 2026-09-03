@@ -412,6 +412,12 @@ session.
 
 Covers **B9, B10**.
 
+> **Read with the reversal in mind.** P4 was executed and B9's currency shipped. B10's
+> "once per life", which this brief asks for below, was later replaced on purpose by a
+> per-streak cooldown and a no-two-at-once rule — a design change, not a fix. The brief is
+> left as it was written because it is what the session was asked to do; PLAN.md's last
+> section is what the code does now.
+
 ## The session
 
 - B9 — "activating an ability must cost kills: if I have 12 kills and activate something that

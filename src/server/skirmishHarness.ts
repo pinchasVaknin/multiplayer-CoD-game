@@ -720,13 +720,16 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       }
 
       /**
-       * Top the wallet up, repeatedly (round 4, B9 + B10).
+       * Top the wallet up, repeatedly (round 4, B9 + B10 and the pivot).
        *
        * Was once per match, which is the right shape for an entitlement and the wrong one for a
        * currency: a single grant is spent once and proves only that the debit path runs. Paying
        * in what the streak costs every `GRANT_INTERVAL_MS` puts every client permanently able to
-       * afford it, so the only thing that can stop them buying it again is B10 — and
-       * `maxUsedInOneLife` in the economy report is what that looks like from outside.
+       * afford it, so the only things that can stop them buying it again are the cooldown and
+       * the streak still being up — and `maxRepeatsInOneLife` in the economy report is what that
+       * looks like from outside. Under B10 it could not exceed 1 whatever the wallet held; the
+       * top-up interval is shorter than a UAV's whole lockout on purpose, so a life that lasts
+       * long enough to earn it twice will show a 2.
        *
        * Still `debugGrant`, which is the same `credit` a care package uses, so everything
        * downstream of "this player can now afford a UAV" is shipping code.
@@ -1428,9 +1431,11 @@ function reportFlow(input: FlowReportInput): number {
    *   against `PlayerScore.kills`, and a count that resets under it would silently starve every
    *   balance for the rest of the run while looking like nothing at all.
    *
-   * `dirtyLifeStarts` is asserted against `roundCarryOvers` since P5 decided the row: a wallet
-   * survives a round boundary on purpose and survives nothing else, so the two counts — one
-   * taken at the spawn, one at the round turn — have to be the same number.
+   * `walletsAtLifeStart` is asserted against `walletsAtRoundBoundary` since P5 decided the row:
+   * a wallet survives a round boundary on purpose and survives nothing else, so the two counts —
+   * one taken at the spawn, one at the round turn — have to be the same number. Both are about
+   * the **wallet**; the cooldowns that replaced the once-per-life rule are meant to cross a
+   * death, so they are reported beside these rather than asserted against anything.
    */
   if (economy === null) {
     log.warn('streak economy: NOT SAMPLED — no live match was observed running in this run.');
@@ -1441,21 +1446,24 @@ function reportFlow(input: FlowReportInput): number {
     if (economy.resyncs > 0) {
       problems.push(`${economy.resyncs} kill-anchor resync(s) inside a live match — the balance was starved (B9)`);
     }
-    if (economy.dirtyLifeStarts !== economy.roundCarryOvers) {
+    if (economy.walletsAtLifeStart !== economy.walletsAtRoundBoundary) {
       problems.push(
-        `${economy.dirtyLifeStarts} life-start(s) inherited a balance against ` +
-          `${economy.roundCarryOvers} round boundary carry-over(s) — a wallet crossed a death (B10)`,
+        `${economy.walletsAtLifeStart} life-start(s) inherited a balance against ` +
+          `${economy.walletsAtRoundBoundary} round boundary carry-over(s) — a wallet crossed a death (B9)`,
       );
     }
     log.info(
       `streak economy: ${economy.lives} life/lives, ${economy.lifeStarts} life-start(s) ` +
-        `(${economy.dirtyLifeStarts} inheriting a balance); banked ${economy.killsBanked} + ` +
+        `(${economy.walletsAtLifeStart} inheriting a balance); banked ${economy.killsBanked} + ` +
         `${economy.credited} credited, spent ${economy.spent}, peak balance ${economy.peakBalance}; ` +
         `${economy.postMortemKills} post-mortem kill(s) dropped; ` +
         `${economy.activations} activation(s) over ${input.grants} wallet top-up(s), most in one ` +
-        `life ${economy.maxUsedInOneLife}; refused ${economy.refusedUnaffordable} unaffordable / ` +
-        `${economy.refusedUsed} already used; entitlement per life ${economy.thresholdGrants} under the ` +
-        `threshold model vs ${economy.balancePurchases} under the balance.`,
+        `life ${economy.maxBuysInOneLife}, most of one streak in one life ` +
+        `${economy.maxRepeatsInOneLife}; refused ${economy.refusedUnaffordable} unaffordable / ` +
+        `${economy.refusedCooling} cooling / ${economy.refusedLive} already up; ` +
+        `${economy.cooldownsCrossingDeath} cooldown(s) crossed a death; entitlement per life ` +
+        `${economy.thresholdGrants} threshold / ${economy.balancePurchases} once-per-life / ` +
+        `${economy.balanceRepeatPurchases} with repeats.`,
     );
   }
 

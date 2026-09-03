@@ -3,11 +3,19 @@
  *
  * Two widgets that share a corner and a lifetime:
  *
- * **The streak strip** — what your three keys cost, which of them you can pay for, and which
- * you have already spent this life. Three slots because there are three keys. Every price shown
- * is the *effective* one, already Hardline-discounted by `StreakSystem`, so this file has never
+ * **The streak strip** — what your three keys cost, which of them you can pay for, and how much
+ * of a locked key's wait is left. Three slots because there are three keys. Every price shown is
+ * the *effective* one, already Hardline-discounted by `StreakSystem`, so this file has never
  * heard of a perk; and the progress line counts the **balance** toward the cheapest thing still
  * out of reach, which after round 4's B9 goes back up when you buy something.
+ *
+ * **The cooldown is drawn and never written.** Round 4's pivot replaced "used this life" with a
+ * lockout that has a length, and the brief that asked for it asked for it *visually*: a fill,
+ * not a number, and nothing counting seconds. So a slot carries a bar whose height is the
+ * fraction of the lockout still to run, and says nothing at all — which is also the cheaper
+ * shape, because a transform composites and a digit changing once a second is a reflow a second
+ * for as long as the wait lasts. The remaining time is still a number in state and on the wire;
+ * this is the one place it stops being one.
  *
  * **The objective banner** — the bomb timer, the plant/defuse ring, and the capture prompt.
  * It only appears when there is something to say, because a HUD element that is present and
@@ -18,6 +26,8 @@
  * updates sixty times a second off the layout path — every `textContent` write is a reflow, and
  * a reflow inside the frame budget is the thing this whole HUD is written to avoid.
  */
+
+import { STREAK_COOLDOWN_SECONDS } from '../../shared/streaks/StreakDefs';
 
 export interface StreakSlotState {
   /** Empty string for an unused slot. */
@@ -43,8 +53,15 @@ export interface StreakSlotState {
    * missing, where a dark slot says only that something is.
    */
   price: number;
-  /** Bought this life (round 4, B10). Not available again until death. */
-  used: boolean;
+  /**
+   * Seconds until the key works again; 0 means now (round 4, the pivot).
+   *
+   * The server's number, drawn as a fill and never printed. It covers the cooldown and a
+   * previous instance of the same streak still being in the world, which are one event to a
+   * player: nothing happens when they press the key, and the bar says how much longer that will
+   * be true for.
+   */
+  lockoutSeconds: number;
 }
 
 export interface StreakHudState {
@@ -77,9 +94,9 @@ export interface StreakHudState {
 export function makeStreakHudState(): StreakHudState {
   return {
     slots: [
-      { name: '', key: '3', ready: false, price: 0, used: false },
-      { name: '', key: '4', ready: false, price: 0, used: false },
-      { name: '', key: '5', ready: false, price: 0, used: false },
+      { name: '', key: '3', ready: false, price: 0, lockoutSeconds: 0 },
+      { name: '', key: '4', ready: false, price: 0, lockoutSeconds: 0 },
+      { name: '', key: '5', ready: false, price: 0, lockoutSeconds: 0 },
     ],
     balance: 0,
     nextName: '',
@@ -103,6 +120,7 @@ export class HudStreaks {
   private readonly slotEls: HTMLElement[] = [];
   private readonly slotNameEls: HTMLElement[] = [];
   private readonly slotCostEls: HTMLElement[] = [];
+  private readonly slotCoolEls: HTMLElement[] = [];
   private readonly progressEl: HTMLElement;
   private readonly bannerLabel: HTMLElement;
   private readonly bannerTimer: HTMLElement;
@@ -112,6 +130,8 @@ export class HudStreaks {
 
   /** Last written strings, so nothing touches the DOM unless it actually changed. */
   private lastSlotNames = ['', '', ''];
+  /** Whether each slot was drawing a lockout last frame. The fill's transform is not cached. */
+  private lastSlotCooling = [false, false, false];
   private lastProgress = '';
   private lastBanner = '';
   private lastTimer = '';
@@ -136,15 +156,21 @@ export class HudStreaks {
       key.textContent = String(3 + i);
       const name = document.createElement('span');
       name.className = 'hud-streaks__name';
-      // The price, or USED. One element, because they are two halves of one sentence — what
-      // this key would cost you, and that you have already paid it once this life.
+      // The price, always and only. `USED` used to share this element; the lockout that
+      // replaced it is drawn rather than written, so the cost has one job again.
       const cost = document.createElement('i');
       cost.className = 'hud-streaks__cost';
-      slot.append(key, name, cost);
+      // The lockout, as a fill that drains. Scaled on a transform from the bottom, so the frame
+      // that draws it never touches layout.
+      const cool = document.createElement('u');
+      cool.className = 'hud-streaks__cool';
+      cool.style.transform = 'scaleY(0)';
+      slot.append(cool, key, name, cost);
       slots.appendChild(slot);
       this.slotEls.push(slot);
       this.slotNameEls.push(name);
       this.slotCostEls.push(cost);
+      this.slotCoolEls.push(cool);
     }
     this.element.appendChild(slots);
 
@@ -224,11 +250,13 @@ export class HudStreaks {
       const entry = state.slots[i];
       const name = entry?.name ?? '';
       const ready = entry?.ready === true;
-      const used = entry?.used === true;
-      const cost = name.length === 0 ? '' : used ? 'USED' : String(entry?.price ?? 0);
-      // The cache key carries every fact the slot paints, so a slot that becomes affordable —
-      // or stops being, or is spent — without changing its name still repaints. One stamp
-      // rather than four guards, because four guards would need four caches.
+      const lockout = entry?.lockoutSeconds ?? 0;
+      const cooling = name.length > 0 && lockout > 0;
+      const cost = name.length === 0 ? '' : String(entry?.price ?? 0);
+      // The cache key carries every fact the slot *writes*, so a slot that becomes affordable —
+      // or stops being — without changing its name still repaints. One stamp rather than three
+      // guards, because three guards would need three caches. The lockout is deliberately not in
+      // it: it is drawn on a transform, and a transform is not a write worth guarding.
       const stamp = `${ready ? '+' : '-'}${cost}|${name}`;
       if (stamp !== this.lastSlotNames[i]) {
         this.lastSlotNames[i] = stamp;
@@ -240,8 +268,21 @@ export class HudStreaks {
         if (slot !== undefined) {
           slot.classList.toggle('is-ready', ready);
           slot.classList.toggle('is-owned', name.length > 0);
-          slot.classList.toggle('is-used', used);
         }
+      }
+      if (cooling !== this.lastSlotCooling[i]) {
+        this.lastSlotCooling[i] = cooling;
+        this.slotEls[i]?.classList.toggle('is-cooling', cooling);
+      }
+      const coolEl = this.slotCoolEls[i];
+      if (coolEl !== undefined) {
+        // Clamped at 1 rather than scaled against the whole lockout, so a streak still in the
+        // sky and one whose cooldown has just started read the same: full, then draining over
+        // the last STREAK_COOLDOWN_SECONDS. The alternative — a fraction of a total that is 120 s
+        // for a sentry and 30 s for a mortar — makes the same wait look different on two keys,
+        // for a reason the player has no way to see.
+        const fill = cooling ? Math.min(1, lockout / STREAK_COOLDOWN_SECONDS) : 0;
+        coolEl.style.transform = `scaleY(${fill.toFixed(3)})`;
       }
     }
 

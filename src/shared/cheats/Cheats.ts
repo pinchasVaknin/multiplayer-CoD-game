@@ -145,7 +145,7 @@ export interface CheatCode {
  * Kills granted by `MO951357`, and the number is the report's.
  *
  * Thirty is above every price in `STREAK_DEFS`, which is the point: one code makes the whole of
- * a class affordable so the three-slot strip, the price list and B10's once-per-life rule can all
+ * a class affordable so the three-slot strip, the price list and the cooldowns can all
  * be exercised in one match without staging a twelve-kill streak first.
  */
 export const CHEAT_WALLET_KILLS = 30;

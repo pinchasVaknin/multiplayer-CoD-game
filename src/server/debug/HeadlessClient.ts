@@ -965,14 +965,19 @@ export class HeadlessClient {
            *
            * The view no longer says what is held — under a balance nothing is — so the choice
            * has to be made here from the price list, and it is the same choice the HUD paints:
-           * an offer priced at or under the balance and not already bought this life. Cheapest
-           * first, so a client with twelve kills exercises the *debit* rather than sitting on a
-           * balance waiting for the one expensive thing it has equipped.
+           * an offer priced at or under the balance whose key is not locked out. Cheapest first,
+           * so a client with twelve kills exercises the *debit* rather than sitting on a balance
+           * waiting for the one expensive thing it has equipped.
+           *
+           * Skipping a locked-out offer is what the player does, so it is what this does — and
+           * it means `refusedCooling` stays at zero in a clean run and the cooldown shows up in
+           * `activations` and `maxRepeatsInOneLife` instead. A client that spammed the key
+           * regardless would be measuring the server's refusal rather than the game's pacing.
            */
           let best = -1;
           let bestPrice = Number.POSITIVE_INFINITY;
           for (const offer of view.offers) {
-            if (offer.used || offer.price > view.balance) continue;
+            if (offer.lockoutCs > 0 || offer.price > view.balance) continue;
             if (offer.price >= bestPrice) continue;
             bestPrice = offer.price;
             best = offer.kind;

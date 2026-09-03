@@ -6212,13 +6212,22 @@ decides whether they read.
   no flow lost a step; a player who wants to play now presses Start on the screen that has
   always had one.
 
-## Playtest round 4 — killstreaks became a currency, and B10 is what keeps it one
+## Playtest round 4 — killstreaks became a currency, and the first rule that bounded it
 
 Covers **B9** ("activating an ability must cost kills: twelve earned, spend six, six left, and
 an eight cannot then be afforded") and **B10** ("once a streak has been used it cannot be used
 again until death resets it").
 
-### They are one report, and the second is what makes the first survive
+**Half of this section has been reversed on purpose.** B9's currency stands and everything
+below about it is current. B10's once-per-life rule does not: a later session replaced it with a
+per-streak cooldown and a no-two-at-once rule, deliberately, as a design change rather than a
+fix — see *"one rule about a life, replaced by two about time"* at the end of this file. The
+paragraphs that argue for once-per-life are left standing because the argument was sound for the
+model as it was and the reasoning is what the later session had to answer; every claim that
+would now read as a live rule is marked where it sits. Two numbers in *Measured* count a rule
+that no longer exists, and they say so.
+
+### They were one report, and the second is what made the first survive — at the time
 
 Neither of these was a defect. `StreakSystem` did exactly what it was written to do, and the
 comment at the top of it said so in plain words: someone who reached twelve kills held six
@@ -6233,8 +6242,16 @@ and the interesting part is what it does to B10. Under a threshold, "once per li
 nearly free: `awardedUpTo` stopped a streak being re-granted at the same requirement, so the
 only way to hold two UAVs in one life was to have a care package drop you one. Under a balance
 it is load-bearing — without it, twelve kills buys the same four-kill UAV three times, and the
-optimal play is to spam the cheapest thing in the class. **B10 is not a second fix; it is the
-rule that stops B9's model degenerating**, and the two were built as one change for that reason.
+optimal play is to spam the cheapest thing in the class. **B10 was not a second fix; it was the
+rule that stopped B9's model degenerating**, and the two were built as one change for that
+reason.
+
+That reasoning is right about the danger and wrong about the remedy, which is the whole of what
+the later session found. "Twelve kills buys three UAVs" is a complaint about *pace*, and a
+per-life cap answers it by removing the possibility instead of spacing it out: a player who goes
+on to earn the price a second time over the next two minutes is refused for a reason that has
+nothing to do with the two minutes. A cooldown answers the same danger at the axis it is
+actually on. See the later section.
 
 ### The economy, and where each piece of it lives
 
@@ -6253,10 +6270,12 @@ what has been bought this life, and the audit. It replaces two maps on `StreakSy
   `MO951357` pays thirty kills into a wallet through `creditKills` with no compensating deduction
   anywhere, measured at 30 credited against 0 added to any scoreboard row.
 - **The debit is the entitlement check.** `activate` no longer asks "do you hold it" — holding is
-  not a thing any more — it asks `ledger.charge`, which refuses what the balance cannot cover and
-  what has already been bought this life, and is the only place a refusal is counted. Asking
-  `canAfford` first and charging afterwards would be two questions, and two questions is how a
-  refusal goes unrecorded.
+  not a thing any more — it asks `ledger.charge`, which refuses what the balance cannot cover
+  and (then: what had already been bought this life; now: what is still cooling down or still in
+  the world), and is the only place a refusal is counted. Asking `canAfford` first and charging
+  afterwards would be two questions, and two questions is how a refusal goes unrecorded. That
+  the refusals all sit behind one door is what made the later pivot a change to the ledger and
+  to nothing else.
 - **`requirementFor` is `priceOf`.** The number is the same one `StreakDef.requirement` always
   carried. A name that says "requirement" over code that debits it is a name that hides the
   model.
@@ -6272,10 +6291,14 @@ than handing the streak over.
 Handing the streak over is the one shape that breaks both new rules at once. A crate drops a
 random `fromCarePackage` streak, which need not be one of the claimant's three — and since round
 two, keys 3/4/5 index the *class's* slots, so an unequipped drop had no key to be pressed from
-and no price on screen: a dead gift. It also laundered B10, because a second copy of a streak
-already spent this life would arrive as a fresh entitlement. Paying out the roll's value keeps
-one currency, one once-per-life rule and no dead drops, and the gamble survives intact — a crate
-is worth between five and twelve kills depending on what it rolls.
+and no price on screen: a dead gift. It also laundered the once-per-life rule, because a second
+copy of a streak already spent this life would arrive as a fresh entitlement. Paying out the
+roll's value keeps one currency and no dead drops, and the gamble survives intact — a crate is
+worth between five and twelve kills depending on what it rolls.
+
+The decision outlived the rule half of its justification was about. Under the cooldown a handed
+-over streak is worse, not better: it would arrive having paid no price and started no clock, a
+second door into an economy with one.
 
 ### Two credits that had to be refused, both found by measurement
 
@@ -6307,8 +6330,12 @@ and nearest-enemy detail for the director. One subscription covers every combata
 `MsgS.Streaks` carried `pending`, a list of kind indices the player had earned. A currency cannot
 be replicated that way: a client needs to know what a press will **cost** before making it, and
 why a key that did nothing did nothing. Both facts are the server's — the price carries Hardline's
-discount, the used set is per life and per entity — so `StreakView` now carries
+discount, the used set is per life and per entity — so `StreakView` carried
 `offers: {kind, price, used}[]` and `balance` in place of `pending` and `streakCount`.
+
+*(v13 replaced the `used` bit with a lockout in centiseconds. The shape of the message and the
+argument for it are unchanged; what changed is that the second fact about a key is a duration
+rather than a bit.)*
 
 Offers are keyed by kind rather than sent in slot order. The server drops empty slots when it
 resolves a class, so position does not survive a class with a gap in it; the client already knows
@@ -6330,14 +6357,19 @@ streaks a class does not carry, which is acceptance criterion 1's only instrumen
 
 `HudStreaks` painted three: empty, owned-but-unearned, ready. There are four now, and the price
 is on screen, because a player cannot plan a purchase whose cost they cannot see. Unaffordable
-and already-spent both leave the key doing nothing, which is exactly why they must not look the
-same: an unaffordable slot shows its price in kills, a spent one reads `USED` and is struck
-through. That is the report's *"a used streak's key doing nothing while saying why"* — said
-persistently by the slot itself rather than by a toast, because round four's own HUD-surface
-invariant is that surfaces have one writer and this needed no new surface.
+and unavailable both leave the key doing nothing, which is exactly why they must not look the
+same: an unaffordable slot shows its price in kills, an unavailable one is marked. That is the
+report's *"a used streak's key doing nothing while saying why"* — said persistently by the slot
+itself rather than by a toast, because round four's own HUD-surface invariant is that surfaces
+have one writer and this needed no new surface.
+
+*(The fourth state was `USED`, struck through. It is a draining fill now and carries no text at
+all, because what it says is no longer "not again this life" but "not for another n seconds" —
+see the later section.)*
 
 Keys 3/4/5 still index the class's three slots, unchanged from round two. The earned list decided
-whether a press was honoured; the balance and the used set decide it now.
+whether a press was honoured; the balance decides it now, with the lockout the later session
+added.
 
 ### Measured
 
@@ -6366,7 +6398,13 @@ affords 38. **A 49% cut in what a life's kills entitle a player to.** That is th
 direction — twelve kills is now a chopper *or* a UAV and a sentry — and it is the human's call
 whether it is the intended size.
 
-**Red before green.** `dirtyLifeStarts` was **1 in 152 life-starts** on seed 4 before the
+*Both rows price a life's kills under a rule of one purchase per streak per life, which is the
+rule that was later removed. A third column, computed the same way with repeats allowed, is in
+the later section; the report carries all three now so the comparison never has to be made
+across two runs.*
+
+**Red before green.** `dirtyLifeStarts` — since renamed `walletsAtLifeStart`, because it counts
+wallets and never counted anything else — was **1 in 152 life-starts** on seed 4 before the
 post-mortem guard and **0 in 152** after, with `postMortemKills` going 0 → 1 on the same match.
 One fix, one moved number, and the other four matches unchanged.
 
@@ -6390,6 +6428,10 @@ That fourth row is B10, measured rather than asserted: a permanently funded wall
 balance of 32 against a price of 4, 17 purchases — and **no life ever bought the UAV twice**.
 Each of those 63 payments would have been a separate entitlement under the threshold model, and
 the clients ask for one every 30 ticks when they have one.
+
+*That row measures the rule the later session removed, and it is the number that run exists to
+be compared against: the same harness with the same flag is re-run there, and a life buying the
+UAV twice is what the change looks like from outside.*
 
 The streak still works end to end over the wire in the same run: 17 live streak entities seen per
 client, 3 at once at peak, 2429 / 1337 / 2429 sweep frames and 5 UAV contacts. `spent` is exactly
@@ -6424,9 +6466,9 @@ pane never fires `requestAnimationFrame`, so it cannot stand in for one either.
 - **B9, the case the report names exactly.** Reach twelve kills with a class carrying something
   priced at 6 and something at 8. Spend the 6. The 8 must go dark and show `8`, and pressing its
   key must do nothing.
-- **B10.** After spending the UAV, keep killing past four again. The UAV slot must stay `USED`
-  and struck through — not re-light — and its key must stay dead. Then die. On respawn the slot
-  must clear back to its price and the balance must be 0.
+- **B10.** *(Superseded — do not test this. The later session's list replaces it: after
+  spending the UAV the slot darkens with a draining fill, and once the fill is gone and four
+  more kills are banked the key works again, in the same life.)*
 - **The price on an unaffordable slot.** At zero kills all three slots must show their prices,
   dimmed. This is what makes a class readable before the match starts.
 - **The care package.** Claim one and watch the balance jump by the price of whatever it rolled,
@@ -6453,14 +6495,16 @@ pane never fires `requestAnimationFrame`, so it cannot stand in for one either.
   streak becoming affordable is currently announced to nobody — no audio cue, no HUD flash. That
   is a gap an announcer would fill and is worth knowing before F16 adds three more streaks to
   not announce.
-- **A round start is not a death, and the ledger treats it that way.** `dirtyLifeStarts` is the
-  count of lives that began holding a balance from the life before, and it is 0 in every TDM run
-  measured here because every TDM life starts with a death. A Search & Destroy survivor's next
-  round starts without one, and will carry both the balance and the used set across. That is a
-  policy question rather than a bug under B10's literal wording ("until death resets it"), and it
-  is P5's row to decide. **Decided in P5, below: the carry-over stays** — surviving a round keeps
-  the wallet and keeps the used set — and `dirtyLifeStarts` gained a second number to be checked
-  against rather than an assertion it could no longer make.
+- **A round start is not a death, and the ledger treats it that way.** `dirtyLifeStarts` — now
+  `walletsAtLifeStart` — is the count of lives that began holding a balance from the life before,
+  and it is 0 in every TDM run measured here because every TDM life starts with a death. A Search
+  & Destroy survivor's next round starts without one, and will carry both the balance and the
+  used set across. That is a policy question rather than a bug under B10's literal wording
+  ("until death resets it"), and it is P5's row to decide. **Decided in P5, below: the carry-over
+  stays** — surviving a round keeps the wallet — and the counter gained a second number to be
+  checked against rather than an assertion it could no longer make. *(The used-set half of that
+  sentence went away with the rule; the wallet half is unchanged and is still what the invariant
+  tests.)*
 
 *Two numbers in this section were overtaken by the session below and are left as they were
 measured. The five `npm run harness` scores are no longer a byte-identical control against the
@@ -6578,14 +6622,21 @@ and the replicated spawn serial where it is not — one fact, two transports, as
 | Prediction history | `NetClient.applyOwnerBlock` → `prediction.reset` | the spawn serial |
 | Rewind history | `ServerMatch.spawnPlayer` → `rewind.resetAt` | the spawn |
 | Death screen, respawn clock | `ClientMatch.beginLife` | the spawn |
-| **Streak balance, spent, used set** | `StreakLedger.resetLife` | **death only** — decided below |
-| Streak "already announced" set | `StreakLedger.resetLife`, with the balance | death only |
+| **Streak balance and spend** | `StreakLedger.resetLife` | **death only** — decided below |
+| Streak "already announced" set | `StreakLedger.resetLife`, and `charge` when it takes the money | death, or the purchase that consumed it |
+| **Streak cooldowns** | nothing — they run on the sim clock | **not per life, by decision** — see the last section of this file |
 | Field-upgrade charge | — | **not per life, by design** |
 | `MatchProgression.killsThisMag` | `EV.PlayerSpawned`, filtered on `PLAYER_ENTITY_ID` | the spawn — **but see "Found while here"** |
 | `PerksRenderer` footstep trail | `EV.PlayerSpawned`, filtered on `PLAYER_ENTITY_ID` | the spawn — **same** |
 
-Two rows deserve their own sentence. The **field-upgrade charge** is not a per-life fact and
-never was: `FieldUpgradeRuntime` charges on sim ticks and pauses while dead, precisely so dying
+Three rows deserve their own sentence. The **streak cooldowns** row is the newest and the only
+one in the table with no resetter at all: they are measured from the moment a streak's effect
+ended and a death is not that moment, so nothing per-life touches them. It is the same *shape*
+as the field-upgrade row below it and a different reason — that one is not per life because
+charging through a death would hand out a free activation; this one is not per life because
+clearing it on death would make dying the fast way back to a chopper.
+
+The **field-upgrade charge** is not a per-life fact and never was: `FieldUpgradeRuntime` charges on sim ticks and pauses while dead, precisely so dying
 does not hand you a free activation. Its `reset()` has no caller anywhere in the project, which
 reads like an oversight and is the opposite of one — but a method with no caller is
 indistinguishable from a signal somebody forgot to wire, which is how this session started, so it
@@ -6600,10 +6651,16 @@ they already spent. Only dying clears either. That is B10's wording taken litera
 death resets it"* — and it makes surviving a round worth something, which is what a
 one-life-per-round mode is for.
 
-The consequence is that `dirtyLifeStarts` could no longer be asserted at zero, and a counter
-whose failure case has been quietly excused is a counter that cannot fail. So the ledger counts
-the same thing from the other end: `noteRoundBoundary` counts, at each round turn, the wallets
-that are about to survive it, and **`dirtyLifeStarts === roundCarryOvers`** is the invariant. It
+*(The second half of that sentence went with B10. A survivor keeps their banked kills, which is
+the decision and is unchanged; what they are blocked from re-buying is now decided by a cooldown
+that does not care about rounds or lives at all. The invariant below is about the wallet and is
+untouched.)*
+
+The consequence is that `walletsAtLifeStart` — then called `dirtyLifeStarts` — could no longer be
+asserted at zero, and a counter whose failure case has been quietly excused is a counter that
+cannot fail. So the ledger counts the same thing from the other end: `noteRoundBoundary` counts,
+at each round turn, the wallets that are about to survive it, and
+**`walletsAtLifeStart === walletsAtRoundBoundary`** is the invariant. It
 fails in both directions — a wallet that survived a *death* appears on the left with nothing to
 match it, and a survivor whose wallet was wrongly cleared appears on the right — and the skirmish
 harness blocks on it. Ordering against the spawns the round causes does not matter, because
@@ -6670,8 +6727,8 @@ limit, and the four model invariants above are unchanged. `postMortemKills` move
 entitlement per life 75 → 93 threshold / 38 → 43 balance, all in the direction more lethal bots
 predict.
 
-**`npm run server -- --mode SND --matches 5`, for the decision.** `dirtyLifeStarts` against
-`roundCarryOvers`, per match: **5/5, 3/3, 1/1, 3/3, 4/4** — equal in all five, over 190
+**`npm run server -- --mode SND --matches 5`, for the decision.** `walletsAtLifeStart` against
+`walletsAtRoundBoundary` (both then carrying their older names), per match: **5/5, 3/3, 1/1, 3/3, 4/4** — equal in all five, over 190
 life-starts, with 0 partial stock. Every wallet that survived into a new life survived a *round
 boundary*; none survived a death. That is the S&D policy measured rather than asserted, and it is
 the invariant the skirmish harness now blocks on.
@@ -6753,9 +6810,11 @@ Every item is a networked match. Single-player is unaffected by the client half 
 - **The pre-match class change.** Press a class key during the ten-second freeze of round one.
   The grenades that arrive must be the ones the *new* class carries, at its count.
 - **The S&D wallet, which is the decision.** Reach four kills in round one with a UAV in the
-  class and spend it. Survive the round. In round two the UAV must still read `USED` and its key
-  must still do nothing, and any balance left over must still be there. Then die: on the next
-  spawn it must clear back to its price with the balance at 0.
+  class and spend it. Survive the round. In round two any balance left over must still be there.
+  Then die: on the next spawn the balance must be 0. *(This item originally also asked that the
+  UAV still read `USED` in round two. It will not: the once-per-life rule is gone, and what
+  carries across the round boundary now is the wallet and the cooldown — the cooldown having
+  almost certainly run out by then.)*
 - **The bots throwing.** Not a HUD check — play a full networked match and notice that grenades
   keep coming in after the first minute. Before this every bot threw one lethal and one tactical
   in the whole match, which is the difference between an opponent who uses equipment and one who
@@ -7557,7 +7616,7 @@ duplicate-row defect above.
 return is a **new life**: fresh spawn, zero balance, empty used-set. That is P4's model taken
 literally — the balance belongs to a life, and the life they left was played out by the bot that
 stood in for them. The alternative is a wallet surviving something that is not a death, which is
-precisely what P5's `dirtyLifeStarts === roundCarryOvers` invariant exists to catch; it reads 0/0
+precisely what P5's `walletsAtLifeStart === walletsAtRoundBoundary` invariant exists to catch; it reads 0/0
 in every run here.
 
 **Failure: told, and seated anyway.** Grace expired, instance destroyed, match full or token
@@ -8725,7 +8784,9 @@ P4 made streaks a **currency**: `StreakLedger` holds a balance in kills, `charge
 the balance cannot cover and what has already been bought this life, and P4's measurement was
 that the balance model affords **38 streaks across 705 lives where the threshold model handed out
 75**. Nine streaks against three class slots is therefore a *choice* problem, not an inflation
-one — the wallet still buys about one thing per life.
+one — the wallet still buys about one thing per life. *(Written before the cooldown pivot. The
+wallet is still what bounds a purchase; what has changed is that a long life can now buy the
+same thing twice, so a fourth streak competes for repeats as well as for slots.)*
 
 Two facts from P4 that all three inherit: **no bot has ever spent a killstreak** (there is no
 call site — bots bank a balance and never spend it), and **`EV.StreakEarned` has no gameplay
@@ -10211,3 +10272,316 @@ everything under "Open, and all of one kind".
   reader takes a plain `number`, because masks are combinations rather than single bits. Not
   removed here — it costs nothing and names something real — but it is the kind of export that
   looks load-bearing and is not.
+
+---
+
+## Playtest round 4 — one rule about a life, replaced by two about time
+
+Nothing here was reported and nothing here was broken. B10 shipped, worked, and was measured
+working — *"killstreaks became a currency, and the first rule that bounded it"*, earlier in this
+file, records a permanently funded wallet, a peak balance of 32 against a price of 4, and no life
+that ever bought the same UAV twice. This session takes that rule out on purpose. It is an architectural override, so the first job was to find every place that assumed
+the rule and change the record as well as the code.
+
+### Why a per-life cap was the wrong axis
+
+P4's argument for once-per-life is in that section and it is right about the danger: under
+a pure balance, twelve kills buys the same four-kill UAV three times and the optimal play is to
+spam the cheapest thing in the class. What it gets wrong is where the danger lives. "Three UAVs
+off twelve kills" is a complaint about **pace** — three in quick succession — and a per-life cap
+answers it by removing the possibility altogether. A player who goes on to earn the price a
+second time over the following two minutes gets refused for a reason that has nothing to do with
+the two minutes, and the rule is invisible to them in the moment: the strip said `USED` and the
+only thing that would clear it was dying.
+
+So the cap comes off and three mechanics take its place, none of which is new state beside the
+wallet:
+
+1. **The price is charged again.** Already true — `charge` debits every activation and always
+   has. Re-using a streak means earning it again, in the same life.
+2. **A per-streak cooldown of 30 s**, from the moment that streak's *effect* ends. Other streaks
+   are unaffected, so keys 4 and 5 back to back is fine and key 5 twice is not.
+3. **No two of the same at once.** A streak whose previous instance is still in the world cannot
+   be called in again.
+
+### The three decisions, made rather than defaulted
+
+- **Death.** The wallet zeroes, which is P4's rule and stands. **The cooldowns do not** — they
+  run on the sim clock and a life boundary is not a moment in it. A player who could shorten a
+  wait by dying would have a reason to die, which is the opposite of what a killstreak is for.
+  That decision is the one line in `StreakLedger.resetLife` that leaves a field alone, and
+  `cooldownsCrossingDeath` is it counted rather than asserted.
+- **Concurrency.** The key is refused and the strip shows the same state a cooldown shows,
+  because to the player the two are one event: nothing happened, and here is how much longer
+  that will be true for. `lockoutTicks` is the one number both produce; only the log distinguishes
+  them, through `refusedLive` and `refusedCooling`.
+- **The clock starts when the effect ends.** So a lasting streak's real lockout is its own
+  duration plus the thirty seconds — a UAV is 60 s from the press, a sentry 120 s — and a mortar
+  or a care package is 30 s flat.
+
+### Every streak needed an "effect ended" moment, and it is not `durationSeconds`
+
+`StreakDef.effectEnds` is `'activation'` or `'expiry'`, on the definition rather than in a
+`switch` the seventh streak would fall through:
+
+| Streak | `durationSeconds` | `effectEnds` | Lockout from the press |
+|---|---|---|---|
+| UAV | 30 | expiry | 60 s |
+| Counter-UAV | 25 | expiry | 55 s |
+| Care package | 60 | **activation** | 30 s — plus the crate, while it is down |
+| Mortar strike | 14 | **activation** | 30 s |
+| Sentry gun | 90 | expiry | 120 s, or less if it is destroyed |
+| Chopper gunner | 32 | expiry | 62 s |
+
+Deriving it from the duration would have been wrong for exactly the two streaks the brief named.
+A care package's sixty seconds is how long an *unclaimed crate* is left on the floor, and a
+mortar's fourteen is how long the barrage takes to finish falling; neither is a stretch of time
+the owner is getting anything out of, and reading a duration as if it were would have priced two
+streaks by a number that means something else in both.
+
+The cooldown is armed twice and it is the same call both times. `activate` arms an **estimate** —
+`effectEndTicks(def) + 30 s` — so the strip is honest about the whole wait from the first frame
+rather than jumping when the streak expires; `retire` **replaces** it with the fact, for
+`'expiry'` streaks only. The two agree when a streak ran its full duration and the fact is
+earlier when it did not, so a sentry shot down at ten seconds is buyable again at forty rather
+than at a hundred and twenty. An `'activation'` streak is deliberately not re-armed on retire: an
+unclaimed crate expiring sixty seconds later must not restart a cooldown that ran out thirty
+seconds ago.
+
+### Dying shortens exactly one wait, and that is a decision
+
+`retire` is the single exit every streak leaves the world through, §8.23's four Chopper Gunner
+cases included — and two of those four are a **death**: `onDeath` retires a gunner shot out of
+their own body, and `onOwnerRemoved` brings a disconnecting gunner's chopper down with them.
+Under "the clock starts when the effect ends", that destruction *is* the effect ending, so the
+thirty seconds start there.
+
+The consequence, stated because it is the one case where dying makes a wait shorter: a gunner
+killed at second 5 of a 32-second flight can buy the chopper again 27 seconds earlier than one
+who flew it out. That is left as it is, for two reasons. It is the honest reading of the rule —
+the chopper stopped shooting, so its effect is over — and any other reading needs a second clock
+that keeps running for a streak that no longer exists. And the shortcut is worthless in practice:
+dying also zeroes the wallet, so the player has to re-earn twelve kills before the cooldown is
+what is stopping them, and twelve kills takes considerably longer than 27 seconds. **The cooldown
+almost never binds across a death; it binds inside a life, which is what it was added to do.**
+
+### `dirtyLifeStarts` was never the grenade probe
+
+Asked for by call site, and the answer is that the name was misleading rather than the code. It
+is declared in `StreakLedger`, written by `noteLifeStart` (subscribed to `EV.PlayerSpawned`) and
+`noteRoundBoundary` (`EV.RoundStarted`), and read by `ServerMatch.streakEconomy` — which feeds
+`main.ts`'s per-match JSON and the skirmish harness's blocking assertion. P5's grenade probe is a
+different object entirely: `LifeStockAudit`, reporting `partialStock` through
+`ServerMatch.equipmentAudit`. They share no code; they only both count life-starts off the same
+spawn event, which is what makes them read alike.
+
+What the counter tests is `kills + credits − spent !== 0` — **"this life started holding a
+wallet"**. It is the wallet's life boundary measured at the spawn instead of at the death, with
+the round-boundary count as its other end so it can fail in both directions. Only the
+`|| used.length > 0` clause it also carried had anything to do with once-per-life, and that
+clause is what this session removed. So the invariant is untouched by the pivot, and both halves
+are renamed to say what they count: **`walletsAtLifeStart === walletsAtRoundBoundary`**.
+
+Cooldowns are deliberately outside it. They are meant to cross a death, so putting them in a
+counter asserted at zero would be building a counter to fail. `cooldownsCrossingDeath` is where
+that decision is measured, and it is written to be read the other way round: in a run where
+streaks were spent, a **zero** there means either nobody died inside a cooldown or the life reset
+is clearing them — and the second is a bug that would look exactly like the first.
+
+### The wire carries a duration where it carried a bit (protocol v13)
+
+`StreakOfferState.used: boolean` became `lockoutCs: number`, u8 → u16, one extra byte per offer
+and three offers per frame. A bit cannot express either new rule: the client has to know *how
+long*, because the strip draws the wait as a fill, and it has to be the server's number, because
+the clock is the simulation's tick and a networked client is not running it.
+
+Everything else about the model is server-side by construction rather than by care, because all
+three rules are inside `StreakLedger.charge` — the one door — and `activate` is the only way into
+the world. The client's copies are advisory: `ReplicatedStreaks.canAfford` decides whether to
+*send* a request, and `Server.onStreakRequest` decides whether to grant it.
+
+### The HUD has a fill and no digits
+
+The fourth slot state was `USED`, struck through. It is now a `<u class="hud-streaks__cool">`
+absolutely positioned across the slot, drawn with `transform: scaleY(remaining / 30)` and clamped
+at 1 — so a streak still in the sky and one whose cooldown has just started read the same, full,
+and both drain over the last thirty seconds. No text and no number, which is what was asked for.
+
+Clamping is what stops the same wait looking different on two keys: a fraction of the *whole*
+lockout would be a bar falling at half speed on a sentry and at double on a mortar, for a reason
+the player has no way to see.
+
+Two things worth writing down because they are the mistakes this widget invites. The transform is
+written every frame and is deliberately **not** in the slot's string cache — a transform
+composites, a `textContent` reflows, and caching the one that is cheap costs a comparison to save
+nothing. And the fill needed `isolation: isolate` on the slot: an absolutely positioned child
+paints above its in-flow siblings whatever the DOM order, so without a stacking context the slot
+owns, the bar covers the key, the name and the price. `opacity` on three of the four slot states
+happens to create one — which is exactly the kind of accident that stops being true the first
+time somebody sets a state to `opacity: 1`.
+
+`npm run check:cosmetics` passes and was never at risk: it pins `EntitySnapshot`'s field set, and
+this is `MsgS.Streaks`. Worth saying explicitly that the audit's line was honoured rather than
+merely not tripped — **remaining time is still a number**, in `LedgerRow.cooldowns`, in
+`StreakOfferState.lockoutCs` and in `StreakSlotState.lockoutSeconds`. The HUD is the one place it
+stops being one.
+
+### The earning side, confirmed rather than assumed
+
+"Earn the points again in that same life" needs the kill counter to keep accumulating after a
+purchase, and it does — structurally, not by a rule that could be forgotten. `foldKills` banks
+the delta of `PlayerScore.kills` into `row.kills` and has no reference to spending; `charge` adds
+to `row.spent` and touches nothing else; the balance is the difference. Nothing in `checkEarned`
+was ever gated on the used set except the *announcement*, and that gate now lifts on the purchase
+that consumed it, so a streak becoming affordable a second time in one life announces a second
+time.
+
+### Bots go through the same door, and there is still no bot behind it
+
+The three rules live in `charge`, which `activate` calls before it builds anything, so every
+caller inherits all three: `ClientMatch.spendStreak`, `Server.onStreakRequest`, `ConsoleApi` and
+`StreakPanel`. There is no fifth. P4's finding is re-confirmed and still true — **nothing in
+`shared/ai/` touches `StreakSystem` at all**, so no bot has ever spent a streak, and there is no
+second economy because there is no second caller. When bot streak AI is built it inherits the
+debit, the cooldown and the concurrency rule without a line of its own; that is the property this
+session had to preserve and did, and it is not the same thing as bots participating today.
+
+### Measured
+
+Every number came out of a run in this session, named with the probe that produced it. The red
+control is HEAD before this session (once-per-life, `used` bit), rebuilt and re-run on the same
+inputs.
+
+**`npm run harness` — 5 matches, seeds 1-5, TDM on Foundry, bots only.**
+
+| | Red (once-per-life) | Green (cooldown) |
+|---|---|---|
+| Scores | 75-59, 75-66, 62-75, 75-66, 60-75 | **identical** |
+| Life-starts / with a wallet at start | 722 / **0** | 722 / **0** |
+| Round-boundary carry-overs | 0 | 0 |
+| Kills banked, against 683 scored | 683 | 683 |
+| Negative balances / anchor resyncs | 0 / 0 | 0 / 0 |
+| Post-mortem kills dropped | 5 | 5 |
+| Cooldowns crossing a death | — (no field) | **0** |
+| Entitlement per life — threshold | 93 | 93 |
+| Entitlement per life — once-per-life | 43 | 43 |
+| Entitlement per life — **with repeats** | — | **46** |
+
+**The scores are byte-identical, which is the regression control and is expected**: nothing in a
+bot-only TDM match spends a streak, so nothing this change touched runs there. The three
+entitlement ceilings all come out of that one run, on those five seeds, priced the same way — so
+the pacing comparison is not two fights. Removing the once-per-life cap raises the ceiling from
+**43 to 46** across 715 lives, a deliberately small move: a bot life almost never re-earns a
+streak's price *and* outlives the 30 s-plus cooldown, so the two mechanics that replaced the cap
+bind far less often than the cap did. `cooldownsCrossingDeath` is 0 here because no bot spends,
+so no cooldown is ever armed — which is the same fact as `activations` being 0, from the other
+side.
+
+**`npm run skirmish -- --grant-streak uav` — 3 headless clients, real server, real wire, TDM.**
+The only place in the project anything spends, and where the pivot is actually exercised: the
+top-up funds the wallet every 15 s so the only thing stopping a re-buy is the cooldown and a UAV
+still being up.
+
+| | Red (once-per-life) | Green (cooldown) |
+|---|---|---|
+| Life-starts / with a wallet at start | 113 / 0 | 103 / 0 |
+| Activations over ~21 top-ups | 23 | 17 |
+| **Most of one streak bought in one life** | **1** | **3** |
+| Most streaks (any kind) in one life | 1 | 3 |
+| Refused unaffordable / cooling / already up | 0 / — / — | 0 / **0** / **0** |
+| Cooldowns crossing a death | — | 19 |
+| Negative balances / resyncs | 0 / 0 | 0 / 0 |
+| Flow check | PASSED | PASSED |
+
+**The row that is the whole session is `most of one streak in one life`: 1 → 3.** Under B10 a
+life could not buy the same UAV twice however long it lived; here one life bought it three times,
+by re-earning the four kills and waiting out the cooldown twice. The refusals are 0/0 because the
+headless client does what a player does — it skips a key it can see is locked out rather than
+spamming it — so the cooldown shows up as *fewer activations spread over more re-buys* rather than
+as a wall of refused requests. The two runs are not the same seed (skirmish is wall-clock timed),
+so the raw activation counts (23 vs 17) are not a same-seed before/after; the deterministic
+harness above is where the ceilings are same-seed, and the skirmish is where the repeat is real.
+
+`19 cooldowns crossed a death` is the decision measured from the front: streaks were bought,
+players died inside the 30 s window, and their cooldowns kept running — which is exactly what
+"dying does not shorten a wait" produces, and the opposite would have read as a 0 here that looked
+just like a clean run.
+
+**`npm run skirmish -- --vote 4` — the same three clients, Search & Destroy.** The wallet
+carry-over invariant at a non-zero value: **6 life-starts inherited a balance against 6
+round-boundary carry-overs**, 0 cooldowns crossing a death, flow check passed. Six wallets crossed
+a round boundary and six were counted crossing it, from two different signals — the spawn and the
+round turn — agreeing.
+
+**`npm run server -- --mode SND --matches 5 --asap`, bots only.** `walletsAtLifeStart` against
+`walletsAtRoundBoundary`, per match: **5/5, 3/3, 1/1, 3/3, 4/4** — equal in all five over 190
+life-starts, 0 partial grenade stock, 0 negative balances. Identical to the numbers P5 measured
+under the old field names, which is the point: renaming `dirtyLifeStarts`/`roundCarryOvers` and
+dropping the `used` clause did not move the invariant, because the invariant was only ever about
+the wallet.
+
+**`npm run leak` — 100 cycles.** Subscriptions **29 → 29 (+0)**, heap 13.08 → 13.76 MiB. The
+count matches P5's 29 exactly: this session adds no bus subscription, because the cooldown is a
+map on a ledger row rather than a new listener.
+
+**`npm run check` and `npm run build`** green, including `check:cosmetics` — the snapshot audit is
+unaffected because the change is on `MsgS.Streaks`, not `EntitySnapshot`.
+
+### What was not verified
+
+The entitlement ceilings are exactly that — ceilings. `balanceRepeatPurchases` counts what a
+life's kills *could* buy at the cheapest price with repeats allowed and infinite time; it does
+not model the cooldown, on purpose, because the cooldown is a fact about how long a life lasted
+rather than about the kills. The number an actual match produces is `activations`, and it sits
+below the ceiling by whatever the cooldown took out. Both are reported so the gap is visible; the
+gap itself is not separately measured.
+
+`balance = earned − spent` is still not measured and still not measurable: the balance is computed
+from the other two, so there is no third number that could disagree. What is measured is the pair
+that can go wrong — a balance below zero, and a life that started holding one — both 0.
+
+### Needs a browser
+
+Nothing below is testable headlessly. `HeadlessClient` drives `NetClient` and `Prediction` and
+builds no `ClientMatch`, so it has no streak strip and no keys; the preview pane never fires
+`requestAnimationFrame`, so it cannot stand in for one. Every item is a networked match unless
+said otherwise.
+
+- **The repeat, which is the whole change.** Get a UAV up, let it expire, and keep killing. About
+  thirty seconds after it comes down — its 30 s duration is already spent, so this is the cooldown
+  — the slot must light again at four kills and the key must work a second time, **in the same
+  life, without dying**. Under the old rule it stayed `USED` until death; there is no `USED` any
+  more.
+- **The fill, and that it has no digits.** While a streak is on cooldown its slot must show a bar
+  draining from full to empty over thirty seconds, and **no number, no seconds, nothing counting
+  down** — that is the acceptance criterion the brief set. A streak still live in the world shows
+  the same full bar (it is clamped), so calling one in and immediately pressing its key again must
+  do nothing and look identical to a fresh cooldown.
+- **Concurrency without text.** Call in a sentry, then press its key again while it is still
+  standing. The key does nothing and the slot shows the locked state — the same one a cooldown
+  shows — with no message explaining why.
+- **Other keys are unaffected.** With one streak cooling down, a *different* equipped streak you
+  can afford must still fire. The lockout is per streak.
+- **The chopper shortcut, if you want to see it.** Call in the chopper, get shot out of it early,
+  then re-earn twelve kills in the same life: the chopper must be buyable again sooner than if you
+  had flown it to the end, because its cooldown started when it came down. This is the one case
+  where dying earlier helps, and it needs twelve fresh kills to reach, so it is hard to stage.
+- **Create-a-Class is unchanged.** The killstreak rows still read `Costs N kills · …`; the pivot
+  did not touch the editor.
+- **Single-player.** All of the above works locally too — the local `StreakSystem` runs the same
+  ledger. The one difference is that locally the fill comes off the client's own sim tick rather
+  than off the wire.
+
+### Found while here
+
+- **No bot has ever spent a killstreak — re-confirmed, and now load-bearing.** P4 found there is
+  no bot call site into `StreakSystem.activate`; that is still true (`grep` over `shared/ai/`
+  finds no reference to the system at all). It matters more now, because the three new rules live
+  behind the one door every activation goes through, so the day bot streak AI is built it
+  inherits the debit, the cooldown and the concurrency check for free — there is no second path to
+  keep in step. Not this session's item; the property was preserved rather than added.
+- **`EV.StreakProgress` and `EV.StreakEarned` still have no gameplay subscriber.** Only the debug
+  log listens. Both now carry balance-model numbers and the earned event now fires again when a
+  streak becomes re-affordable in one life, but a streak coming off cooldown is announced to
+  nobody — no cue that the key is live again. That is a gap an announcer would fill and is worth
+  knowing before F16 adds three more streaks with cooldowns of their own to not announce. Left.

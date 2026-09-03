@@ -14,6 +14,22 @@
 
 export type StreakId = 'uav' | 'counter_uav' | 'care_package' | 'mortar' | 'sentry' | 'chopper';
 
+/**
+ * When a streak's effect is over — which is when its cooldown starts to run.
+ *
+ * Round 4's second pass replaced "once per life" with a per-streak cooldown, and a cooldown
+ * needs a moment to be measured from. `'activation'` is for the streaks whose whole effect is
+ * dispatched by the keypress: a mortar's shells are already on their way and a care package's
+ * crate belongs to the world the instant it leaves the plane, so the player's part in either is
+ * over. `'expiry'` is for the ones that keep working *for their owner* while they are in the
+ * world, where the real lockout is the streak's own duration plus the cooldown.
+ *
+ * It is a property of the streak rather than a test inside the cooldown code for the reason
+ * every other tuning number in this file is: the next streak added has to answer the question,
+ * and a `switch` on the id is a place to forget to.
+ */
+export type StreakEffectEnd = 'activation' | 'expiry';
+
 export interface StreakDef {
   readonly id: StreakId;
   readonly name: string;
@@ -24,6 +40,16 @@ export interface StreakDef {
    * their own work (the care package drop, the mortar barrage).
    */
   readonly durationSeconds: number;
+  /**
+   * The moment this streak's effect ends, and therefore the moment its cooldown starts.
+   *
+   * Deliberately not derived from `durationSeconds`. A care package's sixty seconds is how long
+   * an unclaimed crate is left on the floor and a mortar's fourteen is how long the barrage
+   * takes to finish falling; neither is a stretch of time the *owner* is getting anything out
+   * of, and reading a duration as if it were would have priced two streaks by a number that
+   * means something else in both.
+   */
+  readonly effectEnds: StreakEffectEnd;
   /** One line, shown under the name in the HUD's streak strip. */
   readonly blurb: string;
   /**
@@ -39,6 +65,7 @@ export const STREAK_DEFS: readonly StreakDef[] = [
     name: 'UAV',
     requirement: 4,
     durationSeconds: 30,
+    effectEnds: 'expiry',
     blurb: 'Sweeping radar · enemies pinged for 30 s',
     fromCarePackage: false,
   },
@@ -47,6 +74,7 @@ export const STREAK_DEFS: readonly StreakDef[] = [
     name: 'COUNTER-UAV',
     requirement: 5,
     durationSeconds: 25,
+    effectEnds: 'expiry',
     blurb: 'Enemy minimap scrambled',
     fromCarePackage: true,
   },
@@ -56,6 +84,7 @@ export const STREAK_DEFS: readonly StreakDef[] = [
     requirement: 5,
     // The crate lives until somebody claims it or the cap expires it.
     durationSeconds: 60,
+    effectEnds: 'activation',
     blurb: 'Drops a random higher streak · contestable',
     fromCarePackage: false,
   },
@@ -64,6 +93,7 @@ export const STREAK_DEFS: readonly StreakDef[] = [
     name: 'MORTAR STRIKE',
     requirement: 7,
     durationSeconds: 14,
+    effectEnds: 'activation',
     blurb: 'Mark a zone · shells land in sequence',
     fromCarePackage: true,
   },
@@ -72,6 +102,7 @@ export const STREAK_DEFS: readonly StreakDef[] = [
     name: 'SENTRY GUN',
     requirement: 8,
     durationSeconds: 90,
+    effectEnds: 'expiry',
     blurb: 'Placeable auto-turret · destructible',
     fromCarePackage: true,
   },
@@ -80,10 +111,25 @@ export const STREAK_DEFS: readonly StreakDef[] = [
     name: 'CHOPPER GUNNER',
     requirement: 12,
     durationSeconds: 32,
+    effectEnds: 'expiry',
     blurb: 'Take the gun · thermal optics',
     fromCarePackage: true,
   },
 ];
+
+/**
+ * Seconds a streak is locked out for after its effect ends (round 4, the second pass).
+ *
+ * One number for all six rather than a per-streak field, because it is a rule about the *pace*
+ * of the match rather than a property of any one streak — the same reason the respawn delay is
+ * not a property of a class. A streak's own duration is already the part of the lockout that
+ * differs, and it is already on the def.
+ *
+ * Shared because both halves read it: the server arms the cooldown with it and the HUD draws
+ * its fill against it. A client that had its own copy would draw a fill that disagreed with the
+ * key it describes the moment the number changed.
+ */
+export const STREAK_COOLDOWN_SECONDS = 30;
 
 /** Whether an arbitrary string names a shipped streak. Used by the save repair. */
 export function isStreakId(value: string): value is StreakId {

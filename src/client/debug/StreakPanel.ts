@@ -41,7 +41,7 @@ export class StreakPanel {
 
     const streaks = overlay.section('Killstreaks', overlay.rightColumn);
     this.fProgress = streaks.addField('Balance / next');
-    this.fPending = streaks.addField('Spent this life');
+    this.fPending = streaks.addField('Locked out');
     this.fActive = streaks.addField('Active entities');
     this.fPerks = streaks.addField('Ghost / Cold / Hardline');
 
@@ -52,7 +52,8 @@ export class StreakPanel {
         this.button(`Buy + use ${def.name}`, () => {
           const sim = match.playerSim;
           // Credits the price and then pays it, so the button exercises the debit rather than
-          // stepping around it. A streak already bought this life stays refused, which is B10.
+          // stepping around it. A streak still cooling down, or one already up, stays refused —
+          // the buttons buy past the *price*, not past the rules that replaced once-per-life.
           match.streaks.debugGrant(PLAYER_ENTITY_ID, def.id);
           this.spend(def.id, sim.x, sim.y, sim.z, sim.yaw);
         }),
@@ -114,8 +115,13 @@ export class StreakPanel {
         : `${balance} -> ${next.price} ${next.def.name}`,
     );
 
-    const used = streaks.usedBy(PLAYER_ENTITY_ID);
-    set(this.fPending, used.length === 0 ? '—' : used.join(', '));
+    // The cooldowns and the concurrency block, as one list: the panel asks the same question
+    // the strip paints, so a slot that is dark here and lit there is a bug rather than a view.
+    const locked = streaks.lockoutsFor(PLAYER_ENTITY_ID);
+    set(
+      this.fPending,
+      locked.length === 0 ? '—' : locked.map((l) => `${l.id} ${l.seconds.toFixed(1)}s`).join(', '),
+    );
     set(this.fActive, `${streaks.active.length} · ${streaks.lastMs.toFixed(2)} ms`);
 
     // The three M6 hooks, as the streak system actually sees them.

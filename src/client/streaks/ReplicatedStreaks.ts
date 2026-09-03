@@ -10,8 +10,15 @@ import type { StreakEntityState, StreakView, UavContactState } from '../../share
 export interface ReplicatedOffer {
   readonly id: StreakId;
   readonly price: number;
-  /** Bought this life (B10). The fourth state the streak strip paints. */
-  readonly used: boolean;
+  /**
+   * Seconds until the key works again; 0 means now (round 4, the pivot).
+   *
+   * Was `used`, a boolean. The server's number, converted from the wire's centiseconds once
+   * here rather than at each read, and **not advanced locally between frames** — see the class
+   * comment: a countdown this client stepped on its own would be a number it invented, and the
+   * strip's fill is smooth enough at the snapshot rate because it is a fill rather than a clock.
+   */
+  readonly lockoutSeconds: number;
 }
 
 /**
@@ -61,7 +68,7 @@ export class ReplicatedStreaks {
     for (const offer of view.offers) {
       const def = STREAK_DEFS[offer.kind];
       if (def === undefined) continue;
-      offers.push({ id: def.id, price: offer.price, used: offer.used });
+      offers.push({ id: def.id, price: offer.price, lockoutSeconds: offer.lockoutCs / 100 });
     }
     this.offers_ = offers;
     this.balance_ = view.balance;
@@ -108,9 +115,9 @@ export class ReplicatedStreaks {
     return this.offerFor(id)?.price ?? 0;
   }
 
-  /** B10: already bought this life. */
-  hasUsed(id: StreakId): boolean {
-    return this.offerFor(id)?.used === true;
+  /** Seconds until this key works again, or 0. Covers the cooldown and a live instance alike. */
+  lockoutSeconds(id: StreakId): number {
+    return this.offerFor(id)?.lockoutSeconds ?? 0;
   }
 
   /**
@@ -122,7 +129,7 @@ export class ReplicatedStreaks {
    */
   canAfford(id: StreakId): boolean {
     const offer = this.offerFor(id);
-    return offer !== undefined && !offer.used && offer.price <= this.balance_;
+    return offer !== undefined && offer.lockoutSeconds <= 0 && offer.price <= this.balance_;
   }
 
   /** The cheapest streak not yet affordable, and its price, or null. Shaped like `nextFor`. */

@@ -17,6 +17,15 @@
 /**
  * Bump on any layout change to any message in this file.
  *
+ * v13 (M11 Gate B, playtest round 4, the killstreak pivot): each offer in `MsgS.Streaks` carries
+ * a **lockout in centiseconds** where it carried a "used this life" bit.
+ *
+ * Once-per-life was replaced by a per-streak cooldown that runs from the moment the streak's
+ * effect ends, plus a refusal while the player's own previous instance is still in the world. A
+ * boolean cannot express either: the client has to know *how long*, because the strip draws the
+ * wait as a fill, and it has to be the server's number, because the clock is the simulation's
+ * tick and the client is not running it. One byte per offer became two and the bit went away.
+ *
  * v12 (M11 Gate B, playtest round 4): **cheat codes** (F14). `MsgC.Cheat` carries the text a
  * player typed and `MsgS.Cheats` carries what the server decided about it; the resulting
  * entitlement mask rides the **owner block** of every snapshot.
@@ -85,7 +94,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
