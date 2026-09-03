@@ -53,14 +53,13 @@ import {
   type HudSurfaceState,
 } from '../shared/ui/HudSurfaces';
 import {
-  CHEAT_LOCAL,
   CHEAT_NOTICE_SECONDS,
   CHEAT_SIMULATION,
-  Cheat,
   CheatOutcome,
   cheatCodeToggling,
   cheatOutcomeText,
   instantCheatLabel,
+  isSurfaceCheat,
   parseCheatCode,
   toggleCheat,
   type CheatCode,
@@ -439,19 +438,17 @@ export class Game {
    */
   private debugRequest: DebugOverlayRequest = 'none';
   /**
-   * The cheat bits this client authors for itself (playtest round 4, F14).
+   * The entitlements this process has granted itself **while offline** (round 4, F14).
    *
-   * Two things live in here and the mask that reads it says which is which. `CHEAT_LOCAL` —
-   * `Cheat.Debug`, and nothing else — is always authored here, because the debug overlay is a
-   * client surface and no simulation reads it. `CHEAT_SIMULATION` bits are authored here **only
-   * when there is no server**, where this process is the authority and the QA spectator has
-   * worked exactly this way since M8.
+   * Only ever read when there is no server, where this process is the authority and the QA
+   * spectator has worked exactly this way since M8. Renamed from `localCheats` when the debug
+   * bit was deleted: with that gone there is nothing client-authored left in the mask, so this
+   * holds simulation bits and nothing else, and the name may as well say when it applies.
    *
-   * On `Game` rather than on the match for the same reason `debugRequest` and
-   * `NetClient.reconnectToken` are, and F8 already noted this was becoming a pattern: the
-   * surface is thrown away by a rotation and the fact is not.
+   * Cleared by `teardownWorld`, which is the offline mirror of `MatchInstance.unseat` — the
+   * entitlement belongs to the world it was granted in, offline exactly as on a server.
    */
-  private localCheats = 0;
+  private offlineCheats = 0;
   /**
    * The instant cheat this client is currently announcing, and when the announcement ends.
    *
@@ -1035,21 +1032,20 @@ export class Game {
    * stuck, and a panel stuck on screen is one eating the digit keys for the rest of the match.
    */
   /**
-   * This client's entitlements, merged from the two authorities that own them (round 4, F14).
+   * This client's entitlements, from the one authority that owns them (round 4, F14).
    *
-   * One expression, in one place, so the partition is arithmetic rather than a rule somebody
-   * has to remember. Connected, the simulation bits are the server's replicated answer and
-   * whatever this process may have granted itself offline is ignored — which is also what makes
-   * cheating offline and then joining a server clean up after itself. Offline, there is no
-   * server to ask and this process is the authority.
+   * Connected, it is the server's replicated answer and whatever this process may have granted
+   * itself offline is ignored — which is also what makes cheating offline and then joining a
+   * server clean up after itself. Offline, there is no server to ask and this process is the
+   * authority.
    *
-   * `CHEAT_LOCAL` is added from `localCheats` in both cases, and `check-cheats.mjs` is what
-   * guarantees the two masks are disjoint so no bit can be claimed by both halves.
+   * It was a merge of two halves until the debug bit was deleted. With every bit in the table
+   * now server-authored there is one authority and one expression, which is the simplification
+   * that removing a redundant fact buys.
    */
   private get cheatMask(): number {
     const net = this.world?.net?.client;
-    const authority = net === undefined ? this.localCheats : net.cheatMask;
-    return (this.localCheats & CHEAT_LOCAL) | (authority & CHEAT_SIMULATION);
+    return (net === undefined ? this.offlineCheats : net.cheatMask) & CHEAT_SIMULATION;
   }
 
   /**
@@ -1080,22 +1076,24 @@ export class Game {
       return;
     }
 
-    if (entry.local) {
-      const before = this.localCheats;
-      const after =
-        entry.effect.kind === 'toggle' ? toggleCheat(before, entry.effect.bits) : before;
-      this.localCheats = after;
+    if (isSurfaceCheat(entry)) {
       /**
-       * Unlocking is also a request to see it, and revoking cancels the request.
+       * `DEBUG666` writes `debugRequest` and nothing else, and that is the fix.
        *
-       * `'onPause'` because this is where it was typed and the tuning sliders need a cursor —
-       * exactly what that member of the tri-state means. Clearing the request on a revoke keeps
-       * a later re-unlock from popping the panel up on a screen nobody asked for it on.
+       * F14 wrote an entitlement bit *and* the request, which made two copies of one fact — and
+       * the × writes only the request, so closing the panel left the bit saying "unlocked" and
+       * the code's next press read as "off". One store, four writers (the ×, Escape, the pause
+       * button and this), exactly as P1 built it for B1.
+       *
+       * Toggled against the **visible** state rather than against a flag of its own: if the
+       * overlay is up the code takes it down, and if it is not the code puts it up. `'onPause'`
+       * because this is where it was typed and the tuning sliders need a cursor — which is what
+       * that member of the tri-state means.
        */
-      const nowUnlocked = (after & Cheat.Debug) !== 0;
-      this.debugRequest = nowUnlocked ? 'onPause' : 'none';
+      const wasVisible = debugOverlayVisible(this.hudSurfaceState());
+      this.debugRequest = wasVisible ? 'none' : 'onPause';
       this.screens.pauseMenu.setCodeResult(
-        cheatOutcomeText(nowUnlocked ? CheatOutcome.Granted : CheatOutcome.Revoked),
+        cheatOutcomeText(wasVisible ? CheatOutcome.Revoked : CheatOutcome.Granted),
       );
       return;
     }
@@ -1126,8 +1124,9 @@ export class Game {
       this.screens.pauseMenu.setCodeResult(cheatOutcomeText(CheatOutcome.InstantApplied));
       return;
     }
-    const after = toggleCheat(this.localCheats, entry.effect.bits);
-    this.localCheats = after;
+    if (entry.effect.kind !== 'toggle') return;
+    const after = toggleCheat(this.offlineCheats, entry.effect.bits);
+    this.offlineCheats = after;
     const granted = (after & entry.effect.bits) !== 0;
     this.screens.pauseMenu.setCodeResult(
       cheatOutcomeText(granted ? CheatOutcome.Granted : CheatOutcome.Revoked),
@@ -1465,6 +1464,19 @@ export class Game {
   private teardownWorld(options: { keepConnection?: boolean } = {}): void {
     this.pendingSummary = false;
     this.pendingRotation = null;
+    /**
+     * The offline authority's own seat boundary (round 4, F14).
+     *
+     * `MatchInstance.unseat` is where a *server* ends a seat's entitlements. Offline there is no
+     * seat and no server, and this is the same boundary: the world the cheat was granted in is
+     * going away. Without it a single-player god mode would follow the player through the menu
+     * into their next match, which is the same defect the networked half was fixed for.
+     *
+     * Networked, this field is not read at all — see `cheatMask` — so clearing it costs nothing
+     * and is not a second writer of the replicated answer.
+     */
+    this.offlineCheats = 0;
+    this.clearInstantCheat();
     // A rotation keeps the socket no matter which teardown runs. The SUMMARY state tears the
     // world down on its way out and has no way to know a rotation is why it is leaving.
     const keep = options.keepConnection === true || this.rotating;
@@ -1657,9 +1669,9 @@ export class Game {
          *
          * The toggles need nothing here: the server clears them at `unseat` and
          * `NetClient.onWelcome` discards its replica, so by the time this runs there is no
-         * simulation bit left to drop. `Cheat.Debug` is deliberately **not** cleared — it is a
+         * simulation bit left to drop. `debugRequest` is deliberately **not** cleared — it is a
          * client surface with a session lifetime, and it survives a migration for the same
-         * reason `debugRequest` survives a rotation.
+         * reason it survives a rotation.
          */
         this.clearInstantCheat();
         this.pendingMigration = welcome;

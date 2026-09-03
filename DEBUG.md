@@ -950,6 +950,13 @@ observe through and one that is strobing at you.
 | Sprint | ×4 — crossing Dunes |
 | ADS | ×¼ — easing up to a seam |
 
+**Turning the spectator off is not one toggle.** `SPEC[]4` clears all three only when all three
+are on; from any other state it *completes* the set, because the codes are toggles and a toggle of
+a set is "complete it unless it is already complete". The panel's headline button and
+`__operator.spectate.off()` go through `bitsClearing`, which asks for one single-bit toggle per bit
+that is actually set. Reaching for the combo code to mean "off" is what shipped a bug where one
+active cheat became three across a migration.
+
 Leaving free-cam drops you where you were floating and hands you back to gravity and
 collision. That is deliberate: teleporting you back to the take-off point would hide the case
 where the geometry you flew out to inspect is geometry you cannot get out of.
@@ -1003,7 +1010,7 @@ them. Type the literal text, brackets included. Case does not matter.
 
 | Code | Effect | Who decides |
 |---|---|---|
-| `DEBUG666` | Unlocks the debug overlay, and puts it up. The pause screen's **Debug overlay** button appears with it. | The client. It is a client surface and no simulation reads it, so it works offline and against any server. |
+| `DEBUG666` | Toggles the debug overlay. The pause screen's **Debug overlay** button appears with it. | The client. It is a client surface with no entitlement behind it at all, so it works offline and against any server. |
 | `SPEC[]1` | God mode | The server, and only with `CHEATS_ENABLED=1` |
 | `SPEC[]2` | Invisible | " |
 | `SPEC[]3` | Free cam | " |
@@ -1014,8 +1021,11 @@ them. Type the literal text, brackets included. Case does not matter.
 
 Every code declares a `CheatKind`, and the HUD renders by it:
 
-- **Toggles** — `DEBUG666` and the four `SPEC[]n` — are states you are *in*. Typing one again
-  clears it. `SPEC[]4` completes the set unless the whole set is already on, in which case it
+- **`DEBUG666`** is a `'surface'` code: it toggles the overlay itself and grants no entitlement.
+  It toggles against **what is on screen**, so closing the panel with its × or with Escape and
+  then typing the code once reopens it. (Until the fix it took two presses, because the code was
+  toggling a bit of its own that the × did not write.)
+- **Toggles** — the four `SPEC[]n` — are states you are *in*. Typing one again clears it. `SPEC[]4` completes the set unless the whole set is already on, in which case it
   clears all of it; that is the same rule the spectator panel's headline button has always used
   and is now literally the same function.
 - **Instants** — `MO951357` — are transactions. They cannot be "on", so there is nothing to type
@@ -1027,8 +1037,8 @@ Every code declares a `CheatKind`, and the HUD renders by it:
 
 | Entitlement | Lifetime |
 |---|---|
-| `DEBUG666` | **the session.** Survives a migration and a map rotation, exactly as the overlay's own open/closed request does. |
-| `SPEC[]1` – `SPEC[]4` | **the seat.** `MatchInstance.unseat` clears them, so being migrated from the arena into a match — or dropping out — ends them. Type them again in the match you want them in. |
+| `DEBUG666` | **the session.** Survives a migration and a map rotation — it *is* the overlay's own open/closed request, and that has outlived a world since M4. |
+| `SPEC[]1` – `SPEC[]4` | **the seat.** `MatchInstance.unseat` clears them, so being migrated from the arena into a match — or dropping out — ends them. Type them again in the match you want them in. Offline the same boundary is `teardownWorld`. |
 | `MO951357` | the payment lands and is over. What it pays *into* is a killstreak balance, which belongs to a life and is forgotten when you leave an instance. |
 
 That is a fix rather than a design: F14 shipped with all of them held for the life of the

@@ -274,11 +274,23 @@ export class DebugSuite {
    * a step in `usedJSHeapSize` at the next match boundary.
    */
   dispose(): void {
-    // First: hand the player back their body. The match and the controller are about to be
-    // thrown away, so this is belt-and-braces — but a spectator flag surviving into the next
-    // match through some future object reuse would be an invisible, invulnerable player and
-    // a very confusing bug report.
-    this.spectator.reset();
+    /**
+     * **No `spectator.reset()` here, and its absence is load-bearing** (F14, and the fix).
+     *
+     * There was one, from before F14, with a comment calling it belt-and-braces against "a
+     * spectator flag surviving into the next match". That was true when this class owned three
+     * booleans and `reset()` wrote them to false. F14 turned them into cheat *entitlements* the
+     * server owns, and the line became a cheat **request** sent during teardown — a toggle of all
+     * three bits, arriving at the server around the moment `MatchInstance.unseat` had cleared the
+     * seat's mask to zero. `0` toggled by a three-bit set is all three bits: a player who had
+     * typed one code arrived in the next match with every cheat on.
+     *
+     * Nothing needs to be undone here. The entitlement's lifetime is the seat and the server ends
+     * it; every effect is derived from the replicated mask every tick, so a torn-down world holds
+     * no cheat state to leak. The thing to resist is re-adding a defensive reset: after F14 a
+     * "reset" is a request, and a request during teardown is a write to state this process does
+     * not own.
+     */
     this.streakPanel.dispose();
     this.metaPanel.dispose();
     this.scene.remove(this.equipmentPanel.group);

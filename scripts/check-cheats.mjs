@@ -13,14 +13,24 @@
  * entitlement. So a code string may appear in exactly two places: the table that defines it, and
  * the harness that types one to test it. Anywhere else fails.
  *
- * ## 2. A bit in both halves of the partition, or in neither
+ * ## 2. A client-authored entitlement
  *
- * `CHEAT_SIMULATION` and `CHEAT_LOCAL` are what make the merge in `Game.cheatMask` one
- * expression instead of a rule somebody has to remember, and the whole security argument rests
- * on them being disjoint and complete. A bit in both would let a client author a simulation
- * entitlement for itself. A bit in neither would be an entitlement that silently cannot be
- * granted at all — the quieter failure of the two, and the one a playtest would report as "the
- * code does nothing".
+ * Every bit in the table is the server's. A `'surface'` code — one the client applies to itself
+ * without asking — must therefore carry no bits at all, and a bit outside `CHEAT_SIMULATION`
+ * could never be granted by anybody. Both are silent failures: the first is an exploit, the
+ * second is a code that does nothing.
+ *
+ * ## What this file deliberately does *not* check
+ *
+ * The arithmetic. `bitsClearing` clearing every mask to exactly zero is the property the shipped
+ * regression violated, and it was written here first — as a re-implementation of the function in
+ * JavaScript, because this script cannot import TypeScript. Watched red, it **stayed green** with
+ * the real function broken, because it was proving a property of its own copy.
+ *
+ * That is the trap this milestone keeps meeting from a new direction, so the proof moved to where
+ * the real function runs: `assertClearingArithmetic` in `skirmishHarness.ts`, which imports it and
+ * folds `toggleCheat` over its answer for every reachable mask on **every** harness run. A check
+ * that cannot fail is worse than no check, because it is trusted.
  *
  * Same mechanism as `check-cosmetics` and `check-unlocks`: a rule a human has to remember is a
  * rule that will be broken by the next milestone.
@@ -59,7 +69,7 @@ for (const file of walk('src')) {
   }
 }
 
-// ---- 2. the partition is disjoint and complete ---------------------------
+// ---- 2. every bit is server-authored, and no surface code carries one ----
 const bits = [...src.matchAll(/^  (\w+): 1 << (\d+),$/gm)].map((m) => ({
   name: m[1],
   value: 1 << Number(m[2]),
@@ -68,23 +78,29 @@ if (bits.length === 0) {
   problems.push(`found no entitlement bits in ${CHEATS} — this check has stopped checking`);
 }
 const sim = maskOf('CHEAT_SIMULATION');
-const local = maskOf('CHEAT_LOCAL');
 for (const bit of bits) {
-  const inSim = (sim & bit.value) !== 0;
-  const inLocal = (local & bit.value) !== 0;
-  if (inSim && inLocal) {
+  if ((sim & bit.value) === 0) {
     problems.push(
-      `Cheat.${bit.name} is in both CHEAT_SIMULATION and CHEAT_LOCAL. A client would be able ` +
-        'to author it for itself while the server also claimed it — the merge in Game.cheatMask ' +
-        'cannot resolve that, and the bit is an exploit.',
+      `Cheat.${bit.name} is not in CHEAT_SIMULATION, so nothing can ever grant it: ` +
+        'Game.cheatMask and NetClient both mask with it and this bit falls out of each. Either ' +
+        'add it, or delete a bit nothing can grant.',
     );
   }
-  if (!inSim && !inLocal) {
+}
+
+// A `'surface'` code is applied by the client without asking anybody, so it must not be able to
+// grant an entitlement. This is the invariant that replaced F14's separate `local` flag.
+for (const m of src.matchAll(/\{ code: '([^']+)', effect: \{ kind: '(\w+)'([^}]*)\}/g)) {
+  const [, code, kind, rest] = m;
+  if (kind === 'surface' && /bits/.test(rest)) {
     problems.push(
-      `Cheat.${bit.name} is in neither CHEAT_SIMULATION nor CHEAT_LOCAL, so nothing can ever ` +
-        'grant it: Game.cheatMask masks with both halves and this bit falls out of each. Add it ' +
-        'to whichever authority owns it.',
+      `${code} is a 'surface' code and carries entitlement bits. A surface code is applied by ` +
+        'the client without asking the server, so a bit on one is a bit a client can author ' +
+        'for itself.',
     );
+  }
+  if (kind === 'toggle' && !/bits/.test(rest)) {
+    problems.push(`${code} is a 'toggle' and carries no bits, so it toggles nothing.`);
   }
 }
 
@@ -123,6 +139,7 @@ if (problems.length > 0) {
 }
 
 console.log(
-  `cheat audit ok — ${codes.length} codes, ${bits.length} entitlement bits, ` +
-    'partition disjoint and complete, no code named outside the table.',
+  `cheat audit ok — ${codes.length} codes, ${bits.length} entitlement bits (all server-authored), ` +
+    'no code named outside the table. The clearing arithmetic is proved in the harness, ' +
+    'against the real function — see the note at the top of this file.',
 );

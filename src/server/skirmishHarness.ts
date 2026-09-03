@@ -2,7 +2,14 @@ import { installClock, nowMs } from '../shared/core/Clock';
 import { logger } from '../shared/core/Log';
 import { EventBus } from '../shared/core/EventBus';
 import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } from '../shared/net/NetSim';
-import { Cheat, CheatOutcome, describeCheatMask } from '../shared/cheats/Cheats';
+import {
+  CHEAT_FULL_SPECTATOR,
+  Cheat,
+  CheatOutcome,
+  bitsClearing,
+  describeCheatMask,
+  toggleCheat,
+} from '../shared/cheats/Cheats';
 import { CLIENT_TIMEOUT_MS, RECONNECT_GRACE_MS } from '../shared/net/Protocol';
 import { isArenaInstance, votePhaseName, type NetLoadout } from '../shared/net/Skirmish';
 import type { StreakId } from '../shared/streaks/StreakDefs';
@@ -236,6 +243,78 @@ const LIGHTWEIGHT_CLASS: NetLoadout = {
  * Index 3 and beyond are `undefined`, and that is the control seat.
  */
 const CHEAT_SCRIPT: readonly (string | undefined)[] = ['SPEC[]1', 'SPEC[]2', 'MO951357'];
+
+/**
+ * The clearing arithmetic, proved against the real functions on every run (F14's second fix).
+ *
+ * ## Why this is here and not in `check-cheats.mjs`
+ *
+ * It was there first, as a re-implementation of `bitsClearing` in JavaScript — that script cannot
+ * import TypeScript. Watched red with the real function broken, it stayed **green**: it was
+ * proving a property of its own copy. This module is compiled, so it can import the thing itself,
+ * and that is the difference between a proof and a restatement.
+ *
+ * ## The property, and why it is exhaustive rather than sampled
+ *
+ * `toggleCheat` is a relative move. Toggling a multi-bit set clears it **only** from the mask that
+ * already holds every bit; every other mask widens to the full set. Expressing *"turn these off"*
+ * as one such toggle is what shipped: a player holding god mode alone was migrated, the teardown
+ * asked to toggle all three, the request landed on a mask the migration had cleared to zero, and
+ * `0 | God|Unseen|NoClip` arrived in the next match as every cheat on. One bit in, three bits out.
+ *
+ * `bitsClearing` is the verb that means "off". The state space is eight masks, so the property is
+ * decidable rather than sampled: for **every** reachable mask, folding `toggleCheat` over its
+ * answer must give exactly `0` — not "not the full mask", exactly zero. That is the assertion the
+ * report asked for, over all of the inputs instead of one of them.
+ *
+ * Pure, allocation-light and instant, so it runs unconditionally at the top of every harness
+ * invocation rather than behind a flag. A property that only holds when somebody remembers to
+ * pass `--cheats` is a property that will be broken by a run that does not.
+ */
+function assertClearingArithmetic(): string[] {
+  const problems: string[] = [];
+  const full = CHEAT_FULL_SPECTATOR;
+  let masks = 0;
+
+  for (let mask = 0; mask <= full; mask++) {
+    // Masks with bits outside the set are not reachable; the wire filters them on arrival.
+    if ((mask & ~full) !== 0) continue;
+    masks++;
+    let after = mask;
+    for (const bit of bitsClearing(mask, full)) after = toggleCheat(after, bit);
+    if (after !== 0) {
+      problems.push(
+        `bitsClearing cannot clear mask ${mask} (${describeCheatMask(mask)}): folding its ` +
+          `toggles gives ${after} (${describeCheatMask(after)}), not 0`,
+      );
+    }
+  }
+
+  /**
+   * And the single case the report named, spelled out rather than left implied by the loop.
+   *
+   * "Activate only bit 1, clear, and the result must be exactly 0 and not the full bitmask."
+   * It is one of the eight above; it is also the one a reader will look for, and a named
+   * assertion is what makes the failure message say which case broke.
+   */
+  let one = Cheat.God;
+  for (const bit of bitsClearing(one, full)) one = toggleCheat(one, bit);
+  if (one !== 0) {
+    problems.push(
+      `clearing god mode alone gives ${one} (${describeCheatMask(one)}), not 0 — this is the ` +
+        'reported mutation: a single active cheat becoming the full set',
+    );
+  }
+  // The other half of the same report: the full set must clear too, which it always did.
+  let all = full;
+  for (const bit of bitsClearing(all, full)) all = toggleCheat(all, bit);
+  if (all !== 0) problems.push(`clearing the full set gives ${all}, not 0`);
+
+  if (masks !== 8) {
+    problems.push(`expected 8 reachable cheat masks and walked ${masks} — the bit table moved`);
+  }
+  return problems;
+}
 
 async function main(): Promise<number> {
   installClock(nodeClock);
@@ -1102,6 +1181,14 @@ function reportFlow(input: FlowReportInput): number {
    * and the brief is explicit that it is not to be explained away.
    */
   const problems: string[] = [];
+  /**
+   * The cheat arithmetic, on **every** run rather than behind `--cheats`.
+   *
+   * It is a pure property of two shared functions and costs eight iterations, so there is no
+   * reason for it to depend on a flag — and the regression it guards shipped precisely because
+   * the only probe that touched cheats had to be asked for. See `assertClearingArithmetic`.
+   */
+  problems.push(...assertClearingArithmetic());
   // F14's block reads its own numbers and returns its own failures, so they join this gate
   // rather than logging beside it and passing.
   if (opts.cheats) problems.push(...reportCheats(input));

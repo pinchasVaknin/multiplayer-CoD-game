@@ -20,15 +20,23 @@
  * killing you) or it works, and then it is a hole. So those bits are `CHEAT_SIMULATION`, and the
  * **server is their only author**; a client's copy is replicated state it reads and never writes.
  *
- * `DEBUG666` changes a client surface and nothing else, so its bit is `CHEAT_LOCAL` and the
- * client authors it for itself. That is not a convenience: gating the debug overlay behind a
- * server flag would make it unreachable in single-player, where there is no server, and
- * unreachable against a deployed one — which is exactly where every "needs a browser" list in
- * PLAN.md asks somebody to go and read the NetPanel.
+ * `DEBUG666` changes a client surface and nothing else, so the client authors it — and it grants
+ * **no entitlement at all**. It is `kind: 'surface'`, it never reaches the wire, and there is no
+ * bit anywhere in this file for it. Gating it behind the server flag would make the debug overlay
+ * unreachable in single-player, where there is no server, and unreachable against a deployed one
+ * — which is exactly where every "needs a browser" list in PLAN.md sends somebody to read the
+ * NetPanel.
  *
- * The two masks are disjoint and every bit is in exactly one of them, which is what lets the
- * merge be one expression rather than a rule somebody has to remember (see `Game.cheatMask`).
- * `check-cheats.mjs` fails if a bit is in both or in neither.
+ * So **every bit in the table below is server-authored**, without exception, and `Game.cheatMask`
+ * is one mask from one authority rather than a merge of two halves. `check-cheats.mjs` enforces
+ * the property that makes that true: a `'surface'` code may not carry entitlement bits.
+ *
+ * F14 gave `DEBUG666` a bit, and the bit was a second copy of `debugRequest` — which round four's
+ * B1 had already established as *the* single store for "is the overlay wanted", after a defect
+ * whose description was *"two copies of 'is the debug overlay open', and the × wrote one of
+ * them"*. The × wrote one of them again: it cleared the request and left the bit, so typing the
+ * code after closing the panel read as *"off"* and a third press was needed to reopen. Deleting
+ * the bit is the fix, and it is B1's fix a second time.
  *
  * ## Every entitlement's lifetime, and where it is cleared
  *
@@ -39,7 +47,7 @@
  *
  * | Entitlement | Kind | Lifetime | Cleared, server | Cleared, client |
  * |---|---|---|---|---|
- * | `Cheat.Debug` | toggle | **the session** — the tab | never granted server-side | retyping the code. Deliberately survives a migration and a rotation, exactly as `debugRequest` does |
+ * | `DEBUG666` | surface | **the session** — the tab | never sent | it *is* `debugRequest`; the ×, Escape and the code all write that one value. Deliberately survives a migration and a rotation |
  * | `Cheat.God` | toggle | **the seat** — one instance | `MatchInstance.unseat` | `NetClient.onWelcome`'s S4.18 discard |
  * | `Cheat.Unseen` | toggle | the seat | same | same |
  * | `Cheat.NoClip` | toggle | the seat | same | same |
@@ -63,16 +71,17 @@
 /**
  * One entitlement per bit. The mask crosses the wire as a single byte.
  *
- * **Every bit here is a state a player can be *in*.** F14 also gave a bit to the wallet payment,
- * as an attribution flag with no effect, and that was a modelling error this file had already
- * argued against two paragraphs further down: a payment is a transaction, and a transaction is
- * not a state. The bit outlived its own subject — the ledger row it described is destroyed by
- * the next migration — so the HUD went on claiming an audit trail for a balance that no longer
- * existed. Instant effects are announced (see `CheatKind`) rather than latched.
+ * **Every bit here is a state a player can be *in*, and every one of them is the server's.**
+ * Two bits have been removed since F14 and both for the same reason — they were not states:
+ *
+ * - `Wallet` was a receipt for a transaction, and it outlived the ledger row it described.
+ * - `Debug` was a second copy of `debugRequest`, and only one of the two was written when the
+ *   panel was dismissed.
+ *
+ * The bits that remain are the three the simulation reads. If a candidate bit has no line in
+ * `Perception`, `DamageSystem` or `PlayerController` that reads it, it is not one of these.
  */
 export const Cheat = {
-  /** The debug overlay is reachable. Client-authored; see the partition below. */
-  Debug: 1 << 0,
   /** Takes no damage. `Damageable.invulnerable`, tested at the damage door. */
   God: 1 << 1,
   /** Nothing comes looking. `Combatant.participating`, tested by perception and spawn scoring. */
@@ -83,51 +92,53 @@ export const Cheat = {
 
 export type CheatBit = (typeof Cheat)[keyof typeof Cheat];
 
-/** The bits the simulation owns. Authored by the server, and by nobody else when there is one. */
+/**
+ * Every entitlement bit there is, and all of them the server's.
+ *
+ * Kept as a named mask rather than folded away, because `NetClient` masks the incoming byte with
+ * it — so a bit retired from the table above is filtered on arrival rather than misread, which is
+ * what let two removals happen without a protocol bump.
+ */
 export const CHEAT_SIMULATION = Cheat.God | Cheat.Unseen | Cheat.NoClip;
-
-/** The bits a client may author for itself, because no simulation reads them. */
-export const CHEAT_LOCAL = Cheat.Debug;
 
 /** Everything `full spectator` means. See `SPEC[]4`. */
 export const CHEAT_FULL_SPECTATOR = Cheat.God | Cheat.Unseen | Cheat.NoClip;
 
 /**
- * Continuous or transient, **declared** rather than inferred at each reader.
+ * What kind of thing a code does, **declared** rather than inferred at each reader.
  *
- * A `'toggle'` is a state a player is in until they leave it: it has a bit, it is replicated, and
- * the HUD shows it for as long as it is true. An `'instant'` is a transaction that is over the
- * moment it lands: it has no bit, nothing replicates it, and the HUD *announces* it for a fixed
- * display duration.
+ * Three kinds, and the differences are all differences of *lifetime*:
  *
- * It is a property of the code rather than a special case in the HUD, and that is the whole point
- * of the field. F14 rendered one persistent tag and gave the wallet payment a latched bit to be
- * rendered by, which put a receipt on screen for the rest of the session; the next instant cheat
- * would have repeated it. Keyed by kind, the next one is already handled.
+ * - `'toggle'` — a state a player is in until they leave it. It has an entitlement bit, the
+ *   server owns it, it is replicated, and the HUD shows it for as long as it is true.
+ * - `'instant'` — a transaction, over the moment it lands. No bit, nothing replicated, and the
+ *   HUD *announces* it for a display duration.
+ * - `'surface'` — a client surface with no simulation behind it. No bit, never sent to the
+ *   server, and the store it writes is the one that already owns that surface.
+ *
+ * The kind is the discriminant and there is no second flag beside it. F14 carried a `local`
+ * boolean as well, which meant the same thing as `'surface'` does and could disagree with the
+ * bits; `check-cheats.mjs` now enforces the invariant that made that flag redundant — a
+ * `'surface'` code carries no entitlement bits, so a client can never author one.
  */
-export type CheatKind = 'toggle' | 'instant';
+export type CheatKind = 'toggle' | 'instant' | 'surface';
 
 /**
  * What a recognised code asks for. The discriminant is the kind above.
  *
  * A toggle carries the bits it flips. An instant carries its payload — today only `kills`, and a
- * second kind of payment would add a field here rather than a branch anywhere downstream.
+ * second kind of payment would add a field here rather than a branch anywhere downstream. A
+ * surface carries nothing: which surface is the client's business, and there is exactly one.
  */
 export type CheatEffect =
   | { readonly kind: 'toggle'; readonly bits: number }
-  | { readonly kind: 'instant'; readonly kills: number };
+  | { readonly kind: 'instant'; readonly kills: number }
+  | { readonly kind: 'surface' };
 
-/** A recognised code: what it is called, what it does, and who decides. */
+/** A recognised code: what it is called and what it does. */
 export interface CheatCode {
   readonly code: string;
   readonly effect: CheatEffect;
-  /**
-   * True when the client may apply this to itself without asking anybody.
-   *
-   * Derived from the partition rather than stated per row, so a code whose bits are in
-   * `CHEAT_SIMULATION` cannot be marked local by accident.
-   */
-  readonly local: boolean;
 }
 
 /**
@@ -148,12 +159,12 @@ export const CHEAT_WALLET_KILLS = 30;
  * `[` is on a keyboard that does not have one.
  */
 const CODES: readonly CheatCode[] = [
-  { code: 'DEBUG666', effect: { kind: 'toggle', bits: Cheat.Debug }, local: true },
-  { code: 'SPEC[]1', effect: { kind: 'toggle', bits: Cheat.God }, local: false },
-  { code: 'SPEC[]2', effect: { kind: 'toggle', bits: Cheat.Unseen }, local: false },
-  { code: 'SPEC[]3', effect: { kind: 'toggle', bits: Cheat.NoClip }, local: false },
-  { code: 'SPEC[]4', effect: { kind: 'toggle', bits: CHEAT_FULL_SPECTATOR }, local: false },
-  { code: 'MO951357', effect: { kind: 'instant', kills: CHEAT_WALLET_KILLS }, local: false },
+  { code: 'DEBUG666', effect: { kind: 'surface' } },
+  { code: 'SPEC[]1', effect: { kind: 'toggle', bits: Cheat.God } },
+  { code: 'SPEC[]2', effect: { kind: 'toggle', bits: Cheat.Unseen } },
+  { code: 'SPEC[]3', effect: { kind: 'toggle', bits: Cheat.NoClip } },
+  { code: 'SPEC[]4', effect: { kind: 'toggle', bits: CHEAT_FULL_SPECTATOR } },
+  { code: 'MO951357', effect: { kind: 'instant', kills: CHEAT_WALLET_KILLS } },
 ];
 
 /**
@@ -211,6 +222,11 @@ export const CHEAT_CODE_MAX = 24;
  * optional, since `SPEC1` would be a different string a player might reasonably expect to mean
  * something else later.
  */
+/** Whether this code is the client's own business and must never reach the wire. */
+export function isSurfaceCheat(entry: CheatCode): boolean {
+  return entry.effect.kind === 'surface';
+}
+
 export function parseCheatCode(raw: string): CheatCode | null {
   if (raw.length > CHEAT_CODE_MAX) return null;
   const text = raw.trim().toUpperCase();
@@ -224,12 +240,61 @@ export function parseCheatCode(raw: string): CheatCode | null {
  * The rule for a multi-bit code — `SPEC[]4` — is the one `SpectatorPanel`'s "toggle full
  * spectator" button has used since M8: pressing it while a *subset* is on completes the set
  * rather than turning things off, and only a press with everything already on clears it. That is
- * what somebody reaching for one control wants, and it is now one function both surfaces call
- * instead of two that agree until they do not.
+ * what somebody reaching for one control wants.
+ *
+ * ## This is a toggle, and a toggle cannot express "off"
+ *
+ * Read the two branches: for a multi-bit `bits`, the *only* mask that clears is the one that
+ * already holds every bit. Every other mask **widens** to the full set.
+ *
+ * | mask | `toggleCheat(mask, God|Unseen|NoClip)` |
+ * |---|---|
+ * | `0` | **all three** |
+ * | `God` | **all three** |
+ * | `God+Unseen` | **all three** |
+ * | all three | `0` |
+ *
+ * That is correct as a toggle and catastrophic as a way of saying *"turn these off"*, which is
+ * exactly what `DebugSuite.dispose` was doing through `Spectator.reset()`: a player holding god
+ * mode alone was migrated, the teardown asked to toggle all three, the request landed on a mask
+ * the migration had already cleared to zero — and arrived in the next match with **everything**
+ * on. One kill and a mask of 2 became a mask of 14.
+ *
+ * So a caller that wants a *state* must not use this. `codesClearing` below is the verb for that,
+ * and `check-cheats.mjs` proves it over every subset.
  */
 export function toggleCheat(mask: number, bits: number): number {
   const all = (mask & bits) === bits;
   return all ? mask & ~bits : mask | bits;
+}
+
+/**
+ * The toggles that turn `bits` off, given the mask they are currently in.
+ *
+ * The verb `toggleCheat` cannot be: *"off"* is a state and a toggle is a relative move, and the
+ * two coincide only when every bit is already set. So this returns **one single-bit toggle per
+ * bit that is actually set** — correct for any mask, and the only thing expressible, because a
+ * toggle is the only input this feature has and giving it a second, absolute one is exactly what
+ * would let a client author an entitlement.
+ *
+ * Single-bit toggles only, and deliberately: a multi-bit code is the thing that cannot express
+ * "off", so it is never part of the answer. Returned as bits for the caller to request through
+ * the same door a typed code goes through, so the server stays the authority; empty when there is
+ * nothing to clear, which is what makes calling it unconditionally safe.
+ *
+ * `check-cheats.mjs` folds `toggleCheat` over the result for **every one of the eight possible
+ * masks** and requires exactly zero. That is the proof the reported mutation cannot come back:
+ * one bit in must not become three bits out.
+ */
+export function bitsClearing(mask: number, bits: number): readonly number[] {
+  const out: number[] = [];
+  for (const entry of CODES) {
+    if (entry.effect.kind !== 'toggle') continue;
+    const single = entry.effect.bits;
+    if (single === 0 || (single & (single - 1)) !== 0) continue;
+    if ((mask & single & bits) !== 0) out.push(single);
+  }
+  return out;
 }
 
 /**
@@ -308,7 +373,6 @@ export function cheatCaption(mask: number, instantLabel: string): string {
 export function describeCheatMask(mask: number): string {
   if (mask === 0) return 'none';
   const parts: string[] = [];
-  if ((mask & Cheat.Debug) !== 0) parts.push('debug');
   if ((mask & Cheat.God) !== 0) parts.push('god');
   if ((mask & Cheat.Unseen) !== 0) parts.push('unseen');
   if ((mask & Cheat.NoClip) !== 0) parts.push('noclip');

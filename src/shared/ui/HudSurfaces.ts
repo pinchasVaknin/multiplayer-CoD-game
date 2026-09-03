@@ -1,4 +1,4 @@
-import { Cheat, cheatCaption } from '../cheats/Cheats';
+import { cheatCaption } from '../cheats/Cheats';
 import type { GameStateId } from '../core/GameStates';
 import type { MatchPhase } from '../modes/MatchFlow';
 import { DT } from '../core/Loop';
@@ -92,10 +92,8 @@ export interface HudSurfaceState {
   /**
    * This seat's cheat entitlements (playtest round 4, F14).
    *
-   * Two surfaces read it and they read different bits: the debug overlay needs `Cheat.Debug`
-   * before it may be shown at all, and the HUD tag names the simulation bits. It is in the state
-   * record rather than passed separately because both are per-frame questions about the same
-   * client, which is what this record is.
+   * Only the HUD tag reads it now. The debug overlay used to need a `Cheat.Debug` bit here as
+   * well, and that bit was a second copy of `debugRequest` — see `debugUnlocked`.
    */
   readonly cheatMask: number;
   /**
@@ -186,19 +184,22 @@ export function quickLoadoutWindow(s: HudSurfaceState): QuickLoadoutWindow {
 }
 
 /**
- * Whether this client may open the debug overlay at all (playtest round 4, F14).
+ * Whether the debug overlay has been asked for at all — `DEBUG666`, and nothing else.
  *
- * `DEBUG666`. It is a **second** fact and not a restatement of `debugRequest`, and the pair is
- * what makes the × survive: *may they* and *do they want it, and from where* are different
- * questions, and collapsing them would mean closing the panel revoked the entitlement and the
- * code had to be retyped every time.
+ * **Derived, because it was never a second fact.** F14 claimed *"may they"* and *"do they want
+ * it, and from where"* were different questions and gave the first one an entitlement bit. They
+ * are not different: every writer of one wrote the other, so the bit and `debugRequest !==
+ * 'none'` were always equal — except at the one moment only one of them was written, which is
+ * the × dismissing the panel. Then the panel was closed and the bit still said unlocked, so
+ * typing the code read as *"off"* and it took a third press to reopen.
  *
- * It is read by the predicate below rather than only by the route that sets the request,
- * because the code is a **toggle**: clearing it while the panel is up has to take the panel
- * down, and a gate that only guards the door cannot do that.
+ * That is round four's B1 exactly — *"two copies of 'is the debug overlay open', and the × wrote
+ * one of them"* — and B1's fix was one value instead of two. This is that fix a second time, on
+ * the copy F14 added. `debugRequest` is the store; the ×, Escape, the pause button and the code
+ * are its four writers, as P1 built it.
  */
 export function debugUnlocked(s: HudSurfaceState): boolean {
-  return (s.cheatMask & Cheat.Debug) !== 0;
+  return s.debugRequest !== 'none';
 }
 
 /**
@@ -208,7 +209,7 @@ export function debugUnlocked(s: HudSurfaceState): boolean {
  * the only screen with one — but only for a request made *there*. Everything else is off.
  */
 export function debugOverlayVisible(s: HudSurfaceState): boolean {
-  if (!s.hasWorld || !debugUnlocked(s) || s.debugRequest === 'none') return false;
+  if (!s.hasWorld || s.debugRequest === 'none') return false;
   if (s.screen === 'MATCH') return true;
   if (s.screen === 'PAUSED') return s.debugRequest === 'onPause';
   return false;

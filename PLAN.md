@@ -7907,6 +7907,13 @@ the panel down, and a gate that only guards the door cannot do that. `debugUnloc
 reader, and `Game.updateHudSurfaces` sets the button's presence from it every frame — idempotent,
 so it appears on the frame the code is typed with nobody having to remember to refresh it.
 
+**That reasoning is wrong and the bit is gone; see "one fact in two places, twice" below.** Every
+writer of the bit also wrote the request, so the two were always equal — except at the × , which
+wrote only the request. The panel then sat closed with the bit still saying "unlocked", and typing
+the code read as a revoke. It is round four's own B1, whose description is *"two copies of 'is the
+debug overlay open', and the × wrote one of them"*, reintroduced by the session that quoted it.
+`debugUnlocked` is `debugRequest !== 'none'` now.
+
 ### The wire (protocol v12), and why the mask is not carried by the reply alone
 
 `MsgC.Cheat` carries the **text** a player typed, not a parsed code id. The decision and the log
@@ -9515,7 +9522,7 @@ The table F14 should have contained. It is in `shared/cheats/Cheats.ts` as well,
 
 | Entitlement | Kind | Lifetime | Cleared, server | Cleared, client |
 |---|---|---|---|---|
-| `Cheat.Debug` | toggle | **the session** — the tab | never granted server-side | retyping `DEBUG666`. Deliberately survives a migration and a rotation, exactly as `debugRequest` does |
+| ~~`Cheat.Debug`~~ | surface | **the session** — the tab | never granted server-side | **the bit is deleted**; `DEBUG666` writes `debugRequest`, which the ×, Escape, the pause button and the code all write. Still deliberately survives a migration and a rotation |
 | `Cheat.God` | toggle | **the seat** — one instance | `MatchInstance.unseat` | `NetClient.onWelcome`'s §4.18 discard |
 | `Cheat.Unseen` | toggle | the seat | `MatchInstance.unseat` | same |
 | `Cheat.NoClip` | toggle | the seat | `MatchInstance.unseat` | same |
@@ -9924,3 +9931,283 @@ Unchanged from the earlier lists: everything under "Open, and all of one kind".
   every sound in the project except one that tries to use a slow attack as a delay, which is what
   P6 did. `oscHit(spec, delay)` exists for that and is the only correct way to schedule a second
   note. Worth knowing before the next multi-part cue.
+
+## Playtest round 4 — one fact in two places, twice, and a toggle asked to mean "off"
+
+Two reports from a browser session against the F14 fix above. The transient wallet caption is
+correct and stayed correct; these are both new, and they turn out to be the same mistake made
+twice in one feature.
+
+**One sentence each.**
+
+1. *"Typing `DEBUG666` opens the overlay. Closing it with its own × and typing the code again
+   prints 'code cleared' and a third press is needed to reopen."* — `Cheat.Debug` and
+   `debugRequest` were two representations of one fact, and the × writes only one of them.
+2. *"Activate `SPEC[]1` alone, migrate, and arrive in the next match with `SPEC[]4` — all three
+   cheats — on. Activate `SPEC[]4` and migrate, and it clears correctly."* — the client's world
+   teardown expressed *"turn everything off"* as a **toggle** of the three-bit set, and a toggle
+   of a set completes the set from every mask that does not already hold all of it.
+
+### 1 is round four's B1, reintroduced by the session that quoted B1
+
+B1's own description, from earlier in this file: *"two copies of 'is the debug overlay open', and
+the × wrote one of them."* Its fix was one value instead of two — the `debugRequest` tri-state.
+
+F14 then added a second copy, and argued for it explicitly: *"it is a **second** fact and not a
+restatement of `debugRequest` … *may they* and *do they want it, and from where* are different
+questions."* That argument is wrong, and the way to see it is to list the writers:
+
+| Writer | wrote `Cheat.Debug` | wrote `debugRequest` |
+|---|---|---|
+| the code, `DEBUG666` | yes | yes |
+| the pause menu's button | — | yes |
+| resume's demotion `onPause → inMatch` | — | yes (stays non-none) |
+| **the × / Escape** | **no** | **yes → `'none'`** |
+
+Every writer of the bit also wrote the request, so the two were always equal — except in the one
+row where only the request was written, which is the × dismissing the panel. There the bit said
+"unlocked" over a closed panel, the code's next press read as a revoke, and it took a third press
+to reopen. A fact that is only ever written together with another fact is not a second fact; it is
+a copy, and P0 bans exactly this shape.
+
+So the bit is deleted. `debugUnlocked` derives — `debugRequest !== 'none'` — and
+`debugOverlayVisible` is back to the expression P1 shipped, which is the strongest evidence
+available that the extra term never carried anything. `DEBUG666` writes the request and nothing
+else, and it toggles against **what is on screen**: `debugOverlayVisible(hudSurfaceState())`. Up,
+the code takes it down; down, the code puts it up. The pause menu's button remains gated on the
+same derivation, so it appears with the panel and goes with it.
+
+**A consequence worth stating rather than discovering:** the debug overlay is now reachable only
+while `debugRequest` is non-none, which after a × means retyping the code. That is what the report
+asks for — the second press must reopen — and it is what F14's own brief asked for when it said
+the overlay *"becomes reachable only through the entitlement"*.
+
+### 2 is arithmetic, and here is the arithmetic
+
+`toggleCheat` is the only verb the codes have:
+
+```ts
+const all = (mask & bits) === bits;
+return all ? mask & ~bits : mask | bits;
+```
+
+Read it with `bits = God|Unseen|NoClip = 14`:
+
+| `mask` | `(mask & 14) === 14` | result |
+|---|---|---|
+| `0` | no | **14** — all three |
+| `2` (god) | no | **14** |
+| `6` (god+unseen) | no | **14** |
+| `14` | yes | `14 & ~14` = **0** |
+
+**Only the full mask clears. Every other mask widens to the full set.** That is correct for a
+toggle — it is `SpectatorPanel`'s documented "complete the set unless it is already complete" —
+and it is catastrophic as a way of saying *"off"*, which is a **state** rather than a relative
+move. The two coincide at exactly one input, and that one input is why the report saw `SPEC[]4`
+behave correctly: 14 toggled by 14 is 0.
+
+The `~` the report suspected is real and is in that first branch. It is not misplaced: the flaw is
+that a caller wanting a state reached for a verb that expresses a difference.
+
+**The caller.** `Spectator.full(false)` was one request for that code, and `DebugSuite.dispose()`
+called it through `spectator.reset()` — a line predating F14, whose comment called it
+belt-and-braces against *"a spectator flag surviving into the next match"*. That was true when
+this class owned three booleans and `reset()` wrote them to `false`. F14 turned them into
+**requests**, and the line silently became a cheat request sent during teardown.
+
+**And the timing is what put it in the *next* match.** `applyRotation` — shared by rotations and
+migrations, deliberately — calls `teardownWorld` *after* the server has already re-seated the
+player, and the previous session made `MatchInstance.unseat` clear the seat's mask. So the chain
+is:
+
+1. the ballot resolves; the server unseats (mask → **0**), seats the player in the live match;
+2. the client receives `Migrate`, and `applyRotation` tears the old world down;
+3. `DebugSuite.dispose` → `Spectator.reset()` → `full(false)` → one request to toggle all three;
+4. the server applies it to the **new** seat's mask of 0: `0 | 14` = **14**.
+
+A player who typed one code arrived holding three, and the thing that granted them was the code
+path whose comment said it was there to take cheats *away*. Note that the previous session's clear
+is not the cause — before it the request landed on `2` and produced 14 just the same — but it is
+what makes the outcome read as *"`SPEC[]4` activated in the new match"* rather than *"my cheat
+followed me"*.
+
+### The fix: a verb that means "off", and a teardown that writes nothing
+
+`bitsClearing(mask, bits)` returns **one single-bit toggle per bit that is actually set**. Correct
+from any mask, and the only thing expressible — a toggle is the whole input model of this feature,
+and adding an absolute "set this mask" door is precisely what would let a client author an
+entitlement. Multi-bit codes are never part of the answer, because a multi-bit code is the thing
+that cannot express "off".
+
+`Spectator.full(false)` folds over it. And **`DebugSuite.dispose` no longer resets anything**: the
+entitlement's lifetime is the seat, the server ends it at `unseat`, and every effect is derived
+from the replicated mask every tick — so a torn-down world holds no cheat state to leak and there
+is nothing to undo. The absence is load-bearing and the comment there says so, because after F14 a
+"reset" is a *request*, and a request during teardown is a write to state this process does not
+own.
+
+### What the two reports have in common, and it is the thing to carry forward
+
+Both are a **second representation of one fact**:
+
+- a bit beside `debugRequest`, and one writer of the pair;
+- a relative verb standing in for an absolute state, agreeing with it at one input out of eight.
+
+The second is the more interesting because nothing about it looks like duplication. `full(false)`
+reads as "the off half of a boolean setter" and is actually "a toggle that happens to coincide with
+off in one case". The generalisation: **when a setter takes a boolean and the mechanism underneath
+it is a toggle, the two halves are not symmetrical, and the asymmetric one is the one nobody
+tests** — the report's own observation that `SPEC[]4` "correctly clears" is exactly the symmetric
+case working and hiding the other seven.
+
+### Bits removed, and what that simplified
+
+`Cheat.Debug` is the second bit to leave the table since F14, after `Cheat.Wallet`, and for the
+same reason: neither was a state a player could be *in*. What is left is the three the simulation
+actually reads, **all server-authored**, which collapses `Game.cheatMask` from a two-authority
+merge to one expression:
+
+```ts
+return (net === undefined ? this.offlineCheats : net.cheatMask) & CHEAT_SIMULATION;
+```
+
+`CHEAT_LOCAL` is gone with the bit it held. `CheatCode.local` is gone too — it meant the same
+thing as the new `kind: 'surface'`, and two spellings of one property is the mistake this whole
+section is about. `DEBUG666` is `kind: 'surface'`: no bit, never sent, and the store it writes is
+the one that already owns that surface.
+
+`localCheats` is `offlineCheats`, because with no client-authored bits left it holds simulation
+bits and nothing else. It is cleared in `teardownWorld`, which is the **offline** mirror of
+`MatchInstance.unseat` — without it a single-player god mode would follow the player through the
+menu into their next match, which is the networked defect the previous session fixed, one runtime
+over.
+
+### The check that was written, watched red, and found to be worthless
+
+`check-cheats.mjs` got the exhaustive clearing property first. It cannot import TypeScript, so it
+re-implemented `bitsClearing` in JavaScript from the bit table — and when the real function was
+broken back to a single multi-bit toggle, the check **stayed green**. It was proving a property of
+its own copy.
+
+That is the fifth probe in this milestone that could not fail for the reason it claimed, and it is
+the first one that was mine and caught in the same sitting. The proof moved to
+`assertClearingArithmetic` in `skirmishHarness.ts`, which is compiled and imports the real
+functions, and which runs **unconditionally at the top of every harness invocation** rather than
+behind `--cheats` — the regression it guards shipped because the only probe touching cheats had to
+be asked for.
+
+What `check-cheats.mjs` keeps is what a regex can honestly enforce, and it gained one rule that
+replaces the deleted `local` flag: **a `'surface'` code may not carry entitlement bits.** That is
+the security property in one line — a bit on a client-applied code is a bit a client can author.
+
+### Measured
+
+Every number came out of a run in this session. **No protocol change**: layouts are byte-identical
+and the retired bit is filtered by `CHEAT_SIMULATION` on arrival rather than misread, which is the
+second time that mask has absorbed a removal.
+
+**The arithmetic, red before green.** The red control is the real `bitsClearing` with its
+single-bit guard removed — i.e. "off" expressed as one multi-bit toggle, which is what shipped.
+
+| Probe | Red | Green |
+|---|---|---|
+| Reachable masks `bitsClearing` fails to clear | **7 of 8** | **0 of 8** |
+| `SPEC[]1` alone, cleared | **14 (god+unseen+noclip)** | **0** |
+| `SPEC[]4`, cleared | 14 | 0 |
+| The run | **FLOW CHECK FAILED**, 8 ways | PASSED |
+
+The red column is the report: *"clearing god mode alone gives 14 (god+unseen+noclip), not 0 — this
+is the reported mutation: a single active cheat becoming the full set."* Mask 14 fails in the red
+run too, and for a reason worth reading — with the single-bit guard gone the answer includes the
+three-bit code itself, so the fold ends where it started. The one mask that behaved in the browser
+is the one the browser never exercised through this path.
+
+**The seat lifetime, still holding.** `npm run skirmish -- --cheats --cheats-on --cheats-early`,
+three clients, codes typed in the **arena**, migrated into a live match:
+
+| Probe | Result |
+|---|---|
+| Codes typed / answered / granted | 3 / 3 / 3 |
+| Mask after the migration, per client | **0 / 0 / 0** |
+| Hits refused at the live match's damage door | **0** |
+| Entitlement ticks in an instance it was not granted in | **0** of 7212 held |
+| Live health floor / hits / deaths, per client | 0 / 23 / 6 · 0 / 18 / 4 · 0 / 29 / 7 |
+| The run | **FLOW CHECK PASSED** |
+
+**And codes typed inside the match still work**, which is the half a lifetime fix can quietly
+break. `--cheats --cheats-on --clients 4`:
+
+| Client | Code | Mask | Live health floor | Hits (after grant) | Deaths |
+|---|---|---|---|---|---|
+| OP1 | god | 2 | **100** | **0** (0) | **0** |
+| OP2 | unseen | 4 | 62 | 1 (1) | **0** |
+| OP3 | wallet | 0 | 0 | 33 (0) | 6 |
+| OP4 | — | 0 | 0 | 19 (0) | 5 |
+
+**98 hits refused** at the damage door, **0** of 37 015 entitlement ticks outside the instance the
+codes were typed in.
+
+**The rest of the gate, unmoved.**
+
+| Probe | Result |
+|---|---|
+| `npm run skirmish`, standing | **FLOW CHECK PASSED** — divergence **0 / 7373** per client, mispredictions into a live match **0** (spawn window 0), quick loadout 8858 ticks over 26 windows **0 while alive**, Tab 2602 of 5273 dead ticks, per-life stock 112 life-starts (22 human, 90 bot) **0 partial / 0 empty**, 268 grenades against 268 expected |
+| `npm run harness`, 5 matches, seeds 1-5 | Scores **75-59, 75-66, 62-75, 75-66, 60-75** — byte-identical to P5/P9/P6/P8 and to both F14 sessions on the same seeds. `partialStock` **0** in all five, `dirtyLifeStarts`/`roundCarryOvers` **0 / 0** in all five, `credited` **0** in all five |
+| `npm run leak`, 100 cycles | subscriptions **29 → 29 (+0)**, heap 13.05 → 13.73 MiB (+0.68). **LEAK CHECK PASSED** — deleting a bit and a teardown call subscribes to nothing |
+| `npm run check` and `npm run build` | boundaries (298 files), the cosmetic audit (19 snapshot fields), the optic audit, the unlock audit and the cheat audit (**6 codes, 3 entitlement bits**, all server-authored) all pass, and all three typecheck targets |
+
+### What was not verified
+
+**Both reports are browser reports, and neither symptom is reachable headlessly.**
+
+- The `DEBUG666` desync is entirely a client surface: `HeadlessClient` builds no `Game`, never
+  grants the debug request, and has no × to click. `debugUnlocked` is a one-line derivation now
+  and it is *reasoned*, not measured.
+- The mutation's **trigger** is `DebugSuite.dispose`, which no headless run reaches. What the
+  harness proves is the arithmetic underneath it — exhaustively, against the real function — and
+  that no entitlement crosses a migration. The path from a torn-down world to a request on the
+  wire is a browser claim.
+
+Also unverified: that removing the teardown reset leaves nothing behind in single-player, where
+`teardownWorld` clearing `offlineCheats` is the only thing that ends an offline cheat.
+
+### Needs a browser
+
+- **Report 1, and it is two presses.** `CHEATS_ENABLED` irrelevant — this works offline. Pause,
+  type `DEBUG666`: the overlay opens and a "Debug overlay" button appears. Click the panel's **×**:
+  panel and button both go. Type `DEBUG666` **once**: it must open again. Not twice.
+- **Report 1's other closer.** Same, but close with **Escape** instead of the ×, and confirm one
+  press of the code reopens it and that Escape did not also drop you onto the pause screen.
+- **Report 2, the exact sequence.** `CHEATS_ENABLED=1`. In the arena, pause, type `SPEC[]1`,
+  resume. Wait for the ballot to migrate you. In the new match: **no tag at all**, and you are
+  mortal. Specifically confirm the tag does not read `CHEATS · GOD · UNSEEN · NOCLIP`.
+- **Report 2, the case that used to work.** Same with `SPEC[]4` in the arena — it must still clear
+  to nothing on migration, which it did before and must not have regressed.
+- **The QA panel's "toggle full spectator", both directions.** Tick god mode alone, then press
+  the headline button: it must complete the set. Press it again: all three must clear. Then god
+  mode alone again and press **off** through the console (`__operator.spectate.off()`): god must
+  clear and the other two must stay off — not come on.
+- **Single-player cheat lifetime.** Offline, `SPEC[]1`, quit to the menu, start a new match: you
+  must be mortal.
+- **The debug overlay across a migration.** `DEBUG666` in the arena, get migrated: the overlay
+  must still be up, because its lifetime is the session and not the seat. This is the row that
+  would break if the deleted bit had been replaced with a blanket clear.
+
+Unchanged from the earlier lists: the arena-return residual of 1-3 sub-25 cm mispredictions, and
+everything under "Open, and all of one kind".
+
+### Found while here
+
+- **`Spectator.reset()` now has exactly one caller** — `__operator.spectate.off()` — and it is a
+  method whose only remaining purpose is a console convenience. Left, because the console surface
+  is documented in DEBUG.md and a QA tool losing its one-liner is a real loss; but it is worth
+  knowing that the dangerous caller was the one nobody typed.
+- **`toggleCheat`'s widening is now documented in the function itself**, with the table above, and
+  the harness asserts it still widens. That is deliberate: a caller reasoning about `full(false)`
+  needs to know the primitive is asymmetric, and a future change that made `toggleCheat` clear
+  from a partial mask would silently make `bitsClearing` redundant while looking like a
+  simplification. The assertion fails if that happens, so the reasoning gets re-read.
+- **`CheatBit` is now an exported type with no importer.** It described the bit union and every
+  reader takes a plain `number`, because masks are combinations rather than single bits. Not
+  removed here — it costs nothing and names something real — but it is the kind of export that
+  looks load-bearing and is not.

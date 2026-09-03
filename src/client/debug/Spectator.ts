@@ -1,4 +1,4 @@
-import { CHEAT_FULL_SPECTATOR, Cheat } from '../../shared/cheats/Cheats';
+import { CHEAT_FULL_SPECTATOR, Cheat, bitsClearing } from '../../shared/cheats/Cheats';
 
 /**
  * The QA spectator: god mode, invisibility and free-cam (post-M8).
@@ -50,7 +50,7 @@ import { CHEAT_FULL_SPECTATOR, Cheat } from '../../shared/cheats/Cheats';
  * maintained, and it needs no teardown.
  */
 export interface SpectatorDeps {
-  /** The live entitlement mask. `Game.cheatMask`, merged from both authorities. */
+  /** The live entitlement mask. `Game.cheatMask`, from the one authority that owns it. */
   readonly cheats: () => number;
   /**
    * Ask to toggle these entitlement bits, through `Game.requestCheatBits`.
@@ -60,6 +60,8 @@ export interface SpectatorDeps {
    * file naming four of them on its first run. The bits are looked up against the same table by
    * `cheatCodeToggling`, so there is still exactly one input to the feature and still nothing
    * downstream that can grant an entitlement without asking the authority.
+   *
+   * **It is a toggle, and that is not a way of saying "off".** See `full`.
    */
   readonly request: (bits: number) => void;
 }
@@ -138,14 +140,49 @@ export class Spectator {
     this.toggleTo(on, this.freeCam, Cheat.NoClip);
   }
 
-  /** All three. The common case, and what the panel's headline button does. */
+  /**
+   * All three. The common case, and what the panel's headline button does.
+   *
+   * ## The two halves are not symmetrical, and assuming they were cost a real bug
+   *
+   * **On** is one request: the full-spectator code's own rule is *"complete the set unless it is
+   * already complete"*, so asking for it with a subset up completes the set.
+   *
+   * **Off is not.** `toggleCheat` is a relative move, and toggling a three-bit set clears it only
+   * when all three bits are already present — every other mask **widens to the full set**. This
+   * method used to express *"off"* as one request for that code, and the result was the reported
+   * mutation: a player holding god mode alone had `DebugSuite.dispose` call `reset()` on a
+   * migration, the request landed on a mask the migration had already cleared to zero, and
+   * `0 | God|Unseen|NoClip` arrived in the next match as **all three cheats on**. Holding all
+   * three cleared correctly, which is exactly why it looked so arbitrary.
+   *
+   * So off asks for one single-bit toggle per bit that is actually set. `bitsClearing` decides
+   * which, in `shared/`, where `check-cheats.mjs` proves over every one of the eight possible
+   * masks that folding those toggles gives exactly zero.
+   */
   full(on: boolean): void {
-    // The full-spectator code's own rule is "complete the set unless it is already complete",
-    // so asking for `on` when a subset is up is one request rather than three.
-    if (on ? !this.allActive : this.anyActive) this.deps.request(CHEAT_FULL_SPECTATOR);
+    if (on) {
+      if (!this.allActive) this.deps.request(CHEAT_FULL_SPECTATOR);
+      return;
+    }
+    // Decided against the mask as it is now, before any request is answered, which is what
+    // makes one pass over the bits correct rather than racy.
+    for (const bit of bitsClearing(this.deps.cheats(), CHEAT_FULL_SPECTATOR)) {
+      this.deps.request(bit);
+    }
   }
 
-  /** Put everything back. Called by `__operator.spectate.off()`. */
+  /**
+   * Put everything back. Called by `__operator.spectate.off()`, and by nothing else.
+   *
+   * **Not called on teardown any more.** `DebugSuite.dispose` did, from before F14, when these
+   * three switches were booleans this class owned and `reset()` wrote them to false. Once they
+   * became *requests*, that line stopped being the belt-and-braces its comment claimed and became
+   * a cheat request sent during teardown — at the exact moment the server had cleared the seat's
+   * entitlements — which is where the mutation above came from. The entitlement is not this
+   * object's to clear: the server ends it at `unseat`, and every effect is derived from the mask
+   * every tick, so there is nothing to undo.
+   */
   reset(): void {
     this.full(false);
   }

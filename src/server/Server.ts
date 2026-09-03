@@ -603,6 +603,20 @@ export class Server {
       return;
     }
 
+    if (entry.effect.kind !== 'toggle') {
+      /**
+       * A `'surface'` code reaching the server is a client that should never have sent it.
+       *
+       * `DEBUG666` is the only one, it grants no entitlement, and `Game.requestCheat` returns
+       * before the send. So this is unreachable from the shipped client and is refused rather
+       * than asserted: §4.16 answers a frame that makes no sense at the boundary, and the type
+       * system knowing it cannot happen is not the same as the socket knowing.
+       */
+      log.warn(`${session.displayName} sent a client-side code to the server. Refused.`);
+      session.sendCheats(CheatOutcome.RefusedUnknown, session.cheats.mask);
+      return;
+    }
+
     const before = session.cheats.mask;
     const after = toggleCheat(before, entry.effect.bits);
     session.cheats.set(after);
