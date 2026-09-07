@@ -10585,3 +10585,235 @@ said otherwise.
   streak becomes re-affordable in one life, but a streak coming off cooldown is announced to
   nobody — no cue that the key is live again. That is a gap an announcer would fill and is worth
   knowing before F16 adds three more streaks with cooldowns of their own to not announce. Left.
+
+## Playtest round 5 — a layer that centred what it could not scroll to
+
+Three reports, and the brief's own hypothesis was that they were one missing CSS property. That
+is right about two of them and wrong about the third, and the third is the interesting one.
+
+- **B1** — the main menu is cut off top *and* bottom and the wheel does nothing. Reported at
+  1366x626 with the title at `y = -118` and `RESET PROGRESS` at `y = 700`.
+- **B2** — under 840px wide the setup screen grows to 833px and `START MATCH` goes under the
+  fold, so a solo match cannot be started in a narrow window at all.
+- **B3** — the post-match board runs off the side and a horizontal scrollbar appears.
+
+### The mechanism, and why the top half was the unreachable half
+
+`.op-screen` is `position: absolute; inset: 0` — exactly viewport-sized, always — and it was a
+flex column with `justify-content: center` and no `overflow`. When a flex line is longer than
+its container the overflow is distributed to **both** ends. The half that goes off the bottom
+is ordinary overflow. The half that goes off the top is at a negative offset, and there is no
+scroll position that reaches a negative offset: `scrollTop` starts at zero and counts up. So
+the menu was not a long page with a broken wheel. It was a page half of which had been placed
+somewhere the wheel could not have gone even if there had been a scroll container to spin, and
+the report's *"the wheel does nothing"* is the exact symptom of that rather than of a missing
+`overflow-y`.
+
+That is B1 and B2 both. B2 is a width bug wearing a height bug's clothes: `.op-pickers` is
+`repeat(auto-fit, minmax(220px, 1fr))`, so below its cap the three columns fold to one and the
+column stack grows past the window — the layer then does to it what it did to the menu. Fixing
+the setup screen specifically would have fixed one screen and left the mechanism.
+
+**B3 is not that property.** The brief's starting point was that the post-match board had never
+had round 4's F11 convention applied — the content carries the cap, the layer stays full-bleed.
+It has: `.sb--embedded` is `width: min(1040px, …)` and always was. The cap was **inert**.
+`.sb__grid` was `grid-template-columns: 1fr 1fr`, and `1fr` is `minmax(auto, 1fr)` — a track
+whose floor is its content's min-content size. Each team block's min-content is the row template
+`Scoreboard.setColumns` writes: a 96px name column plus one fixed `ch` track per scoreboard
+column, none of which can shrink. Two of those and a gap came to about 990px whatever the cap
+said, so below roughly a thousand pixels the AXIS block simply left the box. **A cap cannot
+shrink a grid that has a floor**, and that is the finding: the convention was applied and could
+not work.
+
+The horizontal scrollbar in the report was `.eom`'s. It set `overflow-y: auto` and nothing else,
+and CSS computes the *other* axis to `auto` alongside a non-`visible` one — so asking for
+vertical scrolling had quietly asked for horizontal scrolling too, and that is what caught the
+990px.
+
+### One rule at the layer
+
+`.op-screen` now carries all of it: `justify-content: safe center`, `overflow: auto`,
+`overscroll-behavior: contain`, and `padding: var(--s-8) var(--s-4)`. `safe` is the whole of
+B1 — it centres while the content fits and falls back to `start` the moment it does not, so a
+tall screen scrolls from its own top and no individual screen has to know how tall it is. Both
+overflow axes are named rather than one, because naming one names the other anyway and that
+should be deliberate; and `auto` rather than `overflow-x: hidden`, because clipping sideways
+overflow would hide the layout that produced it instead of the layout being caught.
+
+`.eom` and `.lo` had been writing that rule out for themselves — `overflow-y: auto`,
+`justify-content: flex-start` and a padding each — and the main menu, the screen that got
+reported, never had. Both are down to their `gap` now. The Settings screen was the one that did
+not have this bug, which the brief noticed and which was not a coincidence: `.op-settings` has
+carried `max-height: 56vh; overflow-y: auto; overscroll-behavior: contain` since M8 with a
+comment describing the invariant. **Its own scroller is deliberately kept.** `Settings` carries
+`scrollTop` across its rebuilds (round 3's fix for the list jumping to the top on a rebind), and
+that offset is read off `.op-settings`; hoisting its scroll to the layer would have set it to
+zero forever and reintroduced a bug this file already records.
+
+### `vw` counts two things the content box does not
+
+Every capped element was `width: min(<px>, N vw)`. `vw` is the viewport, including the scrollbar
+and ignoring whatever padding the layer has — so the moment `.op-screen` gained a scrollbar and
+16px of side padding, `96vw` was wider than the box it was measured into and the create-a-class
+screen overflowed sideways at **every** viewport, by 3px at 1024 and 16px at 375. They are
+`min(<px>, 100%)` now, which resolves against the layer's content box — the one thing that has
+already subtracted both. The same edit at `.op-pickers`, `.sb--embedded`, `.eom__xp`, `.lo-head`,
+`.lo-columns` and the settings pair. `.sb` (the floating Tab board) keeps `94vw`: it is
+absolutely positioned against `#ui-root`, which has neither a scrollbar nor padding, so there
+`vw` is honest and it is the only remaining one.
+
+### The board folds, and its columns were sized against the wrong font
+
+Two changes, and the second is the one that was hiding.
+
+`.sb__grid` is `display: flex; flex-wrap: wrap` with `.sb__team { flex: 1 1 0 }`. A flex item's
+hypothetical main size is floored by its automatic minimum — its min-content — so two blocks
+that cannot both fit on a line become two lines, and the fold is where the content puts it
+rather than at a breakpoint somebody chose. Same shape as `.op-pickers`' `auto-fit`, which is
+already the file's answer to this question.
+
+Then: `Scoreboard.setColumns` writes one `ch` track per column, and `ch` resolves against the
+font of the element carrying the template. Every span inside a row sets its own size —
+`.sb__col` at 10px, `.sb__name` and `.sb__cell` at 11px — and the row set none, so it inherited
+the document's 16px and **every numeric column came out about 45% wider than the text it was
+sized to hold**. `.sb__head, .sb__row` now set `font-size: var(--t-small)`. Nothing on the board
+renders at that size, so it moves the track widths and nothing else; the visible effect is that
+two team blocks still fit side by side at 800x600, where before the pair wanted 1006px.
+
+Last, `minmax(96px, 1fr)` became `minmax(0, 1fr)` for the name column, and the argument is that
+the floor only ever fired where it did harm. A `1fr` track already takes every pixel the fixed
+columns do not want, so wherever the board has room the free space decides the name column's
+width and 96px is never consulted. The only case it applied to was the case with no free space —
+375px of window, 328px of box, 272px of fixed columns and gaps — where all it could do was turn
+the 56px that were left into a 96px overflow. `.sb__name` has carried
+`overflow: hidden; text-overflow: ellipsis` since M4 for exactly this.
+
+Two more of the same shape, found by the probe rather than reported, and fixed because they are
+the same cause (P0 rule 8): `.eom__personal` was `grid-auto-flow: column`, which cannot wrap —
+six stats answered "how wide" with "as wide as six stats", 451px of them in a 375px window — and
+is now the same wrapping flex row; and `.op-setting`'s `1fr 220px 64px` is
+`1fr minmax(0, 220px) 64px`, so the control column gives ground before the value readout goes
+off the side. Neither moves at any width where they already fitted.
+
+### The probe, because P0 rule 7 says a layout bug here is a number
+
+`npm run layout`. `probes/layout.html` mounts the front end's screens with no canvas and no
+renderer, `scripts/layout-probe.mjs` drives a headless Chrome over the DevTools Protocol, and
+each of six viewports is measured with `getBoundingClientRect` — which is how all three of this
+round's reports were found in the first place. Ten surfaces: the menu, the setup page, all four
+settings tabs, pause, the summary, and the loadout editor open and with a row expanded.
+
+It asserts two things.
+
+- **Reachable.** Every laid-out element must be wholly inside the viewport after
+  `scrollIntoView({ block: 'nearest', inline: 'nearest' })` — the minimum scroll that would
+  reveal it if any scroll could. That phrasing is the point: an element off the bottom of a
+  scrollable screen passes, an element off the top of the same screen fails, and that asymmetry
+  is B1 exactly. An element bigger than the viewport on an axis is skipped on that axis and its
+  children are not, so a 900px column in a 626px window is the subject of the test rather than a
+  violation of it.
+- **No sideways scrolling.** Any element whose used `overflow-x` is `auto` or `scroll` must have
+  `scrollWidth <= clientWidth`. Vertical overflow is a legitimate answer to a long screen;
+  horizontal overflow is not.
+
+The viewport list is `src/client/probes/Viewports.ts`, in the repository rather than in the
+report, each entry with the reason it is there. `?show=<surface>` on the page leaves one screen
+up instead of measuring it, which is how the browser half of this session was done and how the
+next one can be: open `/probes/layout.html?show=summary` and drag the window.
+
+**Why it is not in `npm run check`.** `npm run build` runs `check`, and the deploy host has no
+browser on it. So this sits beside `readability` and `progression` as an instrument, and the
+browser it needs is named in the failure message rather than assumed. Chrome or Edge is found
+from `CHROME_PATH` first and then the usual install locations; `ws` is already the one permitted
+server dependency, so the protocol client is forty lines and S2's no-new-libraries rule is
+intact — no Puppeteer.
+
+The columns the summary board is measured with are **derived**: every mode is built the way
+`auditModeBriefs` builds them and the one with the most `ch` wins, so a sixth mode with an eighth
+column is covered on the day it is added rather than on the day somebody reports it.
+
+### Measured
+
+Every number below came out of `npm run layout` in this session, on Chrome from 1366x626 down to
+375x812 with `deviceScaleFactor: 1` and Windows' classic scrollbars — which is the conservative
+reading, since an overlay-scrollbar platform gives each layer 15px more.
+
+Red control first, on the tree as it was, with the probe in and nothing else changed:
+
+| Run | Violations | What had changed |
+|---|---|---|
+| Red control | **86** | nothing |
+| After the layer rule and the `100%` caps | **12** | `.op-screen`; six `vw` caps; `.eom` / `.lo` de-duplicated |
+| After the board's fold and its `ch` font | **10** | `.sb__grid`, `.sb__head` / `.sb__row` |
+| After `.eom__personal` and `.op-setting` | **1** | two more grids that could not fold |
+| After the name column's floor | **0** | `minmax(96px, 1fr)` to `minmax(0, 1fr)` |
+
+The reported screens, by the numbers:
+
+| Report | Viewport | Before | After |
+|---|---|---|---|
+| B1 — title | 1366x626 | `OPERATOR` top at **y = -127**, 127px above the window, unreachable | top at **y = +32** at rest, which is the layer's own padding |
+| B1 — `RESET PROGRESS` | 1366x626 | y **710..753**, 127px below a 626px window, unreachable | bottom at **626** after `scrollIntoView`; 317px of scroll range |
+| B2 — `START MATCH` | 596x696 | y **787..834**, 138px under the fold; 13 violations on that screen | reachable; **0** violations |
+| B3 — the summary layer | 800x600 | `.eom` scrolls sideways: **1006px** of content in an 800px box | no sideways scroll; board content **768px**, still two columns |
+| B3 — the summary layer | 596x696 | **998px** in a 596px box | folded to one column, **549px** |
+| B3 — the summary layer | 375x812 | **989px** in a 375px box | **328px** |
+
+The report's own figures were `y = -118` and `y = 700` for B1 and `y = 785` for B2; the probe's
+are `-127`, `710` and `787`. The difference is the probe's status and profile lines being a
+different length from the deployed build's, not a different bug. The report's *"content height
+is 744px"* is `scrollHeight`, which cannot see the half of the overflow above the origin — the
+laid-out content at that viewport is 879px tall, which is why 744 and -118 never added up.
+
+`npm run check` green. `npm run build` green, and `dist/` contains no probe page — the second
+HTML file is served by the dev server and is not an entry of the client build. No harness was
+run: nothing here touches simulation, the wire or a protocol version. Outside `client/ui/` the
+only changes are the new instrument (`probes/`, `src/client/probes/`, `scripts/layout-probe.mjs`,
+the `layout` script) and `Scoreboard.ts`'s one template string, which is `client/ui/`.
+
+### Verified by eye, in a real browser
+
+The probe says every box is inside the window. It does not say the screen still reads right at
+that size, so `?show=` was used at 1366x626 and 596x696 on the dev server: the menu now starts
+at its title with a live scrollbar and the wheel reaches `RESET PROGRESS`; the setup page scrolls
+to `START MATCH`; the summary board is two columns at 1366 and one at 596 with the AXIS block
+whole in both. The wheel works because `Input.bindingsActive` is already false outside `MATCH`,
+so nothing calls `preventDefault` on a scroll while a front-end screen is up — that is round 3's
+fix still holding, one layer up from where it was written.
+
+One deliberate visual change: the summary and the loadout editor used to be pinned to the top
+of the screen by their own `justify-content: flex-start`, and now they centre when they fit and
+start when they do not, like every other screen. That is what one rule at the layer costs, and
+it is the better of the two behaviours.
+
+### Needs a browser
+
+- **A real 1366x768 laptop, maximised and then at half width.** The probe emulates a viewport;
+  it does not emulate a window manager, a devicePixelRatio other than 1, or a scrollbar setting.
+  Confirm `RESET PROGRESS` is clickable and that a solo match starts in both.
+- **A phone, held upright.** 375x812 is green, but the summary board at that width gives the
+  callsign column about 56px and the rest to the numbers, so names ellipsise to six characters
+  or so. That is legible-enough and it is not a judgement a rect can make. F1 is the session
+  that owns whether a phone should be offered a game at all.
+- **A browser without `justify-content: safe`.** Safari below 17.6 drops the whole declaration,
+  which leaves `flex-start` — every screen top-aligned, nothing unreachable, and slightly less
+  pretty. Believed rather than measured: no such browser was run.
+- **Scroll feel on a trackpad.** `overscroll-behavior: contain` was added to the layer for the
+  reason it is on `.op-settings`, and the settings screen is now a scroller inside a scroller.
+  It cannot be measured whether reaching the end of the binding list and carrying on feels like
+  one gesture or two.
+
+### Found while here
+
+- **`.sb`'s 94vw is now the only `vw` cap outside the loading screen, and it is on the one
+  element that is not inside `.op-screen`.** Correct today for the reason above. If the in-match
+  board is ever moved into a layer with padding, it inherits the bug this session removed
+  everywhere else. Left, with the reason written next to it.
+- **The scoreboard's `ch` widths were 45% oversized for eight milestones and nobody could have
+  seen it**, because the columns still lined up — everything was wrong by the same factor. It
+  only became visible as an overflow. Worth remembering as a shape: a unit resolved against the
+  wrong font is invisible until something has to fit.
+- **`.op-setting--stack` exists and is now nearly unnecessary.** With the control track able to
+  shrink, the reason a setting had to declare itself full-width is mostly gone. Not touched: the
+  settings using it are using it for a reason of their own (a control that wants the whole row),
+  and unpicking that is not this session's item.

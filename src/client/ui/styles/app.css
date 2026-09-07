@@ -64,8 +64,42 @@ body.op-locked #viewport {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /*
+   * `safe center`, and the `safe` is the whole of playtest round 5's B1 and B2.
+   *
+   * This was `center`. A flex line that is longer than its container distributes the overflow
+   * to **both** ends, and the half that goes off the top of a scroll container is at a
+   * negative offset — somewhere no scroll position can reach, because `scrollTop` does not go
+   * below zero. On a 1366x626 window the main menu's 879px of content put `OPERATOR` at
+   * y = -127 and `RESET PROGRESS` past the bottom edge, which is why the report reads "the
+   * wheel does nothing" rather than "the page is long": the wheel was not the problem, there
+   * was nothing for it to scroll and half the content was unreachable even if there had been.
+   *
+   * `safe` says: centre while it fits, and fall back to `start` the moment it does not. With
+   * the `overflow` below, that is the whole rule — a screen taller than the window scrolls
+   * from its own top, and no individual screen has to know how tall it is.
+   */
+  justify-content: safe center;
   gap: var(--s-6);
+  /*
+   * The layer scrolls; the document never does (`html, body { overflow: hidden }` at the top
+   * of this file, which is what keeps the canvas still). Both axes are `auto` rather than
+   * `overflow-y: auto` alone, because a single-axis declaration computes the *other* axis to
+   * `auto` as well — that is where B3's horizontal scrollbar came from — and because clipping
+   * a horizontal overflow with `hidden` would hide content instead of the layout that
+   * produced it. Content wider than the layer is a bug `scripts/layout-probe.mjs` fails on,
+   * not a thing to scroll to.
+   */
+  overflow: auto;
+  /* The same reasoning as `.op-settings`': scrolling past either end stays here rather than
+   * chaining to the document and, on Chrome, arming the overscroll gesture. */
+  overscroll-behavior: contain;
+  /*
+   * Nothing sits flush against an edge, and the sides are what make `min(px, 100%)` a gutter.
+   * Every capped element below measures itself against this box — which excludes the padding
+   * and the scrollbar — rather than against `vw`, which counts both.
+   */
+  padding: var(--s-8) var(--s-4);
   background: radial-gradient(ellipse at 50% 45%, rgba(20, 23, 28, 0.86), rgba(7, 8, 10, 0.97));
   backdrop-filter: blur(2px);
 }
@@ -191,7 +225,7 @@ body.op-locked #viewport {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--s-6);
-  width: min(840px, 92vw);
+  width: min(840px, 100%);
 }
 
 .op-picker {
@@ -274,7 +308,7 @@ body.op-locked #viewport {
   background: transparent;
   border: none;
   padding: 0;
-  width: min(1040px, 92vw);
+  width: min(1040px, 100%);
 }
 
 .sb__title {
@@ -283,18 +317,50 @@ body.op-locked #viewport {
   margin-bottom: var(--s-4);
 }
 
+/*
+ * The two team blocks fold rather than insisting on being side by side (round 5, B3).
+ *
+ * This was `grid-template-columns: 1fr 1fr`, and `1fr` is `minmax(auto, 1fr)` — a track whose
+ * floor is its content's min-content size. A block's min-content is the row template below:
+ * a 96px name column plus one fixed track per scoreboard column, none of which can shrink. So
+ * the two blocks had a combined floor of ~990px that no cap could reduce, `.sb--embedded`'s
+ * `width: min(1040px, 100%)` was inert below about a thousand pixels, and the AXIS half went
+ * off the side. The report says "a horizontal scrollbar appears", and that scrollbar was
+ * `.eom`'s: it set `overflow-y: auto`, and CSS computes the other axis to `auto` with it.
+ *
+ * Flex with `flex-wrap` puts the fold where the content is rather than at a breakpoint
+ * somebody picked. A flex item's hypothetical main size is its flex base size floored by its
+ * automatic minimum — its min-content — so two blocks that cannot both fit on a line are two
+ * lines, and no number in this file has to know what "cannot fit" is worth in pixels.
+ */
 .sb__grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--s-8);
 }
 
+.sb__team {
+  flex: 1 1 0;
+}
+
+/*
+ * `font-size` here is track sizing, not typography, and it is the other half of B3.
+ *
+ * `Scoreboard.setColumns` writes `grid-template-columns` from `ColumnDef.width`, in `ch`, and
+ * `ch` resolves against **this** element's font. Every span inside a row sets its own size —
+ * `.sb__col` at 10px, `.sb__name` and `.sb__cell` at 11px — and the row itself set none, so
+ * it inherited the document's 16px and every numeric column came out about 45% wider than the
+ * text it was sized to hold. A "6ch" column meant six characters of the cell's own type, and
+ * this is what makes it mean that. Nothing on the board renders at this size, so it changes
+ * the widths and nothing else.
+ */
 .sb__head,
 .sb__row {
   display: grid;
   align-items: baseline;
   gap: var(--s-2);
   padding: 3px var(--s-2);
+  font-size: var(--t-small);
 }
 
 .sb__head {
@@ -357,11 +423,15 @@ body.op-locked #viewport {
 
 /* ---- end of match (M4) ------------------------------------------------- */
 
+/*
+ * Only the gap. The scrolling, the padding and the start-alignment were this rule's until
+ * round 5's P1 — three declarations that were `.op-screen`'s job written out again here,
+ * and again on `.lo`, and never on the main menu, which is the one that got reported. The
+ * layer does all three now; a screen that needs a tighter rhythm than the layer's still
+ * says so, which is what this is.
+ */
 .eom {
   gap: var(--s-5);
-  overflow-y: auto;
-  padding: var(--s-8) 0;
-  justify-content: flex-start;
 }
 
 .eom[hidden] {
@@ -386,10 +456,20 @@ body.op-locked #viewport {
   color: var(--c-bad);
 }
 
+/*
+ * Six figures on one line while there is room for six, and on two when there is not.
+ *
+ * `grid-auto-flow: column` cannot wrap — it answers "how many columns" with "as many as there
+ * are items" and the row is then as wide as they are, 451px of it inside a 375px window. The
+ * same fold `.sb__grid` above uses, for the same reason: the point at which six stats stop
+ * fitting is a property of the stats, not a breakpoint to write down. The column gap is
+ * unchanged, so nothing moves at any width where it already fitted.
+ */
 .eom__personal {
-  display: grid;
-  grid-auto-flow: column;
-  gap: var(--s-8);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-4) var(--s-8);
   padding: var(--s-4) var(--s-6);
   background: var(--c-surface);
   border: 1px solid var(--c-line);
@@ -416,7 +496,7 @@ body.op-locked #viewport {
  * number.
  */
 .eom__xp {
-  width: min(1040px, 92vw);
+  width: min(1040px, 100%);
   min-height: 48px;
   border: 1px solid var(--c-line);
   border-radius: var(--radius);
@@ -522,7 +602,7 @@ body.op-locked #viewport {
  */
 .op-screen--wide .op-tabs,
 .op-screen--wide .op-settings {
-  width: min(780px, 94vw);
+  width: min(780px, 100%);
 }
 
 .op-tabs {
@@ -575,9 +655,18 @@ body.op-locked #viewport {
   color: var(--c-accent-dim);
 }
 
+/*
+ * The control column may shrink; the label and the readout may not.
+ *
+ * `220px` was a fixed track, so the row had a floor of 220 + 64 + the gaps + the label's own
+ * min-content — about 364px — and on a 375px screen that is wider than the settings panel it
+ * sits in. `minmax(0, 220px)` keeps 220 as the size it *wants* (nothing moves on any screen
+ * with room for it) and lets it give ground before the row overflows, which is the difference
+ * between a slider that gets shorter and a value readout that goes off the side.
+ */
 .op-setting {
   display: grid;
-  grid-template-columns: 1fr 220px 64px;
+  grid-template-columns: 1fr minmax(0, 220px) 64px;
   align-items: center;
   gap: var(--s-3);
 }

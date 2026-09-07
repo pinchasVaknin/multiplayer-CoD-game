@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OPERATOR — layout probe</title>
+    <!--
+      The same five stylesheets `index.html` loads, in the same order, because the thing
+      under measurement is the cascade. A probe page with a trimmed stylesheet set would
+      measure a layout nobody ships.
+    -->
+    <link rel="stylesheet" href="/src/client/ui/styles/tokens.css" />
+    <link rel="stylesheet" href="/src/client/ui/styles/app.css" />
+    <link rel="stylesheet" href="/src/client/ui/styles/hud.css" />
+    <link rel="stylesheet" href="/src/client/ui/styles/meta.css" />
+    <link rel="stylesheet" href="/src/client/ui/styles/debug.css" />
+  </head>
+  <body>
+    <!-- No canvas: nothing here renders. `#ui-root` is the host every screen is built into
+         in the real client, and it is `position: fixed; inset: 0` like the real one. -->
+    <div id="ui-root"></div>
+    <script type="module" src="/src/client/probes/layout.ts"></script>
+  </body>
+</html>

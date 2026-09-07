@@ -9,18 +9,17 @@
 
 /* ---- loadout editor ------------------------------------------------------ */
 
+/* Only the gap — see `.eom` in app.css. The scroll, the padding and the alignment are the
+ * layer's since round 5's P1. */
 .lo {
-  justify-content: flex-start;
   gap: var(--s-4);
-  padding: var(--s-6) var(--s-4);
-  overflow-y: auto;
 }
 
 .lo-head {
   display: flex;
   align-items: center;
   gap: var(--s-5);
-  width: min(1240px, 96vw);
+  width: min(1240px, 100%);
   padding: var(--s-3) var(--s-4);
   border: 1px solid var(--c-line);
   border-radius: var(--radius);
@@ -75,7 +74,7 @@
   display: grid;
   grid-template-columns: minmax(200px, 240px) minmax(320px, 1fr) minmax(280px, 380px);
   gap: var(--s-4);
-  width: min(1240px, 96vw);
+  width: min(1240px, 100%);
   align-items: start;
 }
 

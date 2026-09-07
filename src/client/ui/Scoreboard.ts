@@ -166,7 +166,24 @@ export class Scoreboard {
     this.columns = columns;
     this.title.textContent = `${modeName} · ${mapName}`;
 
-    const template = `minmax(96px, 1fr) ${columns.map((c) => `${c.width}ch`).join(' ')}`;
+    /**
+     * The name column has no floor, and that is playtest round 5's B3 (the last of it).
+     *
+     * It was `minmax(96px, 1fr)`. A `1fr` track already takes every pixel the fixed columns
+     * do not want, so on any board with room to spare the 96px minimum is not what decides
+     * the name column's width — the free space is. The only case it ever applied to was the
+     * case with **no** free space, where all it could do was push the row wider than the box
+     * holding it: a 375px window has 328px for a board whose fixed columns and gaps already
+     * want 272, and the floor turned the 56px that were left into a 96px overflow.
+     *
+     * So it only ever fired where it did harm. `.sb__name` has carried
+     * `overflow: hidden; text-overflow: ellipsis` since M4 for exactly this: a callsign that
+     * does not fit is a callsign that ends in a dot, not a column that leaves the screen.
+     *
+     * `ch` is resolved against the font on `.sb__head` / `.sb__row`, which `app.css` pins to
+     * the cells' own size for that reason — see the comment there.
+     */
+    const template = `minmax(0, 1fr) ${columns.map((c) => `${c.width}ch`).join(' ')}`;
     for (const team of ['A', 'B'] as const) {
       const head = this.teamHeads[team];
       head.replaceChildren();
