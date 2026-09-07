@@ -5,8 +5,10 @@ import { nodeClock } from './NodeClock';
 import { installServerLogging, metric, type LogFormat } from './log';
 import { ServerLoop } from './Loop';
 import { ServerMatch, type ServerMatchResult } from './Match';
-import { auditModeBriefs } from '../shared/modes/ModeRegistry';
+import { auditModeBriefs, MAPS } from '../shared/modes/ModeRegistry';
 import { BOT_TIERS, isBotDifficulty, type BotDifficulty } from '../shared/ai/DifficultyTiers';
+import { auditRosterDeal } from '../shared/ai/RosterDeal';
+import type { BotTeam } from '../shared/ai/Combatant';
 
 /**
  * The headless entry point (brief S6.4 and S7).
@@ -333,6 +335,35 @@ function reportModeBriefs(log: ReturnType<typeof logger>): number {
 }
 
 /**
+ * Every authored spread, dealt at every split (playtest round 5, B4).
+ *
+ * The report was that the mix's only VETERAN always landed on the opposing team, and it was
+ * arithmetic rather than luck: one cursor filled team A before team B started, so a tier's side
+ * was decided by its index in the literal. The properties this asserts, and why they are these
+ * properties rather than the ones the brief proposed, are in `shared/ai/RosterDeal.ts`.
+ *
+ * The four shipped shapes are printed whether or not anything failed, because a roster is the
+ * kind of thing somebody should be able to read rather than trust.
+ */
+function reportRosterDeal(log: ReturnType<typeof logger>): number {
+  const audit = auditRosterDeal(MAPS.map((m) => ({ id: m.id, mix: m.tierMix })));
+  for (const row of audit.rows) {
+    log.info(`  ${padEnd(row.id, 12)} ${row.teamA}v${row.teamB}  A: ${row.a}`);
+    log.info(`  ${padEnd('', 12)} ${padEnd('', 4)}  B: ${row.b}`);
+  }
+  for (const problem of audit.problems) log.error(`  ${problem}`);
+  if (audit.problems.length > 0) {
+    log.error(`ROSTER DEAL AUDIT FAILED: ${audit.problems.length} problem(s).`);
+    return 1;
+  }
+  log.info(
+    `roster deal: ${audit.deals} deals across ${MAPS.length} authored spread(s), every one ` +
+      'mirrored to the body the head-count forces, with the shorter side keeping the stronger half.',
+  );
+  return 0;
+}
+
+/**
  * One match per difficulty, everything else held constant (playtest round 4, F1).
  *
  * P10 asked for *"a match at each difficulty tier with the same seed, printing bot K/D per
@@ -402,6 +433,52 @@ function padEnd(s: string, n: number): string {
   return s.length >= n ? s : s + ' '.repeat(n - s.length);
 }
 
+/**
+ * What each tier did, **on each side** (playtest round 5, B4).
+ *
+ * The per-tier table on its own cannot answer the question B4 asked. A tier that is only ever
+ * dealt to one team looks entirely ordinary in a table with no team column — a VETERAN going
+ * 36-5 reads as a strong tier rather than as a one-sided deal, and there is nothing in the row
+ * to argue with. The team column is the whole point: after the fix a tier appears on both
+ * sides, and if it does not, the count in the first column says so before the kills do.
+ */
+function reportRosterOutcome(
+  log: ReturnType<typeof logger>,
+  match: ServerMatch,
+  index: number,
+): void {
+  const report = match.report();
+  log.info(`  match ${index} roster, per tier per side:`);
+  for (const tier of BOT_TIERS) {
+    const both = report.perTier[tier];
+    if (both === undefined) continue;
+    const line = (['A', 'B'] as const)
+      .map((team: BotTeam) => {
+        const side = report.perTeamTier[team][tier];
+        if (side === undefined) return `${team} —`;
+        return (
+          `${team} x${side.bots} ${side.kills}k/${side.deaths}d hit ${round3(side.hitRate)}`
+        );
+      })
+      .join('   ');
+    log.info(`    ${padEnd(tier, 9)} ${line}`);
+  }
+  metric('harness', 'roster.perTeamTier', {
+    match: index,
+    perTeamTier: Object.fromEntries(
+      (['A', 'B'] as const).map((team) => [
+        team,
+        Object.fromEntries(
+          Object.entries(report.perTeamTier[team]).map(([tier, r]) => [
+            tier,
+            { bots: r.bots, kills: r.kills, deaths: r.deaths, hitRate: round3(r.hitRate) },
+          ]),
+        ),
+      ]),
+    ),
+  });
+}
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -420,6 +497,17 @@ async function main(): Promise<number> {
    */
   const briefFault = reportModeBriefs(log);
   if (briefFault !== 0) return briefFault;
+
+  /**
+   * The roster-deal audit, in the same place and for the same reason (round 5, B4).
+   *
+   * Content rather than a run: the deal is a pure function of `(teamA, teamB, mix)`, so
+   * sweeping every authored spread at every split is the whole domain rather than a sample,
+   * and one green run is a fact. Ahead of the matches because a roster dealt one-sidedly makes
+   * every number after it a measurement of the deal.
+   */
+  const dealFault = reportRosterDeal(log);
+  if (dealFault !== 0) return dealFault;
 
   if (args.tierSweep) return runTierSweep(args, log);
 
@@ -445,6 +533,8 @@ async function main(): Promise<number> {
   for (let i = 0; i < args.matches; i++) {
     const match = newMatch(args, i);
     results.push(args.asap ? await runMatchAsap(args, i, match) : await runMatchPaced(args, i, match));
+    // Before `dispose`, which takes the roster with it.
+    reportRosterOutcome(log, match, i);
     match.dispose();
   }
 

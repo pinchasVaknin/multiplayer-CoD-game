@@ -10788,13 +10788,11 @@ it is the better of the two behaviours.
 
 ### Needs a browser
 
-- **A real 1366x768 laptop, maximised and then at half width.** The probe emulates a viewport;
-  it does not emulate a window manager, a devicePixelRatio other than 1, or a scrollbar setting.
-  Confirm `RESET PROGRESS` is clickable and that a solo match starts in both.
-- **A phone, held upright.** 375x812 is green, but the summary board at that width gives the
-  callsign column about 56px and the rest to the numbers, so names ellipsise to six characters
-  or so. That is legible-enough and it is not a judgement a rect can make. F1 is the session
-  that owns whether a phone should be offered a game at all.
+- ~~**A real 1366x768 laptop, maximised and then at half width.**~~ **Done.** Scrolling
+  confirmed at full width and at half width; `RESET PROGRESS` reachable and a solo match starts
+  in both.
+- ~~**A phone, held upright.**~~ **Done.** The name column's truncation at 375px was looked at
+  and accepted. F1 still owns whether a phone should be offered a game at all.
 - **A browser without `justify-content: safe`.** Safari below 17.6 drops the whole declaration,
   which leaves `flex-start` — every screen top-aligned, nothing unreachable, and slightly less
   pretty. Believed rather than measured: no such browser was run.
@@ -10817,3 +10815,201 @@ it is the better of the two behaviours.
   shrink, the reason a setting had to declare itself full-width is mostly gone. Not touched: the
   settings using it are using it for a reason of their own (a control that wants the whole row),
   and unpicking that is not this session's item.
+
+## Playtest round 5 — one cursor dealt the spread, and the spread landed on one side
+
+**B4** — *"the only VETERAN in the mix always falls on the opposing team"*, with two matches whose
+rosters were byte-identical and that bot finishing 36 kills to 5. The report was right that it is
+"always", and right that it is not a seed.
+
+### The mechanism
+
+`BotDirector.populate` advanced **one cursor** through `tierMix` and filled team A to completion
+before team B started. That makes "which side does this tier land on" a pure function of the
+tier's *index in the literal* against `teamA`: everything below the index is team A's forever,
+everything at or above it is team B's forever. Foundry and Dunes put `VETERAN` at index 4 and a
+solo 5v5 deals four bots to A, so index 4 was the opposition's first bot in every match ever
+played. Re-deriving the report's two rosters from the literal reproduces them entry for entry.
+
+The same literal punishes a different side at each of the three splits the project actually
+deals, which is why this is one mechanism and not one bug:
+
+| call site | split | the VETERAN always lands on |
+|---|---|---|
+| `ClientMatch.populateDefault` — solo 5v5 | 4 / 5 | **B**, the report |
+| `ServerMatch.populate` via `LiveMatch` (`bots: 10`) | 5 / 5 | **A**, and B never gets one |
+| the same, FFA (`rosterSize: 8`) | 4 / 4 | **B** |
+
+### The brief's assertion was already true, so it could not have been the probe
+
+The brief asked for *"the multiset of tiers on team A and on team B differ by at most one entry"*.
+Checked against the shipped literal at all six shipped configurations, **that is green on the
+broken build** — the reported roster, `A = REGULAR HARDENED RECRUIT REGULAR` against
+`B = VETERAN HARDENED REGULAR RECRUIT REGULAR`, satisfies per-tier parity exactly. An assertion
+of that shape would have been a regression guard for a future edit of the mix and would not have
+caught the thing that was reported. It is asserted anyway, because a property that is implied is
+still a property somebody will change; it is just not the probe.
+
+What is red on the broken build is stated differently, and in two parts:
+
+- **Containment.** The side with fewer bots must hold a *sub-multiset* of the side with more.
+  Today the two sides hold tiers the other does not: on Depot, on the live 5v5 and on FFA.
+- **The short side keeps the stronger half.** The bodies it does without must be the weakest
+  ones dealt. On the report's own roster the body team A did without was the VETERAN.
+
+### The deal, and the decision the brief asked to be made out loud
+
+`shared/ai/RosterDeal.ts` is new and it is one function: the long side takes the first
+`max(a, b)` entries of the cyclic mix, and the short side takes the same entries minus the
+`|a - b|` **weakest** of them. Two consequences, both provable rather than observed:
+
+- when the sides are even the two rosters are **identical**, which is every live-server match;
+- when they are not, the short side is contained in the long one and the two differ by exactly
+  `|a - b|` entries — the fewest the head-count allows.
+
+The brief asked for an explicit choice between *"mirror the spread and accept the human seat as
+the handicap"* and *"deal the stronger half to the player's side"*. **The second**, phrased so
+that it needs no knowledge of where the humans are: a side is short a bot precisely because
+something else holds that seat, so **the side that is a body down keeps the better bodies**. In
+solo the short side is always the player's, because the player fills the missing seat. On a
+dedicated server it is simply short, and the same compensation is right for the same reason.
+
+That phrasing is load-bearing rather than stylistic. At `ServerMatch.populate` there are **no
+humans at all** — the match is built and then humans take seats through `removeBotForSeat` — so
+a rule written in terms of "the player's side" could only have been an `if (networked)` branch,
+which is the shape P0 rule 1 bans by name. Written in terms of bodies it is one rule in both
+runtimes.
+
+Strength order is `BOT_TIERS` itself, which has been authored weakest-first since M3 and is
+already the order the difficulty picker offers. Nothing here invents a ranking.
+
+**The rejected alternative was to vary the deal by seed**, and it is worth recording why,
+because it is the obvious answer and it is a non-fix: `MatchWorld.AI_SEED` is a **constant**,
+deliberately, so every solo match would have drawn the same offset and the report's two
+identical rosters would have survived the fix untouched. The defect had to be removed from the
+arithmetic, not sampled around.
+
+### `replacePlayerWithBot` is the same rule asked from the other end
+
+Round 4's F1 already found this call site dealing tiers by a rule of its own, and it was doing
+it again: `mix[this.bots.bots.length % mix.length]` — a third cursor, next to the two `populate`
+used, indexing by the *total* bot count and knowing nothing about either side's composition. So
+a replacement could deepen exactly the imbalance the deal exists to prevent.
+
+It does not restate the rule now, it asks it: deal the roster this side would have had at one
+body more, and hand back whatever this side is short of. One description of a balanced roster,
+and every caller derives from it. `BotDirector.tiersOn(team)` is the roster's own answer to
+"what is this side", which is what the two call sites now compare.
+
+That pairing is asserted rather than assumed, and getting it asserted is what caught the first
+version being wrong: a fallback that returned "the weakest tier in the mix" whenever no tier was
+short looked reasonable and failed 3 configurations in 10, because a side that is already the
+long one is owed its *next* seat, not the cheapest one. The audit walks the whole cycle a human
+puts a side through — `removeOne` takes the newest bot off, `tierForExtraBot` names the tier
+that comes back — and the roster has to end where it was dealt.
+
+### Measured
+
+Every number below came out of a run in this session. The deal is a pure function of
+`(teamA, teamB, mix)`, so the sweep is the **whole domain** rather than the hundred seeds the
+brief asked for: every authored spread against every split up to a full roster, 676 deals, which
+makes one green run a fact rather than an estimate. There is no seed left to sweep, and saying
+so is the more honest artefact.
+
+**`npm run harness` — the audit, red control first.** The red control is the shipped one-cursor
+deal, restored behind the new audit on the same tree with nothing else changed:
+
+| Run | Deals | Problems |
+|---|---|---|
+| Red control — the one-cursor deal | 676 | **3303** |
+| After | 676 | **0** |
+
+The red control names the report's own case in the words of the property it breaks:
+
+    mp_foundry 4v5: the smaller side does without a VETERAN while keeping a REGULAR.
+                    The side that is a body down keeps the stronger half, not the weaker one.
+    mp_foundry 5v5: the smaller side holds 1 VETERAN against the larger side's 0.
+    mp_foundry 5v5: the rosters differ by 2 entries where the head-count only forces 0.
+
+**The rosters, before and after, at the four shipped shapes on Foundry:**
+
+| Split | Before | After |
+|---|---|---|
+| 5v5 (live match) | A `R H Rc R V` / B `H R Rc R H` | A `R H Rc R V` / B `R H Rc R V` — identical |
+| 4v5 (solo, a human in A) | A `R H Rc R` / B `V H R Rc R` | A `R H R V` / B `R H Rc R V` |
+| 4v4 (live FFA) | A `R H Rc R` / B `V H R Rc` | A `R H Rc R` / B `R H Rc R` — identical |
+| 3v4 (solo FFA) | A `R H Rc` / B `R V H R` | A `R H R` / B `R H Rc R` |
+
+The 4v5 row is the report. The VETERAN is on **both** sides now, and the one body the player's
+side does without is the RECRUIT — the weakest in the spread rather than the strongest.
+
+**`npm run harness` — five matches, unpaced, per tier per side.** The team column is new
+(`BotReport.perTeamTier`): the old table had no way to express B4 at all, because a tier dealt
+only to one side looks entirely ordinary in a row with no side in it. Totals across the five
+matches, which run at `--bots 10` and therefore at the 5v5 split:
+
+| Tier | Before — A | Before — B | After — A | After — B |
+|---|---|---|---|---|
+| RECRUIT | 5 slots, 18k/73d | 5 slots, 16k/65d | 5 slots, 25k/71d | 5 slots, 35k/64d |
+| REGULAR | 10 slots, 119k/136d | 10 slots, 125k/140d | 10 slots, 109k/134d | 10 slots, 102k/144d |
+| HARDENED | 5 slots, 104k/63d | **10 slots**, 200k/142d | 5 slots, 103k/66d | 5 slots, 93k/64d |
+| VETERAN | 5 slots, 107k/70d | **none, in all five matches** | 5 slots, 94k/74d | 5 slots, 115k/59d |
+
+The point is not that the numbers are equal — they are not, and a symmetric roster does not make
+them so. It is the slot counts: `VETERAN … B —` printed in all five matches before, and every
+tier on both sides in all five after. The VETERAN's kills were 107 on one side and none on the
+other because there was no other; they are 94 and 115 now, and which side is ahead moves match
+to match.
+
+**The rest of the gate.** `npm run check` green. `npm run skirmish` — the full connect, warmup,
+vote, migrate, match, return flow — `FLOW CHECK PASSED`, 3 migrations, 0 failed.
+`npm run leak` — 100 allocate/destroy cycles, subscriptions 29 → 29 (+0), heap 13.11 → 13.80 MiB
+(+0.69), `LEAK CHECK PASSED`. `npm run netharness` against a real `serve.js` — 2 headless clients,
+30 s, 0 snapshots lost, worst misprediction p99 0.781. **No protocol change**: the deal is
+composed before anybody is on the wire and nothing about a bot's tier is replicated, so there is
+no version to bump.
+
+### What was not verified
+
+- **Whether the match is now more fun, or more winnable.** The roster is symmetric; that is a
+  statement about the deal and not about difficulty. Round 4's F1 difficulty picker remains the
+  control for how hard a solo match is, and this session deliberately did not touch it.
+- **Whether the solo 5v5 is now correctly balanced.** It is not, and it cannot be made so by a
+  deal: team B has five bots and team A has four bots and a human. The spread is mirrored and
+  the short side keeps the better bodies; the remaining edge is the human seat itself, which is
+  the thing this session decided to compensate rather than to erase.
+- **The live-server path with humans on both sides.** `smallerTeam` and `removeBotForSeat` are
+  exercised by the skirmish harness with three clients; a full ten-human lobby joining, leaving
+  and being replaced was not run.
+
+### Needs a browser
+
+Nothing for correctness — the deal measures cleanly, which is what the brief predicted. Two
+things a human would see and a harness cannot:
+
+- **Solo, twice.** Start two solo matches on Foundry and open the scoreboard in each. The bot
+  names differ (they come off the same index counter) but the *tiers* are no longer readable
+  from the board, so the check is behavioural: the opposing side should no longer feel like it
+  has one player who is not like the others.
+- **A live match with a friend.** Join a server, have one player leave mid-match, and confirm
+  the bot that takes the seat does not visibly stand out — the log line
+  `entity N left; NAME took over on team T at TIER` names the tier, so the claim is checkable
+  against the console rather than argued about.
+
+### Found while here
+
+- **`BotDirector.removeOne` takes the newest bot on a side, so a joining human displaces
+  whichever tier the mix put last.** That was true before this session and is still true; what
+  changed is only which tier that is. On Foundry it is the VETERAN, on Depot a HARDENED — it
+  tracks the authored order rather than strength, so it is not a systematic filter. Worth
+  knowing before somebody decides a joining human should displace the *weakest* bot, which is a
+  defensible rule and a different session's.
+- **`ServerMatch.populate` splits an odd roster as `teamB = ceil(total / 2)`, so team B gets the
+  extra body on an empty server.** With no humans yet that is an arbitrary tie broken one way,
+  and it is why the live FFA split is 4/4 and the TDM one is 5/5. The deal now mirrors whatever
+  split it is handed, so this no longer decides anything about tiers — but it still decides
+  which side is a body up before the first human arrives. Left; it is head-count, not spread.
+- **`ClientMatch` seeds every solo match from the constant `AI_SEED`.** Deliberate, documented,
+  and load-bearing for the client-side bot harness — but it means *nothing* in a solo match
+  varies between runs except the player. Any future report of the form "it is the same every
+  time" should start there rather than at the system being blamed.

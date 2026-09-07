@@ -1,6 +1,7 @@
 import { DEFAULT_SCHEDULER, type SchedulerConfig } from '../shared/ai/AiScheduler';
 import { BOT_ID_BASE, BotDirector, RESPAWN_SECONDS } from '../shared/ai/BotDirector';
 import type { BotTeam, Combatant } from '../shared/ai/Combatant';
+import { tierForExtraBot } from '../shared/ai/RosterDeal';
 import type { CheatGrants } from '../shared/cheats/Cheats';
 import { makeSpawnChoice, type SpawnChoice } from '../shared/ai/SpawnSelector';
 import { isObjectiveProvider } from '../shared/ai/ObjectiveIntent';
@@ -1181,8 +1182,18 @@ export class ServerMatch {
     const team = player.team;
     this.removePlayer(entityId);
 
-    const mix = this.tierMix;
-    const tier = mix[this.bots.bots.length % Math.max(mix.length, 1)] ?? 'REGULAR';
+    /**
+     * The tier is the one this side is short of, not the next one off a cursor (round 5, B4).
+     *
+     * This used to index the mix by the *total* bot count — a third cursor, next to the two
+     * `populate` used, and one that knew nothing about either side's composition. So a
+     * replacement could deepen exactly the imbalance the deal exists to prevent: a side already
+     * missing the spread's VETERAN could be handed a second RECRUIT because that is where the
+     * count happened to land. `tierForExtraBot` reads both rosters and returns the entry that
+     * moves them back towards each other, which is the same rule `dealTiers` deals by.
+     */
+    const other: BotTeam = team === 'A' ? 'B' : 'A';
+    const tier = tierForExtraBot(this.bots.tiersOn(team), this.bots.tiersOn(other), this.tierMix);
     const bot = this.bots.addOne(team, tier);
     if (bot === null) {
       log.warn(`no bot could replace entity ${entityId} on team ${team} — the side is a body down.`);

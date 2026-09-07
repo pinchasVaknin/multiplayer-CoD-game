@@ -26,6 +26,7 @@ import type { ObjectiveProvider } from './ObjectiveIntent';
 import { BOT_TIERS, type BotTier, type PerceptionConfig, type TierTable } from './DifficultyTiers';
 import { NoiseKind, Perception } from './Perception';
 import { Pathfinder } from './Pathing';
+import { dealTiers } from './RosterDeal';
 import { makeSpawnChoice, SpawnSelector, type SpawnChoice } from './SpawnSelector';
 import { simCos } from '../core/SimMath';
 
@@ -372,10 +373,18 @@ export class BotDirector {
   }
 
   /**
-   * Build the roster. `teamA` are the player's side, `teamB` the opposition.
+   * Build the roster.
    *
-   * Tiers are dealt round-robin from `tierMix` so a default match is a spread rather than
-   * ten identical opponents; the harness overrides it to measure one tier at a time.
+   * `teamA` and `teamB` are bot counts, not body counts — a side is short a bot exactly when
+   * something else holds that seat, which in a solo match is the player.
+   *
+   * **The two sides are dealt from `RosterDeal.dealTiers`, not from a cursor** (playtest round
+   * 5, B4). This used to be one cursor that filled team A to completion and then started team
+   * B, which made a tier's side a pure function of its index in `tierMix`: Foundry puts
+   * `VETERAN` at index 4 and a solo 5v5 deals four bots to A, so it was team B's first bot in
+   * every match ever played. `dealTiers` reads the mix from the same place for both sides and
+   * gives the short side the stronger half; see that file for the decision and for why a
+   * seed-varied deal would have fixed nothing in solo.
    *
    * **Each bot draws its own weapon** (M7 hotfix). Until M7 they all shared one def cloned
    * from the player's primary, so picking a sniper in Create-a-Class armed the entire map
@@ -385,14 +394,16 @@ export class BotDirector {
   populate(teamA: number, teamB: number, tierMix: readonly BotTier[]): void {
     this.clear();
     this.nextIndex = 0;
-    const add = (team: BotTeam, count: number): void => {
-      for (let i = 0; i < count; i++) {
-        const tier = tierMix[this.nextIndex % Math.max(tierMix.length, 1)] ?? 'REGULAR';
-        this.createBot(team, tier);
-      }
-    };
-    add('A', teamA);
-    add('B', teamB);
+    const deal = dealTiers(teamA, teamB, tierMix);
+    for (const tier of deal.a) this.createBot('A', tier);
+    for (const tier of deal.b) this.createBot('B', tier);
+  }
+
+  /** The tiers on one side, in creation order. The roster's own answer to "what is this side". */
+  tiersOn(team: BotTeam): BotTier[] {
+    const out: BotTier[] = [];
+    for (const bot of this.bots) if (bot.team === team) out.push(bot.tierName);
+    return out;
   }
 
   /**
@@ -702,23 +713,38 @@ export class BotDirector {
   /** Everything acceptance criteria 3, 5 and 6 ask for, in one object. */
   report(): BotReport {
     this.scheduler.recompute();
+    /**
+     * Both tables come off one pass, and the per-team one is playtest round 5's B4.
+     *
+     * "REGULAR bots went 40-38" is a number that cannot answer the question B4 asked, which was
+     * never about a tier — it was about a *side*. A tier that is only ever dealt to one team
+     * looks perfectly ordinary in a table with no team column, which is how a VETERAN going
+     * 36-5 for the opposition reads as balance rather than as a deal.
+     */
     const perTier: Record<string, TierReport> = {};
+    const perTeamTier: Record<BotTeam, Record<string, TierReport>> = { A: {}, B: {} };
     for (const tier of BOT_TIERS) {
-      let fired = 0;
-      let hit = 0;
-      let kills = 0;
-      let deaths = 0;
-      let bots = 0;
+      const both = emptyTierReport();
+      const sides: Record<BotTeam, TierReport> = { A: emptyTierReport(), B: emptyTierReport() };
       for (const bot of this.bots) {
         if (bot.tierName !== tier) continue;
-        bots++;
-        fired += bot.shotsFired;
-        hit += bot.shotsHit;
-        kills += bot.kills;
-        deaths += bot.deaths;
+        for (const into of [both, sides[bot.team]]) {
+          into.bots++;
+          into.shotsFired += bot.shotsFired;
+          into.shotsHit += bot.shotsHit;
+          into.kills += bot.kills;
+          into.deaths += bot.deaths;
+        }
       }
-      if (bots === 0) continue;
-      perTier[tier] = { bots, shotsFired: fired, shotsHit: hit, hitRate: fired > 0 ? hit / fired : 0, kills, deaths };
+      if (both.bots === 0) continue;
+      both.hitRate = both.shotsFired > 0 ? both.shotsHit / both.shotsFired : 0;
+      perTier[tier] = both;
+      for (const team of ['A', 'B'] as const) {
+        const side = sides[team];
+        if (side.bots === 0) continue;
+        side.hitRate = side.shotsFired > 0 ? side.shotsHit / side.shotsFired : 0;
+        perTeamTier[team][tier] = side;
+      }
     }
 
     return {
@@ -741,6 +767,7 @@ export class BotDirector {
       },
       spawns: { ...this.spawns.stats },
       perTier,
+      perTeamTier,
       stuckEvents: this.bots.reduce((n, b) => n + b.brain.stuckEvents, 0),
       pathFailures: this.bots.reduce((n, b) => n + b.brain.pathFailures, 0),
     };
@@ -788,6 +815,10 @@ export interface TierReport {
   deaths: number;
 }
 
+function emptyTierReport(): TierReport {
+  return { bots: 0, shotsFired: 0, shotsHit: 0, hitRate: 0, kills: 0, deaths: 0 };
+}
+
 export interface BotReport {
   bots: number;
   nav: NavStats;
@@ -816,6 +847,8 @@ export interface BotReport {
     minEnemyDistance: number;
   };
   perTier: Record<string, TierReport>;
+  /** The same tally, split by side (playtest round 5, B4). A tier absent from a side is absent. */
+  perTeamTier: Record<BotTeam, Record<string, TierReport>>;
   stuckEvents: number;
   pathFailures: number;
 }
