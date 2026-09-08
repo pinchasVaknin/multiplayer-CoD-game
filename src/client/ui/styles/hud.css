@@ -1408,7 +1408,7 @@
 .hud-header {
   position: absolute;
   left: 50%;
-  top: 46px;
+  top: 66px;
   transform: translateX(-50%);
   display: flex;
   gap: var(--s-2);
