@@ -11397,10 +11397,15 @@ audits. `npm run skirmish` **FLOW CHECK PASSED**, 3 clients, one migration each,
   turret's panel and after this change they cannot enter a player's row: the only writer of a
   `PlayerScore`'s shot counters is the `weapon.fired` handler.
 
+### Verified by eye, in a real browser
+
+The build was refreshed onto protocol v14, a match played with a shotgun class, and the ACC
+column read under 100 throughout; the post-match board was reported correct. That closes the
+first of the three checks below — the one this session could not do for itself, because the
+column is drawn by `EndOfMatch` and no harness builds one.
+
 ### Needs a browser
 
-- **A shotgun class, a match, and the post-match board.** The ACC column must read under 100 for
-  every row. Tab during the match is the same number from the same rows and should agree.
 - **A networked match with a second window, one of them on a shotgun.** This is the half only a
   browser reaches: the local player's own shots are counted from a locally emitted event and the
   remote player's from the wire, and protocol v14 is what makes those two the same figure. Read
@@ -11415,3 +11420,178 @@ audits. `npm run skirmish` **FLOW CHECK PASSED**, 3 clients, one migration each,
   still two tallies with two lifetimes — one per match, one per weapon, folded into the save — and
   that is deliberate. What is worth recording is that they were the same arithmetic written twice
   and only one of them was right, for a milestone, on adjacent screens.
+
+## Playtest round 5 — a match that was played, and a table with no row for having played it
+
+**B6** was a whole match — 0 kills, 6 deaths, a loss — paying `+0 XP`, the breakdown panel under
+the bar rendering as an empty box, and the menu behind it still saying "500 XP TO NEXT" with the
+bar on zero. The game's answer to a full match was that it had not happened.
+
+### One mechanism, and the panel is downstream of it
+
+Every one of the ten rows in `XP_SOURCES` was contingent on succeeding. `buildLines` skips any
+row whose count is zero, so a player who did nothing produced **no rows at all** — and
+`XpSummary.play` read `report.lines.length === 0`, jumped straight past its `'ROWS'` phase to
+`'BAR'`, and left the rows container empty. The empty box was not a rendering fault; it was the
+renderer faithfully drawing nothing, because there was nothing.
+
+So it is one defect and not two, and the brief's second ask follows from the fix rather than
+needing its own: give the table a row that always fires and the panel can no longer be empty.
+
+### The rule, and it is two rows rather than a special case
+
+`matchComplete` — flat, 500 — for reaching the end of a match. `matchTime` — 25 a minute — so a
+long match pays more than a short one. Both are ordinary rows in `XP_SOURCES`, which means they
+sum, animate and display through exactly the same code the other ten do; nothing at the summing
+site knows they exist. `MatchProgression.finish` sets their counts beside the four it already
+sets for assists, objectives, weapon levels and challenges.
+
+500 is not a new number. **A dedicated server has been paying `MATCH COMPLETE` 500 since M11** —
+as a literal, in `LiveMatch.buildXpLines`, next to a table whose own file comment says *"the whole
+award table is here and nothing downstream hardcodes a value"*. It was hardcoded downstream, so
+the rule B6 asks to be built already existed in one runtime and not the other, with its number in
+the wrong place. Keeping 500 means making one table authoritative is not also a balance argument.
+
+25 a minute is deliberately the smallest per-unit award in the table except a headshot: ten
+minutes of standing still pays 250, which is less than three kills.
+
+### The two edges, decided rather than defaulted
+
+**Leaving early pays nothing, and nothing had to be built for it.** XP is banked from `Game`'s
+entry into the `SUMMARY` state, so a client that quit at 30 seconds never reaches a path that pays
+it. The completion condition *is* the call site. That matters, because the alternative — a "did
+they finish" flag — is exactly the sort of state that goes out of step with a reconnect.
+
+**The per-minute term is the match's length, not the player's stay.** One clock:
+`ServerMatch.tickCount` on a server, `MatchProgression`'s own per-tick sampler in single-player. A
+returning player therefore cannot lose the minutes before their drop, because those minutes were
+never counted per player in the first place — there is nothing for a reconnect to have to survive.
+The alternative, per-seat occupancy, would have needed bookkeeping that does not exist:
+`ReclaimedSeat` carries an entity id and a team and nothing else, and the `NetPlayer` a returning
+client gets is a new one.
+
+**The warmup arena cannot pay, structurally, and both halves were traced rather than assumed.** A
+summary is built by `LiveMatch.buildSummary`; `WarmupMatch` has no such method, so the room emits
+none. On the client, `Game.applyRotation` calls `teardownWorld` before building the live world, so
+the live match gets a `MatchProgression` constructed at zero rather than one carrying the room's
+minutes. That is why `MatchXpAudit` has no arena case: asserting a zero against a call that cannot
+happen is a green light with no bulb behind it, which is this file's standing lesson about
+unreachable guards. `npm run skirmish` reports the room's own numbers, and it reports `score rows
+0` in it.
+
+### The panel cannot be handed an empty tally, and that is a type
+
+`XpReport.lines` is `readonly [XpLine, ...XpLine[]]` now. `buildLines` returns
+`[matchFloorLine(), ...rest]`, which is the shape the compiler reads as non-empty, so the
+guarantee is structural rather than a convention somebody has to keep. `XpSummary.play`'s
+empty-list branch is gone because it is unreachable.
+
+Two things fell out of that, and both are improvements the type forced:
+
+- **`emptyXpReport` is deleted.** Its only caller was `finish`'s idempotence guard, which returned
+  a report of zeroes on a second call. That is not idempotence, it is a lie told the second time —
+  the match did pay something. `finish` caches what it produced and hands the same answer back.
+- **`Game.bankServerXp` sums the lines rather than the wire.** It used to total `net.xp` and then
+  separately map it into rows; now the rows are built first and the total is their sum, so what
+  the bar animates and what the profile banks cannot come apart. Its floor fallback is the same
+  `matchFloorLine` single-player uses, so an empty `xp` array off the socket produces the same
+  answer as an empty match does locally.
+
+### Measured
+
+Every number came out of a run in this session.
+
+**`auditMatchXp` — `shared/debug/MatchXpAudit`**, at the top of every harness run beside
+`auditAccuracy` and `auditReplicatedScore`. A real `MatchProgression`, sampled by a real
+`WeaponSystem` and `PlayerController`, against a real `ScoreSystem`; nobody fires and nobody
+scores, which is the harshest reading of the report:
+
+| shape | ran | minutes | paid | lines | breakdown |
+|---|---|---|---|---|---|
+| worst | 360s | 6 | **650** | 2 | `Match complete x1 = 500`, `Time played x6 = 150` |
+| short | 30s | 0 | **500** | 1 | `Match complete x1 = 500` |
+| played | 600s | 10 | **750** | 2 | `Match complete x1 = 500`, `Time played x10 = 250` |
+
+**The red control, on the table as it stood.** With the floor demoted to an ordinary row and the
+time count not set — which is the code exactly as B6 found it — all three shapes read `0 XP over 0
+line(s)` and the audit exits **1**. That is the report reproduced as a number: the empty panel and
+the zero are the same fact, which is why one row fixes both.
+
+**The audit found a real defect in this session's own fix, on its first run.** It prints the
+minutes it asked for beside the minutes the row awarded, and they disagreed: `played 600s` came
+out as `10 min` in the header and `Time played x9` in the line. `secondsPlayed` was accumulated as
+`+= DT` once a tick; `DT` is `1/60`, which no float holds, and thirty-six thousand of them sum to
+**599.999999999783** — under the minute boundary, so a ten-minute match paid for nine. It drifts
+both ways: 21600 ticks sum to 360.00000000000125. Counting ticks as an integer and multiplying
+once has no drift to accumulate. The assertion that caught it is now permanent.
+
+**`npm run skirmish` with `MATCH_ROUND_SECONDS=90`** — the default run never ends a match, so the
+summary path is not reached and the brief asks for the XP at the end. Three clients, two cycles,
+twelve migrations, **`FLOW CHECK PASSED`**, six summaries received:
+
+    OP1 XP: 875 over 4 row(s) — MATCH COMPLETE 500, TIME PLAYED 25, WIN BONUS 250, TOP OPERATOR 100
+    OP2 XP: 875 over 4 row(s) — MATCH COMPLETE 500, TIME PLAYED 25, WIN BONUS 250, TOP OPERATOR 100
+    OP3 XP: 875 over 4 row(s) — MATCH COMPLETE 500, TIME PLAYED 25, WIN BONUS 250, TOP OPERATOR 100
+
+`TIME PLAYED 25` is one minute, and it is one minute **because the round was shortened to 90
+seconds to reach the summary at all**. That is the knob in the number, stated rather than left for
+a reader to trip over: an authored round pays the authored length. The identical row set across
+three clients is not a coincidence and is the finding below.
+
+**The economy, since this is a balance change and should be stated as one.** Against
+`XpSimulator`'s `AVERAGE_MATCH` — 18 kills, 5 headshots, 6 assists, 2 longshots, a best streak of
+4, half the matches won, a fifth topping the board — a ten-minute match moves from **3120 to 3870
+XP, +750, +24%**. A match with nothing in it moves from 0 to 750. The floor is a quarter of an
+average match, which is the ratio the two numbers were chosen against.
+
+**The rest of the gate.** `npm run check` green. `npm run harness` five matches, all completed,
+`rowsOverHundred 0` on every one, so P3's assertion still holds under this change. `npm run leak`
+100 cycles, subscriptions 29 -> 29 (+0), heap 13.14 -> 13.84 MiB (+0.70), **LEAK CHECK PASSED**.
+`npm run netharness` against a real `serve.js`, 2 clients, 30 s, worst misprediction p99 0.731.
+
+### What was not verified
+
+- **No browser saw the summary screen.** The panel is non-empty by type and the totals are
+  headless facts, but that the rows *animate* — `XpSummary` steps them on `requestAnimationFrame`
+  over a torn-down match — is untested by anything here, and P0's split says the preview pane
+  cannot stand in for it.
+- **The reconnect case was reasoned, not run.** `npm run skirmish -- --drop-return N` exercises
+  drop and return, but the default cycle never ends a match, so a returning client has no summary
+  to be paid by. The claim — that a returning player keeps their minutes — rests on the award
+  being the match's length rather than the seat's, which is a property of where the number comes
+  from rather than a measurement. A drop/return **and** a shortened round in one pass is the test,
+  and it was not run.
+- **The `matchTime` value is unplaytested.** 25 a minute is an argument about proportion, not a
+  measurement of how it feels to earn.
+
+### Needs a browser
+
+- **A deliberately bad match, then the summary screen.** The number must not be zero and the panel
+  must have rows in it — that is B6 verbatim. `Match complete 500` should be the first row to
+  land, before anything the player did.
+- **A sub-minute match.** Leave a solo match immediately after it starts: the panel should show
+  `Match complete` alone, rather than a `Time played x0` row reading zero.
+- **The menu behind it.** The bar should have moved, and "500 XP TO NEXT" should no longer be the
+  answer to a match that was played to the end.
+
+### Found while here
+
+- **`LiveMatch.buildXpLines` builds one array for the whole instance, and every seat gets it.** The
+  comment above it said *"the per-player half is filled in by the caller, which knows which row
+  belongs to which client"* — there is no such caller: `Server.finishLive` builds the summary once
+  and sends the same object to every session. So `WIN BONUS` is paid to the losing team and `TOP
+  OPERATOR` to everybody, which the skirmish run above shows as three identical XP lines for three
+  clients. Same class as B7's comment describing a check the code cannot perform, and the comment
+  has **not** been left standing: `buildXpLines` now says plainly which of its rows are the
+  table's and which are not. The fix is not here, because making the lines per-player means
+  reconciling the win bonus and MVP with `win` (500) and `mvp` (300) in the table, which they
+  disagree with in both name and value — a change to the networked economy rather than to B6.
+- **A dedicated server pays nothing per kill.** Its whole breakdown is those four flat rows, so a
+  30-kill match on a server pays 875 where the same match in single-player pays over 3000. A much
+  larger disagreement than B6, and deliberate scope: closing it means deciding whether the
+  instance should score the client's progression at all, which is the next thing to decide about
+  §6.9.
+- **`WeaponTally.timeUsed` still accumulates `+= DT` per tick**, with the drift measured above. It
+  is a per-weapon lifetime stat rather than a threshold, so a few hundredths of a second across a
+  match crosses nothing — but it is the same arithmetic, and if a rule is ever hung off it the
+  first thing to do is count ticks instead.

@@ -115,7 +115,10 @@ export class XpSummary {
   play(report: XpReport): void {
     this.stop();
     this.report = report;
-    this.phase = report.lines.length === 0 ? 'BAR' : 'ROWS';
+    // Always ROWS: `XpLines` is a non-empty tuple, so there is no such thing as a match with
+    // nothing to show (playtest round 5, B6). The branch that used to skip straight to the bar
+    // is what left the panel an empty box after a 0-kill loss.
+    this.phase = 'ROWS';
     this.timer = 0;
     this.rowIndex = 0;
     this.shownXp = report.xpBefore;

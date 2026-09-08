@@ -66,7 +66,7 @@ import {
 } from '../shared/cheats/Cheats';
 import type { Match } from './ClientMatch';
 import type { MatchResult } from '../shared/modes/GameMode';
-import type { XpReport } from '../shared/meta/XpRules';
+import { matchFloorLine, type XpLine, type XpLines, type XpReport } from '../shared/meta/XpRules';
 import { MatchWorld } from './MatchWorld';
 import { GameScreens } from './GameScreens';
 import { applyEquippedLoadout, asModeId } from './GameLoadout';
@@ -1560,19 +1560,33 @@ export class Game {
    * unlocks, and it affects only them.
    */
   private bankServerXp(net: SummaryInfo, won: boolean): XpReport {
-    const total = net.xp.reduce((sum, line) => sum + line.amount, 0);
+    const decoded: XpLine[] = net.xp.map((line) => ({
+      // The server's lines are already the human-readable breakdown; they carry no source id
+      // because the id space is a client-side progression concept the server has no view of.
+      id: 'match',
+      label: line.label,
+      count: 1,
+      xp: line.amount,
+      kind: 'flat' as const,
+    }));
+    /**
+     * The floor, on this path too (playtest round 5, B6).
+     *
+     * A live instance always sends a `MATCH COMPLETE` line, so in practice the fallback never
+     * fires — but `net.xp` is decoded from bytes this client did not write, and B6's fix is that
+     * a summary *cannot* be handed an empty tally rather than that it copes with one. The
+     * fallback is the same row single-player builds, from the same table, so the two paths
+     * cannot disagree about what an unplayable-to-zero match is worth.
+     */
+    const [head, ...rest] = decoded;
+    const lines: XpLines = head === undefined ? [matchFloorLine()] : [head, ...rest];
+    // Summed from the lines rather than from the wire, so what the bar animates and what the
+    // profile banks are the same arithmetic over the same list.
+    const total = lines.reduce((sum, line) => sum + line.xp, 0);
     const xpBefore = this.profile.xp;
     const { levelBefore, levelAfter } = this.profile.bankMatch(total, won);
     return {
-      lines: net.xp.map((line) => ({
-        // The server's lines are already the human-readable breakdown; they carry no source id
-        // because the id space is a client-side progression concept the server has no view of.
-        id: 'match',
-        label: line.label,
-        count: 1,
-        xp: line.amount,
-        kind: 'flat' as const,
-      })),
+      lines,
       total,
       xpBefore,
       levelBefore,

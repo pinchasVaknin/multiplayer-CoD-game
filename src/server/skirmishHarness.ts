@@ -1202,6 +1202,11 @@ function reportFlow(input: FlowReportInput): number {
         `${r.votesCast} vote(s), ${r.summaries} summary(s), ` +
         `${r.deaths} death(s), ${r.metresSinceRespawn}m since respawn`,
     );
+    // B6: what a finished match actually paid, and through which rows. Printed only when a
+    // summary arrived, so a run that never ended a match says nothing rather than says zero.
+    if (r.summaries > 0) {
+      log.info(`  ${r.name} XP: ${r.summaryXpTotal} over ${r.summaryXp.length} row(s) — ${r.summaryXp.join(', ')}`);
+    }
     for (const notice of r.notices) log.info(`  notice: ${notice}`);
   }
 
@@ -1229,6 +1234,8 @@ function reportFlow(input: FlowReportInput): number {
       toArenaWindows: r.toArenaWindows,
       worstBuildMs: r.worstBuildMs,
       summaries: r.summaries,
+      summaryXp: r.summaryXp,
+      summaryXpTotal: r.summaryXpTotal,
       votesCast: r.votesCast,
       notices: r.notices,
     })),

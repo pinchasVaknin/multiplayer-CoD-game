@@ -20,12 +20,14 @@ import { levelForXp } from './Levels';
 import type { ProgressionStore } from './ProgressionStore';
 import { weaponLevelForXp } from './Unlocks';
 import {
-  emptyXpReport,
+  matchFloorLine,
+  matchMinutes,
   LONGSHOT_METRES,
   WEAPON_XP_FRACTION,
   xpSource,
   XP_SOURCES,
   type XpLine,
+  type XpLines,
   type XpReport,
   type XpSourceId,
 } from './XpRules';
@@ -125,7 +127,14 @@ export class MatchProgression {
   private lastKilledBy = -1;
 
   private objectives = 0;
-  private finished = false;
+  /** Ticks this progression has been sampled through. See `sample`. */
+  private ticksPlayed = 0;
+  /**
+   * What `finish` produced, so a second call answers the same thing rather than zeroes.
+   *
+   * Null until the match is closed out. See the note where `emptyXpReport` used to be.
+   */
+  private report: XpReport | null = null;
 
   constructor(deps: MatchProgressionDeps) {
     this.deps = deps;
@@ -182,6 +191,20 @@ export class MatchProgression {
     this.airborne = !sim.grounded && !sim.slideActive;
     this.sinceSlide = sim.slideActive ? 0 : Math.min(999, this.sinceSlide + DT);
     this.tally(def.id).timeUsed += DT;
+    /**
+     * How long this match has run, for `matchTime` (round 5, B6).
+     *
+     * **Ticks, converted once**, and not `+= DT` like the per-weapon line above it. `DT` is
+     * `1/60`, which no float can hold, so a sum of thirty-six thousand of them lands at
+     * 599.999999999783 — and `matchMinutes` floors, so a ten-minute match paid for nine. The
+     * audit caught it because it prints the minutes it asked for beside the minutes it got.
+     * An integer count multiplied at the end has no drift to accumulate.
+     *
+     * It is the *match's* length and not the player's stay: a returning player therefore cannot
+     * lose the minutes before their drop, because those minutes were never counted against them
+     * in the first place. See `finish` for the other half of that decision.
+     */
+    this.ticksPlayed++;
   }
 
   /**
@@ -213,8 +236,8 @@ export class MatchProgression {
    * able to bank one twice.
    */
   finish(won: boolean, isMvp: boolean): XpReport {
-    if (this.finished) return emptyXpReport();
-    this.finished = true;
+    const already = this.report;
+    if (already !== null) return already;
 
     const profile = this.deps.profile;
     const row = this.deps.score.row(PLAYER_ENTITY_ID);
@@ -242,6 +265,16 @@ export class MatchProgression {
     // "Challenges x100" for a single 100 XP completion.
     this.counts.set('challenge', this.deps.tracker.awardsThisMatch.length);
 
+    /**
+     * The floor, and the completion condition is where this method is called from (round 5, B6).
+     *
+     * B6 asked whether a player who quits at 30 seconds gets the flat award. They do not, and
+     * nothing had to be built for that: XP is banked from `Game`'s entry into SUMMARY, so a
+     * client that left never reaches a path that pays it. The condition is the call site, which
+     * is why there is no "did they complete it" flag here to get out of step with a reconnect.
+     */
+    this.counts.set('matchTime', matchMinutes(this.ticksPlayed * DT));
+
     const lines = this.buildLines(won, isMvp, bestStreak);
     const total = this.totalFrom(lines);
 
@@ -252,7 +285,7 @@ export class MatchProgression {
 
     this.announce(total, xpBefore, banked.levelBefore, banked.levelAfter);
 
-    return {
+    this.report = {
       lines,
       total,
       xpBefore,
@@ -264,6 +297,7 @@ export class MatchProgression {
         .map((a) => a.camo)
         .filter((c): c is CamoId => c !== null),
     };
+    return this.report;
   }
 
   dispose(): void {
@@ -380,9 +414,12 @@ export class MatchProgression {
     return levelled;
   }
 
-  private buildLines(won: boolean, isMvp: boolean, bestStreak: number): XpLine[] {
+  private buildLines(won: boolean, isMvp: boolean, bestStreak: number): XpLines {
     const out: XpLine[] = [];
     for (const source of XP_SOURCES) {
+      // The floor is the head of the list rather than one more row the loop might drop, and
+      // that is what makes `XpLines` non-empty without the renderer having to check.
+      if (source.id === 'matchComplete') continue;
       let count = this.counts.get(source.id) ?? 0;
       if (source.id === 'win') count = won ? 1 : 0;
       if (source.id === 'mvp') count = isMvp ? 1 : 0;
@@ -398,7 +435,7 @@ export class MatchProgression {
             : count * source.value;
       out.push({ id: source.id, label: source.label, count, xp, kind: source.kind });
     }
-    return out;
+    return [matchFloorLine(), ...out];
   }
 
   private totalFrom(lines: readonly XpLine[]): number {

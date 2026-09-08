@@ -4,6 +4,7 @@ import { logger } from '../../shared/core/Log';
 import type { SummaryInfo, SummaryRow, SummaryXpLine } from '../../shared/net/Messages';
 import { InstanceState, type MatchId } from '../../shared/net/Skirmish';
 import { findMap, findMode } from '../../shared/modes/ModeRegistry';
+import { matchMinutes, xpSource } from '../../shared/meta/XpRules';
 import type { BotDifficulty } from '../../shared/ai/DifficultyTiers';
 import { ServerMatch } from '../Match';
 import type { MapBakery } from '../MapBakery';
@@ -264,7 +265,7 @@ export class LiveMatch extends MatchInstance {
       scoreA: outcome?.scoreA ?? 0,
       scoreB: outcome?.scoreB ?? 0,
       rows,
-      xp: buildXpLines(outcome?.winner ?? 'DRAW', rows),
+      xp: buildXpLines(outcome?.winner ?? 'DRAW', rows, this.match.tickCount * DT),
       endsTick: this.summaryEndsTick,
     };
     this.summary = built;
@@ -378,12 +379,43 @@ export class LiveMatch extends MatchInstance {
  * client persists the total to its own `localStorage` save (§6.9) — there is no server-side
  * database and there will not be one.
  *
- * The per-player half is filled in by the caller, which knows which row belongs to which
- * client; these are the lines every player in the match shares.
+ * ## The two rows that are not this file's to price (playtest round 5, B6)
+ *
+ * `MATCH COMPLETE` was the literal `500` here, and B6 asked for exactly that rule to exist in
+ * `shared/meta/XpRules` — where the file comment says *"the whole award table is here and
+ * nothing downstream hardcodes a value"*. It was hardcoded downstream, so the rule had two
+ * definitions and only one of them was in the table. Both it and the new `TIME PLAYED` term now
+ * read their number from `XP_SOURCES`, which is what stops a match paying one amount in
+ * single-player and another on a server.
+ *
+ * `seconds` is the match's own length — `ServerMatch.tickCount * DT`, which is the quantity
+ * `ServerMatchResult.simSeconds` rounds — and not how long any one player was seated. That is
+ * the decision B6 asked to be made explicitly: the award is for the match, so a player who
+ * reconnects cannot lose the minutes before their drop, because those minutes were never
+ * counted per player in the first place. A player who left and did not come back is paid
+ * nothing, because they are not here to be sent a summary.
+ *
+ * The two rows below are **not** derived from the table, and that is deliberate rather than an
+ * oversight: they disagree with `win` and `mvp` in both name and value, they are awarded to
+ * every player in the match rather than to the ones who earned them, and reconciling that is a
+ * change to the networked economy rather than to B6. See PLAN.md, "Found while here".
  */
-function buildXpLines(winner: string, rows: readonly SummaryRow[]): SummaryXpLine[] {
+function buildXpLines(
+  winner: string,
+  rows: readonly SummaryRow[],
+  seconds: number,
+): SummaryXpLine[] {
+  const complete = xpSource('matchComplete');
+  const time = xpSource('matchTime');
+  const minutes = matchMinutes(seconds);
+
   const lines: SummaryXpLine[] = [];
-  lines.push({ label: 'MATCH COMPLETE', amount: 500 });
+  lines.push({ label: complete.label.toUpperCase(), amount: complete.value });
+  // Dropped rather than shown as zero for a match under a minute, which is what the client's
+  // own `buildLines` does with a count of zero.
+  if (minutes > 0) {
+    lines.push({ label: time.label.toUpperCase(), amount: minutes * time.value });
+  }
   if (winner !== 'DRAW') lines.push({ label: 'WIN BONUS', amount: 250 });
   const best = rows[0];
   if (best !== undefined && best.kills > 0) {

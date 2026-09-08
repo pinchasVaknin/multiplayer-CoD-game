@@ -10,6 +10,7 @@ import { BOT_TIERS, isBotDifficulty, type BotDifficulty } from '../shared/ai/Dif
 import { auditRosterDeal } from '../shared/ai/RosterDeal';
 import { auditReplicatedScore } from '../shared/debug/ReplicatedScoreAudit';
 import { auditAccuracy } from '../shared/debug/AccuracyAudit';
+import { auditMatchXp } from '../shared/debug/MatchXpAudit';
 import { accuracy } from '../shared/combat/ScoreSystem';
 import { WEAPON_DEFS } from '../shared/weapons/WeaponDefs';
 import type { BotTeam } from '../shared/ai/Combatant';
@@ -457,6 +458,33 @@ function reportAccuracy(log: ReturnType<typeof logger>): number {
 }
 
 /**
+ * What a match pays for having been played (playtest round 5, B6).
+ *
+ * The audit itself is `shared/debug/MatchXpAudit`; this prints it. The breakdown is printed in
+ * full rather than summarised because B6's second half is that the panel had **no rows in it**,
+ * and a count of lines is exactly the thing a reader should be able to see rather than trust.
+ */
+function reportMatchXp(log: ReturnType<typeof logger>): number {
+  const audit = auditMatchXp();
+  for (const row of audit.rows) {
+    log.info(
+      `  ${padEnd(row.shape, 7)} ${padEnd(`${row.seconds}s`, 5)} ${row.minutes} min -> ` +
+        `${row.total} XP over ${row.lines} line(s): ${row.breakdown.join(', ')}`,
+    );
+  }
+  for (const problem of audit.problems) log.error(`  ${problem}`);
+  if (audit.problems.length > 0) {
+    log.error(`MATCH XP AUDIT FAILED: ${audit.problems.length} problem(s).`);
+    return 1;
+  }
+  log.info(
+    `match XP: ${audit.rows.length} shape(s) of a match nobody scored in; every one pays and ` +
+      'every one has rows to draw.',
+  );
+  return 0;
+}
+
+/**
  * Every authored spread, dealt at every split (playtest round 5, B4).
  *
  * The report was that the mix's only VETERAN always landed on the opposing team, and it was
@@ -651,6 +679,16 @@ async function main(): Promise<number> {
    */
   const accuracyFault = reportAccuracy(log);
   if (accuracyFault !== 0) return accuracyFault;
+
+  /**
+   * The match XP audit (round 5, B6), in the same place and for the same reason.
+   *
+   * Pure like the three above it. Ahead of the matches because it is a statement about what a
+   * finished match is worth, and it is cheap: three progressions sampled over simulated ticks
+   * with nobody firing.
+   */
+  const xpFault = reportMatchXp(log);
+  if (xpFault !== 0) return xpFault;
 
   if (args.tierSweep) return runTierSweep(args, log);
 

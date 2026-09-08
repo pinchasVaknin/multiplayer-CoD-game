@@ -504,6 +504,15 @@ export interface HeadlessClientReport {
    */
   readonly summaryHoldMs: number;
   readonly summarySaidSeconds: number;
+  /**
+   * The XP breakdown the last summary carried (playtest round 5, B6).
+   *
+   * Kept verbatim — labels and amounts as decoded — rather than summed on arrival, because B6
+   * is as much about *what rows the panel has* as about the total: a match that paid something
+   * through one row nobody can read is the empty box again with a number over it.
+   */
+  readonly summaryXp: readonly string[];
+  readonly summaryXpTotal: number;
   readonly droppedOnSummary: boolean;
   readonly notices: readonly string[];
   /** Vote phases this client cast a vote in. */
@@ -590,6 +599,8 @@ export class HeadlessClient {
    * a zero that means "never looked" has to fail as loudly as a zero that means "no wait".
    */
   private summaryAtMs = 0;
+  private summaryXp: readonly string[] = [];
+  private summaryXpTotal = 0;
   private summarySaidSeconds = 0;
   private summaryHoldMs = -1;
   private awaitingReturn = false;
@@ -846,6 +857,8 @@ export class HeadlessClient {
         onSummary: (info) => {
           this.summaries++;
           this.summaryAtMs = nowMs();
+          this.summaryXp = info.xp.map((line) => `${line.label} ${line.amount}`);
+          this.summaryXpTotal = info.xp.reduce((sum, line) => sum + line.amount, 0);
           // What the screen is told to show for this hold, from the deadline the server sent
           // and the tick this client believes it is on — the browser's own arithmetic.
           this.summarySaidSeconds = Math.max(0, (info.endsTick - this.net.stats.clientTick) * DT);
@@ -1623,6 +1636,8 @@ export class HeadlessClient {
       summaries: this.summaries,
       summaryHoldMs: this.summaryHoldMs,
       summarySaidSeconds: this.summarySaidSeconds,
+      summaryXp: this.summaryXp,
+      summaryXpTotal: this.summaryXpTotal,
       droppedOnSummary: this.droppedOnSummary,
       notices: [...this.notices],
       votesCast: this.votesCast,

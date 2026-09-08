@@ -1,6 +1,6 @@
 import { levelForXp, MAX_LEVEL, XP_TO_MAX } from '../../shared/meta/Levels';
 import { unlocksAtLevel } from '../../shared/meta/Unlocks';
-import { XP_SOURCES, xpSource } from '../../shared/meta/XpRules';
+import { matchMinutes, XP_SOURCES, xpSource } from '../../shared/meta/XpRules';
 
 /**
  * The XP / unlock simulator (brief S7).
@@ -18,6 +18,15 @@ import { XP_SOURCES, xpSource } from '../../shared/meta/XpRules';
  * The profile is never touched. This is a projection, not a grant — `MetaPanel` has a
  * separate, explicit button for granting XP.
  */
+
+/**
+ * How long the average match this projection models runs, minutes.
+ *
+ * It was a bare `10` inside the milestone loop's hours conversion. `matchTime` needs the same
+ * number (round 5, B6), and a projection whose XP-per-match and hours-per-match disagreed about
+ * the length of a match would be two models wearing one graph.
+ */
+const MINUTES_PER_MATCH = 10;
 
 /** One match of "average performance", as counts per XP source. */
 export interface SimulatedMatch {
@@ -87,6 +96,12 @@ export function xpPerMatch(match: SimulatedMatch): number {
 
 function matchLineXp(id: string, match: SimulatedMatch): number {
   switch (id) {
+    case 'matchComplete':
+      return xpSource('matchComplete').value;
+    case 'matchTime':
+      // The ten minutes this whole projection is authored against — see `SimulatedLevel.hours`,
+      // which converts matches to hours at the same rate.
+      return matchMinutes(MINUTES_PER_MATCH * 60) * xpSource('matchTime').value;
     case 'kill':
       return match.kills * xpSource('kill').value;
     case 'headshot':
@@ -141,7 +156,7 @@ export function simulateXp(
       milestones.push({
         level,
         matches: i,
-        hours: (i * 10) / 60,
+        hours: (i * MINUTES_PER_MATCH) / 60,
         unlocks: unlocksAtLevel(level),
       });
       if (level >= MAX_LEVEL && matchesToMax < 0) matchesToMax = i;
