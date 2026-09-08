@@ -247,8 +247,11 @@ async function main(): Promise<number> {
       bytesInPerSec: round(r.stats.bytesInPerSecond),
       bytesOutPerSec: round(r.stats.bytesOutPerSecond),
       shotsFired: r.shotsFired,
+      shotsHit: r.shotsHit,
       hitsDealt: r.hitsDealt,
-      hitRate: r.shotsFired === 0 ? 0 : round(r.hitsDealt / r.shotsFired),
+      // Rays over rays (round 5, B5). This was `hitsDealt / shotsFired`, which is damage
+      // events over trigger pulls and has no ceiling.
+      hitRate: r.shotsFired === 0 ? 0 : round(r.shotsHit / r.shotsFired),
       killsDealt: r.killsDealt,
       deaths: r.deaths,
       deathCycles: r.deathCycles,

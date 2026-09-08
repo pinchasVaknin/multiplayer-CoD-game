@@ -1,6 +1,7 @@
 import { PLAYER_ENTITY_ID } from '../combat/DamageSystem';
 import type { HitZone } from '../combat/HitboxRig';
 import type { ScoreSystem } from '../combat/ScoreSystem';
+import { hitsFrom, shotsFrom } from '../combat/ShotAccounting';
 import { EV, type GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
 import type { PlayerSim } from '../player/PlayerState';
@@ -134,8 +135,11 @@ export class MatchProgression {
       bus.on(EV.WeaponFired, (p) => {
         if (p.sourceId !== PLAYER_ENTITY_ID) return;
         const tally = this.tally(p.weaponId);
-        tally.shotsFired += p.pellets;
-        tally.shotsHit += p.pelletsHit;
+        // This was already the right definition when `ScoreSystem` had the wrong one (round 5,
+        // B5). It reads through `ShotAccounting` now so there is one of it rather than two that
+        // happen to match.
+        tally.shotsFired += shotsFrom(p);
+        tally.shotsHit += hitsFrom(p);
       }),
       bus.on(EV.DamageDealt, (p) => {
         if (p.sourceId !== PLAYER_ENTITY_ID) return;

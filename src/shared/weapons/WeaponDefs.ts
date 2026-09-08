@@ -143,6 +143,17 @@ export interface ScopeProfile {
   glint: boolean;
 }
 
+/**
+ * The most rays one trigger pull may send.
+ *
+ * The shotgun's 8 is the only value above 1 in the shipped table, but `pellets` is writable —
+ * the M5 tuning panel moves it live — and it is the denominator of every accuracy figure in
+ * the game, so the number that bounds it lives beside the field rather than inside the one
+ * subsystem that happened to need it first. `WeaponSystem` clamps the fire loop to it, and
+ * `combat/ShotAccounting` clamps everything that counts what came out.
+ */
+export const MAX_PELLETS = 16;
+
 export interface WeaponDef {
   id: string;
   name: string;
@@ -180,6 +191,9 @@ export interface WeaponDef {
   /**
    * Hitscan rays per trigger pull. 1 for everything but the shotgun, which fires 8 and
    * resolves each one against the hitbox rig separately (S6.1).
+   *
+   * Capped at `MAX_PELLETS` wherever it is read, because the tuning panel writes this field
+   * live and the wire carries the connected count in six bits.
    */
   pellets: number;
   /** Extra cone applied to pellets 2..n, degrees of half-angle. 0 for a single ray. */

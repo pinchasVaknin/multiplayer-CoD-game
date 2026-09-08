@@ -11247,3 +11247,171 @@ server, 2 clients, 30 s, 0 snapshots lost, worst misprediction p99 1.041.
   timeout` — from a *visible* pane that was not being driven. The report flagged it as needing
   reproduction because it was seen in a hidden tab; the same lines come out of any client whose
   frame loop stops, which is a broader cause than P14's brief assumes.
+
+## Playtest round 5 — a shot is not a damage event
+
+**B5** was `CINDER · ACC 267%` on the post-match board, out of `25 shots / 62 hits`, with the
+same number on Tab. The brief had already found the mechanism and named the file: `ScoreSystem`
+counted `shotsFired` from `weapon.fired` — one trigger pull, one increment — and `shotsHit` from
+`damage.dealt`, which is one **damage event**. Two populations, one division.
+
+### One of the three shapes the brief listed is not real, and the measurement says so
+
+The brief predicted three inflating shapes, and the session's first job was to kill any of them
+that could be killed rather than fix all three:
+
+- **Multi-pellet** is real and is the report. A `shotgun_breacher` pull sends eight rays and each
+  one that finds a body is its own `damage.dealt`.
+- **Penetration is not.** The brief said *"a penetrating round produces one per victim"*.
+  `Ballistics.fire` returns the moment a body is hit — the `MAX_PENETRATIONS` loop is about world
+  geometry, and a body ends the ray. Measured rather than argued: a carbine through a wooden
+  partition at two posts standing in line put **30 damage events on 1 body from 30 rays**, and a
+  control run with the near post removed connected **27 of 30 on the far post**, which is what
+  makes the first number a fact about `Ballistics` and not about where the posts happened to be.
+- **Explosive is real and wider than reported.** `EquipmentSystem` applies a blast under the
+  thrower's own `sourceId`, once per body in radius, with no `weapon.fired` behind it at all. So
+  do `MortarStrike`, `ChopperGunner` and `Melee` — a knife emits `melee.swing`, not
+  `weapon.fired`. `SentryGun` is the exception and only by accident: it applies under the
+  sentry's own entity id, which has no scoreboard row.
+
+### The decision the brief asked to be made out loud
+
+**A shot is one ray that left a barrel. A hit is one ray that found a body.** Explosives,
+equipment, melee and killstreak weapons deal damage and are not counted: accuracy answers *"of
+the rounds you sent, how many connected"*, and a grenade sends none.
+
+It is enforced by shape rather than by discipline. `shared/combat/ShotAccounting` exports the
+pair — `shotsFrom`, `hitsFrom` — and both take a `FiredShot`, which a `damage.dealt` payload
+cannot satisfy. A future counter that subscribes to damage and reaches for them gets a compile
+error instead of a percentage over one hundred. That is the whole point of the pair: the brief
+said five call sites *"agree by luck"*, and a type is what makes them agree on purpose.
+
+`meta/MatchProgression` had the right definition since M5 — `tally.shotsFired += p.pellets` — so
+the game was showing two answers to one question on two screens: the per-weapon accuracy in
+Create-a-Class was right while the scoreboard column next to it was not. There is one now.
+
+### The sixth call site, and it was in the instruments
+
+The brief named five. There is a sixth, and it is the harness's own: `netHarness` printed
+`hitRate: hitsDealt / shotsFired` — damage events over trigger pulls, B5 exactly, one layer
+down — and `HitTest` divided the same pair. They agreed by luck for the reason the brief means
+literally: a headless client carries the default carbine, and a carbine fires one ray and throws
+no grenades. `HeadlessClient` counts `shotsHit` beside `shotsFired` now, both off the same
+replicated `weapon.fired`, and `hitsDealt` keeps the name it always deserved — damage events in
+which this client was the shooter, which is not a hit count.
+
+### The wire carried a bit where a statistic was needed (protocol v14)
+
+There is no scoreboard on the wire. A client builds its own out of replicated events, so the
+accuracy column for every remote player is computed from `FiredEvent` — and `FiredEvent` carried
+`hitTarget`, one bit. `NetSession` therefore synthesised `pellets: 1, pelletsHit: hitTarget ? 1
+: 0`, which means that after the counters were fixed a client would have counted **pulls** for
+remote shooters while the server counted **rays**. One figure, two definitions, split by runtime
+— which is the shape this milestone keeps finding, and fixing B5 without this would have moved
+it rather than closed it.
+
+`FiredEvent.pelletsHit` replaces the bit, in six spare bits of the byte the tracer flag already
+rides, so nothing on the wire got bigger. The *denominator* is deliberately not replicated: it is
+`WEAPON_DEFS[weaponIndex].pellets`, and both sides compile against that table. A derived field on
+the wire is a second copy of a fact, which is what the bit was — `hitTarget` is now derived from
+the count by the one consumer that wants it, for the tracer and the impact.
+
+### Measured
+
+Every number came out of a run in this session.
+
+**`auditAccuracy` — `shared/debug/AccuracyAudit`, at the top of every harness run** beside
+`auditRosterDeal` and `auditReplicatedScore`. Real `WeaponSystem`, real `Ballistics`, real
+`DamageSystem`, a real frag through `EquipmentSystem`, and a real `ScoreSystem` on the same bus;
+fixed seeds and targets that cannot move or die, so one run is a fact rather than a sample. Each
+row carries both figures, because the fix is only legible as the pair:
+
+| shape | weapon | pulls → rays | damage events | bodies | was | now |
+|---|---|---|---|---|---|---|
+| multi-pellet | `shotgun_breacher` | 6 → 48 | 46 | 1 | **767%** | **96%** |
+| penetration | `ar_carbine` | 30 → 30 | 30 | 1 | 100% | 100% |
+| penetration-control | `ar_carbine` | 30 → 30 | 27 | 1 | 90% | 90% |
+| explosive | `ar_carbine` | 30 → 30 | 16 | **3** | 53% | 43% |
+
+The penetration row is the one where the two figures are equal, and that equality is the finding:
+that shape never inflated. The explosive row's ten points are three bodies a frag caught and no
+round was fired at.
+
+**The red control, on the tree as it stood.** P0's standing lesson is that an assertion which has
+never been watched fail is not an assertion. With `ScoreSystem`'s two handlers put back the way
+they were, the audit exits **1** with two problems: `multi-pellet: 46 hits out of 6 shots — 767%`
+and `explosive: the row reads 53% where the damage-event figure is 53%`. Both were wrong first:
+the explosive assertion originally compared `damageEvents` against `shotsHit`, which is a
+proposition that only holds *after* the fix, so it went red on the broken tree for the rig's
+reason rather than the code's. It asserts the two figures must differ now, which is the property
+and not a proxy for it.
+
+**`npm run harness --bot-weapon shotgun_breacher`, three matches, the same three seeds on both
+trees.** The flag is new and is what B5's verification asks for: a statistic about rays per pull
+measured on a roster that is one shotgun in eight is a statistic about carbines.
+
+| | rows over 100% | worst row | RECRUIT | REGULAR | HARDENED | VETERAN |
+|---|---|---|---|---|---|---|
+| before | **9, 10, 10** of 10 | **261 / 310 / 271 %** | 1.12 – 3.00 | 2.21 – 2.47 | 2.44 – 2.52 | 2.28 – 2.61 |
+| after | **0, 0, 0** | 32.6 / 38.8 / 33.8 % | 0.14 – 0.38 | 0.28 – 0.31 | 0.30 – 0.31 | 0.28 – 0.32 |
+
+The prediction written before the run was that every tier's pre-fix rate would exceed 1.0 and
+that the post-fix figure is bounded by 1.0 by construction. Both held. The worst row before is
+**310%**, which brackets the report's 267% — the same defect, a different roster.
+
+Two details in that table are worth more than the headline. In match 1 the RECRUIT tier read
+`91 hits / 81 pulls` before and `91 hits / 648 rays` after: 648 is exactly 8 × 81, which is the
+pellet count and nothing else. And REGULAR read 532 hits before against 529 after — the three
+that went away are damage with no round behind it, which is the second half of B5 showing up in a
+real match.
+
+**`npm run harness`, five matches, the shipped roster:** every match `rowsOverHundred 0`, worst
+row 18.1 – 30.3%, all five completed. `accuracy` is a new field on the per-match JSON, read off
+`ScoreSystem.rows` rather than off the per-tier aggregate — B5 was a *row*, and one bot at 267%
+disappears into a tier average.
+
+**`npm run netharness` against a real `serve.js` on protocol v14:** 2 clients, 30 s, 600
+snapshots each, **0 snapshots lost**, worst misprediction p99 **0.25**. The new field is in that
+line and is worth reading: `shotsFired 102, shotsHit 4, hitsDealt 4, hitRate 0.039`. The two
+numerators are equal because a headless client carries a carbine and threw nothing — which is
+"agree by luck" as a measurement rather than as an assertion.
+
+**The rest of the gate.** `npm run check` green, including the boundary, cosmetic and authority
+audits. `npm run skirmish` **FLOW CHECK PASSED**, 3 clients, one migration each, **divergence
+0/7372** on all three, 0 misrouted. `npm run leak` 100 cycles, subscriptions 29 -> 29 (+0), heap
+13.14 -> 13.82 MiB (+0.68), **LEAK CHECK PASSED**.
+
+### What was not verified
+
+- **No browser saw any of this.** Every number above is headless. The post-match board and the
+  Tab scoreboard both read `accuracy()`, which cannot now exceed 100 by construction, but that
+  the column renders what the row holds is a claim about `EndOfMatch` that this session did not
+  test.
+- **The report's own 267% was not reproduced against the deployed build.** The shape is
+  reproduced — 767% in the audit, 310% in a real match — and the mechanism is the one the brief
+  named, but that is not the same evidence as the number in the report and it would be dishonest
+  to present them as one.
+- **`SentryGun` and `ChopperGunner` keep their own counters and they are not asserted anywhere.**
+  Each `stepFiring` sends exactly one ray and counts it, which is the same definition, but it is
+  the same definition by reading rather than by call. They are the turret's numbers on the
+  turret's panel and after this change they cannot enter a player's row: the only writer of a
+  `PlayerScore`'s shot counters is the `weapon.fired` handler.
+
+### Needs a browser
+
+- **A shotgun class, a match, and the post-match board.** The ACC column must read under 100 for
+  every row. Tab during the match is the same number from the same rows and should agree.
+- **A networked match with a second window, one of them on a shotgun.** This is the half only a
+  browser reaches: the local player's own shots are counted from a locally emitted event and the
+  remote player's from the wire, and protocol v14 is what makes those two the same figure. Read
+  the shotgunner's ACC on *both* screens and confirm they match.
+- **Create-a-Class after that match.** The per-weapon accuracy under the weapon list comes from
+  `Profile.weaponAccuracy`, which was already right; it should now agree with the scoreboard
+  instead of disagreeing with it.
+
+### Found while here
+
+- **`MatchProgression` and `ScoreSystem` count the same statistic twice, and now agree.** They are
+  still two tallies with two lifetimes — one per match, one per weapon, folded into the save — and
+  that is deliberate. What is worth recording is that they were the same arithmetic written twice
+  and only one of them was right, for a milestone, on adjacent screens.

@@ -9,6 +9,9 @@ import { auditModeBriefs, MAPS } from '../shared/modes/ModeRegistry';
 import { BOT_TIERS, isBotDifficulty, type BotDifficulty } from '../shared/ai/DifficultyTiers';
 import { auditRosterDeal } from '../shared/ai/RosterDeal';
 import { auditReplicatedScore } from '../shared/debug/ReplicatedScoreAudit';
+import { auditAccuracy } from '../shared/debug/AccuracyAudit';
+import { accuracy } from '../shared/combat/ScoreSystem';
+import { WEAPON_DEFS } from '../shared/weapons/WeaponDefs';
 import type { BotTeam } from '../shared/ai/Combatant';
 
 /**
@@ -62,6 +65,14 @@ interface Args {
    * because there is no deadline to have missed.
    */
   asap: boolean;
+  /**
+   * Issue every bot the same weapon (playtest round 5, B5).
+   *
+   * `--bot-weapon shotgun_breacher` is the *"roster forced to shotguns"* B5's verification asks
+   * for: the accuracy column is a statistic about rays per pull, and a roster that is one
+   * shotgun in eight measures carbines. Empty is the shipped per-tier draw.
+   */
+  botWeapon: string;
   format: LogFormat;
   level: LogLevel;
 }
@@ -77,6 +88,7 @@ function parseArgs(argv: readonly string[]): Args {
     matches: 1,
     minutes: 0,
     asap: false,
+    botWeapon: '',
     // A redirected log is being read by something. Default to JSON when stdout is not a
     // terminal, so `npm run server > run.log` produces a parseable file without a flag.
     format: process.stdout.isTTY === true ? 'text' : 'json',
@@ -130,6 +142,16 @@ function parseArgs(argv: readonly string[]): Args {
       case '--asap':
         args.asap = true;
         break;
+      case '--bot-weapon': {
+        const raw = next();
+        // Validated here for `--tier`'s reason: an unknown id would reach `requireWeapon` inside
+        // the first `createBot` and throw halfway through building a roster.
+        if (WEAPON_DEFS[raw] === undefined) {
+          throw new Error(`--bot-weapon must be a shipped weapon id; got "${raw}"`);
+        }
+        args.botWeapon = raw;
+        break;
+      }
       case '--json':
         args.format = 'json';
         break;
@@ -151,6 +173,38 @@ function parseArgs(argv: readonly string[]): Args {
   if (!Number.isFinite(args.matches) || args.matches < 1) throw new Error('--matches must be >= 1');
   if (!Number.isFinite(args.seed)) throw new Error('--seed must be a number');
   return args;
+}
+
+/**
+ * What the scoreboard's ACC column reads across a finished match (playtest round 5, B5).
+ *
+ * Read off `ScoreSystem` rather than off the per-tier report, because the report aggregates and
+ * B5 was a *row*: one shotgun bot at 267% disappears into a tier average. `rowsOverHundred` is
+ * the number that must be zero; the rest is context so a zero cannot be a zero because nobody
+ * fired.
+ */
+function accuracySummary(match: ServerMatch): {
+  rows: number;
+  rowsWithShots: number;
+  rowsOverHundred: number;
+  worstAccuracy: number;
+} {
+  let rowsWithShots = 0;
+  let rowsOverHundred = 0;
+  let worst = -1;
+  for (const row of match.score.rows) {
+    if (row.shotsFired === 0) continue;
+    rowsWithShots++;
+    const pct = accuracy(row);
+    if (pct > worst) worst = pct;
+    if (pct > 100) rowsOverHundred++;
+  }
+  return {
+    rows: match.score.rows.length,
+    rowsWithShots,
+    rowsOverHundred,
+    worstAccuracy: round3(worst),
+  };
 }
 
 /** Resident heap in MB, after a GC if the runtime was started with `--expose-gc`. */
@@ -214,6 +268,15 @@ function reportMatch(
      * denominator that stops a probe which never fired from reading as a pass.
      */
     equipment: match.equipmentAudit,
+    /**
+     * The accuracy column, on the rows a real match produced (round 5, B5).
+     *
+     * `auditAccuracy` proves the three shapes in isolation; this is the whole roster, over a
+     * whole match, with grenades, knives and killstreaks in it — which is the population the
+     * report came from. `worstAccuracy` is the headline and `rowsOverHundred` is the assertion:
+     * a non-zero there is B5 back.
+     */
+    accuracy: accuracySummary(match),
     hitRateByTier: Object.fromEntries(
       Object.entries(report.perTier).map(([tier, r]) => [
         tier,
@@ -234,6 +297,7 @@ function newMatch(args: Args, index: number): ServerMatch {
     // Each match in a run gets its own seed, so five matches are five different fights
     // rather than the same one five times — which is what a stability run needs.
     seed: args.seed + index,
+    botWeaponId: args.botWeapon === '' ? undefined : args.botWeapon,
   });
 }
 
@@ -359,6 +423,35 @@ function reportReplicatedScore(log: ReturnType<typeof logger>): number {
   log.info(
     `replicated score: ${audit.rows.length} mode(s), ${audit.kills} kill(s) replayed each; ` +
       'MatchFlow.teamScore carries the server\'s number on every one.',
+  );
+  return 0;
+}
+
+/**
+ * The three shapes that used to push accuracy over 100% (playtest round 5, B5).
+ *
+ * The audit itself is `shared/debug/AccuracyAudit`; this prints it. Both figures are printed
+ * for every shape — what the board used to say and what it says now — because the fix is only
+ * legible as the pair. The row where they are equal is the brief's penetration hypothesis,
+ * measured and dead.
+ */
+function reportAccuracy(log: ReturnType<typeof logger>): number {
+  const audit = auditAccuracy();
+  for (const row of audit.rows) {
+    log.info(
+      `  ${padEnd(row.shape, 13)} ${padEnd(row.weaponId, 17)} ` +
+        `${row.pulls} pull(s) -> ${row.shotsFired} ray(s), ${row.damageEvents} damage event(s) ` +
+        `on ${row.victims} body(s); was ${row.legacy.toFixed(0)}%, now ${row.accuracy.toFixed(0)}%`,
+    );
+  }
+  for (const problem of audit.problems) log.error(`  ${problem}`);
+  if (audit.problems.length > 0) {
+    log.error(`ACCURACY AUDIT FAILED: ${audit.problems.length} problem(s).`);
+    return 1;
+  }
+  log.info(
+    `accuracy: ${audit.rows.length} shape(s) fired through the real ballistics; a hit is a ray ` +
+      'that found a body on every one of them.',
   );
   return 0;
 }
@@ -547,6 +640,17 @@ async function main(): Promise<number> {
    */
   const scoreFault = reportReplicatedScore(log);
   if (scoreFault !== 0) return scoreFault;
+
+  /**
+   * The accuracy audit (round 5, B5), in the same place and for the same reason.
+   *
+   * Pure like the three above it — fixed seeds, targets that cannot move or die — so one run is
+   * a fact. Ahead of the matches because every `hitRateByTier` a run reports downstream is the
+   * same two counters, and a run whose denominator is trigger pulls is a run about something
+   * else.
+   */
+  const accuracyFault = reportAccuracy(log);
+  if (accuracyFault !== 0) return accuracyFault;
 
   if (args.tierSweep) return runTierSweep(args, log);
 

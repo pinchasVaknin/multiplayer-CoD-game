@@ -2,6 +2,7 @@ import type { RenderableActor } from '../../shared/ai/BotVisualState';
 import type { CombatantDirectory } from '../../shared/combat/Killfeed';
 import type { HitZone } from '../../shared/combat/HitboxRig';
 import type { LocalIdentity } from '../../shared/combat/LocalIdentity';
+import { hitsFrom } from '../../shared/combat/ShotAccounting';
 import { EV, type GameBus } from '../../shared/core/Events';
 import type { InputCommand } from '../../shared/core/InputCommand';
 import { logger } from '../../shared/core/Log';
@@ -311,10 +312,19 @@ export class NetSession {
           evFired.shotIndex = 0;
           evFired.spreadDeg = 0;
           evFired.tracer = e.tracer;
-          evFired.hitTarget = e.hitTarget;
           evFired.ammoInMag = 0;
-          evFired.pellets = 1;
-          evFired.pelletsHit = e.hitTarget ? 1 : 0;
+          /**
+           * The shot's two accuracy numbers (round 5, B5).
+           *
+           * `pellets` is not on the wire and must not be: it is a property of the weapon the
+           * index already named, and both sides compile against the same table. `pelletsHit` is,
+           * because how many of eight rays connected is not derivable from anything the client
+           * holds. `hitTarget` is the old bit, derived here rather than replicated beside the
+           * count it duplicates — a tracer and an impact only care whether anything landed.
+           */
+          evFired.pellets = def.pellets;
+          evFired.pelletsHit = e.pelletsHit;
+          evFired.hitTarget = hitsFrom(evFired) > 0;
           evFired.minimapPing = def.minimapPing;
           this.deps.bus.emit(EV.WeaponFired, evFired);
 

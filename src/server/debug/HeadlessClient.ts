@@ -18,7 +18,9 @@ import {
 } from '../../shared/net/Skirmish';
 import { resolveLoadout } from '../../shared/meta/Loadouts';
 import { DEFAULT_INTERPOLATION_DELAY_MS, makeInterpolatedPose } from '../../shared/net/Interpolation';
-import { EFlag } from '../../shared/net/Snapshot';
+import { EFlag, weaponIdAt } from '../../shared/net/Snapshot';
+import { WEAPON_DEFS } from '../../shared/weapons/WeaponDefs';
+import { hitsFrom, shotsFrom } from '../../shared/combat/ShotAccounting';
 import {
   cloneMovementConfig,
   DEFAULT_MOVEMENT_CONFIG,
@@ -226,9 +228,19 @@ export interface HeadlessClientReport {
   readonly mispredictionP99: number;
   readonly maxReplayDepth: number;
   readonly ticksSimulated: number;
-  /** Damage events in which this client was the shooter. */
+  /** Damage events in which this client was the shooter. Not a hit count — see `shotsHit`. */
   readonly hitsDealt: number;
+  /**
+   * Rounds this client sent, and how many of them found a body (round 5, B5).
+   *
+   * Rays rather than trigger pulls, and both out of the same replicated `weapon.fired`. The
+   * hit rate `netHarness` and `HitTest` print used to be `hitsDealt / shotsFired` — damage
+   * events over pulls — which is the same defect B5 reported on the scoreboard, one layer
+   * down. It agreed by luck because a headless client carries the default carbine and a
+   * carbine fires one ray and throws no grenades.
+   */
   readonly shotsFired: number;
+  readonly shotsHit: number;
   readonly killsDealt: number;
   readonly deaths: number;
   /** Remote entities currently tracked. */
@@ -550,6 +562,7 @@ export class HeadlessClient {
 
   private hitsDealt = 0;
   private shotsFired = 0;
+  private shotsHit = 0;
   private killsDealt = 0;
   private deaths = 0;
 
@@ -813,7 +826,14 @@ export class HeadlessClient {
           }
         },
         onFired: (e) => {
-          if (e.sourceId === this.net.entityId) this.shotsFired++;
+          if (e.sourceId !== this.net.entityId) return;
+          // The denominator is the weapon's, the numerator is the wire's. See
+          // `shared/combat/ShotAccounting` for why they both come off this one event.
+          const weaponId = weaponIdAt(e.weaponIndex);
+          const def = weaponId === null ? undefined : WEAPON_DEFS[weaponId];
+          const shot = { pellets: def?.pellets ?? 1, pelletsHit: e.pelletsHit };
+          this.shotsFired += shotsFrom(shot);
+          this.shotsHit += hitsFrom(shot);
         },
       },
       displayName: opts.name,
@@ -1515,6 +1535,7 @@ export class HeadlessClient {
       ticksSimulated: this.ticks,
       hitsDealt: this.hitsDealt,
       shotsFired: this.shotsFired,
+      shotsHit: this.shotsHit,
       killsDealt: this.killsDealt,
       deaths: this.deaths,
       remotes: this.net.remotes.size,

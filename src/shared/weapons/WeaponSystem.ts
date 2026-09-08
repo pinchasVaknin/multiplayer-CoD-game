@@ -1,5 +1,6 @@
 import { makeDamageRequest, PLAYER_ENTITY_ID, type DamageRequest, type DamageSystem } from '../combat/DamageSystem';
 import type { HitZone } from '../combat/HitboxRig';
+import { shotsFrom } from '../combat/ShotAccounting';
 import { EV, type GameBus } from '../core/Events';
 import { Btn, isDown, justPressed, type InputCommand } from '../core/InputCommand';
 import { clamp01, DEG2RAD, lerp, TAU } from '../core/MathUtil';
@@ -12,7 +13,7 @@ import { aimWithOffset, makeAimSample, pelletOffset, Recoil, type AimSample, typ
 import { ScopeState } from './Scope';
 import type { ViewmodelConfig } from './ViewmodelConfig';
 import { makeWeaponInput, type Weapon, type WeaponInput } from './WeaponBase';
-import type { WeaponDef } from './WeaponDefs';
+import { MAX_PELLETS, type WeaponDef } from './WeaponDefs';
 import { simCos, simSin } from '../core/SimMath';
 
 /**
@@ -72,9 +73,6 @@ export type MuzzleStyle = 'viewmodel' | 'world';
 const WORLD_MUZZLE_FORWARD = 0.44;
 const WORLD_MUZZLE_RIGHT = 0.16;
 const WORLD_MUZZLE_DOWN = 0.16;
-
-/** Ceiling on the pellet bookkeeping the debug panel reads back. */
-const MAX_PELLETS = 16;
 
 const evFired = {
   weaponId: '',
@@ -430,7 +428,9 @@ export class WeaponSystem {
     const eyeZ = sim.z;
 
     this.request.weapon = def;
-    const pellets = Math.max(1, Math.min(MAX_PELLETS, Math.round(def.pellets)));
+    // The same clamp everything that counts shots applies — `combat/ShotAccounting` is the
+    // other reader of this number and has to agree with the loop that produced it (round 5, B5).
+    const pellets = shotsFrom(def);
     const report = this.lastPellets;
     report.count = pellets;
     report.hits = 0;

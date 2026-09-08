@@ -79,7 +79,8 @@ export async function runHitTest(
   shooter.disconnect(true);
 
   const shots = after.shotsFired - before.shotsFired;
-  const hits = after.hitsDealt - before.hitsDealt;
+  // What connected, not what the damage bus said (round 5, B5): a hit rate is rays over rays.
+  const hits = after.shotsHit - before.shotsHit;
   const result: HitTestResult = {
     conditions: describeConditions(conditions),
     shots,

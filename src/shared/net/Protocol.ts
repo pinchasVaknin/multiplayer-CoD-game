@@ -17,6 +17,17 @@
 /**
  * Bump on any layout change to any message in this file.
  *
+ * v14 (M11 Gate B, playtest round 5, B5): `FiredEvent` carries **how many of the pull's rays
+ * connected** where it carried a "did anything connect" bit.
+ *
+ * A client builds its own scoreboard out of replicated events — there is no scoreboard on the
+ * wire — so the accuracy column for every remote player is computed from this event. A bit
+ * makes a shotgun's eight rays into one shot that either landed or did not, so the client
+ * counted trigger pulls while the server counted rounds: the same figure with two definitions,
+ * split by runtime. The count is six spare bits of the byte the tracer flag already rides, and
+ * the *denominator* is not on the wire at all — it is `WEAPON_DEFS[weaponIndex].pellets`, which
+ * both sides compile against.
+ *
  * v13 (M11 Gate B, playtest round 4, the killstreak pivot): each offer in `MsgS.Streaks` carries
  * a **lockout in centiseconds** where it carried a "used this life" bit.
  *
@@ -94,7 +105,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'

@@ -1,5 +1,6 @@
 import { EV, type GameBus } from '../core/Events';
 import { LocalIdentity } from './LocalIdentity';
+import { hitsFrom, shotsFrom } from './ShotAccounting';
 
 /**
  * Who is winning, and what everybody in the match has done (brief S6.5).
@@ -171,17 +172,27 @@ export class ScoreSystem {
       }),
     );
 
+    /**
+     * Both halves of the accuracy column come off this one event (round 5, B5).
+     *
+     * They used to come off two — pulls from here, hits from `damage.dealt` — which is why the
+     * board could read 267%. See `ShotAccounting` for the definition and for what is
+     * deliberately excluded from it.
+     */
     this.unsubscribe.push(
       bus.on(EV.WeaponFired, (p) => {
         const row = this.rowsById.get(p.sourceId);
-        if (row !== undefined) row.shotsFired++;
+        if (row === undefined) return;
+        row.shotsFired += shotsFrom(p);
+        row.shotsHit += hitsFrom(p);
       }),
     );
     this.unsubscribe.push(
       bus.on(EV.DamageDealt, (p) => {
         const row = this.rowsById.get(p.sourceId);
         if (row === undefined) return;
-        row.shotsHit++;
+        // Damage only. A grenade, a knife and a killstreak's belt all arrive here under the
+        // owner's id and none of them sent a round, so none of them touch the shot counters.
         row.damageDealt += p.amount;
         const slot = this.ledger[this.ledgerHead];
         if (slot !== undefined) {
@@ -382,7 +393,12 @@ export class ScoreSystem {
   }
 }
 
-/** Accuracy as a percentage, or -1 when nothing has been fired. */
+/**
+ * Accuracy as a percentage, or -1 when nothing has been fired.
+ *
+ * Both operands are rays now — see `ShotAccounting` — so this cannot exceed 100. It could,
+ * and did: the numerator was a count of damage events.
+ */
 export function accuracy(row: PlayerScore): number {
   if (row.shotsFired === 0) return -1;
   return (row.shotsHit / row.shotsFired) * 100;

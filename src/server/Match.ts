@@ -3,6 +3,7 @@ import { BOT_ID_BASE, BotDirector, RESPAWN_SECONDS } from '../shared/ai/BotDirec
 import type { BotTeam, Combatant } from '../shared/ai/Combatant';
 import { tierForExtraBot } from '../shared/ai/RosterDeal';
 import type { CheatGrants } from '../shared/cheats/Cheats';
+import { hitsFrom, shotsFrom } from '../shared/combat/ShotAccounting';
 import { makeSpawnChoice, type SpawnChoice } from '../shared/ai/SpawnSelector';
 import { isObjectiveProvider } from '../shared/ai/ObjectiveIntent';
 import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
@@ -154,6 +155,8 @@ export interface ServerMatchOptions {
    * back to. This one wins over both.
    */
   readonly rosterOverride?: number;
+  /** Issue every bot this weapon. Harness only — see `BotDirectorDeps.botWeaponId`. */
+  readonly botWeaponId?: string;
 }
 
 /**
@@ -334,6 +337,7 @@ export class ServerMatch {
       player: this.spectator,
       seed: options.seed,
       nav: options.baked?.nav,
+      botWeaponId: options.botWeaponId,
     });
     /**
      * Free-for-All, read off the registry rather than compared against the id.
@@ -595,8 +599,8 @@ export class ServerMatch {
 
     this.unsubscribe.push(
       this.bus.on(EV.DamageDealt, (p) => {
-        const shooter = this.getPlayer(p.sourceId);
-        if (shooter !== undefined) shooter.shotsHit++;
+        // The shot counters are written from `weapon.fired` alone (round 5, B5) — a damage
+        // event is not a round, and this handler sees a grenade's three victims as three.
         if (p.lethal) return;
         const victim = this.getPlayer(p.targetId);
         if (victim === undefined) return;
@@ -610,7 +614,9 @@ export class ServerMatch {
     this.unsubscribe.push(
       this.bus.on(EV.WeaponFired, (p) => {
         const shooter = this.getPlayer(p.sourceId);
-        if (shooter !== undefined) shooter.shotsFired++;
+        if (shooter === undefined) return;
+        shooter.shotsFired += shotsFrom(p);
+        shooter.shotsHit += hitsFrom(p);
       }),
     );
 

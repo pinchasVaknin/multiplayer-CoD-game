@@ -19,6 +19,7 @@ import type { MapDef } from '../world/maps/types';
 import { AiScheduler, type SchedulerConfig } from './AiScheduler';
 import { Bot } from './Bot';
 import { drawBotWeapon } from './BotArsenal';
+import { cloneWeaponDef, requireWeapon } from '../weapons/WeaponDefs';
 import type { BrainDeps } from './BotBrain';
 import type { BotTeam, Combatant } from './Combatant';
 import { CoverIndex } from './Cover';
@@ -27,6 +28,7 @@ import { BOT_TIERS, type BotTier, type PerceptionConfig, type TierTable } from '
 import { NoiseKind, Perception } from './Perception';
 import { Pathfinder } from './Pathing';
 import { dealTiers } from './RosterDeal';
+import { hitsFrom, shotsFrom } from '../combat/ShotAccounting';
 import { makeSpawnChoice, SpawnSelector, type SpawnChoice } from './SpawnSelector';
 import { simCos } from '../core/SimMath';
 
@@ -183,6 +185,15 @@ export interface BotDirectorDeps {
    * path still want: one match, one bake, nothing to cache it in.
    */
   readonly nav?: NavGrid;
+  /**
+   * Issue every bot this weapon instead of drawing from its tier's pool. Harness only.
+   *
+   * Playtest round 5 B5 asks for a run *"with a roster forced to shotguns"*, and a statistic
+   * about pellets measured on a roster that is one shotgun in eight is a statistic about
+   * carbines. It changes no balance number: `drawBotWeapon` already returns any of these, and
+   * this only removes the draw. Undefined everywhere but `--bot-weapon`.
+   */
+  readonly botWeaponId?: string;
 }
 
 export interface NavStats {
@@ -462,7 +473,10 @@ export class BotDirector {
         damage: this.deps.damage,
         movement: this.deps.movement,
         healthConfig: this.deps.healthConfig,
-        weaponDef: drawBotWeapon(tier, this.rng),
+        weaponDef:
+          this.deps.botWeaponId === undefined
+            ? drawBotWeapon(tier, this.rng)
+            : cloneWeaponDef(requireWeapon(this.deps.botWeaponId)),
         viewmodelConfig: this.deps.viewmodelConfig,
         tiers: this.deps.tiers,
         perceptionConfig: this.deps.perceptionConfig,
@@ -612,8 +626,14 @@ export class BotDirector {
     // ---- hearing (S6.3) --------------------------------------------------
     this.unsubscribe.push(
       bus.on(EV.WeaponFired, (p) => {
+        // Rays, not pulls, and both halves from this one event (round 5, B5). The acceptance
+        // hit-rate per tier is this divided by itself, so it was a shotgun bot away from
+        // reading over 100% — see `combat/ShotAccounting`.
         const shooter = this.byId.get(p.sourceId);
-        if (shooter !== undefined) shooter.shotsFired++;
+        if (shooter !== undefined) {
+          shooter.shotsFired += shotsFrom(p);
+          shooter.shotsHit += hitsFrom(p);
+        }
         this.perception.noise.emit(NoiseKind.Gunfire, p.sourceId, this.teamOf(p.sourceId), p.x, p.y, p.z);
       }),
     );
@@ -655,10 +675,9 @@ export class BotDirector {
     this.unsubscribe.push(
       bus.on(EV.DamageDealt, (p) => {
         const shooter = this.byId.get(p.sourceId);
-        if (shooter !== undefined) {
-          shooter.shotsHit++;
-          shooter.damageDealt += p.amount;
-        }
+        // Damage only: a bot's frag is not a round it fired. Counted here it made the tier
+        // hit-rate a number about grenades.
+        if (shooter !== undefined) shooter.damageDealt += p.amount;
         const victim = this.byId.get(p.targetId);
         if (victim === undefined || p.lethal) return;
         const source = this.combatant(p.sourceId);

@@ -132,7 +132,22 @@ export interface FiredEvent {
   /** Terminating surface material, for the impact sound and spark colour. */
   material: number;
   tracer: boolean;
-  hitTarget: boolean;
+  /**
+   * How many of this pull's rays found a body (protocol v14, playtest round 5, B5).
+   *
+   * This was a `hitTarget` bit, and a bit is not a statistic. `ScoreSystem` builds a client's
+   * whole scoreboard — accuracy column included — out of replicated events, so a remote
+   * shotgunner's eight rays arriving as one connected-or-not flag meant the client counted
+   * *pulls* where the server counted *rays*: one figure with two definitions, split by runtime,
+   * which is the shape this milestone keeps finding.
+   *
+   * How many rays the pull sent is **not** here: it is `WEAPON_DEFS[weaponIndex].pellets`, and
+   * both sides compile against that table. A derived field on the wire is a second copy of a
+   * fact. `hitTarget` is derived from this one the same way, by the one consumer that wants it.
+   *
+   * Six bits of the byte the tracer flag already occupies, so it costs nothing.
+   */
+  pelletsHit: number;
 }
 
 export interface DamageEvent {
@@ -952,7 +967,8 @@ export function writeFired(w: ByteWriter, e: FiredEvent): void {
   w.i16(quantPos(e.endY));
   w.i16(quantPos(e.endZ));
   w.u8v(e.material);
-  w.u8v((e.tracer ? 1 : 0) | (e.hitTarget ? 2 : 0));
+  // Bit 0 is the tracer; the rest is the connected count, which `MAX_PELLETS` bounds at 16.
+  w.u8v((e.tracer ? 1 : 0) | (e.pelletsHit << 1));
 }
 
 export function writeDamage(w: ByteWriter, e: DamageEvent): void {
@@ -1624,7 +1640,7 @@ export function readEvents(r: ByteReader, count: number, sink: EventSink): boole
         e.material = r.u8v();
         const bits = r.u8v();
         e.tracer = (bits & 1) !== 0;
-        e.hitTarget = (bits & 2) !== 0;
+        e.pelletsHit = bits >>> 1;
         if (r.overran) return false;
         sink.onFired?.(e);
         break;
@@ -1702,7 +1718,7 @@ const firedScratch: FiredEvent = {
   endZ: 0,
   material: 0,
   tracer: false,
-  hitTarget: false,
+  pelletsHit: 0,
 };
 const damageScratch: DamageEvent = {
   sourceId: 0,

@@ -1,3 +1,4 @@
+import { hitsFrom } from '../../shared/combat/ShotAccounting';
 import { EV, type GameBus } from '../../shared/core/Events';
 import {
   beginEvents,
@@ -78,7 +79,9 @@ export class EventCollector {
         // resolved from the last impact this tick — see `noteImpactMaterial`.
         fired.material = lastImpactMaterial;
         fired.tracer = p.tracer;
-        fired.hitTarget = p.hitTarget;
+        // The count, not the bit (protocol v14, round 5 B5). A client's accuracy column is
+        // built from this event and nothing else, so it has to carry what actually connected.
+        fired.pelletsHit = hitsFrom(p);
         this.write(() => writeFired(this.writer, fired));
       }),
     );
@@ -214,7 +217,7 @@ const fired: FiredEvent = {
   endZ: 0,
   material: 0,
   tracer: false,
-  hitTarget: false,
+  pelletsHit: 0,
 };
 const damage: DamageEvent = {
   sourceId: 0,
