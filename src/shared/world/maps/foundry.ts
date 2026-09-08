@@ -488,6 +488,39 @@ export const FOUNDRY_MAP: MapDef = {
     fogColor: 0x272b33,
     fogNear: 55,
     fogFar: 150,
+
+    /**
+     * Dusk over an industrial site (round 5, F2).
+     *
+     * The roofs here only cover the two catwalk runs, so the hall is open above its middle and
+     * the sky is a real part of the picture from the floor — which is why this map gets one at
+     * all rather than being treated as an interior.
+     *
+     * The key is `0xffe3c2` at 2.35 and sits at 55 degrees, so the disc is warm and low-ish and
+     * the horizon is warmer than the zenith. That inversion is the whole reason the zenith is
+     * authored rather than derived: a multiple of `fogColor` would make the top of the sky a
+     * brighter version of a cold grey, and dusk does the opposite.
+     */
+    sky: {
+      /**
+       * The shallowest gradient of the four, and the map's own fog is why.
+       *
+       * The horizon is pinned to `fogColor`, which here is a dark cold `0x272b33` — so the only
+       * direction a zenith can go and still be a gradient is *down*. `0x0f1730` reads 1.25x
+       * against it in `npm run readability`, against Dunes' 1.59x; anything closer and the
+       * report's "one flat colour" would be true again with more code behind it.
+       */
+      zenith: 0x0f1730,
+      falloff: 0.85,
+      disc: { color: 0xffd9a8, sizeDeg: 1.8, glowDeg: 22, intensity: 1.25 },
+      /**
+       * Chimneys and gantries: taller than Depot's blocks, fewer, and only mostly hard-edged.
+       *
+       * `hardness: 0.72` rather than 1 because a steelworks silhouette is not a row of flat
+       * roofs — the ramp between features reads as ducting and conveyors between the towers.
+       */
+      skyline: { color: 0x141821, heightDeg: 15, count: 13, hardness: 0.72, seed: 4211 },
+    },
   },
 
   coverPoints: coverPoints(ALL_PROPS),

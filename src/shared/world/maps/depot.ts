@@ -805,6 +805,34 @@ export const DEPOT_MAP: MapDef = {
     // is about, not as depth.
     fogNear: 48,
     fogFar: 130,
+
+    /**
+     * Night over a cargo yard (round 5, F2).
+     *
+     * The zenith is **darker** than `skyColor` above and that is the point of the two being
+     * separate numbers. `0x6d7f9c` is a sensible hemisphere term for a night yard — it is
+     * what lights the top of a container — and it is far too bright to be a night sky; used
+     * as one it would put a bright grey lid over the darkest map in the game.
+     *
+     * `falloff` above 1 holds the horizon glow low and dark, which is what a city night sky
+     * does: the light pollution is a band near the ground and the zenith goes black.
+     */
+    sky: {
+      zenith: 0x0d1424,
+      falloff: 1.45,
+      // A moon, not a sun. The key here is `0x9fb4d8` at 1.15 and the file already calls it a
+      // moon; a warm disc over it would be the sky disagreeing with the shadows.
+      disc: { color: 0xc9d6ee, sizeDeg: 1.1, glowDeg: 9, intensity: 0.9 },
+      /**
+       * A port skyline: cranes, stacks and sheds, hard-edged and cut flat across the top.
+       *
+       * `hardness: 1` is the whole difference from Dunes — the same generator, told that the
+       * features are buildings rather than sand, holds each one's height across its own width
+       * and steps at the edge. Twenty-two of them around the circle is roughly a block every
+       * sixteen degrees, which reads as a working port rather than as a bar chart.
+       */
+      skyline: { color: 0x090e18, heightDeg: 13, count: 22, hardness: 1, seed: 8803 },
+    },
   },
 
   /** Cold haze rather than dust: it catches the mast pools and gives them a shape. */

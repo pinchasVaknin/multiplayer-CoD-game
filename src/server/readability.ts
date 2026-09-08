@@ -7,7 +7,7 @@ import { FOUNDRY_MAP } from '../shared/world/maps/foundry';
 import { DEPOT_MAP } from '../shared/world/maps/depot';
 import { DUNES_MAP } from '../shared/world/maps/dunes';
 import { GREYBOX_MAP } from '../shared/world/maps/greybox';
-import type { MapDef } from '../shared/world/maps/types';
+import type { MapDef, SkylineDef } from '../shared/world/maps/types';
 import { allMaterialBaseColors, materialBaseColor } from '../shared/world/maps/albedo';
 import {
   DECAL_HOLE_FRACTION,
@@ -18,6 +18,7 @@ import {
 } from '../shared/world/maps/materials';
 import { MATERIAL_KEYS } from '../shared/world/maps/types';
 import { linearLuminance, readFloor } from '../shared/world/MapLuminance';
+import { readSkyline, skylineFeatureHeight, SKY_PROFILE_SAMPLES } from '../shared/world/SkyProfile';
 import { simCos, simSin } from '../shared/core/SimMath';
 import {
   makeScreenPoint,
@@ -525,6 +526,264 @@ function decalSizeTable(): number {
   return failures;
 }
 
+// -- round 5 F2: the sky, and what is wrong with one silently ----------------
+
+/**
+ * What a generated sky can get wrong without anybody noticing (playtest round 5, F2).
+ *
+ * The report was `scene.background = fogColor` and nothing else: a uniform rectangle overhead
+ * and a void past the walls. The fix is a gradient dome, a disc placed from the map's own key
+ * light, and a ridge line — and each of those three has a failure that looks fine in a
+ * screenshot of the wrong direction and is obvious in the one nobody took.
+ *
+ * **The horizon is not checked, because it cannot be wrong.** `SkyDome` takes the bottom of
+ * its gradient from `def.ambient.fogColor` directly. There is no horizon colour in `SkyDef` to
+ * author, so there is no second number to drift, and the seam between fog and sky is closed by
+ * construction rather than by agreement. That is the point of the type, and it is why this
+ * section has nothing to say about it.
+ *
+ * What is checked is what the type cannot enforce:
+ *
+ *  1. **A flat sky.** A zenith equal to the fog colour is F2 again with more code. The rule is
+ *     that they differ; how much they differ by is a reading, because there is no threshold
+ *     anybody has agreed to and inventing one here is what this file's exit-code note bans.
+ *  2. **A disc with no light behind it.** The sun's *direction* is deliberately not authorable
+ *     — it comes from the map's directional light — so the way to get it wrong is to ask for a
+ *     disc on a map that has no such light, or to point the key upward and put the sun under
+ *     the floor. Both are rules with no legitimate exception.
+ *  3. **A ridge that does not join up.** The profile wraps: the last sample is adjacent to the
+ *     first. A generator that treats it as a line rather than as a circle leaves a vertical
+ *     crack in the horizon at exactly one azimuth — findable by a playtester, unreproducible
+ *     from their description, and invisible to every other instrument here.
+ *  4. **A silhouette that is not one.** A ridge brighter than the haze it stands in reads as a
+ *     glow. This is what the word means rather than a taste call.
+ */
+function skyTable(): number {
+  let failures = 0;
+
+  console.log('\n== round 5 F2: the sky, per map ==\n');
+  console.log(
+    '  %s %s %s %s %s  %s',
+    pad('map', 9),
+    pad('horizon', 9),
+    pad('zenith', 9),
+    padStart('contrast', 9),
+    padStart('spread', 7),
+    padStart('sun elev', 9),
+    'verdict',
+  );
+
+  for (const { def } of GROUNDS) {
+    const sky = def.ambient.sky;
+    const horizon = rgbOf(def.ambient.fogColor);
+    const zenith = rgbOf(sky.zenith);
+    const ratio = contrast(zenith, horizon);
+
+    const key = def.lights.find((l) => l.kind === 'directional');
+    // `direction` is the direction the light travels, so the sun is at its negation and a
+    // downward-travelling key is a sun above the horizon.
+    const elevationDeg =
+      key === undefined
+        ? NaN
+        : (Math.asin(
+            Math.max(
+              -1,
+              Math.min(
+                1,
+                -key.direction.y /
+                  Math.max(
+                    1e-6,
+                    Math.hypot(key.direction.x, key.direction.y, key.direction.z),
+                  ),
+              ),
+            ),
+          ) *
+            180) /
+          Math.PI;
+
+    const flat = sky.zenith === def.ambient.fogColor;
+    const wantsDisc = sky.disc.intensity > 0;
+    const discWithoutLight = wantsDisc && key === undefined;
+    const discBelowHorizon = wantsDisc && key !== undefined && elevationDeg <= 0;
+
+    if (flat) failures++;
+    if (discWithoutLight) failures++;
+    if (discBelowHorizon) failures++;
+
+    const verdict = flat
+      ? 'FLAT — the zenith is the fog colour, which is F2 with more code'
+      : discWithoutLight
+        ? 'DISC WITH NO KEY LIGHT — the sky would draw a sun the map does not have'
+        : discBelowHorizon
+          ? 'SUN BELOW THE HORIZON — the key points up and the disc is under the floor'
+          : 'ok';
+
+    /**
+     * The second reading, and it is here because the first one is hue-blind.
+     *
+     * WCAG contrast is a luminance ratio by construction, and a sky gradient does a lot of its
+     * work in hue — Foundry's runs from a cold grey haze to a deep evening blue at nearly the
+     * same brightness. The largest per-channel step says how far the colour travels where the
+     * ratio says how far the light does, and a gradient wants both.
+     */
+    const spread = Math.max(
+      Math.abs(zenith[0] - horizon[0]),
+      Math.abs(zenith[1] - horizon[1]),
+      Math.abs(zenith[2] - horizon[2]),
+    );
+
+    console.log(
+      '  %s %s %s %s %s %s  %s',
+      pad(def.name, 9),
+      pad(hex(def.ambient.fogColor), 9),
+      pad(hex(sky.zenith), 9),
+      padStart(`${ratio.toFixed(2)}x`, 9),
+      padStart(String(spread), 7),
+      padStart(key === undefined ? '—' : `${elevationDeg.toFixed(0)}°`, 9),
+      verdict,
+    );
+  }
+
+  console.log('\n  the ridge past the boundary:\n');
+  console.log(
+    '  %s %s %s %s %s %s  %s',
+    pad('map', 9),
+    padStart('peak', 7),
+    padStart('floor', 7),
+    padStart('worst step', 11),
+    padStart('seam step', 10),
+    padStart('periodicity', 12),
+    'verdict',
+  );
+
+  for (const { def } of GROUNDS) {
+    const skyline = def.ambient.sky.skyline;
+    if (skyline === undefined) {
+      console.log(
+        '  %s %s  %s',
+        pad(def.name, 9),
+        padStart('—', 7),
+        'no ridge, and that is authored: a room does not get a horizon',
+      );
+      continue;
+    }
+
+    const reading = readSkyline(skyline);
+    /**
+     * The seam rule, and it has no number in it.
+     *
+     * Comparing the two *ends* by size cannot work: a hard-edged skyline is allowed large steps
+     * — that is what `hardness: 1` is for, and Depot's port steps by six degrees at a block
+     * edge — so a crack the size of a building hides among them. What the horizon actually owes
+     * is that it be a function of the direction you are facing, and that is exact: one full
+     * turn on is the same azimuth, so it is the same elevation or the curve is not a circle.
+     */
+    const circular = reading.worstPeriodicityDeg === 0;
+    const darkerThanHaze = linearLuminance(skyline.color) < linearLuminance(def.ambient.fogColor);
+    if (!circular) failures++;
+    if (!darkerThanHaze) failures++;
+
+    console.log(
+      '  %s %s %s %s %s %s  %s',
+      pad(def.name, 9),
+      padStart(`${reading.maxDeg.toFixed(1)}°`, 7),
+      padStart(`${reading.minDeg.toFixed(1)}°`, 7),
+      padStart(`${reading.worstStepDeg.toFixed(3)}°`, 11),
+      padStart(`${reading.seamStepDeg.toFixed(3)}°`, 10),
+      padStart(`${reading.worstPeriodicityDeg.toFixed(3)}°`, 12),
+      !circular
+        ? 'SEAM — the ridge is not a function of the direction you are facing'
+        : !darkerThanHaze
+          ? 'NOT A SILHOUETTE — the ridge is brighter than the fog it stands in'
+          : 'ok',
+    );
+  }
+
+  /**
+   * The red control, and it is the tree this session started from.
+   *
+   * F2's sky was `new THREE.Color(fogColor)` in both directions: horizon and zenith the same
+   * hex, contrast exactly 1.00x. Running the rule against that is how this table was shown to
+   * fail before it was shown to pass — the mistake `PLAN.md` keeps recording is an assertion
+   * that was green on the bug, and a sky check that only ever looks at the fixed tree is one.
+   */
+  const flatRatio = contrast(rgbOf(DUNES_MAP.ambient.fogColor), rgbOf(DUNES_MAP.ambient.fogColor));
+  console.log(
+    '\n  RED CONTROL — the sky as F2 found it, %s in both directions: contrast %sx, which this table calls FLAT.',
+    hex(DUNES_MAP.ambient.fogColor),
+    flatRatio.toFixed(2),
+  );
+
+  /**
+   * The second red control, for the seam rule, and it is the one that had to exist.
+   *
+   * A circular generator cannot produce a seam, so a seam check run only against the shipped
+   * one is green for ever and proves nothing. This is the same arithmetic with the modulo taken
+   * out — a generator that treats the profile as a line — which is the mistake the rule is
+   * about, and the numbers below are the crack it leaves in the horizon.
+   */
+  for (const { def } of GROUNDS) {
+    const skyline = def.ambient.sky.skyline;
+    if (skyline === undefined) continue;
+    const control = lineShapedPeriodicity(skyline);
+    console.log(
+      '  RED CONTROL — %s ridge from a generator with no wrap: periodicity %s°, which this table calls SEAM.',
+      pad(def.name, 8).trim(),
+      control.toFixed(3),
+    );
+    if (control === 0) {
+      console.log('  WARNING: the seam control is periodic too, so it is controlling nothing.');
+      failures++;
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * `skylineAt` with the one thing that makes it circular removed, measured the way the rule is.
+ *
+ * Not called by anything that ships, and it uses the shipped hash rather than one that
+ * resembles it, so the only difference between this and the real generator is the modulo —
+ * which is the mistake. It reports the same quantity the rule tests: the largest disagreement
+ * between one turn of the circle and the next.
+ */
+function lineShapedPeriodicity(skyline: SkylineDef): number {
+  const samples = SKY_PROFILE_SAMPLES;
+  const peak = (skyline.heightDeg * Math.PI) / 180;
+  const count = Math.max(1, Math.round(skyline.count));
+  const hardness = Math.min(1, Math.max(0, skyline.hardness));
+
+  const at = (index: number): number => {
+    const t = (index / samples) * count;
+    const cell = Math.floor(t);
+    const frac = t - cell;
+    // The defect, in two expressions: no `% count` on either end.
+    const here = skylineFeatureHeight(cell, skyline.seed);
+    const next = skylineFeatureHeight(cell + 1, skyline.seed);
+    const s = frac * frac * (3 - 2 * frac);
+    const ridge = here + (next - here) * s;
+    const blocks = frac < 0.94 ? here : here + (next - here) * ((frac - 0.94) / 0.06);
+    const shape = ridge + (blocks - ridge) * hardness;
+    return peak * (0.34 + 0.66 * shape);
+  };
+
+  let worst = 0;
+  for (let i = 0; i < samples; i++) {
+    worst = Math.max(worst, Math.abs(at(i + samples) - at(i)));
+  }
+  return (worst * 180) / Math.PI;
+}
+
+/** An authored hex as the 0-255 triple the contrast helpers above take. */
+function rgbOf(hexValue: number): readonly [number, number, number] {
+  return [(hexValue >> 16) & 0xff, (hexValue >> 8) & 0xff, hexValue & 0xff];
+}
+
+function hex(value: number): string {
+  return `0x${value.toString(16).padStart(6, '0')}`;
+}
+
 // -- main -------------------------------------------------------------------
 
 console.log('OPERATOR readability probe — playtest round 4, P9 (B2, B12, F9)');
@@ -538,6 +797,7 @@ lightingTable();
 const arenaFailures = arenaBrightness();
 const crosshairContrastFailures = crosshairContrastTable();
 const decalFailures = decalSizeTable();
+const skyFailures = skyTable();
 
 console.log('\n== summary ==');
 console.log('  crosshair gaps at the floor: %d of %d hip-fire states', crosshair.atFloor, crosshair.examined);
@@ -546,6 +806,7 @@ console.log('  projection checks failed:    %d', projectionFailures);
 console.log('  arena brightness failures:   %d', arenaFailures);
 console.log('  crosshair contrast failures: %d', crosshairContrastFailures);
 console.log('  decals outside the range:    %d', decalFailures);
+console.log('  sky failures:                %d', skyFailures);
 
 /**
  * The exit code, and the one thing here that can fail a build.
@@ -589,6 +850,14 @@ if (crosshairContrastFailures > 0) {
     crosshairContrastFailures,
     GROUNDS.length,
     MIN_CONTRAST,
+  );
+  process.exit(1);
+}
+if (skyFailures > 0) {
+  console.error(
+    '\nSKY CHECK FAILED: %d map(s) with a flat sky, a disc no light stands behind, a ridge ' +
+      'that does not join up where it wraps, or a silhouette brighter than its own haze.',
+    skyFailures,
   );
   process.exit(1);
 }

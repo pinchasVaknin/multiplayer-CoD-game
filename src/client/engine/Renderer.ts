@@ -30,6 +30,23 @@ import type { ViewmodelLayer } from '../player/Viewmodel';
  * Scaling by `2048 / size` keeps every tier at whatever the map author chose in texels rather
  * than in metres, so the setting changes sharpness and cost and stops changing correctness.
  */
+/**
+ * The layer the sky is drawn on, and the only object on it (playtest round 5, F2).
+ *
+ * It lives here rather than beside `SkyDome` because the reason for it lives here:
+ * `renderGunship` below draws the scene three times with `scene.overrideMaterial` set, and an
+ * inward-facing dome pinned to the far plane, drawn as thermal terrain, is a grey wall over
+ * the whole optic. A layer says that once, declaratively, instead of adding a fourth
+ * visibility toggle to that pass.
+ *
+ * The mechanism is the *default*. A camera's layer mask is layer 0 alone unless something
+ * enables more, and three tests `object.layers` against `light.layers` for shadow casters
+ * exactly as it tests against the camera's for the main pass — so the thermal camera, every
+ * shadow camera, and any camera a later milestone adds all see no sky until they ask for it.
+ * `CameraRig` is the one place that asks.
+ */
+export const SKY_LAYER = 1;
+
 export const SHADOW_TIERS: Readonly<
   Record<ShadowQuality, { size: number; radiusScale: number; biasScale: number }>
 > = {

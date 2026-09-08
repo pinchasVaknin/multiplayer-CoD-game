@@ -498,6 +498,23 @@ export const GREYBOX_MAP: MapDef = {
     fogColor: 0x1b2028,
     fogNear: 34,
     fogFar: 96,
+
+    /**
+     * A sky over the testbed, and deliberately **no horizon** (round 5, F2).
+     *
+     * This is the room every player lands in after `PLAY MULTIPLAYER`, so the flat lid F2
+     * reports is more visible here than anywhere: it is the first thing anybody sees. It gets
+     * the gradient and the disc for the same reason round 5's F6 gave it lights.
+     *
+     * It does not get a `skyline`. A ridge line is a claim that there is a place out there,
+     * and this is a grey-box measurement room with a speed lane down one side. Drawing
+     * mountains around it would be the sky saying something the map does not mean.
+     */
+    sky: {
+      zenith: 0x2c3d5c,
+      falloff: 1.0,
+      disc: { color: 0xffeccd, sizeDeg: 1.6, glowDeg: 16, intensity: 1.1 },
+    },
   },
 
   coverPoints: coverPoints(COVER_PROPS),

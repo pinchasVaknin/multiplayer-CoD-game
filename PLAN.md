@@ -12774,3 +12774,245 @@ what the ten bots on a map carry is identical before and after.
   builder. There is no screen anywhere that shows a player what is coming — the picker shows a
   locked row's level one item at a time. A "next unlock" line on the summary screen would be cheap
   and is the natural companion to this session; it was not built because F10 did not ask for it.
+
+
+## Playtest round 5 — the sky, and the seam that had to be impossible rather than fixed
+
+**F2**: `scene.background` was `new THREE.Color(def.ambient.fogColor)` and nothing else, so
+looking up on Dunes gave a uniform beige rectangle and flying above the map gave a village in a
+void of the same beige. The brief called it the cheapest large improvement available, and it is
+the one that costs nothing against the no-external-assets rule.
+
+### The constraint decided the shape, and it is the reason there is no horizon colour
+
+P8's constraint was that the horizon must be the map's `fogColor`, so geometry fades into fog,
+fog meets the sky, and the seam is not drawable. The way to honour that is not to author it
+twice and check the two agree. **`SkyDef` has no horizon field.** The shader takes the bottom of
+its gradient from `def.ambient.fogColor` directly, so there is no second number that can drift
+and nothing for a check to compare — the same shape as P13's sun direction, one paragraph down.
+
+Two things follow that are worth stating because they are the difference between a sky that is
+present and one that is right:
+
+- **The dome is tone-mapped.** A fully-fogged world pixel is `fogColor` decoded to linear, ACES
+  mapped at exposure 1.25 and encoded back to sRGB. A shader that wrote the authored hex
+  straight out would be the same colour and a visibly different pixel, with the join drawn
+  across the middle of the screen. So the fragment shader works in linear and ends with three's
+  own `tonemapping_fragment` and `colorspace_fragment` chunks. The gunship shaders next door
+  deliberately skip both — an optic is a false-colour readout — and copying them here would have
+  produced exactly the seam the constraint exists to remove.
+- **The horizon is not checked, because it cannot be wrong.** `npm run readability` has plenty
+  to say about the sky and nothing to say about that.
+
+### Where the sun is, and why the type has no field for it
+
+*"Positioned from the map's existing directional light rather than from a new number, so the
+light in the scene and the light in the sky cannot disagree."* Taken literally: `SkyDiscDef`
+carries a colour, two angles and an intensity, and **no direction**. `SkyDome` walks
+`def.lights` for the first directional and puts the disc at the negation of the direction the
+light travels. A map with shadows pointing one way and a sun sitting the other is not a bug that
+can be introduced here; it is a state with no representation.
+
+A map with no directional light draws no disc rather than a default one. That case is a *rule*
+in the probe — a disc asked for on a map with no key light, or a key light pointing upward that
+would put the sun under the floor — because those are the two ways the omission can still be got
+wrong from the authoring side.
+
+### It never moves, and nothing updates it
+
+The vertex shader drops the translation out of the model-view matrix and writes
+`gl_Position = pos.xyww`, which puts every fragment at the far plane centred on the camera. So:
+
+- the dome is at infinity **by construction** rather than by being large, and the sphere's radius
+  is irrelevant — it is 1;
+- there is no per-frame `position.copy(camera.position)` beside `particulate.update` to forget;
+- and the free camera cannot fly out of it, which is the check the brief asks for.
+
+`Particulate` does the opposite and is right to: dust is *near*, and its parallax is the whole
+effect. A horizon's correct parallax is none, and that decides the silhouettes too — see below.
+
+### The silhouettes are drawn at infinity, not placed past the walls
+
+The brief asked for "distant silhouette bands past the boundary … flat, unlit, fogged, a few
+triangles". They are in the sky instead of in the world, and the reason is arithmetic rather
+than convenience: **a map is sixty metres across, so scenery near enough to show parallax is
+near enough to fly to.** A band at 120 m would shift by twenty degrees as a player crossed
+Dunes, which reads as large scenery rather than as distance, and the free camera would reach it
+in four seconds and prove it was a wall — the exact failure the verification step is looking
+for. Real hills at a kilometre shift by under two degrees across a whole map. No parallax is the
+accurate answer here, not the cheap one.
+
+What replaces the fog is the ridge's own vertical fade: its base washes out into the horizon
+colour and its top stands clear of it, which is aerial perspective the right way round and is
+what removes any line at the horizon.
+
+**One generator, two extremes.** `shared/world/SkyProfile.ts` places `count` features around the
+circle, hashes each one's height from the map's `seed`, and either interpolates between them —
+a ridge — or holds each across its own width and turns over at the edge — a skyline of blocks.
+`hardness` blends the two. Dunes is 7 features at `hardness: 0`; Depot is 22 at 1; Foundry is 13
+at 0.72, because a steelworks is towers with ducting between them rather than a row of flat
+roofs. There is no per-map `kind` to switch on and no second code path.
+
+The profile is a **512×1 red-channel `DataTexture`**, sampled by azimuth. It is the only texture
+this feature allocates.
+
+### Per-map, and the two numbers that are not the same number
+
+The brief: *"if the sky ends up with a constant in `MapRender.ts`, the sky is wrong for at least
+three of the four maps."* Nothing is constant; `SkyDef` is a required field on `AmbientDef`, so a
+map added later cannot forget it — the compiler asks.
+
+The zenith is authored rather than derived, and `ambient.skyColor` is why. That field already
+existed and is the **hemisphere light's** upper term: a lighting number, chosen for what it does
+to an upward-facing surface. Depot's is `0x6d7f9c`, which is a sensible bounce colour for a night
+yard and a ridiculous night sky; used as one it would have put a bright grey lid over the darkest
+map in the game. The two are now documented as the two different questions they answer.
+
+| Map | Horizon (`fogColor`) | Zenith | Contrast | Sun/moon | Ridge |
+|---|---|---|---:|---|---|
+| DUNES | `0xc9ae83` | `0x5f8fc4` | 1.59x | 2.2° warm disc at 70° | 7 dunes, smooth, 19° |
+| DEPOT | `0x2c3444` | `0x0d1424` | 1.47x | 1.1° pale moon at 62° | 22 blocks, hard, 13° |
+| FOUNDRY | `0x272b33` | `0x0f1730` | 1.25x | 1.8° warm disc at 55° | 13 towers, 0.72, 15° |
+| TESTBED | `0x1b2028` | `0x2c3d5c` | 1.50x | 1.6° disc at 53° | **none** |
+
+Two of those rows are decisions rather than settings. **Foundry's is the shallowest gradient of
+the four and its own fog is why**: the horizon is pinned to a dark cold `0x272b33`, so the only
+direction a zenith can go and still be a gradient is down. And **the testbed has no ridge on
+purpose.** It gets the gradient and the disc — it is the room everybody lands in, so F2's flat
+lid is more visible there than anywhere, which is the same argument round 5's F6 made about its
+lights. It does not get a horizon, because a ridge line is a claim that there is a place out
+there and this is a grey-box measurement room with a speed lane down one side.
+
+### The layer, and the pass it exists for
+
+`renderGunship` draws the scene three times with `scene.overrideMaterial` set. An inward-facing
+dome pinned to the far plane, drawn as thermal terrain, is a grey wall over the entire optic. The
+fix is not a fourth visibility toggle in that pass: the dome sits on `SKY_LAYER` and **only
+`CameraRig`'s camera enables it.** A camera's default mask is layer 0 alone, and three tests
+`object.layers` against `light.layers` for shadow casters exactly as it tests the camera's for
+the main pass — so the thermal camera, every shadow camera and any camera a later milestone adds
+see no sky until they ask. The default is the mechanism.
+
+`SKY_LAYER` is declared in `engine/Renderer.ts` rather than beside the dome, because that is
+where the reason lives and because `engine/` may not import `world/`.
+
+### The probe, and a rule with no number in it
+
+`npm run readability` gained a sky section. Four things are checked, and the interesting part is
+which of them is a rule and which is a reading — this file's exit-code note says a reading with
+no agreed threshold must not fail a build, and that still holds.
+
+**Rules, each with no legitimate exception:** a zenith equal to the fog colour (F2 again, with
+more code behind it); a disc asked for on a map with no directional light; a key light pointing
+upward, which puts the sun under the floor; a ridge brighter than the haze it stands in, which is
+not what the word silhouette means; and the seam.
+
+**Readings, printed and not asserted:** the horizon-to-zenith contrast ratio, the largest
+per-channel step — WCAG contrast is hue-blind by construction and Foundry's gradient does most of
+its work in hue — and the ridge's peak, floor and step sizes.
+
+The seam rule is the one worth writing down, because **the obvious version of it does not work.**
+The first attempt compared the step at the wrap against the worst ordinary step. That catches a
+crack in Dunes' smooth ridge and cannot catch one in Depot's, where a step the size of a building
+is the point and a seam hides among twenty-two of them. What the horizon actually owes is that it
+be a *function of the direction you are facing* — so the rule is that `skylineAt(def, i)` and
+`skylineAt(def, i + samples)` are the same number, one full turn on. That is exact, it needs no
+threshold, and a generator that indexes its control points without the modulo fails it for every
+map and every hardness.
+
+Watched red, because a probe nobody has seen fail has not been written:
+
+| Red control | What it reported |
+|---|---|
+| the sky as F2 found it — `0xc9ae83` in both directions | contrast **1.00x**, which the table calls FLAT |
+| the same three ridges from a generator with no wrap | periodicity **9.315° / 8.614° / 8.151°**, which the table calls SEAM |
+
+Against **0.000°** on all three shipped ridges.
+
+### Measured
+
+Every number came out of a run in this session.
+
+**`npm run readability`** — the two tables above, sky failures 0, and both red controls firing.
+
+**`npm run check`** green — 313 files across the partition (up 2: `SkyDome.ts` and
+`SkyProfile.ts`), and **the cosmetic audit unchanged at 19 snapshot fields**. Nothing here
+touches a simulated value: `SkyDef` is map content read by the renderer and by this probe, and no
+snapshot, wire message or collision number moved.
+
+**`npm run harness`** — 5 matches, 5 completed, 0 incomplete, and the interesting part is that
+the five scorelines are **identical to the P13 run earlier in this session** (75-66, 75-66,
+62-75, 44-75, 75-63 on the same seeds). The harness is seeded, so an unchanged scoreline is a
+stronger statement than a green one: adding a required field to `AmbientDef` did not perturb a
+single tick of simulation.
+
+**`npm run skirmish`** — FLOW CHECK PASSED, as a control on the shared change.
+
+**The bundle, before and after, from `vite build` on this tree**: 1,384.62 kB raw / 395.80 kB
+gzip at HEAD, **1,390.33 kB / 398.07 kB** with the sky — **+5.71 kB raw, +2.27 kB gzip**, which
+is the shader source, the profile generator and four `SkyDef` blocks. Still three network
+requests and no asset of any kind.
+
+**What it adds to a frame, counted rather than estimated**: **one draw call and 720 triangles**,
+reported through `MapStats` like every other mesh, plus one 512-byte texture. The dome is
+`SphereGeometry(1, 24, 16)` and the gradient is per fragment, so the tessellation only has to be
+round.
+
+### What was not verified
+
+- **No frame numbers.** The brief asks for `__operator.frameReport()` before and after on Depot
+  and Dunes, 600 samples each. That is a browser claim and this session cannot make it: the
+  preview pane never fires `requestAnimationFrame`, so a frame report taken through it would be
+  a number about a throttled clock. The draw-call and triangle counts above are the part that
+  *can* be established headlessly, and they are the part the cost argument rests on — one
+  additional draw call of 720 triangles with no lighting, no fog and no depth write, over a full
+  screen of fragments. **The fill is the cost, and fill is what the frame report would measure.**
+  It is first on the browser list.
+- **The shader has never been compiled.** `tsc` sees a template literal and `vite build` bundles
+  it as a string; GLSL is compiled by the driver on the first frame the dome is drawn. A typo in
+  it is a black screen and a console error, not a build failure. Reviewed by hand for the two
+  cases that bite — `pow(0.0, x)` is floored away from zero, and the disc's `smoothstep` edges
+  are ordered — but reviewed is not run.
+- **Nothing about how it looks.** Whether Dunes' zenith is the right blue, whether a 19° dune
+  ridge reads as distance or as a wall, and whether Foundry's 1.25x gradient is visible at all on
+  a real panel are all judgements about a picture. The probe says the numbers are not equal; it
+  does not say anybody can see it.
+
+### Needs a browser
+
+- **`__operator.frameReport()`, 600 samples, on Depot and on Dunes.** Depot has the most
+  geometry and Dunes the most open sky, which are the two different ways this could cost
+  something. The round-5 baseline to beat is p50 16.7 ms, p95 16.8, p99 17.0.
+- **Look up on all four maps.** A gradient with no banding, and the sun or moon where the
+  shadows say it should be — stand beside a container on Depot, follow its shadow back, and the
+  moon should be at the end of it. That is the one check the type cannot make for itself.
+- **`__operator.spectate.noclip(true)` and fly past the boundary on each of the three outdoor
+  maps.** The horizon should stay put as you climb and the ridge should stay at the same
+  apparent size however far out you go — that is what "at infinity" means, and it is what a band
+  placed in the world would fail. Then look back at the map from outside: it should sit on a
+  horizon rather than float in a void, which is the second half of the report.
+- **Stand where the fog is thickest and find the join.** Dunes' fog runs to 210 m; look down a
+  street at the far wall and then up past it. There should be no line.
+- **Call in a Chopper Gunner.** The thermal optic must show the grey world and orange bodies with
+  **no sky at all**. If a grey wall fills the optic, the layer is not doing its job and that is
+  the one regression this change can cause somewhere it is not visible.
+- **Turn motion blur on.** The dome renders into a render target on that path, and the
+  colour-space handling differs between a target and the canvas; the horizon seam is the place
+  it would show.
+
+### Found while here
+
+- **`ambient.skyColor` has been two things wearing one name since M4.** It is the hemisphere
+  light's sky term and nothing has ever drawn it. Every map's value was chosen as a lighting
+  number, which is why none of them was usable as a zenith and why F2 could not have been fixed
+  by pointing the background at it. It is documented now rather than renamed: a rename touches
+  four map files and `MapLuminance`, and the comment is what was actually missing.
+- **Foundry's fog is colder and darker than its key light.** `0x272b33` against a `0xffe3c2`
+  key at 2.35 intensity describes a bright warm sun over a cold grey haze, which is a
+  combination no time of day produces. It is left alone — changing a map's fog is a change to
+  how the whole map reads and is not what F2 asked for — but it is why that map's sky has the
+  least room to move, and it is worth a look next time somebody is in `foundry.ts`.
+- **There is no instrument in this project that can measure a frame.** Four probes and three
+  harnesses, and the one number the brief for a rendering feature asks for is the one thing only
+  a real browser can produce. That is not a gap this session should close, but it is the reason
+  every cosmetic session ends with the same list.

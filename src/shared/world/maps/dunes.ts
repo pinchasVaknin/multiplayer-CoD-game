@@ -556,6 +556,35 @@ export const DUNES_MAP: MapDef = {
     fogColor: 0xc9ae83,
     fogNear: 72,
     fogFar: 210,
+
+    /**
+     * Midday over a desert village (round 5, F2).
+     *
+     * The zenith is a real blue and the horizon is the dust the map is already standing in,
+     * which is the whole trick: `fogColor` is not repeated here, it *is* the bottom of the
+     * gradient, so the far end of a 72 m street and the sky above it are the same colour and
+     * the join between them is not drawable.
+     *
+     * `falloff` is under 1 on purpose and this is the map that most needs it: an exponent
+     * below one lifts the haze band high, which is what a hot afternoon looks like and what
+     * matches a fog that does not finish until 210 m.
+     */
+    sky: {
+      zenith: 0x5f8fc4,
+      falloff: 0.62,
+      // Straight overhead and large: the key is at 70 degrees of elevation and this map's
+      // identity is that it is the bright one.
+      disc: { color: 0xfff6e0, sizeDeg: 2.2, glowDeg: 26, intensity: 1.5 },
+      /**
+       * Dunes, and they are the reason the perimeter is 11 m rather than 6.
+       *
+       * From mid-map the wall subtends about 15 degrees, so a ridge under that is a ridge
+       * nobody ever sees; 19 reaches over it from most of the street and well over it from
+       * the rooftops. Seven smooth features rather than twenty hard ones — a dune field has
+       * long wavelengths and no vertical edges, which is exactly what `hardness: 0` is.
+       */
+      skyline: { color: 0xa98a5f, heightDeg: 19, count: 7, hardness: 0, seed: 1571 },
+    },
   },
 
   /**

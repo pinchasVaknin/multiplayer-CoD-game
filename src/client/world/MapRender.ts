@@ -12,6 +12,7 @@ import {
 import { PROP_SHAPES } from '../../shared/world/maps/props';
 import type { Box, MapDef, MaterialKey, SpawnZone } from '../../shared/world/maps/types';
 import { buildBoxGeometry, type BoxSpec } from './MapMesher';
+import { SkyDome } from './SkyDome';
 
 /**
  * The render half of the map loader (M9 split — see `shared/world/MapLoader.ts`).
@@ -151,7 +152,8 @@ export function* buildMapChunked(
 
   // Chunk count is known up front, so a progress bar is a real fraction rather than a guess.
   const propParts = countPropParts(def);
-  const total = byMaterial.size + propParts + 1;
+  // + 2: the lights chunk and the sky chunk, neither of which is per material or per prop.
+  const total = byMaterial.size + propParts + 2;
   let done = 0;
 
   const disposables: Array<{ dispose(): void }> = [];
@@ -330,6 +332,22 @@ export function* buildMapChunked(
     done++;
     yield { done, total, label: 'lights' };
 
+    /**
+     * The sky, built after the lights because it reads one of them (round 5, F2).
+     *
+     * In the map's own root rather than added to the scene beside `applyAmbient`, for the
+     * reason the particulate is: `dispose` walks one list and clears one group, and a second
+     * thing hanging off the scene is a second thing to forget on a map change.
+     */
+    const sky = new SkyDome(def);
+    root.add(sky.mesh);
+    disposables.push(sky);
+    drawCalls++;
+    triangles += sky.triangleCount;
+
+    done++;
+    yield { done, total, label: 'sky' };
+
     const stats: MapStats = {
       ...loaded.stats,
       drawCalls,
@@ -399,7 +417,19 @@ function makeMaterial(textures: ProceduralTextures, key: MaterialKey): THREE.Mat
   });
 }
 
-/** Apply a map's ambient block to the scene. Kept here so maps own their look. */
+/**
+ * Apply a map's ambient block to the scene. Kept here so maps own their look.
+ *
+ * **`scene.background` is no longer the sky** (round 5, F2). `SkyDome` covers every direction
+ * from the far plane, so nothing that reaches a pixel comes from here any more; the line stays
+ * because it is still the *clear* colour, and a frame that started on `Renderer`'s fixed
+ * `0x0c0e11` would flash the wrong dark grey on any frame the dome did not cover — a resize
+ * between the clear and the draw, or a pass that skips the sky layer. Keeping it at `fogColor`
+ * means the fallback is the same colour as the horizon rather than a colour from nowhere.
+ *
+ * The report is what it used to be: *"`scene.background` is the fog colour and that is the
+ * whole sky."* It was, and now it is only the floor under one.
+ */
 export function applyAmbient(scene: THREE.Scene, def: MapDef): void {
   scene.background = new THREE.Color(def.ambient.fogColor);
   scene.fog = new THREE.Fog(def.ambient.fogColor, def.ambient.fogNear, def.ambient.fogFar);

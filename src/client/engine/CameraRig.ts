@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { clamp, damp, DEG2RAD, lerp } from '../../shared/core/MathUtil';
 import type { CameraConfig } from '../player/CameraConfig';
 import { CameraShake } from '../player/CameraShake';
+import { SKY_LAYER } from './Renderer';
 import type { PlayerSnapshot } from '../../shared/player/PlayerState';
 import type { ViewmodelLayer } from '../player/Viewmodel';
 
@@ -78,6 +79,16 @@ export class CameraRig {
     this.camera = new THREE.PerspectiveCamera(cfg.fov, aspect, 0.12, 400);
     this.camera.near = this.nearFor(cfg.fov, aspect);
     this.camera.rotation.order = 'YXZ';
+    /**
+     * The one camera that sees the sky (round 5, F2).
+     *
+     * `SkyDome` sits on its own layer, and a camera's default mask is layer 0 alone. This is
+     * the enable; the *absence* of it everywhere else is what keeps a dome pinned to the far
+     * plane out of the Chopper Gunner's three-pass thermal draw, where an override material
+     * would render it as a grey wall over the whole optic, and out of every shadow camera,
+     * where it would be a caster the size of the world.
+     */
+    this.camera.layers.enable(SKY_LAYER);
   }
 
   resize(aspect: number): void {
