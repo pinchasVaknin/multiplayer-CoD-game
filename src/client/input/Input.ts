@@ -113,7 +113,19 @@ export class Input {
 
   /** Set while a match is live: a click re-acquires pointer lock. See `armPointerLock`. */
   private wantPointerLock = false;
-  private lockRejectedWhileArmed = false;
+  /**
+   * A pointer lock request came back refused, and we have not been locked since (round 5, B8).
+   *
+   * One meaning, which is the change. It was `lockRejectedWhileArmed` and carried two: *we were
+   * refused* and *stop filling the console with it*. `onMouseDown` cleared it before every retry
+   * so the next refusal would warn again — which is fine for a log line and useless as a
+   * condition, because the flag was false for exactly as long as anybody would want to read it.
+   *
+   * Cleared on **acquiring** the lock rather than on attempting to, so it describes the outcome
+   * and not the attempt. The console suppression rides the same field and is now once per armed
+   * session instead of once per click, which is what the old comment said it wanted.
+   */
+  private lockRefused = false;
 
   private lockListeners: Array<(locked: boolean) => void> = [];
   private escapeListeners: Array<() => void> = [];
@@ -198,11 +210,37 @@ export class Input {
       result.catch((err: unknown) => {
         // While armed the next click will try again, so a rejection is expected rather
         // than exceptional — say so once and then stop filling the console with it.
-        if (this.wantPointerLock && this.lockRejectedWhileArmed) return;
-        if (this.wantPointerLock) this.lockRejectedWhileArmed = true;
+        const alreadyKnown = this.lockRefused;
+        this.noteLockRefused();
+        if (this.wantPointerLock && alreadyKnown) return;
         console.warn('[Input] pointer lock request rejected:', err);
       });
     }
+  }
+
+  /**
+   * A refusal arrived, from either of the two ways a browser can deliver one.
+   *
+   * There are two, and only one of them used to record anything: `requestPointerLock` returns a
+   * rejected promise on Chrome 113+, and every browser also fires `pointerlockerror` on the
+   * document. The event handler logged and set nothing, so on a build that returns `undefined`
+   * from the request the refusal was invisible even inside this class — which would have made
+   * B8's banner silently never appear on exactly the browsers most likely to refuse.
+   */
+  private noteLockRefused(): void {
+    this.lockRefused = true;
+  }
+
+  /**
+   * Do we want the pointer locked, and have we been told we cannot have it? (round 5, B8)
+   *
+   * The three terms are all facts that outlive any surface reading them, which is what lets the
+   * banner be derived once a frame in `Game.updateHudSurfaces` like every other HUD surface
+   * rather than pushed from an event. `Input` belongs to `Game` and not to the world, so this
+   * also survives a teardown, a rotation and a rejoin without anybody arranging it.
+   */
+  get pointerLockRefused(): boolean {
+    return this.wantPointerLock && !this.locked && this.lockRefused;
   }
 
   /**
@@ -220,7 +258,7 @@ export class Input {
   armPointerLock(on: boolean): void {
     this.wantPointerLock = on;
     if (!on) {
-      this.lockRejectedWhileArmed = false;
+      this.lockRefused = false;
       return;
     }
     this.requestPointerLock();
@@ -575,7 +613,9 @@ export class Input {
     // spent doing that. Passing it on as well would fire the weapon on the frame the player
     // clicked to resume.
     if (this.wantPointerLock && !this.locked) {
-      this.lockRejectedWhileArmed = false;
+      // The refusal is *not* cleared here. It describes an outcome, and the outcome of this
+      // attempt is not known yet — clearing it on the way in is what made the old flag
+      // unreadable as a condition (round 5, B8).
       this.requestPointerLock();
       return;
     }
@@ -619,6 +659,9 @@ export class Input {
     if (nowLocked === this.locked) return;
     this.locked = nowLocked;
     if (nowLocked) {
+      // Whatever was refused before, we have it now. The one place the refusal is cleared by
+      // success rather than by asking again.
+      this.lockRefused = false;
       // Swallow the first delta so re-acquiring lock never snaps the view.
       this.settleCounter = SETTLE_EVENTS_AFTER_LOCK;
     } else {
@@ -629,6 +672,11 @@ export class Input {
   };
 
   private readonly onPointerLockError = (): void => {
+    // The other half of the pair `noteLockRefused` documents. This used to log and record
+    // nothing at all.
+    const alreadyKnown = this.lockRefused;
+    this.noteLockRefused();
+    if (this.wantPointerLock && alreadyKnown) return;
     console.warn('[Input] pointer lock error; the browser refused the request.');
   };
 

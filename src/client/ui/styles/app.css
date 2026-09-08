@@ -141,6 +141,24 @@ body.op-locked #viewport {
   margin: 0;
 }
 
+/**
+ * The device gate's body copy (playtest round 5, F1).
+ *
+ * Sentence case and a measure, where `__sub` above it is an uppercase label: this is the only
+ * screen in the game that has to explain something rather than name it, and tracked-out capitals
+ * across three lines are unreadable. `max-width` in `ch` so the measure holds at any font size,
+ * and it wraps rather than scrolls — this screen is the one place a player has already been told
+ * their device is too small.
+ */
+.op-screen__note {
+  font-size: var(--t-body);
+  line-height: 1.5;
+  color: var(--c-text-dim);
+  max-width: 46ch;
+  margin: 0;
+  text-align: center;
+}
+
 .op-btn {
   appearance: none;
   border: 1px solid var(--c-accent-dim);

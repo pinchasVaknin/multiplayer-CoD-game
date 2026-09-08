@@ -1316,3 +1316,46 @@
   text-transform: uppercase;
   color: var(--c-text);
 }
+
+/**
+ * The aim warning (playtest round 5, B8).
+ *
+ * Above centre, where `.hud-cheat` is below it, because both can be up at once and they say
+ * opposite things — one that a rule has been relaxed for you, the other that the game is not
+ * reading your mouse. `--c-bad` rather than the cheat tag's warning amber, for the same reason:
+ * this is not a state you chose.
+ *
+ * A `--on` class rather than `[hidden]`, which is B13 and cost two rounds: the UA stylesheet's
+ * `[hidden] { display: none }` sits at the lowest specificity there is, and the `display` here
+ * would silently outrank it.
+ */
+.hud-aim {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  transform: translateX(-50%);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-med) var(--ease), visibility var(--dur-med);
+}
+
+.hud-aim--on {
+  opacity: 1;
+  visibility: visible;
+}
+
+.hud-aim span {
+  display: block;
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-display);
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--c-bad);
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid var(--c-bad);
+  border-radius: 2px;
+  padding: 3px var(--s-3);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+}

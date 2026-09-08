@@ -3,6 +3,7 @@ import { defaultBindings } from '../../shared/core/Keybinds';
 import { ScoreSystem, type ScoreTeam } from '../../shared/combat/ScoreSystem';
 import type { ColumnDef } from '../../shared/modes/GameMode';
 import { defaultSettings } from '../../shared/meta/SaveData';
+import { playability } from '../../shared/ui/Capabilities';
 import {
   DEFAULT_MAP_ID,
   DEFAULT_MODE_ID,
@@ -377,6 +378,33 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
     name: 'menu',
     show: () => {
       menus.show();
+      return layerOf(PLAIN_SCREEN);
+    },
+    hide: () => menus.hide(),
+  },
+  {
+    /**
+     * The device gate (playtest round 5, F1).
+     *
+     * Measured here because it is a new full-screen surface and P0 rule 7 is explicit that a
+     * layout claim which can be a rect should be one — and because the *only* viewport this
+     * screen is ever shown at is a small one. It is the answer to "your device is too small to
+     * play", so a version of it that is itself cut off at 375x812 would be a joke at the
+     * player's expense.
+     *
+     * The longest copy of the two verdicts, not an arbitrary one: `no-fine-pointer` is the
+     * message a phone actually gets, and it is the one with three lines of body text under the
+     * headline.
+     */
+    name: 'unsupported',
+    show: () => {
+      const verdict = playability({
+        maxTouchPoints: 5,
+        finePointer: false,
+        coarsePointer: true,
+        hasPointerLock: true,
+      });
+      menus.showUnsupported(verdict.headline, verdict.detail);
       return layerOf(PLAIN_SCREEN);
     },
     hide: () => menus.hide(),

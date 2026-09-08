@@ -1942,6 +1942,18 @@ export class HeadlessClient {
        * including `resultSurfacesVisible`, which is the one three surfaces share.
        */
       inWarmupArena: isArenaInstance(this.net.matchId),
+      /**
+       * B8's three, and every one of them is a limit here rather than a value (round 5).
+       *
+       * There is no pointer to lock in this process and no `Input` to arm one, so the aim
+       * warning is structurally silent in every headless run — which is stated rather than left
+       * for somebody to read as a pass. The rule itself is exercised over its whole domain by
+       * `auditCapabilities`, which is a pure function and needs no connection; what a harness
+       * cannot say is what a *browser* does with a refusal, and that is on the list.
+       */
+      wantsPointerLock: false,
+      pointerLocked: false,
+      lockRefused: false,
     };
 
     if (!alive) this.deadTicks++;

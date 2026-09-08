@@ -42,7 +42,10 @@ import { MatchHarness } from './debug/MatchHarness';
 import { Speedometer } from './debug/Speedometer';
 import { nowMs } from '../shared/core/Clock';
 import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStates';
+import { playability } from '../shared/ui/Capabilities';
+import { readDeviceCapabilities } from './input/DeviceCapabilities';
 import {
+  aimWarningText,
   cheatTag,
   debugOverlayVisible,
   debugUnlocked,
@@ -772,6 +775,23 @@ export class Game {
         this.transport.open();
         installConsoleApi(this, this.harness, this.matchHarness);
         window.setTimeout(() => {
+          /**
+           * The device gate (playtest round 5, F1).
+           *
+           * A phone loaded the menu, was shown a table of keyboard bindings and a note about
+           * F11, and could start a match it had no way to play. The check is here rather than
+           * inside the menu because *not transitioning* is the gate: there is no button to
+           * disable, no state to be in, and nothing downstream has to know about it.
+           *
+           * The loop is left running on purpose — the screen is composited by it, and stopping
+           * it would leave a message nobody can see.
+           */
+          const device = playability(readDeviceCapabilities());
+          if (!device.ok) {
+            netLog.warn(`refusing to start: ${device.id} — ${device.headline}`);
+            this.screens.menus.showUnsupported(device.headline, device.detail);
+            return;
+          }
           this.transitionTo('MENU');
           this.startBotHarnessIfRequested();
         }, 32);
@@ -1212,6 +1232,10 @@ export class Game {
     // outlives them — and both are idempotent, which is what lets the pause screen's button
     // appear on the frame the code is typed without anybody refreshing it.
     if (match !== undefined) match.setCheatTag(cheatTag(state));
+    // B8. A surface in the same sense as every line above it — one writer, derived once a frame
+    // from state that outlives it — which is what makes it survive a pause and a rejoin without
+    // anything being remembered across either.
+    if (match !== undefined) match.setAimWarning(aimWarningText(state));
     this.screens.pauseMenu.setDebugAvailable(debugUnlocked(state));
   }
 
@@ -1237,6 +1261,12 @@ export class Game {
       // A fact about the world, not about this frame: `MatchWorld` asks `isArenaInstance` once,
       // when the world is built, and a migration rebuilds the world.
       inWarmupArena: match?.inWarmupArena ?? false,
+      // B8. Off `Input`, which this class owns rather than the world — so unlike every field
+      // above, these three do not go `undefined` between a teardown and the next build, and the
+      // banner is describing the same pointer across a rotation that it was before it.
+      wantsPointerLock: this.input.pointerLockArmed,
+      pointerLocked: this.input.isLocked,
+      lockRefused: this.input.pointerLockRefused,
     };
   }
 

@@ -11769,14 +11769,16 @@ clients, 30 s, **0 snapshots lost**, worst misprediction p99 0.701.
 - **`?net=` and the `?server=host:port` form were not exercised end to end.** They are unchanged
   by this session and now checked for existence, but neither was run.
 
+### Verified by eye, in a real browser
+
+Two windows were opened with `?name=ALICE` and `?name=BRAVO` and the scoreboard carried both
+names, distinct, neither of them the profile callsign; the callsign in Settings was unchanged
+afterwards. That closes the first two checks below — the precedence *and* the "nothing is written
+back" half, which is the safety argument the whole decision rests on and which no headless run
+can observe, because the profile is a browser store.
+
 ### Needs a browser
 
-- **Two windows, two names, one scoreboard.** `?server=1&name=BRAVO` and `?server=1&name=ALICE`
-  against a local `npm run serve`, Play Multiplayer in each. Both names on Tab, distinct, and
-  neither of them the profile callsign. This is B9 verbatim.
-- **One window with no `?name=`.** The scoreboard should show the profile callsign, and the
-  callsign in Settings should be unchanged after a match played under an override — the "nothing
-  is written back" half.
 - **The menu with and without an address.** With `?server=` the Play Multiplayer button is
   enabled and *does not connect until pressed*; with neither `?server=` nor `VITE_SERVER_URL` it
   is disabled with the reason in its tooltip.
@@ -11794,3 +11796,186 @@ clients, 30 s, **0 snapshots lost**, worst misprediction p99 0.701.
   `mode`, `matches`) and the layout probe owns one (`show`). All eight are declared now with
   reasons. None is a defect; the point is that the client understands twelve query keys and until
   this session four of them were written down.
+
+## Playtest round 5 — capabilities the game assumes, and the two answers that are not the same answer
+
+**B8**: pointer lock is refused, `Input` writes `[Input] pointer lock request rejected:
+WrongDocumentError` to the console, and the match runs on unaimable — full HUD, running clock,
+nothing on screen. **F1**: there is no touch input anywhere in `src/client/`, and yet a phone
+loads the menu, is shown a table of keyboard bindings and a note about F11, and can start a
+match. One missing step twice: the game never asks whether it can be played here, and never says
+so when it cannot.
+
+### The decision, and it splits — which is the finding rather than a compromise
+
+The brief asked for one answer: is a refused pointer lock a banner or a blocking state. It is a
+banner, and the reason is a property the two reports do not share.
+
+**A refusal is recoverable, and it is the expected state on the commonest path in the game.**
+`Input.armPointerLock`'s own comment records why the arming exists: Chrome refuses a lock for a
+window after the player leaves it with Escape, so *pause, then resume* is a refusal every single
+time. It clears itself the instant the next click lands. Blocking on that would be a modal the
+player fights through on every resume — a protective answer applied to a condition that does not
+need protecting from.
+
+**No fine pointer is not recoverable by anything the player can do in the page.** No amount of
+clicking gives a phone a mouse. Round 4's F7 made the protective call for the waiting room, and
+*this* is where that precedent belongs.
+
+So the rule is **recoverable conditions get a banner, unrecoverable ones get a gate**, and B8 and
+F1 land on opposite sides of it for a stated reason rather than by taste.
+
+### Surviving a pause and a rejoin is what choosing the banner buys
+
+It is not extra work under that decision. The banner's visibility is a pure function in
+`shared/ui/Capabilities`, called from `shared/ui/HudSurfaces` and evaluated once a frame by
+`Game.updateHudSurfaces` — which is round 4's HUD surface invariant, and the brief was right that
+this belongs *in* that table rather than beside it. Two consequences fall out for free:
+
+- **A pause.** `PAUSED`'s enter calls `armPointerLock(false)`, so `wantsPointerLock` is false and
+  the banner is down — correctly, because a released cursor on the pause screen is the player's
+  own doing. On resume the arm re-requests and the banner returns only if the refusal does.
+- **A rejoin.** The three terms come off `Input`, which `Game` owns rather than the world. Unlike
+  every other field in `HudSurfaceState` they do not go `undefined` between a teardown and the
+  next build, so a rotation or a migration cannot lose the fact. Nothing had to be remembered
+  across either.
+
+### One flag that meant two things, and a second refusal path that recorded nothing
+
+`lockRejectedWhileArmed` could not have been read as a condition even if something had tried. It
+carried two meanings — *we were refused* and *stop filling the console with it* — and
+`onMouseDown` cleared it before every retry so the next refusal would log again. It was therefore
+false for exactly as long as anybody would want to read it.
+
+It is `lockRefused` now, with one meaning, cleared on **acquiring** the lock rather than on
+attempting to, so it describes an outcome instead of an attempt. The console suppression rides
+the same field and became once per armed session, which is what the old comment said it wanted.
+
+And there were **two** ways a refusal arrives, of which only one recorded anything.
+`requestPointerLock` returns a rejected promise on Chrome 113+; every browser also fires
+`pointerlockerror` on the document, and that handler logged and set nothing. On a build that
+returns `undefined` from the request the refusal was invisible even inside `Input` — so B8's
+banner would have been silently absent on exactly the browsers most likely to refuse. Both paths
+go through `noteLockRefused` now.
+
+### F1 is a gate, and the gate is *not reaching the menu*
+
+`BOOT`'s enter shows a message and transitions to `MENU` on a 32 ms timeout. The check goes
+there, and when it fails the transition simply does not happen: there is no button to disable, no
+state to be in, and nothing downstream has to know. It needs no `GameStateId`, no entry in
+`LEGAL_TRANSITIONS`, and no interaction with the pause or summary machinery a real state would
+have dragged in for a screen nobody can leave. The loop is left running on purpose — it is what
+composites the screen.
+
+F1 asked for *"the honest version — a screen that says the game needs a keyboard and a mouse"*
+and explicitly **not** a half-built touch scheme. That is the whole feature.
+
+### Touch is not the test, and that is the row worth defending
+
+The obvious reading of *"there is no touch input"* is to gate on `navigator.maxTouchPoints`. It
+is wrong, and wrong in the direction that matters: a laptop with a trackpad **and** a touchscreen
+reports a non-zero touch count and a coarse pointer alongside its fine one, and it plays
+perfectly well. The question is not whether the device has a finger; it is whether it has
+something to aim with.
+
+So the rule is **a fine pointer, and an API to lock it**. The audit carries a `touchscreen
+laptop` row for no other purpose than to hold that decision in place, and it was watched failing
+against the naive rule before it was trusted — see below.
+
+### Measured
+
+Every number came out of a run in this session.
+
+**`auditCapabilities` — `shared/debug/CapabilityAudit`**, at the top of every harness run beside
+`auditAccuracy`, `auditMatchXp` and `auditUrlFlags`. P6's verification asks for exactly this:
+*"the capability predicates are pure functions of `navigator`/`document` state and are tested as
+such, without a DOM."* The DOM half is one adapter that fills a record in; everything that
+decides anything takes the record.
+
+| shape | touch | fine | coarse | lock | verdict |
+|---|---|---|---|---|---|
+| desktop | 0 | y | n | y | **PLAYS** |
+| touchscreen laptop | 10 | y | y | y | **PLAYS** |
+| phone | 5 | n | y | n | `no-pointer-lock` |
+| tablet with pointer lock | 5 | n | y | y | `no-fine-pointer` |
+| desktop, no lock API | 0 | y | n | n | `no-pointer-lock` |
+
+The aim warning is a function of three booleans, so **all eight** combinations are swept rather
+than the two anybody would think to write — **1 of 8 raises the banner**. That is not
+thoroughness for its own sake: the case that has to be run is `refused` true with the lock
+*disarmed*, because "the banner must not fire while paused" is the whole decision, and asserting
+it needs the case rather than the intention.
+
+**Two red controls, both watched before the green was trusted.**
+
+| Control | What it reported |
+|---|---|
+| The code as it stood — no gate, and a refusal that told nobody | exit **1**, four problems: three device shapes returning `ok`, and `wants=true locked=false refused=true gave false, expected true` |
+| The naive reading of F1 — gate on `maxTouchPoints > 0` | `touchscreen laptop: playability returned "no-fine-pointer", expected "ok"` |
+
+The second is the one worth having. It is the mistake this session would have made without the
+row, and it locks a working machine out of the game.
+
+**`npm run layout` — the gate screen in a real headless Chrome**, because P0 rule 7 is explicit
+that a layout claim which can be a rect should be one, and because the only viewport this screen
+is ever shown at is a small one. A message saying *your device is too small to play* that is
+itself cut off would be a joke at the player's expense.
+
+    unsupported              content 322x195          ok      (at 375x812)
+
+11 surfaces across 6 viewports, **PASS — every surface fits or scrolls**.
+
+**The rest of the gate.** `npm run check` green. `npm run harness` five matches, all completed,
+with P3's, P4's and P7's audits still green beside the new one. `npm run leak` 100 cycles,
+subscriptions 29 → 29 (+0), heap 13.16 → 13.86 MiB (+0.70), **LEAK CHECK PASSED**. `npm run
+skirmish` **FLOW CHECK PASSED** — run because `HeadlessClient.observeSurfaces` gained three
+fields, and it is the probe that exercises the surface rules over a real connection.
+
+No wire change and no simulation change, so the protocol version is untouched.
+
+### What was not verified
+
+- **No browser saw either surface behave.** The layout probe mounts the gate screen and measures
+  it, which is a rect and not a behaviour: that the screen is what a *phone* actually reaches is
+  a browser claim, and so is every frame of the banner.
+- **The banner is structurally silent in every headless run, and the harness says so.**
+  `HeadlessClient` has no pointer to lock, so its `HudSurfaceState` carries
+  `wantsPointerLock: false` — written as a stated limit in that record rather than left as a
+  default somebody could read as a pass. The rule is exercised by the audit; the *wiring* from
+  `Input` through `Game` to the HUD is not exercised by anything here.
+- **`readDeviceCapabilities` is the one file in the feature that cannot be tested headlessly**,
+  by design. Its fallbacks — a `matchMedia` that throws, a `maxTouchPoints` that is `undefined` —
+  are reasoned rather than measured, and the reasoning is in the file.
+
+### Needs a browser
+
+Three cases, with the steps:
+
+- **A normal desktop run.** Start a solo match. Nothing appears; the crosshair behaves as it
+  always did. Then press Escape to pause and click Resume: the banner must **not** flash on the
+  way back in, which is the case the third term of the predicate exists for.
+- **A refused lock.** Open the built client inside an `<iframe>` on a local page — an iframe
+  without `allow="pointer-lock"` is refused, which is the `WrongDocumentError` the round-5 report
+  hit. Start a match: the red banner reads `MOUSE NOT CAPTURED — CLICK TO AIM · F11 FOR
+  FULLSCREEN` above centre and stays up. Pause: it goes down. Resume: it comes back. Fix the
+  iframe permission, reload and click: it clears on the frame the lock lands.
+- **A mobile-emulated viewport.** DevTools device toolbar, 375×812, with touch emulation on —
+  the emulated viewport alone is not enough, because the rule is about pointers and not about
+  width. Reload. The gate screen appears instead of the menu, there is no Play button anywhere on
+  it, and the console carries one `[join] refusing to start: no-fine-pointer` line.
+
+### Found while here
+
+- **`Input.onPointerLockError` recorded nothing before this session**, which is the second
+  refusal path above. Worth restating on its own because it is the same shape as round 5's other
+  two findings: a handler that exists, runs, and terminates in nothing. Three times in one round
+  now — B7's score comparison, B9's `wantsRewindDebug`, and this — and the detector each time was
+  *asking who reads it*.
+- **The device gate cannot be reached from the layout probe's own harness path.** The probe
+  imports `playability` and mounts the screen directly; there is no way to make `Game`'s boot
+  check fail on a desktop, so the *branch* is untested even though the screen is measured. A
+  `?device=` override would test it and would also be a way to skip the gate, which is why there
+  is not one.
+- **`Menus.showUnsupported` is the second terminal screen in the front end**, after
+  `showBoot('NO SERVER CONFIGURED — …')`. Neither is a state, both are `.op-screen` with the menu
+  never painted over them, and if a third appears it is worth asking whether they want to be one.

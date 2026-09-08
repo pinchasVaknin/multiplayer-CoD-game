@@ -1258,6 +1258,11 @@ export class Match {
     this.ui.hud.setCheatTag(text);
   }
 
+  /** B8's aim warning. One writer, `Game.updateHudSurfaces`, like every other HUD surface. */
+  setAimWarning(text: string): void {
+    this.ui.hud.setAimWarning(text);
+  }
+
   get isActive(): boolean {
     return this.active;
   }

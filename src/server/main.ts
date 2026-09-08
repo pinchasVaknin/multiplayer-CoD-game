@@ -12,6 +12,7 @@ import { auditReplicatedScore } from '../shared/debug/ReplicatedScoreAudit';
 import { auditAccuracy } from '../shared/debug/AccuracyAudit';
 import { auditMatchXp } from '../shared/debug/MatchXpAudit';
 import { auditUrlFlags } from '../shared/debug/UrlFlagAudit';
+import { auditCapabilities } from '../shared/debug/CapabilityAudit';
 import { accuracy } from '../shared/combat/ScoreSystem';
 import { WEAPON_DEFS } from '../shared/weapons/WeaponDefs';
 import type { BotTeam } from '../shared/ai/Combatant';
@@ -515,6 +516,37 @@ function reportUrlFlags(log: ReturnType<typeof logger>): number {
 }
 
 /**
+ * Whether the game says what it needs, and when it cannot be played (round 5, B8 and F1).
+ *
+ * The audit itself is `shared/debug/CapabilityAudit`; this prints it. Both halves are pure
+ * functions of a record by design, which is what lets a process with no DOM decide every case —
+ * and it is the only place either rule is exercised, because `HeadlessClient` has no pointer to
+ * lock and its own surface probe says so in its `wantsPointerLock: false`.
+ */
+function reportCapabilities(log: ReturnType<typeof logger>): number {
+  const audit = auditCapabilities();
+  for (const row of audit.devices) {
+    log.info(
+      `  ${padEnd(row.shape, 26)} touch ${padEnd(String(row.caps.maxTouchPoints), 2)} ` +
+        `fine ${row.caps.finePointer ? 'y' : 'n'} coarse ${row.caps.coarsePointer ? 'y' : 'n'} ` +
+        `lock ${row.caps.hasPointerLock ? 'y' : 'n'} -> ${row.ok ? 'PLAYS' : row.id}`,
+    );
+  }
+  const warns = audit.warnings.filter((w) => w.warns).length;
+  log.info(`  aim warning: ${warns} of ${audit.warnings.length} combination(s) raise the banner`);
+  for (const problem of audit.problems) log.error(`  ${problem}`);
+  if (audit.problems.length > 0) {
+    log.error(`CAPABILITY AUDIT FAILED: ${audit.problems.length} problem(s).`);
+    return 1;
+  }
+  log.info(
+    `capabilities: ${audit.devices.length} device shape(s) and all ${audit.warnings.length} ` +
+      'aim-warning combinations; a refusal is a banner, no pointer is a gate.',
+  );
+  return 0;
+}
+
+/**
  * Every authored spread, dealt at every split (playtest round 5, B4).
  *
  * The report was that the mix's only VETERAN always landed on the opposing team, and it was
@@ -729,6 +761,15 @@ async function main(): Promise<number> {
    */
   const flagFault = reportUrlFlags(log);
   if (flagFault !== 0) return flagFault;
+
+  /**
+   * The capability audit (round 5, B8 and F1), in the same place and for the same reason.
+   *
+   * Pure records in, verdicts out, so one run is a fact. Ahead of the matches because both rules
+   * are about whether the game can be played at all, and every number after them assumes it can.
+   */
+  const deviceFault = reportCapabilities(log);
+  if (deviceFault !== 0) return deviceFault;
 
   if (args.tierSweep) return runTierSweep(args, log);
 

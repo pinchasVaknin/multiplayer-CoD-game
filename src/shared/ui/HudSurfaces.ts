@@ -1,3 +1,4 @@
+import { aimWarning } from './Capabilities';
 import { cheatCaption } from '../cheats/Cheats';
 import type { GameStateId } from '../core/GameStates';
 import type { MatchPhase } from '../modes/MatchFlow';
@@ -123,6 +124,37 @@ export interface HudSurfaceState {
    * needs no id at all: `MatchInstance.isArena` is a property of the instance kind.
    */
   readonly inWarmupArena: boolean;
+  /**
+   * The pointer lock this match wants, and whether it has it (playtest round 5, B8).
+   *
+   * Three fields rather than one derived boolean, for the reason `instantCheatLabel` above gives
+   * about lifetimes: the decision is `aimWarning`'s, and a record that arrived pre-decided would
+   * put the rule in `Game` and leave this file describing a value it does not own. All three
+   * come off `Input`, which `Game` holds rather than the world — so they outlive a teardown, a
+   * rotation and a rejoin without anybody arranging it, which is what B8's "survives a pause and
+   * a rejoin" actually needs.
+   */
+  readonly wantsPointerLock: boolean;
+  readonly pointerLocked: boolean;
+  readonly lockRefused: boolean;
+}
+
+/**
+ * The aim warning (playtest round 5, B8).
+ *
+ * A banner rather than a blocking state, and the argument is in `shared/ui/Capabilities` where
+ * the rule itself lives: a refusal is recoverable by the click this banner asks for, and it is
+ * the *expected* state for a moment after every resume, so blocking on it would be a modal the
+ * player fights through on the commonest path in the game.
+ *
+ * Delegated rather than reimplemented here because the same rule has to be answerable from the
+ * capability audit, which knows nothing about a `HudSurfaceState`. This row's whole content is
+ * that it is a surface like the others: one writer, derived once a frame, from state that
+ * outlives it.
+ */
+export function aimWarningText(s: HudSurfaceState): string {
+  if (!s.hasWorld || s.screen !== 'MATCH') return '';
+  return aimWarning(s);
 }
 
 /**

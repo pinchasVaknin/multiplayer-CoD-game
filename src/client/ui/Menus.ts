@@ -115,6 +115,27 @@ export class Menus {
     this.screen.replaceChildren(title('OPERATOR'), subtitle(message));
   }
 
+  /**
+   * The device gate (playtest round 5, F1).
+   *
+   * A terminal screen: there is no button, no way back, and `Game` never leaves `BOOT` behind
+   * it. F1 asked for *"the honest version — a screen that says the game needs a keyboard and a
+   * mouse"* and explicitly **not** a half-built touch scheme, so this is the whole feature.
+   *
+   * Deliberately not a new `GameStateId`. The gate is *not reaching* `MENU`, which means there
+   * is nothing to press rather than a disabled thing to press — and it needs no entry in
+   * `LEGAL_TRANSITIONS`, no handler, and no interaction with the pause or summary machinery
+   * that a real state would have dragged in for a screen nobody can leave.
+   */
+  showUnsupported(headline: string, detail: string): void {
+    this.page = 'MAIN';
+    this.screen.hidden = false;
+    const body = document.createElement('p');
+    body.className = 'op-screen__note';
+    body.textContent = detail;
+    this.screen.replaceChildren(title('OPERATOR'), subtitle(headline), body);
+  }
+
   /** Open the front end at its main page. */
   show(): void {
     this.page = 'MAIN';

@@ -173,6 +173,10 @@ export class Hud {
   private readonly cheatTag: HTMLElement;
   private lastCheatTag = '';
 
+  /** B8's aim warning, and the last text written to it. See `setAimWarning`. */
+  private readonly aimWarning: HTMLElement;
+  private lastAimWarning = '';
+
   private hurtTimer = 0;
   private hurtPeak = 0;
   private lastVignette = -1;
@@ -318,6 +322,23 @@ export class Hud {
     this.cheatTag.appendChild(document.createElement('span'));
     this.root.appendChild(this.cheatTag);
 
+    /**
+     * The aim warning (playtest round 5, B8).
+     *
+     * Its own element rather than a second use of the cheat tag, because the two can be up at
+     * once and they mean opposite things — one says a rule has been relaxed for you, the other
+     * says the game is not listening to your mouse. Above centre rather than below it, so it
+     * does not sit on top of `.hud-cheat` at `bottom: 12%`.
+     *
+     * A `--on` class and not `[hidden]`, which is B13's lesson and is why `.hud-cheat` next to
+     * it uses one: `[hidden] { display: none }` sits at the lowest specificity there is, and any
+     * author-level `display` here would silently outrank it.
+     */
+    this.aimWarning = document.createElement('div');
+    this.aimWarning.className = 'hud-aim';
+    this.aimWarning.appendChild(document.createElement('span'));
+    this.root.appendChild(this.aimWarning);
+
     // ---- M4 ---------------------------------------------------------------
     this.root.append(
       this.banner.element,
@@ -350,6 +371,21 @@ export class Hud {
     this.lastCheatTag = text;
     this.cheatTag.classList.toggle('hud-cheat--on', text !== '');
     const span = this.cheatTag.firstElementChild;
+    if (span instanceof HTMLElement) span.textContent = text;
+  }
+
+  /**
+   * The aim warning's text, or `''` to take it down (playtest round 5, B8).
+   *
+   * Called every frame from `Game.updateHudSurfaces` through `Match.setAimWarning`, and guarded
+   * on the text so sixty DOM writes a second become one write per change — the same shape as
+   * `setCheatTag` above it.
+   */
+  setAimWarning(text: string): void {
+    if (text === this.lastAimWarning) return;
+    this.lastAimWarning = text;
+    this.aimWarning.classList.toggle('hud-aim--on', text !== '');
+    const span = this.aimWarning.firstElementChild;
     if (span instanceof HTMLElement) span.textContent = text;
   }
 
