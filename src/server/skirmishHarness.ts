@@ -1198,7 +1198,7 @@ function reportFlow(input: FlowReportInput): number {
         (r.firstMismatchTick >= 0 ? ` (first @${r.firstMismatchTick})` : '') +
         ', ' +
         `post-migration windows [${r.postMigrationWindows.join(",")}] at ticks [${r.migrationMispredictionTicks.join(",")}], ` +
-        `${r.buildsCompleted} build(s) worst ${r.worstBuildMs}ms, ` +
+        `${r.buildsCompleted} build(s) worst ${r.worstBuildMs}ms, ${r.lateBuilds} late, ` +
         `${r.votesCast} vote(s), ${r.summaries} summary(s), ` +
         `${r.deaths} death(s), ${r.metresSinceRespawn}m since respawn`,
     );
@@ -1233,6 +1233,7 @@ function reportFlow(input: FlowReportInput): number {
       intoLiveWindows: r.intoLiveWindows,
       toArenaWindows: r.toArenaWindows,
       worstBuildMs: r.worstBuildMs,
+      lateBuilds: r.lateBuilds,
       summaries: r.summaries,
       summaryXp: r.summaryXp,
       summaryXpTotal: r.summaryXpTotal,
@@ -1290,6 +1291,53 @@ function reportFlow(input: FlowReportInput): number {
    */
   if (opts.fault === 'none' || opts.fault === 'latency') {
     if (totalMigrations === 0) problems.push('no client migrated — the flow never reached a match');
+    /**
+     * **Every transition arrives with its map already built** (playtest round 5, F13).
+     *
+     * §6.5's promise reduced to one integer, and P11 calls this assertion the real deliverable
+     * of F13 rather than the fix. The deployed build logged its own broken promise —
+     * `no background build ready for mp_testbed; building it now (expect a hitch)` — and
+     * `HeadlessClient` had been counting the exact number all along, behind an accessor with no
+     * readers whose comment said arena returns were *expected* to be late.
+     *
+     * They are not. `Server.finishLive` sends a `Prepare` for the arena with the summary, so
+     * the return trip is built during the hold like every outbound trip is built during warmup.
+     * A non-zero here is a player watching a hitch on the transition the whole design exists to
+     * make invisible, so it goes in the gate beside the misprediction window rather than into a
+     * log line somebody has to read.
+     *
+     * Only on a clean or latency run, for the same reason the migration count above is: a fault
+     * run reaches no match, so there is no transition to have prepared for.
+     */
+    /**
+     * The return trip has to have happened for the number below to mean anything.
+     *
+     * Found by running the red control: with `Server.finishLive`'s arena `Prepare` removed —
+     * the bug — a default run still reported **0 late** and passed, because a default run never
+     * ends a match. Migrations go arena to live and stop there, so the one transition F13 is
+     * about is not in the sample at all.
+     *
+     * An assertion that is green on the bug is worse than none, so this says so rather than
+     * quietly passing. Same shape as the post-match hold warning below it, and the same
+     * remedy: shorten `MATCH_ROUND_SECONDS` and the cycle completes.
+     */
+    const returned = reports.filter((r) => r.toArenaWindows.length > 0).length;
+    if (returned === 0) {
+      log.warn(
+        'background build: the return to the arena was NOT EXERCISED — no match ended in this ' +
+          'run, so the transition F13 is about never happened and the late-build count below ' +
+          'proves nothing. Shorten MATCH_ROUND_SECONDS to reach it.',
+      );
+    }
+
+    const late = reports.reduce((sum, r) => sum + r.lateBuilds, 0);
+    if (late > 0) {
+      const who = reports.filter((r) => r.lateBuilds > 0).map((r) => `${r.name} x${r.lateBuilds}`);
+      problems.push(
+        `${late} migration(s) arrived with no map built — ${who.join(', ')}. Every transition ` +
+          'is supposed to be prepared: see Server.finishLive for the arena half.',
+      );
+    }
   } else {
     if (totalMigrations > 0) {
       problems.push(`${totalMigrations} migration(s) happened despite an injected ${opts.fault}`);

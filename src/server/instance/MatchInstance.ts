@@ -122,6 +122,18 @@ export abstract class MatchInstance {
    */
   abstract readonly isArena: boolean;
 
+  /**
+   * What this instance is running, for the clients that have to build it (round 5, F13).
+   *
+   * `LiveMatch` has carried both since M11 and `WarmupMatch` did not, which is why the arena
+   * could not be named in a `Prepare` — the one message that starts a client's background build
+   * takes a map id, and the only instance nobody could ask was the one everybody returns to. On
+   * the base rather than tested for with `instanceof`, for the same reason `objectiveZones` is:
+   * the caller wants to prepare *an instance*, not a kind of one.
+   */
+  abstract readonly mapId: string;
+  abstract readonly modeId: string;
+
   protected state_: InstanceStateId = InstanceState.BOOTING;
 
   /** Sessions seated in this instance, keyed by the stable connection id. */

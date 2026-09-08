@@ -9,6 +9,7 @@ import {
   MAP_BALLOT,
   MODE_BALLOT,
   sanitiseNetLoadout,
+  WARMUP_MATCH_ID,
 } from '../shared/net/Skirmish';
 import {
   CheatOutcome,
@@ -1151,6 +1152,24 @@ export class Server {
       // Per-session encode, for the reason `Session.sendPrepare` documents at length: one
       // shared writer hands out several views of the same buffer.
       for (const seat of instance.sessions) seat.session.sendSummary(summary);
+      /**
+       * Start the arena's background build now, with the summary (playtest round 5, F13).
+       *
+       * F13 was the game reporting its own broken promise: `[join] no background build ready
+       * for mp_testbed; building it now (expect a hitch)`. §6.5 says a map transition costs
+       * nothing because the client built the map while still playing — and every client got
+       * that for the trip *into* a live match and none of them got it for the trip back, because
+       * `Prepare` was only ever sent when a match was **allocated**. The arena is permanent, so
+       * nobody allocates it, so nobody prepared it. A missing case rather than a race.
+       *
+       * Here rather than at the migration for the reason the outbound one is sent at
+       * allocation: the build has to start *before* the transition, not at it. The summary hold
+       * is `summaryHoldSeconds` of a screen with nothing behind it — the best window in the
+       * whole cycle to be building a map, and the one this was already spending idle.
+       */
+      for (const seat of instance.sessions) {
+        seat.session.sendPrepare(WARMUP_MATCH_ID, this.warmup.mapId, this.warmup.modeId);
+      }
       instance.markSummarySent();
       log.info(
         `match ${instance.id} over — ${summary.winner} ${summary.scoreA}-${summary.scoreB} ` +

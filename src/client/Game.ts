@@ -22,7 +22,7 @@ import { handshake, HandshakeError, type HandshakeOptions } from './net/Handshak
 import { logger } from '../shared/core/Log';
 import type { SummaryInfo, WelcomeInfo } from '../shared/net/Messages';
 import type { SkirmishSink } from '../shared/net/NetClient';
-import { toNetLoadout, type NetLoadout } from '../shared/net/Skirmish';
+import { isArenaInstance, toNetLoadout, type NetLoadout } from '../shared/net/Skirmish';
 import { LoadingScreen } from './ui/LoadingScreen';
 import { VoteOverlay } from './ui/VoteOverlay';
 import { QuickLoadout } from './ui/QuickLoadout';
@@ -616,10 +616,21 @@ export class Game {
         // Report ready the moment the build lands, which is what `READY_WAIT` is waiting on.
         // The map itself is held by the queue until the migration that needs it arrives.
         const client = this.world?.net?.client;
-        // Addressed to the match being prepared, not the one we are seated in — the whole
-        // point is that we are still in the arena while this builds. The server rejects and
-        // logs a `Ready` for any other instance (§8.15).
-        client?.sendReady(this.pendingMatchId);
+        /**
+         * Addressed to the match being prepared, not the one we are seated in — the whole point
+         * is that we are still in the arena while this builds. The server rejects and logs a
+         * `Ready` for any other instance (§8.15).
+         *
+         * **Except when the thing being prepared is the arena** (playtest round 5, F13). Round
+         * five gave the return trip its own `Prepare` so the arena is built during the summary
+         * hold instead of at the migration, and reporting readiness for it would be exactly the
+         * rejection that paragraph describes: `Router.mayAddress` counts a message addressed to
+         * an instance you are not seated in as **misrouted**, and `npm run skirmish` asserts
+         * that count is zero. There is also nothing to tell — the arena is `RUNNING` from boot
+         * and has no `READY_WAIT` to satisfy. A build with no reader is the whole difference
+         * between the two paths, and it is one condition rather than a second code path.
+         */
+        if (!isArenaInstance(this.pendingMatchId)) client?.sendReady(this.pendingMatchId);
         netLog.info(
           `background build for ${mapId}: ${report.elapsedMs}ms wall, ${report.workMs}ms work, ` +
             `${report.chunks} chunks, worst chunk ${report.worstChunkMs}ms.`,

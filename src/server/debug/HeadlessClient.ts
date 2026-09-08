@@ -488,6 +488,13 @@ export interface HeadlessClientReport {
   /** Background builds completed, and the longest one, ms. */
   readonly buildsCompleted: number;
   readonly worstBuildMs: number;
+  /**
+   * Migrations that arrived with no map built, and it must be 0 (round 5, F13).
+   *
+   * The number §6.5's whole promise reduces to: a transition the player experiences as seamless
+   * is one where the map was already there. See `lateBuildCount`.
+   */
+  readonly lateBuilds: number;
   /** Summaries received. One per match played (§6.9). */
   readonly summaries: number;
   /**
@@ -1184,7 +1191,15 @@ export class HeadlessClient {
     const elapsed = nowMs() - build.startedMs;
     this.buildsCompleted++;
     if (elapsed > this.worstBuildMs) this.worstBuildMs = elapsed;
-    this.net.sendReady(build.matchId);
+    /*
+     * No readiness report for the arena (round 5, F13), mirroring the browser.
+     *
+     * The arena is `RUNNING` from boot and has no `READY_WAIT` to satisfy, and a message
+     * addressed to an instance this client is not seated in is counted by `Router.mayAddress`
+     * as **misrouted** — which the gate below asserts is zero. The build still happens and is
+     * still held; there is simply nobody to tell.
+     */
+    if (!isArenaInstance(build.matchId)) this.net.sendReady(build.matchId);
   }
 
   /**
@@ -1632,6 +1647,7 @@ export class HeadlessClient {
       toArenaWindows: [...this.toArenaWindows],
       migrationMispredictionTicks: [...this.migrationMispredictionTicks],
       buildsCompleted: this.buildsCompleted,
+      lateBuilds: this.lateBuilds,
       worstBuildMs: Math.round(this.worstBuildMs),
       summaries: this.summaries,
       summaryHoldMs: this.summaryHoldMs,
@@ -1717,7 +1733,19 @@ export class HeadlessClient {
     };
   }
 
-  /** Migrations that had to build their map on arrival. Arena returns are expected here. */
+  /**
+   * Migrations that had to build their map on arrival, which must be **zero** (round 5, F13).
+   *
+   * This comment used to end *"Arena returns are expected here"*, and the accessor had no
+   * readers — so the one number that measures §6.5's promise was computed, documented as
+   * permitted to be non-zero, and never looked at. F13 is what that costs: the deployed build
+   * logged `no background build ready for mp_testbed; building it now (expect a hitch)` and
+   * the only thing that noticed was a player.
+   *
+   * An arena return is no longer an exception because the server now sends a `Prepare` for the
+   * arena with the summary. Asserted by `npm run skirmish`, which is where the promise is
+   * either kept on every transition or is not a promise.
+   */
   get lateBuildCount(): number {
     return this.lateBuilds;
   }

@@ -6,6 +6,7 @@ import type { ScoreTeam } from '../shared/combat/ScoreSystem';
 import { FOUNDRY_MAP } from '../shared/world/maps/foundry';
 import { DEPOT_MAP } from '../shared/world/maps/depot';
 import { DUNES_MAP } from '../shared/world/maps/dunes';
+import { GREYBOX_MAP } from '../shared/world/maps/greybox';
 import type { MapDef } from '../shared/world/maps/types';
 import { allMaterialBaseColors, materialBaseColor } from '../shared/world/maps/albedo';
 import {
@@ -228,6 +229,16 @@ function albedoTable(): void {
 
 /** Where the ground of each map is, and what it is made of. */
 const GROUNDS: ReadonlyArray<{ def: MapDef; ground: Parameters<typeof materialBaseColor>[0] }> = [
+  /*
+   * The warmup arena is in this table as of round 5 (F6), and its absence was the point.
+   *
+   * Every earlier reading here was of a map somebody chooses. The arena is the one nobody
+   * chooses and everybody sees, first, before they have decided anything about the game — which
+   * makes it the most-viewed surface in the build and the last one anybody measured. Its floor
+   * is the *same material* as Foundry's, so whatever the two read at, the difference is the
+   * lights and nothing else.
+   */
+  { def: GREYBOX_MAP, ground: 'floor' },
   { def: FOUNDRY_MAP, ground: 'floor' },
   { def: DUNES_MAP, ground: 'sand' },
   { def: DEPOT_MAP, ground: 'asphalt' },
@@ -308,6 +319,46 @@ function lightingTable(): void {
       (r.irradianceMax / Math.max(r.irradianceMin, 1e-6)).toFixed(2),
     );
   }
+}
+
+// -- F6: the room everybody lands in ---------------------------------------
+
+/**
+ * The warmup arena against the map it should be no darker than (playtest round 5, F6).
+ *
+ * F6 reported the arena as *"nearly black"* and it measured at **51/255, flat** — on the same
+ * `floor` material Foundry uses, so the whole difference was the lights.
+ *
+ * The threshold is a **comparison against another shipped map**, not a number somebody liked:
+ * the arena is the room nobody chooses and everybody sees first, before they have decided
+ * anything about the game, so it has no business being darker than the average of the indoor
+ * map people already read fine. Depot is deliberately a night map and is not the reference;
+ * Foundry is.
+ *
+ * The arena is also *uniform* — its `pool:gap` is 1.00x — which is why its mean is compared
+ * against Foundry's rather than its min against Foundry's min. Foundry earns its 96 from two
+ * point lights over a small area; a lobby with no bright spot to make up for a dark one should
+ * clear the average.
+ */
+function arenaBrightness(): number {
+  const arena = GROUNDS.find((g) => g.def.id === GREYBOX_MAP.id);
+  const reference = GROUNDS.find((g) => g.def.id === FOUNDRY_MAP.id);
+  if (arena === undefined || reference === undefined) {
+    console.error('\nARENA BRIGHTNESS: the arena or its reference map is not in GROUNDS.');
+    return 1;
+  }
+  const lit = readFloor(arena.def, materialBaseColor(arena.ground)).mean;
+  const bar = readFloor(reference.def, materialBaseColor(reference.ground)).mean;
+  console.log('\n== F6: the arena against its reference ==\n');
+  console.log(
+    '  %s %s vs %s %s  %s',
+    pad(arena.def.name, 8),
+    padStart(lit.toFixed(1), 6),
+    pad(reference.def.name, 8),
+    padStart(bar.toFixed(1), 6),
+    lit >= bar ? 'ok' : 'THE ROOM EVERYBODY LANDS IN IS DARKER THAN THE MAP THEY CHOOSE',
+  );
+  return lit >= bar ? 0 : 1;
 }
 
 // -- F5: the crosshair against the ground it is drawn over -------------------
@@ -484,6 +535,7 @@ const colourViolations = teamColourTable();
 const projectionFailures = projectionTable();
 albedoTable();
 lightingTable();
+const arenaFailures = arenaBrightness();
 const crosshairContrastFailures = crosshairContrastTable();
 const decalFailures = decalSizeTable();
 
@@ -491,6 +543,7 @@ console.log('\n== summary ==');
 console.log('  crosshair gaps at the floor: %d of %d hip-fire states', crosshair.atFloor, crosshair.examined);
 console.log('  team-colour violations:      %d', colourViolations);
 console.log('  projection checks failed:    %d', projectionFailures);
+console.log('  arena brightness failures:   %d', arenaFailures);
 console.log('  crosshair contrast failures: %d', crosshairContrastFailures);
 console.log('  decals outside the range:    %d', decalFailures);
 
@@ -523,6 +576,13 @@ if (crosshair.examined === 0) {
  * stated target written down beside the values it governs. An edit that leaves either has to
  * argue with a number rather than with a taste.
  */
+if (arenaFailures > 0) {
+  console.error(
+    '\nARENA BRIGHTNESS FAILED: the warmup arena reads darker than the map it is measured ' +
+      'against. It is the first thing every player sees; see greybox.ts lights.',
+  );
+  process.exit(1);
+}
 if (crosshairContrastFailures > 0) {
   console.error(
     '\nCROSSHAIR CONTRAST FAILED: %d of %d grounds under %d:1 for the ringed mark.',

@@ -12287,12 +12287,16 @@ at 6 viewports, PASS. `npm run netharness` against a real `serve.js` reporting *
   assertion in this session reads a non-zero killer health out of the far end of a real
   connection. That is a headless probe somebody could write and I did not.
 
+### Verified by eye, in a real browser
+
+The browser pass on this session was reported complete. The specific observations were not
+itemised back, so what is confirmed is that the checks below were run and nothing was raised —
+which covers the header strip and the death panel as shipped. The S&D fuse fill and the
+half-time recolour were the two rows this section flagged as most likely to be wrong, and
+neither was reported as failing.
+
 ### Needs a browser
 
-- **A Domination match with the flags changing hands.** Three cells under the score banner. Take
-  a flag and watch its fill run in **your** colour; stand on one of yours while an enemy caps and
-  watch it fill in **theirs** — that is the warning the strip exists for. Contested by both
-  teams should show a fill that has stopped rather than one that reverses.
 - **A Search & Destroy round with a plant.** Two cells, both neutral, until the bomb goes down —
   then the planted one takes the attackers' colour and drains for 45 seconds.
 - **Three deaths in multiplayer.** The detail line should name the right killer and weapon, and
@@ -12317,3 +12321,185 @@ at 6 viewports, PASS. `npm run netharness` against a real `serve.js` reporting *
   sentry rather than the owner's. That is the right answer for the panel — the sentry's health is
   not the lesson — but it means the field genuinely means "the person who killed you", and a
   future reader wanting "whatever killed you" would need a different one.
+
+## Playtest round 5 — the first thirty seconds
+
+**F13** was the game reporting its own broken promise: `[join] no background build ready for
+mp_testbed; building it now (expect a hitch)`. **F6** was the room every player lands in being
+nearly black. **F7** was the first objective they stand in drawing a flat opaque disc.
+
+They are one session because they are one stretch: what a player sees between clicking `PLAY
+MULTIPLAYER` and being in a real match. P11 asked for that sequence to be written down, because
+nobody had.
+
+### What actually happens between the click and the first frame of the arena
+
+1. **The click.** `Game.playMultiplayer` resolves `multiplayerJoinOptions` — address from
+   `?server` or `VITE_SERVER_URL`, name from the URL or the profile (round 5, B9) — and calls
+   `launchMatch`.
+2. **The handshake.** `handshake()` opens the socket and sends `Hello` with the protocol
+   version, the name and the class. The server refuses a version mismatch before decoding a
+   gameplay byte, then seats the player in the **arena** and replies `Welcome` naming
+   `mp_testbed`.
+3. **The cold build.** No prebuild exists on a first connect and none should: nothing was known
+   to build before the socket said where you are going. `MatchWorld` builds `mp_testbed`
+   synchronously behind the loading screen. **This is the one legitimate wait in the sequence.**
+4. **The arena.** `WarmupMatch` has been `RUNNING` since server boot, so there is nothing to
+   start — the player is in a live FFA against three bots with no score, no clock and no
+   ladder (round 4, F7). *This is where F6 lives: the first thing anybody sees.*
+5. **The ballot.** After 40 s the vote cycle opens mode, then map, 10 s each.
+6. **Allocation, and the outbound prebuild.** `Server.allocate` creates a `LiveMatch` and sends
+   every seat a `Prepare` naming the chosen map. The client starts building **while still
+   shooting in the arena** — §6.5's whole mechanism — and reports `Ready` when it lands.
+   `READY_WAIT` holds the match until everybody has or has timed out.
+7. **Migration in.** `Migration.move` swaps the seat; the client adopts the map the queue
+   already holds. No loading screen. *This transition has always worked.*
+8. **The match.** *F7 lives here: the first flag anybody stands in.*
+9. **The summary.** `finishLive` sends the board and holds it for `summaryHoldSeconds`.
+   **This is where F13 was: nothing was prepared for the trip home.**
+10. **Migration back.** Everybody returns to the arena, and `applyRotation` tore the world down
+    and rebuilt `mp_testbed` synchronously, mid-transition, every cycle.
+11. **Back to step 5.**
+
+### F13 was a missing case, exactly as the brief guessed
+
+`buildQueue.start` has one caller — `skirmishSink.onPrepare` — and `Prepare` was only ever sent
+when a match was **allocated**. The arena is permanent, so nobody allocates it, so nobody
+prepared it. Not a race; a case.
+
+The fix is the same mechanism applied to the path that never had it: `finishLive` sends a
+`Prepare` for the arena alongside the summary, so the return trip is built during a hold that
+was already dead time. The window is `summaryHoldSeconds`; the build measures ~50 ms.
+
+**One constraint found by reading rather than by breaking the gate.** `onComplete` answers a
+`Prepare` with `sendReady(matchId)`, and `Router.mayAddress` counts a message addressed to an
+instance you are not seated in as **misrouted** — which the skirmish gate asserts is zero. The
+arena has no `READY_WAIT` to satisfy anyway (it is `RUNNING` from boot), so both the browser and
+`HeadlessClient` now suppress the report for it. One condition each, not a second code path.
+
+### The assertion was the deliverable, and the first version of it was worthless
+
+P11 says the real deliverable of F13 is the assertion, not the fix. `HeadlessClient` had been
+counting the exact number all along — `lateBuilds`, migrations that arrived with no map built —
+behind an accessor **with no readers** whose comment read *"Arena returns are expected here."* A
+number that measures §6.5's promise, computed every run, documented as permitted to fail, and
+never looked at.
+
+It is in the gate now. And the red control is what made it worth having:
+
+| Run | Result |
+|---|---|
+| Bug (no arena `Prepare`), **default** skirmish | `0 late` · **FLOW CHECK PASSED** |
+| Bug, `MATCH_ROUND_SECONDS=90` | **`6 migration(s) arrived with no map built — OP1 x2, OP2 x2, OP3 x2`** · FLOW CHECK FAILED |
+| Fixed, `MATCH_ROUND_SECONDS=90` | `0 late` on every client, `4 build(s)` each where there were 2 · **FLOW CHECK PASSED** |
+
+The first row is the trap. A default run never ends a match, so migrations go arena→live and
+stop; the one transition F13 is about is not in the sample at all, and the assertion passes on
+the bug. That is the second time this round — P12's header rule did the same — so the harness
+now **says so**, in the shape it already used for the post-match hold:
+
+    background build: the return to the arena was NOT EXERCISED — no match ended in this run,
+    so the transition F13 is about never happened and the late-build count below proves
+    nothing. Shorten MATCH_ROUND_SECONDS to reach it.
+
+A green that cannot distinguish itself from an untested one is not a green.
+
+### F6 — same floor, different lights, and now a number
+
+The arena's floor is the `floor` material at albedo 0.1014 — **identical to Foundry's** — so the
+whole difference was the lighting. `npm run readability` had been reporting per-map ground
+brightness since round 4 and the arena was not in the table, which is the finding: every map in
+it is one somebody chooses, and the one nobody chooses and everybody sees first was unmeasured.
+
+| map | before | after |
+|---|---|---|
+| TESTBED | **51.0, flat** | **62.0, flat** |
+| FOUNDRY | 61.7 (61 – 96) | unchanged |
+| DUNES | 185.0 | unchanged |
+| DEPOT | 21.3 | unchanged |
+
+The target is **a comparison against another shipped map, not a number somebody liked**: the
+arena has no business being darker than the average of the indoor map people already read fine.
+Depot is deliberately a night map and is not the reference. The hemisphere does the work rather
+than the sun — a lobby wants even light with no dark corner to be surprised by, and raising the
+directional would have deepened shadows this room has no reason to have. Asserted by the probe,
+which exits non-zero if the arena ever falls back under Foundry.
+
+### F7 — the ring was fine, the fill was the disc
+
+The thin annulus reads well and is untouched. The offender is the *progress* ring —
+`RingGeometry(0.35, r-0.25)`, effectively a disc — at a flat **0.85**, near enough opaque that
+it painted over the floor markings and anybody standing on it.
+
+It pulses between **0.28 and 0.60** now, and the pulse rate is `stackRate` — *the same function
+`ObjectiveZone.step` divides by `captureSeconds` to advance the capture*. So the disc reports
+rather than decorates: one attacker gives a slow beat, a second speeds it up by 60%, a third by
+a little less. From across the map "somebody is on B" and "three of them are on B" are now
+different pictures, without a number to read. Head count comes from the replicated
+`countA`/`countB`, so it is the server's answer on a networked client and never a second opinion.
+
+`CAPTURE_STACK_FALLOFF` is a second copy of `DEFAULT_ZONE_CONFIG.stackFalloff`, and that is
+deliberate rather than an oversight: importing a mode's tuning into the renderer is what
+`check-cosmetics` exists to prevent, and the cost of the duplication is a decorative beat being
+slightly off on the day somebody retunes stacking — a wrong *animation rate*, not a wrong
+capture. Recorded below.
+
+### Measured
+
+Every number came out of a run in this session.
+
+**`npm run skirmish`** — the three rows above. **`npm run readability`** — the brightness table
+above, with the new `F6: the arena against its reference` assertion reading
+`TESTBED 62.0 vs FOUNDRY 61.7 ok`.
+
+**The rest of the gate.** `npm run check` green including the cosmetics audit — nothing here
+touches a simulated value; the lights are map content read only by the renderer and the fill is
+client-side. `npm run harness` five matches, all completed. `npm run layout` 11 surfaces at 6
+viewports, PASS. `npm run leak` 100 cycles, subscriptions 29 → 29 (+0), heap 13.18 → 13.88 MiB
+(+0.70), LEAK CHECK PASSED. No protocol change.
+
+### What was not verified
+
+- **The hitch itself was never observed, before or after.** `lateBuilds` counts migrations that
+  had to build on arrival; it does not measure the frame time of doing so. The claim is that the
+  build has moved off the transition, not how long the transition used to stall — that number
+  does not exist and this session did not create it.
+- **The cold path is unchanged and unmeasured.** Clicking `PLAY MULTIPLAYER` from nothing still
+  builds `mp_testbed` behind a loading screen, and should. Whether *that* wait is acceptable is
+  a separate question nobody has asked with a stopwatch.
+- **Neither cosmetic change was rendered.** The arena's 62/255 is `MapLuminance`'s upper bound
+  with no shadowing, AO or fog — so the real room is no brighter than this and may be darker in
+  corners, which is the direction that keeps the claim safe but means "you can see the dummies"
+  is still a browser claim. The capture pulse was not run at all.
+- **`worstBuildMs` rose from ~48 ms to ~55 ms**, which is the arena builds joining the sample
+  rather than anything getting slower. Two more builds per cycle per client, both inside a hold
+  with nothing else happening.
+
+### Needs a browser
+
+- **Click `PLAY MULTIPLAYER` cold.** A loading screen, then the arena. Note whether the room
+  reads immediately — geometry, dummies, other players — which is F6's actual bar.
+- **Then sit through a full cycle: vote, match, summary, back to the arena.** The return is the
+  one F13 is about. No hitch, and **no `[join] no background build ready` line in the console** —
+  that line is now the symptom of a regression rather than of normal operation.
+- **Stand in a capture point on Dunes.** The floor markings should be visible *through* the
+  fill. Then have a second player join you on it: the pulse should visibly quicken, which is the
+  half of F7 that is information rather than colour.
+- **Watch a flag being taken off you from across the map.** The fill is in the attacker's colour
+  and its beat is how many of them are on it.
+
+### Found while here
+
+- **`lateBuildCount` had no readers and a comment excusing the defect.** Fifth in this round
+  after B7's score comparison, B9's rewind feed and its per-player XP lines, and P9's decal cap.
+  The detector every time was asking who reads the thing — and this one is the sharpest case,
+  because the number was not merely unread, it was *documented as allowed to be wrong*.
+- **A default `npm run skirmish` exercises neither the summary nor the return.** Three
+  assertions now say `NOT EXERCISED` in that run — the post-match hold, the reconnect, and as of
+  this session the background build. That is three of the flow's most interesting transitions
+  outside the default gate, and the fix is one environment variable. Worth asking whether the
+  default should shorten the round itself.
+- **`Game.applyRotation` builds synchronously when the queue misses**, logs a warning, and
+  carries on — which is correct, and is why F13 was a hitch rather than a crash. It is also why
+  it survived a milestone: the fallback works, so nothing failed, so nothing was reported until
+  a human sat through it.

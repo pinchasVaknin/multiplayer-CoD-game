@@ -461,8 +461,26 @@ export const GREYBOX_MAP: MapDef = {
   brushes: brushes(),
   props: [...COVER_PROPS, ...lightStrips()],
   spawns: spawns(),
+  /**
+   * The room everybody lands in, lit to be read rather than to have a mood (round 5, F6).
+   *
+   * F6 reported the arena as *"nearly black"*, and it was: `npm run readability` puts its floor
+   * at **51/255, flat**, on the same `floor` material Foundry uses at 61.7 rising to 96. Same
+   * albedo, so the entire difference was the lights — a 0.85 hemisphere over a `groundColor` of
+   * `0x24272d`, which is a bounce that bounces nothing.
+   *
+   * The bar is not "brighter", it is the one P11 states: a player can see the geometry, the
+   * dummies and the other players well enough to understand where they are within a second of
+   * arriving. So the target is derived rather than dialled — **the arena reads at least as
+   * bright as the brightest indoor map's floor** — and the probe asserts it, because this is
+   * the room nobody chooses and everybody sees first.
+   *
+   * The hemisphere does the work rather than the sun, deliberately: a lobby wants even light
+   * with no dark corner to be surprised by, and raising the directional would have deepened the
+   * shadows this room has no reason to have.
+   */
   lights: [
-    { kind: 'hemisphere', skyColor: 0x8fa6c4, groundColor: 0x24272d, intensity: 0.85 },
+    { kind: 'hemisphere', skyColor: 0xa8bcd8, groundColor: 0x55575e, intensity: 1.6 },
     {
       kind: 'directional',
       color: 0xffe9cf,
@@ -473,8 +491,10 @@ export const GREYBOX_MAP: MapDef = {
     },
   ],
   ambient: {
-    skyColor: 0x8fa6c4,
-    groundColor: 0x24272d,
+    skyColor: 0xa8bcd8,
+    // In step with the hemisphere above: `ambient` is the fog and the sky the room is seen
+    // against, and leaving it dark would have put a lit room inside a black box (round 5, F6).
+    groundColor: 0x55575e,
     fogColor: 0x1b2028,
     fogNear: 34,
     fogFar: 96,

@@ -72,6 +72,10 @@ export class WarmupMatch extends MatchInstance {
   /** This is the room. See `MatchInstance.isArena`. */
   override readonly isArena = true;
 
+  /** The room is always this map under these rules; `buildDeps` builds the match from both. */
+  override readonly mapId = GREYBOX_MAP.id;
+  override readonly modeId = 'FFA';
+
   constructor(options: WarmupOptions) {
     super(buildDeps(options));
     this.setState(InstanceState.RUNNING, 'arena is always live');

@@ -4,6 +4,7 @@ import type { GameBus } from '../shared/core/Events';
 import type { GameMode } from '../shared/modes/GameMode';
 import { palette } from './ui/Palette';
 import { Domination } from '../shared/modes/Domination';
+import { stackRate } from '../shared/modes/ObjectiveZone';
 import { KillConfirmed } from '../shared/modes/KillConfirmed';
 import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
 import type { ObjectiveZone } from '../shared/modes/ObjectiveZone';
@@ -83,6 +84,26 @@ function colorEnemy(): number {
 
 /** Height of a flag pole, metres. Tall enough to see over a container. */
 const POLE_HEIGHT = 3.4;
+
+/**
+ * The capture fill's opacity band, and its beat (playtest round 5, F7).
+ *
+ * The old fill was a flat 0.85 — near enough opaque that it painted over the floor markings and
+ * anybody standing on it, which is the *"flat opaque disc"* F7 reported. A band rather than a
+ * single value because the disc pulses now, and the floor is what it is worth at its dimmest:
+ * low enough to read the ground through, high enough to be unmistakable from across the map.
+ *
+ * `CAPTURE_STACK_FALLOFF` is `DEFAULT_ZONE_CONFIG.stackFalloff` restated, and it is a second
+ * copy of a simulation number in a cosmetic file — which is deliberate and is the lesser of two
+ * evils. Importing the config would put a mode's tuning into the renderer, and
+ * `check-cosmetics` exists to keep that boundary; a decorative beat that is slightly wrong on
+ * the day somebody retunes stacking is a wrong *animation rate*, not a wrong capture.
+ */
+const CAPTURE_FILL_MIN = 0.28;
+const CAPTURE_FILL_MAX = 0.6;
+/** Radians per second of pulse for a single attacker; multiplied by the stack rate. */
+const CAPTURE_PULSE_HZ = 3.4;
+const CAPTURE_STACK_FALLOFF = 0.6;
 
 export interface MatchObjectivesDeps {
   readonly bus: GameBus;
@@ -252,10 +273,22 @@ export class MatchObjectives {
       depthWrite: false,
       side: THREE.DoubleSide,
     });
+    /**
+     * The capture fill (playtest round 5, F7).
+     *
+     * F7: *"the Domination capture fill is a flat opaque disc — the ring of the other side
+     * actually looks good"*. The ring is the thin annulus below and is untouched; this is the
+     * wide one, which at 0.85 was near enough opaque that it painted over the floor, the slab
+     * markings and anybody standing on it.
+     *
+     * The starting opacity is the floor of the pulse in `updateZone`, not a second number:
+     * every frame overwrites it, and leaving 0.85 here would have been a value that is only
+     * ever true for the one frame between construction and the first update.
+     */
     const progressMat = new THREE.MeshBasicMaterial({
       color: colorNeutral(),
       transparent: true,
-      opacity: 0.85,
+      opacity: CAPTURE_FILL_MIN,
       depthWrite: false,
       side: THREE.DoubleSide,
     });
@@ -315,7 +348,24 @@ export class MatchObjectives {
       // and upload, which is the exact opposite of what a progress ring should cost.
       const s = 0.2 + zone.progress * 0.8;
       flag.progressRing.scale.set(s, s, 1);
-      flag.progressRing.material.opacity = 0.85;
+      /**
+       * Translucent, and pulsing at the rate it is actually being taken (round 5, F7).
+       *
+       * The pulse rate is `stackRate` — the same function `ObjectiveZone.step` divides by
+       * `captureSeconds` to advance `progress` — so the disc is *reporting* something rather
+       * than decorating: one attacker gives a slow beat, a second speeds it up by 60%, a third
+       * by a little less. A player looking across the map can tell "somebody is on B" from
+       * "three of them are on B" without reading a number, which is the difference between a
+       * coloured shape and a piece of information.
+       *
+       * Head count comes from the replicated `countA`/`countB` rather than from a local
+       * recount, so it is the server's answer on a networked client and the sim's in
+       * single-player — the same fact either way and never a second opinion.
+       */
+      const attackers = zone.capturingTeam === 'A' ? zone.countA : zone.countB;
+      const beat = stackRate(Math.max(1, attackers), CAPTURE_STACK_FALLOFF);
+      const wave = 0.5 + Math.sin(this.spin * CAPTURE_PULSE_HZ * beat) * 0.5;
+      flag.progressRing.material.opacity = CAPTURE_FILL_MIN + wave * (CAPTURE_FILL_MAX - CAPTURE_FILL_MIN);
     }
     // A held flag flies its banner; a neutral one droops. Cheap, and it reads at a glance.
     const target = zone.owner === 'NONE' ? -0.5 : 0;
