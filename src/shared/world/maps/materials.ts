@@ -25,7 +25,18 @@ export interface MaterialSurface {
   readonly impactSpark: number;
   /** Decal darkness, 0..1. A hole in dark concrete needs less than one in pale floor. */
   readonly decalStrength: number;
-  /** Decal radius, metres. */
+  /**
+   * Decal half-size, metres, before `DecalField.place`'s per-hole jitter.
+   *
+   * Halved across the board in playtest round 5 (F3), which reported *"soft black blobs 30-40cm
+   * across"*. They were: the plane spanned 7.6-26.4 cm and what the eye actually reads is the
+   * texture's pale rim at `DECAL_RIM_FRACTION` of it, so the visible smudge ran to 25 cm on
+   * sand. These are chosen against a target rather than nudged — see `DECAL_RIM_FRACTION` — and
+   * `npm run readability` prints the resulting centimetres and fails if they leave the range.
+   *
+   * The spread between materials is kept deliberately: a round spalls wider out of plaster than
+   * it does out of steel grating, and flattening that would trade one wrong picture for another.
+   */
   readonly decalRadius: number;
 
   /** Impact click centre frequency, Hz. */
@@ -43,13 +54,39 @@ export interface MaterialSurface {
   readonly stepLevel: number;
 }
 
+/**
+ * What a bullet decal's texture actually draws, as fractions of the quad it is mapped onto.
+ *
+ * `buildDecalTexture` paints a dark hole inside a pale rim, and both are authored as radii in a
+ * 64px square — so a `decalRadius` in metres means nothing on its own. These two numbers are
+ * what turn it into a size somebody can argue about, and they live here rather than beside the
+ * canvas code because they are the units `decalRadius` is denominated in.
+ *
+ * Diameters, as fractions of the quad's width: the hole is `2 x 0.22` and the rim `2 x 0.48`.
+ * The rim is the one that matters — it is the outer edge of anything visible, and therefore the
+ * number F3 was reporting when it said 30-40 cm.
+ */
+export const DECAL_HOLE_FRACTION = 0.44;
+export const DECAL_RIM_FRACTION = 0.96;
+
+/**
+ * The rim diameter every `decalRadius` above is chosen to land inside, metres.
+ *
+ * A rifle strike is a hole a couple of centimetres across with spalling around it, so 5-12 cm
+ * of *visible mark* is the target and the per-material spread lives inside it. Asserted by
+ * `npm run readability`, which multiplies `decalRadius` back out through the jitter and the rim
+ * fraction — so a value edited here without thinking fails the gate rather than shipping.
+ */
+export const DECAL_RIM_MIN_M = 0.05;
+export const DECAL_RIM_MAX_M = 0.12;
+
 const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
   concrete: {
     penetrationDensity: 1.0,
     impactColor: 0xb8b2a6,
     impactSpark: 0.0,
     decalStrength: 0.85,
-    decalRadius: 0.075,
+    decalRadius: 0.041,
     impactFreq: 1750,
     impactQ: 1.1,
     impactDecay: 0.1,
@@ -62,7 +99,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0x9a958c,
     impactSpark: 0.0,
     decalStrength: 0.7,
-    decalRadius: 0.08,
+    decalRadius: 0.042,
     impactFreq: 1560,
     impactQ: 1.1,
     impactDecay: 0.11,
@@ -75,7 +112,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xc2c6cd,
     impactSpark: 0.0,
     decalStrength: 0.8,
-    decalRadius: 0.07,
+    decalRadius: 0.039,
     impactFreq: 1650,
     impactQ: 1.0,
     impactDecay: 0.1,
@@ -88,7 +125,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xffd08a,
     impactSpark: 1.0,
     decalStrength: 0.6,
-    decalRadius: 0.05,
+    decalRadius: 0.033,
     impactFreq: 3200,
     impactQ: 5.5,
     impactDecay: 0.16,
@@ -101,7 +138,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xffc266,
     impactSpark: 0.7,
     decalStrength: 0.65,
-    decalRadius: 0.055,
+    decalRadius: 0.034,
     impactFreq: 2900,
     impactQ: 4.0,
     impactDecay: 0.14,
@@ -114,7 +151,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xffcf8f,
     impactSpark: 0.35,
     decalStrength: 0.6,
-    decalRadius: 0.05,
+    decalRadius: 0.033,
     impactFreq: 2400,
     impactQ: 2.4,
     impactDecay: 0.12,
@@ -127,7 +164,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0x4a4d54,
     impactSpark: 0.0,
     decalStrength: 0.5,
-    decalRadius: 0.06,
+    decalRadius: 0.036,
     impactFreq: 700,
     impactQ: 0.7,
     impactDecay: 0.07,
@@ -148,7 +185,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xa2705c,
     impactSpark: 0.0,
     decalStrength: 0.8,
-    decalRadius: 0.085,
+    decalRadius: 0.044,
     impactFreq: 1400,
     impactQ: 1.4,
     impactDecay: 0.12,
@@ -167,7 +204,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xc08a4e,
     impactSpark: 0.75,
     decalStrength: 0.68,
-    decalRadius: 0.06,
+    decalRadius: 0.036,
     impactFreq: 2600,
     impactQ: 3.4,
     impactDecay: 0.19,
@@ -186,7 +223,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xffd9a4,
     impactSpark: 1.0,
     decalStrength: 0.45,
-    decalRadius: 0.045,
+    decalRadius: 0.031,
     impactFreq: 3800,
     impactQ: 7.0,
     impactDecay: 0.22,
@@ -208,7 +245,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xd8bd90,
     impactSpark: 0.0,
     decalStrength: 0.42,
-    decalRadius: 0.11,
+    decalRadius: 0.052,
     impactFreq: 620,
     impactQ: 0.55,
     impactDecay: 0.07,
@@ -228,7 +265,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xd4bb96,
     impactSpark: 0.0,
     decalStrength: 0.78,
-    decalRadius: 0.095,
+    decalRadius: 0.047,
     impactFreq: 1250,
     impactQ: 0.95,
     impactDecay: 0.11,
@@ -243,7 +280,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xe08a58,
     impactSpark: 0.15,
     decalStrength: 0.72,
-    decalRadius: 0.08,
+    decalRadius: 0.042,
     impactFreq: 2050,
     impactQ: 2.6,
     impactDecay: 0.13,
@@ -262,7 +299,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xc09a62,
     impactSpark: 0.0,
     decalStrength: 0.66,
-    decalRadius: 0.07,
+    decalRadius: 0.039,
     impactFreq: 980,
     impactQ: 1.9,
     impactDecay: 0.14,
@@ -279,7 +316,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0x8e939c,
     impactSpark: 0.0,
     decalStrength: 0.88,
-    decalRadius: 0.075,
+    decalRadius: 0.041,
     impactFreq: 1180,
     impactQ: 0.8,
     impactDecay: 0.09,
@@ -299,7 +336,7 @@ const SURFACES: Readonly<Record<MaterialKey, MaterialSurface>> = {
     impactColor: 0xa8d0d4,
     impactSpark: 0.85,
     decalStrength: 0.62,
-    decalRadius: 0.055,
+    decalRadius: 0.034,
     impactFreq: 2850,
     impactQ: 4.2,
     impactDecay: 0.2,

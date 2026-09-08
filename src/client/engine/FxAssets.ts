@@ -1,5 +1,6 @@
 ﻿import * as THREE from 'three';
 import { Rng } from '../../shared/core/Rng';
+import { DECAL_HOLE_FRACTION, DECAL_RIM_FRACTION } from '../../shared/world/maps/materials';
 
 /**
  * Generated art for `Fx` (brief S2: zero external assets).
@@ -86,28 +87,53 @@ export function buildDecalTexture(anisotropy: number): THREE.Texture {
   if (ctx === null) throw new Error('2D canvas context unavailable; cannot build bullet decals.');
   const rng = new Rng(0x2c9e_a11d);
 
-  // A chipped pale ring around a dark hole, so it reads on both light and dark walls.
-  const ring = ctx.createRadialGradient(size / 2, size / 2, size * 0.12, size / 2, size / 2, size * 0.48);
-  ring.addColorStop(0, 'rgba(210,205,196,0.55)');
-  ring.addColorStop(0.55, 'rgba(150,145,138,0.3)');
+  /**
+   * Radii as fractions of the quad, from the one place they are declared.
+   *
+   * `DECAL_HOLE_FRACTION` and `DECAL_RIM_FRACTION` are diameters, because that is the useful
+   * unit at the call site that converts them to centimetres. Here they are halved back into the
+   * radii the canvas wants. They live beside `decalRadius` in `materials.ts` rather than here
+   * because they are the units it is denominated in — a metre value for a hole means nothing
+   * without them (playtest round 5, F3).
+   */
+  const holeR = size * (DECAL_HOLE_FRACTION / 2);
+  const rimR = size * (DECAL_RIM_FRACTION / 2);
+
+  /**
+   * The pale rim, and it is brighter and tighter than it was (F3).
+   *
+   * The old gradient ran from 0.55 alpha at 12% out to nothing at 48%, which is a *wash* rather
+   * than a rim: on a light wall the whole thing disappeared and left the dark hole alone, which
+   * is the "soft black blob" the report describes. Displaced material sits in a band just
+   * outside the hole, so the peak is moved to the hole's edge, raised, and given somewhere to
+   * fall off to — the outer two thirds are nearly clear, which is also what keeps the mark from
+   * reading as a smudge the size of the quad.
+   */
+  const ring = ctx.createRadialGradient(size / 2, size / 2, holeR * 0.9, size / 2, size / 2, rimR);
+  ring.addColorStop(0, 'rgba(226,221,210,0.85)');
+  ring.addColorStop(0.3, 'rgba(198,192,182,0.5)');
+  ring.addColorStop(0.65, 'rgba(150,145,138,0.16)');
   ring.addColorStop(1, 'rgba(150,145,138,0)');
   ctx.fillStyle = ring;
   ctx.beginPath();
-  ctx.arc(size / 2, size / 2, size * 0.48, 0, Math.PI * 2);
+  ctx.arc(size / 2, size / 2, rimR, 0, Math.PI * 2);
   ctx.fill();
 
-  const hole = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size * 0.22);
+  // The hole itself, dark to its edge rather than fading out into the rim: the boundary between
+  // the two is what makes it read as a hole with a lip rather than as a stain.
+  const hole = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, holeR);
   hole.addColorStop(0, 'rgba(10,10,12,1)');
-  hole.addColorStop(0.7, 'rgba(18,18,20,0.9)');
-  hole.addColorStop(1, 'rgba(30,30,32,0)');
+  hole.addColorStop(0.78, 'rgba(16,16,18,0.94)');
+  hole.addColorStop(1, 'rgba(26,26,28,0)');
   ctx.fillStyle = hole;
   ctx.beginPath();
-  ctx.arc(size / 2, size / 2, size * 0.22, 0, Math.PI * 2);
+  ctx.arc(size / 2, size / 2, holeR, 0, Math.PI * 2);
   ctx.fill();
 
+  // Chipping, scattered through the rim band rather than across the whole quad.
   for (let i = 0; i < 40; i++) {
     const angle = rng.float() * Math.PI * 2;
-    const r = rng.range(size * 0.16, size * 0.42);
+    const r = rng.range(holeR * 0.9, rimR * 0.8);
     ctx.fillStyle = `rgba(20,20,22,${rng.range(0.1, 0.4)})`;
     ctx.fillRect(
       size / 2 + Math.cos(angle) * r,

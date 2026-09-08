@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import type { Rng } from '../../shared/core/Rng';
+import { ATTACHMENT_IDS, attachmentDef } from '../../shared/weapons/Attachments';
+import { ALL_WEAPONS } from '../../shared/weapons/WeaponDefs';
 import { buildDecalTexture } from './FxAssets';
 
 /**
@@ -12,17 +14,47 @@ import { buildDecalTexture } from './FxAssets';
  */
 
 /**
- * Raised from 96 in M7, for the accuracy wall (M6 playtest item).
+ * Two full magazines of the largest magazine in the arsenal — **derived**, not asserted.
  *
- * 96 recycled inside a single LMG magazine, so a group being measured lost its earliest holes
- * while the burst that made them was still going — which is precisely the case the wall exists
- * to serve. 192 holds two full magazines of the largest-magazine weapon in the arsenal, so a
- * group survives a reload and can be compared against the next one.
+ * The rule has been the same since M7 and the reason is the accuracy wall: 96 recycled inside a
+ * single LMG magazine, so a group being measured lost its earliest holes while the burst that
+ * made them was still going, which is precisely the case the wall exists to serve. Two full
+ * magazines means a group survives a reload and can be compared against the next one.
  *
- * Nearly free: the whole field is one `InstancedMesh` and therefore one draw call whatever the
- * count, so this buys 96 more instance matrices and no additional state changes.
+ * The number written down was **192, and the rule said 250 at best** (playtest round 5, F3).
+ * The MONOLITH's magazine is 125, so two is 250 — and an extended magazine multiplies it by
+ * 1.5, so the honest answer is 376. The comment had been describing a rule the constant did not
+ * implement since the day the LMGs landed, which is why it is computed here instead: the next
+ * weapon or attachment that moves the ceiling moves this with it, and the comment cannot go
+ * stale because there is no number in it.
+ *
+ * Nearly free, and that is the frame-cost note F3 asks for: the whole field is one
+ * `InstancedMesh` and therefore one draw call whatever the count, so 192 -> 376 buys 184 more
+ * instance matrices — about 14 KB of `Float32Array` — and no additional draw calls, state
+ * changes or per-frame work. Nothing iterates the pool per frame; `place` writes one slot.
  */
-const CAPACITY = 192;
+const CAPACITY = 2 * largestMagazine();
+
+/**
+ * The biggest magazine anything in the arsenal can be built with.
+ *
+ * The base table's ceiling times the largest magazine multiplier any attachment offers, because
+ * the case this pool exists for is somebody emptying the largest magazine they can assemble into
+ * a wall. Computed once at module load over two shipped tables.
+ */
+function largestMagazine(): number {
+  let mult = 1;
+  for (const id of ATTACHMENT_IDS) {
+    const effects = attachmentDef(id)?.effects.magSizeMult;
+    if (effects !== undefined && effects > mult) mult = effects;
+  }
+  let biggest = 1;
+  for (const def of ALL_WEAPONS) {
+    const size = Math.round(def.magSize * mult);
+    if (size > biggest) biggest = size;
+  }
+  return biggest;
+}
 /** Lift off the surface, metres. Backed up by a polygon offset in the material. */
 const SURFACE_LIFT = 0.006;
 

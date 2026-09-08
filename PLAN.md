@@ -11947,13 +11947,15 @@ No wire change and no simulation change, so the protocol version is untouched.
   by design. Its fallbacks — a `matchMedia` that throws, a `maxTouchPoints` that is `undefined` —
   are reasoned rather than measured, and the reasoning is in the file.
 
+### Verified by eye, in a real browser
+
+The desktop pause/resume cycle was run and is clean — no banner flash on the way back in, which
+is the case the predicate's third term exists for and the one a headless run cannot reach. The
+mobile emulation was confirmed to block entry at the boot screen outright. That closes the first
+and third of the checks below; the middle one, a genuinely refused lock, is still open.
+
 ### Needs a browser
 
-Three cases, with the steps:
-
-- **A normal desktop run.** Start a solo match. Nothing appears; the crosshair behaves as it
-  always did. Then press Escape to pause and click Resume: the banner must **not** flash on the
-  way back in, which is the case the third term of the predicate exists for.
 - **A refused lock.** Open the built client inside an `<iframe>` on a local page — an iframe
   without `allow="pointer-lock"` is refused, which is the `WrongDocumentError` the round-5 report
   hit. Start a match: the red banner reads `MOUSE NOT CAPTURED — CLICK TO AIM · F11 FOR
@@ -11979,3 +11981,166 @@ Three cases, with the steps:
 - **`Menus.showUnsupported` is the second terminal screen in the front end**, after
   `showBoot('NO SERVER CONFIGURED — …')`. Neither is a state, both are `.op-screen` with the menu
   never painted over them, and if a third appears it is worth asking whether they want to be one.
+
+## Playtest round 5 — reading a hit, and two marks drawn for a dark game
+
+**F3**: the impact decals are soft black blobs 30-40 cm across, reading as holes punched through
+a wall rather than as bullet strikes. **F5**: the crosshair is clear on Foundry and nearly
+disappears on Dunes at noon.
+
+One job, and one shape behind both: **every mark the game draws to tell you about a shot was
+tuned against a dark backdrop, and the game has two bright ones.** Dunes' sand reads 185/255 and
+Depot's asphalt reads 21 — a factor of nine between two maps in the same rotation.
+
+### F5 is not a matter of taste, and the probe already had the ground values
+
+The brief named the fix and it is right, but the argument is better than "a hard ring is
+crisper". A 2px *blurred* shadow spreads its darkness over four pixels of a two-pixel mark, so
+almost none of it reaches the pixel adjacent to the line; on a dark map the ground supplies the
+contrast anyway and nobody notices. `npm run readability` has been measuring what each map's
+ground reads at since round 4, so the report converts straight into a number:
+
+| ground | 0-255 | mark vs ground | mark vs hard ring |
+|---|---|---|---|
+| FOUNDRY | 61.7 | 7.58 : 1 | 14.04 : 1 |
+| DEPOT | 21.3 | 12.36 : 1 | 13.98 : 1 |
+| DUNES | **185.0** | **1.56 : 1** | 13.56 : 1 |
+
+1.56:1 is below WCAG 2.1's 3:1 floor for a non-text UI component — *"it nearly disappears"* as a
+figure rather than an opinion, on exactly the map that was reported and no other.
+
+**The property worth having is not that the number went up.** It is that a ringed mark is
+compared against an opaque ring rather than against the map, so the figure stops depending on the
+map at all: the spread across the three grounds collapses from **7.94× to 1.04×**. That is what
+makes the crosshair stop being a per-map problem, and it is why the same token now drives the
+hitmarker — which had the identical shadow, the identical problem, and matters more because it
+is the only confirmation a shot connected and it is on screen for a fifth of a second.
+
+The blur is kept *behind* the ring rather than replaced by it: the ring supplies the guaranteed
+floor and the blur supplies depth, doing the thing a blur is actually good at instead of the
+thing it was failing at.
+
+### F3's two claims: one right about the wrong number, one simply wrong
+
+**The decals were too big, but not the way the report says.** The quad is
+`decalRadius * 2 * jitter` across, and what the eye reads is the texture's pale rim at 0.96 of
+it — so the *visible mark* ran 7.3 to 25.3 cm, with sand the worst. The reporter's "30-40 cm" was
+the rim seen close up, not the quad and not the hole.
+
+**"the puff is what sells it, and it is what is missing" is false.** `Fx.spawnImpact` has
+launched a dust puff on every strike since M5: 3-8 particles, 3 cm, dead in 0.24-0.46 s. It was
+not missing. It was **outsized by a decal eight times its width**, which is a different defect
+with a different fix — and the fix is the one already being made. Shrinking the mark is what
+makes the existing puff read, so no particle count changed and the particle budget did not move.
+
+That is the third brief claim this round to die by measurement rather than get implemented, after
+B5's penetration and B9's `?server=1`, and the method was the same each time: look before
+believing.
+
+### The sizes are chosen against a target, and the target is in the file
+
+`decalRadius` used to be sixteen numbers with no stated unit beyond "metres" — and a radius in
+metres means nothing on its own, because what is visible depends on where the texture paints its
+hole and its rim. Those two fractions are declared beside the field now
+(`DECAL_HOLE_FRACTION`, `DECAL_RIM_FRACTION`), `buildDecalTexture` paints from them instead of
+its own literals, and the sixteen values are chosen so the rim lands in a **stated 5-12 cm range**
+that lives in the same file and is asserted by the probe. The per-material spread is deliberately
+kept: a round spalls wider out of plaster than out of steel grating, and flattening that would
+trade one wrong picture for another.
+
+### The decal cap: a comment that had been wrong since the LMGs landed
+
+`CAPACITY = 192`, with a comment saying it *"holds two full magazines of the largest-magazine
+weapon in the arsenal"*. It does not. The MONOLITH's magazine is **125**, so two is 250 — and the
+extended-magazine attachment multiplies by 1.5, so the largest magazine anybody can assemble is
+188 and two is **376**. The constant had been describing a rule it did not implement since the
+day the LMGs shipped.
+
+The brief asked for the cap to be derived or justified. It is derived: `2 * largestMagazine()`,
+computed at module load over `ALL_WEAPONS` and `ATTACHMENT_IDS`. The next weapon or attachment
+that moves the ceiling moves the pool with it, and the comment cannot go stale because there is
+no number left in it to be wrong.
+
+**The frame-cost note F3 asks for:** 192 → 376 buys 184 more instance matrices, about **13.7 KB**
+of `Float32Array`, and **zero** extra draw calls, state changes or per-frame work. The field is
+one `InstancedMesh` however full it is, nothing iterates the pool per frame, and `place` writes a
+single slot.
+
+### Measured
+
+Every number came out of a run in this session. All of it is a pure function of the shipped
+tables, so one run is a fact rather than a sample.
+
+**`npm run readability`** gained both halves, printed above, and now exits non-zero on either.
+That is a change to what the probe is entitled to do, and it is argued rather than assumed: the
+file's own note says a reading with no agreed threshold must not fail a build. These two have
+thresholds somebody can point at — WCAG's 3:1, and a target range written down beside the values
+it governs — so an edit that leaves them has to argue with a number instead of with a taste.
+
+**Two red controls, run independently so each failure is attributable to one assertion:**
+
+| Control | What it reported |
+|---|---|
+| The crosshair with no ring reaching the adjacent pixel | `DUNES 185.0 1.56:1 1.56:1 UNDER 3:1` — exit **1** |
+| Sand's `decalRadius` back at 0.11 | `sand 0.110 8.2-11.6 18.0-25.3 OUTSIDE` — exit **1** |
+
+The second is the report's own number: 25.3 cm of visible mark, which is what "30-40 cm" was
+looking at.
+
+**The decal table after**, all sixteen materials inside the range, holes 2.3-5.5 cm and rims
+5.1-12.0 cm. Sand, the worst offender, went from a 18.0-25.3 cm mark to 8.5-12.0 cm.
+
+**The rest of the gate.** `npm run check` green, **cosmetics audit green** — nothing here touches
+a simulated value, and `decalRadius` has exactly one reader, in `client/engine/Fx.ts`. `npm run
+harness` five matches, all completed. `npm run layout` 11 surfaces at 6 viewports, PASS. `npm run
+leak` 100 cycles, subscriptions 29 → 29 (+0), heap 13.15 → 13.84 MiB (+0.69), LEAK CHECK PASSED.
+No protocol change and no simulation change.
+
+### What was not verified
+
+- **Nothing was rendered.** Every number above is arithmetic over the shipped tables, and that is
+  the honest limit of it: contrast is computed from the CSS colours and the probe's *upper bound*
+  on ground brightness, and the decal sizes are computed from the quad and the texture's
+  authored fractions. Whether the rim reads as a lip rather than a smudge is a claim about a
+  canvas gradient that only an eye can settle.
+- **The ground values are upper bounds, and that matters in one direction.** `MapLuminance`
+  states its own limits — no shadowing, no baked AO, no fog — so a real Dunes is no brighter than
+  185 and may be darker in places. The contrast figures are therefore worst-case for Dunes, which
+  is the direction that makes the F5 claim safe, and best-case for Depot, which is the direction
+  that makes a *pass* there weaker than it looks. Nothing rests on Depot's pass.
+- **The puff was measured but not judged.** 3-8 particles at 3 cm for 0.24-0.46 s is what the
+  code does; whether that reads as displaced material once the decal beside it is a third of the
+  size is exactly the thing this session decided not to guess at.
+
+### Needs a browser, and this one genuinely does
+
+The list for the human, in the order that makes each one cheap:
+
+- **Dunes, midday, look at the sky and then at the sand.** The crosshair must hold on both, and
+  the dot in the middle with it. This is the report.
+- **Fire a magazine into a wall on Dunes, then the same on Foundry.** Each strike should read as
+  a small hole with a bright lip and a puff that is gone before the next round lands. The group
+  should be legible as a group — that is what the pool exists for — and the rim should not read
+  as a stain the size of a fist.
+- **Then keep firing.** Past 376 holes the oldest recycle; the wall should never accumulate
+  visibly beyond that and the frame time should not move when it starts recycling.
+- **Land hits on a bot standing on the sand at the edge of the map.** The hitmarker against
+  bright ground is the case that matters most and the one with no second look.
+- **A dark interior on Depot for the control.** Nothing should have got worse where it was
+  already fine — the ringed figures say 13.98:1 against 12.36:1, so if anything it is cleaner.
+
+### Found while here
+
+- **`buildDecalTexture` painted its hole and rim from its own literals**, unrelated to anything
+  that knew what a decal was for. They are `DECAL_HOLE_FRACTION` and `DECAL_RIM_FRACTION` in
+  `materials.ts` now, next to the `decalRadius` they give meaning to — a metre value for a mark
+  is uninterpretable without them, which is why the sizes could drift to 25 cm without anybody
+  being able to say so.
+- **The probe restates `DecalField.place`'s jitter as two constants.** A second copy, and the
+  honest kind — a server entry cannot import a client module — but it is a second copy, and if
+  the jitter moves the probe will silently report the wrong range. Worth a shared constant the
+  day anything else needs it.
+- **Four comments in this round have now described something the code does not do**: B7's
+  score-versus-events comparison, B9's rewind feed and its per-player XP lines, and this one's
+  two full magazines. Each was found by asking what the sentence would have to be true of, and
+  checking. It is the cheapest audit in this project and nothing automates it.

@@ -10,7 +10,30 @@
   --hud-cross-len: 7px;
   --hud-cross-thick: 2px;
   --hud-cross-color: rgba(232, 234, 238, 0.9);
-  --hud-cross-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
+  /**
+   * A hard 1px ring, then a soft shadow behind it (playtest round 5, F5).
+   *
+   * It was `0 0 2px rgba(0,0,0,.9)` alone, and that is a *blurred* shadow spread over four
+   * pixels of a two-pixel mark: by the time it reaches the pixel adjacent to the line there is
+   * almost nothing of it left. On a dark map that does not matter because the ground supplies
+   * the contrast; on Dunes it is the whole of the problem. Measured, against the ground values
+   * `npm run readability` reports:
+   *
+   *     ground          mark vs ground     mark vs hard ring
+   *     FOUNDRY  61.7        7.59 : 1           14.04 : 1
+   *     DEPOT    21.3       12.36 : 1           13.98 : 1
+   *     DUNES     185        1.56 : 1           13.56 : 1
+   *
+   * 1.56:1 is below WCAG 2.1's 3:1 floor for non-text UI, which is "it nearly disappears" as a
+   * number rather than as an opinion. The ring puts a full-strength dark pixel against every
+   * light one, so the figure stops depending on the map at all: the spread across the three
+   * grounds collapses from 7.9x to 1.04x.
+   *
+   * The blur is kept *behind* the ring rather than replaced by it. The ring supplies the
+   * guaranteed floor and the blur supplies depth, and at 3px it is doing the job it is actually
+   * good at — softening an edge — instead of the job it was failing at.
+   */
+  --hud-cross-shadow: 0 0 0 1px rgba(0, 0, 0, 0.85), 0 0 3px rgba(0, 0, 0, 0.55);
 }
 
 .hud {
@@ -90,7 +113,15 @@
   height: 8px;
   /* M8: the palette writes this, so colourblind mode moves the hitmarker itself. */
   background: var(--c-hit, #ffffff);
-  box-shadow: 0 0 3px rgba(0, 0, 0, 0.85);
+  /*
+   * The same ring as the crosshair, and this is the one that matters more (F5).
+   *
+   * It had the identical blurred shadow and therefore the identical problem, on a mark that is
+   * the *only* confirmation a shot connected — and which appears for a fifth of a second, so
+   * there is no second look. Shares the crosshair's token rather than repeating the value:
+   * they are one decision about one class of mark.
+   */
+  box-shadow: var(--hud-cross-shadow);
 }
 
 /* Four ticks on the diagonals, pointing away from the centre. */

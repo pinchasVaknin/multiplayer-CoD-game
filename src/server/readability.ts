@@ -8,6 +8,14 @@ import { DEPOT_MAP } from '../shared/world/maps/depot';
 import { DUNES_MAP } from '../shared/world/maps/dunes';
 import type { MapDef } from '../shared/world/maps/types';
 import { allMaterialBaseColors, materialBaseColor } from '../shared/world/maps/albedo';
+import {
+  DECAL_HOLE_FRACTION,
+  DECAL_RIM_FRACTION,
+  DECAL_RIM_MAX_M,
+  DECAL_RIM_MIN_M,
+  surfaceOf,
+} from '../shared/world/maps/materials';
+import { MATERIAL_KEYS } from '../shared/world/maps/types';
 import { linearLuminance, readFloor } from '../shared/world/MapLuminance';
 import { simCos, simSin } from '../shared/core/SimMath';
 import {
@@ -302,6 +310,170 @@ function lightingTable(): void {
   }
 }
 
+// -- F5: the crosshair against the ground it is drawn over -------------------
+
+/**
+ * WCAG 2.1's minimum contrast for a non-text user-interface component.
+ *
+ * A citable standard rather than a number tuned until the observation stopped, which is what P0
+ * bans. A crosshair is exactly what 1.4.11 is about — a small graphical element whose whole job
+ * is to be distinguishable from what is behind it.
+ */
+const MIN_CONTRAST = 3;
+
+/** One sRGB channel, 0-255, linearised the way WCAG defines it. */
+function channel(v: number): number {
+  const c = v / 255;
+  return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+function relativeLuminance(rgb: readonly [number, number, number]): number {
+  return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+}
+
+/** `fg` at `alpha` composited over a grey `bg`, both 0-255. */
+function composite(
+  fg: readonly [number, number, number],
+  alpha: number,
+  bg: number,
+): [number, number, number] {
+  return [
+    fg[0] * alpha + bg * (1 - alpha),
+    fg[1] * alpha + bg * (1 - alpha),
+    fg[2] * alpha + bg * (1 - alpha),
+  ];
+}
+
+function contrast(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  return la > lb ? (la + 0.05) / (lb + 0.05) : (lb + 0.05) / (la + 0.05);
+}
+
+/** `--hud-cross-color` and the ring alpha in `--hud-cross-shadow`, from `styles/hud.css`. */
+const CROSS_RGB: readonly [number, number, number] = [232, 234, 238];
+const CROSS_ALPHA = 0.9;
+const RING_ALPHA = 0.85;
+const BLACK: readonly [number, number, number] = [0, 0, 0];
+
+/**
+ * How the crosshair reads on each map's ground (playtest round 5, F5).
+ *
+ * The report was *"on Dunes at noon it nearly disappears"*, and this is that sentence as a
+ * number. Two columns, and the pair is the argument:
+ *
+ * - **bare** is the mark against the ground with no help from the shadow at all. A 2px *blurred*
+ *   shadow spreads its darkness over four pixels of a two-pixel mark, so almost nothing of it
+ *   reaches the pixel next to the line — bare is the worst case the old shadow degrades toward,
+ *   and it is a bracket rather than a model. Modelling a CSS blur precisely would be a guess
+ *   dressed up as a measurement.
+ * - **ringed** is the mark against a hard 1px ring, where the adjacent pixel *is* the ring by
+ *   definition and there is nothing left to model.
+ *
+ * The assertion is on `ringed`, because that is what ships. `bare` is printed beside it so the
+ * reason for the change stays visible: it is below the floor on exactly one ground, and it is
+ * the one that was reported.
+ */
+function crosshairContrastTable(): number {
+  console.log('\n== F5: the crosshair against each map ground ==\n');
+  console.log('map          ground      bare     ringed  verdict');
+
+  let failures = 0;
+  const bare: number[] = [];
+  const ringed: number[] = [];
+
+  for (const { def, ground } of GROUNDS) {
+    const bg = readFloor(def, materialBaseColor(ground)).mean;
+    const mark = composite(CROSS_RGB, CROSS_ALPHA, bg);
+    const ring = composite(BLACK, RING_ALPHA, bg);
+    const b = contrast(mark, [bg, bg, bg]);
+    const r = contrast(mark, ring);
+    bare.push(b);
+    ringed.push(r);
+    const ok = r >= MIN_CONTRAST;
+    if (!ok) failures++;
+    console.log(
+      '  %s %s %s %s %s',
+      pad(def.name, 10),
+      padStart(bg.toFixed(1), 6),
+      padStart(b.toFixed(2) + ':1', 9),
+      padStart(r.toFixed(2) + ':1', 9),
+      ok ? 'ok' : 'UNDER ' + String(MIN_CONTRAST) + ':1',
+    );
+  }
+
+  /*
+   * The property the fix is actually for, and it is not "the number went up".
+   *
+   * A ringed mark's contrast barely moves between a map at 21/255 and one at 185/255, because
+   * the ring is what the eye compares the mark against and the ring is opaque. The spread
+   * collapsing is what makes the crosshair stop being a per-map problem at all.
+   */
+  const spread = (xs: readonly number[]): number => Math.max(...xs) / Math.min(...xs);
+  console.log(
+    '\n  map-to-map spread: bare %sx, ringed %sx (1.00x is ground-independent)',
+    spread(bare).toFixed(2),
+    spread(ringed).toFixed(2),
+  );
+  return failures;
+}
+
+// -- F3: how big a bullet decal actually is ---------------------------------
+
+/**
+ * `DecalField.place`'s per-hole jitter, restated.
+ *
+ * A second copy, and the honest kind: this file cannot import a client module, and a probe that
+ * assumed no jitter would report a range narrower than the one that ships. Keep it in step with
+ * `rng.range(0.85, 1.2)` in `client/engine/Decals.ts`.
+ */
+const DECAL_JITTER_MIN = 0.85;
+const DECAL_JITTER_MAX = 1.2;
+
+/**
+ * Every material's decal, in centimetres of visible mark (playtest round 5, F3).
+ *
+ * The report said *"soft black blobs 30-40cm across"* and it was reading the **rim**: the quad
+ * is `decalRadius * 2 * jitter` across and the texture's pale ring reaches `DECAL_RIM_FRACTION`
+ * of it, so the mark on sand ran to 25 cm. The number worth holding to a range is therefore the
+ * rim diameter at the jitter's extremes and not `decalRadius`, and this does the conversion
+ * rather than leaving it to be done in somebody's head at review time.
+ */
+function decalSizeTable(): number {
+  console.log('\n== F3: bullet decals, as centimetres on the wall ==\n');
+  console.log('material         radius      hole cm       rim cm  verdict');
+
+  let failures = 0;
+  for (const key of MATERIAL_KEYS) {
+    const surface = surfaceOf(key);
+    const smallest = surface.decalRadius * 2 * DECAL_JITTER_MIN;
+    const largest = surface.decalRadius * 2 * DECAL_JITTER_MAX;
+    const rimMin = smallest * DECAL_RIM_FRACTION;
+    const rimMax = largest * DECAL_RIM_FRACTION;
+    const ok = rimMin >= DECAL_RIM_MIN_M && rimMax <= DECAL_RIM_MAX_M;
+    if (!ok) failures++;
+    const hole =
+      (smallest * DECAL_HOLE_FRACTION * 100).toFixed(1) +
+      '-' +
+      (largest * DECAL_HOLE_FRACTION * 100).toFixed(1);
+    const rim = (rimMin * 100).toFixed(1) + '-' + (rimMax * 100).toFixed(1);
+    console.log(
+      '  %s %s %s %s %s',
+      pad(key, 14),
+      padStart(surface.decalRadius.toFixed(3), 6),
+      padStart(hole, 12),
+      padStart(rim, 12),
+      ok ? 'ok' : 'OUTSIDE',
+    );
+  }
+  console.log(
+    '\n  target rim diameter: %s-%s cm, from materials.ts',
+    (DECAL_RIM_MIN_M * 100).toFixed(0),
+    (DECAL_RIM_MAX_M * 100).toFixed(0),
+  );
+  return failures;
+}
+
 // -- main -------------------------------------------------------------------
 
 console.log('OPERATOR readability probe — playtest round 4, P9 (B2, B12, F9)');
@@ -312,11 +484,15 @@ const colourViolations = teamColourTable();
 const projectionFailures = projectionTable();
 albedoTable();
 lightingTable();
+const crosshairContrastFailures = crosshairContrastTable();
+const decalFailures = decalSizeTable();
 
 console.log('\n== summary ==');
 console.log('  crosshair gaps at the floor: %d of %d hip-fire states', crosshair.atFloor, crosshair.examined);
 console.log('  team-colour violations:      %d', colourViolations);
 console.log('  projection checks failed:    %d', projectionFailures);
+console.log('  crosshair contrast failures: %d', crosshairContrastFailures);
+console.log('  decals outside the range:    %d', decalFailures);
 
 /**
  * The exit code, and the one thing here that can fail a build.
@@ -335,6 +511,29 @@ if (projectionFailures > 0) {
 }
 if (crosshair.examined === 0) {
   console.error('\nCROSSHAIR CHECK FAILED: no weapons examined.');
+  process.exit(1);
+}
+/**
+ * Both of round 5's P9 halves exit non-zero, and unlike the lighting table above they are
+ * entitled to.
+ *
+ * The note on the exit code says a reading with no agreed threshold must not fail a build, and
+ * that still holds — what changed is that these two have thresholds somebody can point at.
+ * `MIN_CONTRAST` is WCAG 2.1's figure for a non-text UI component, and the decal range is a
+ * stated target written down beside the values it governs. An edit that leaves either has to
+ * argue with a number rather than with a taste.
+ */
+if (crosshairContrastFailures > 0) {
+  console.error(
+    '\nCROSSHAIR CONTRAST FAILED: %d of %d grounds under %d:1 for the ringed mark.',
+    crosshairContrastFailures,
+    GROUNDS.length,
+    MIN_CONTRAST,
+  );
+  process.exit(1);
+}
+if (decalFailures > 0) {
+  console.error('\nDECAL SIZE FAILED: %d material(s) outside the stated rim range.', decalFailures);
   process.exit(1);
 }
 console.log('\nreadability probe ok');
