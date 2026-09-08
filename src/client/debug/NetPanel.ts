@@ -1,5 +1,6 @@
 import { describeConditions, findPreset, NET_PRESETS, parseConditions } from '../../shared/net/NetSim';
 import { MAX_REWIND_MS } from '../../shared/net/Protocol';
+import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
 import {
   CORRECTION_SMOOTHING_TICKS,
   MAX_SMOOTHED_DISTANCE,
@@ -17,15 +18,22 @@ import { setField, type DebugOverlay } from './DebugOverlay';
  * - **Network**: RTT, jitter, measured clock offset, server tick vs client tick, snapshot
  *   size, snapshots/sec, bandwidth up and down, packet loss.
  * - **Prediction**: misprediction count and distance p50/p99, replay depth, active smoothing.
- * - **Rewind**: what the server applied per shot, and how often the 200 ms cap bit.
+ * - **Rewind**: what the server *would* apply for this client, and whether the 200 ms cap bites.
  *
- * ## Why the rewind numbers come from the server
+ * ## Why the rewind numbers are an estimate, and what that costs (round 5, B9)
  *
  * A client cannot observe its own lag compensation — the rewind happens on the server, to
- * other people's hitboxes, on a tick the client will not see for another half a round trip.
- * So the figures shown here are the client's own *inputs* to that calculation (its RTT and
- * interpolation delay, which is exactly what `viewLagMsFor` uses), plus the per-shot record
- * the server sends back to a client that asked for it with `?rewinddebug=1`.
+ * other people's hitboxes, on a tick the client will not see for another half a round trip. So
+ * every figure here is derived from the client's own *inputs* to that calculation: its RTT and
+ * its interpolation delay, run through the same arithmetic `viewLagMsFor` uses on the server.
+ *
+ * This comment used to end *"plus the per-shot record the server sends back to a client that
+ * asked for it with `?rewinddebug=1`"*. **There is no such record.** No message on the wire
+ * carries one, and `Session.wantsRewindDebug` — which the whole `?rewinddebug=1` chain exists
+ * to set — is written and never read, on the server or anywhere else. The flag is out of the
+ * README's table until something reads it; see `shared/net/UrlFlags`. A comment describing a
+ * feed the code cannot receive is the thing that let this look finished for a milestone, which
+ * is the same finding B7 made about `ModeStateHash`.
  *
  * Everything updates on the overlay's 15 Hz text hook rather than per frame. S7's panels
  * must not show up in the frame times they exist to report.
@@ -108,8 +116,10 @@ export class NetPanel {
       );
       setField(fUnacked, String(p.unacked));
 
-      // Rewind: this client's contribution to the server's calculation.
-      const interpMs = 100;
+      // Rewind: this client's contribution to the server's calculation. The delay comes from
+      // the constant both sides compile against, not from a literal here — a panel that keeps
+      // its own copy of a replicated number is a panel that lies the day the number moves.
+      const interpMs = DEFAULT_INTERPOLATION_DELAY_MS;
       const viewLag = st.rttMs * 0.5 + interpMs;
       const applied = Math.min(viewLag, MAX_REWIND_MS);
       setField(fViewLag, `${viewLag.toFixed(0)} ms (RTT/2 ${(st.rttMs * 0.5).toFixed(0)} + interp ${interpMs})`);

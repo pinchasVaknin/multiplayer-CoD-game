@@ -11564,11 +11564,15 @@ average match, which is the ratio the two numbers were chosen against.
 - **The `matchTime` value is unplaytested.** 25 a minute is an argument about proportion, not a
   measurement of how it feels to earn.
 
+### Verified by eye, in a real browser
+
+A deliberately bad match was played through to the summary: the base completion award and the
+time-played row were both there, the total was not zero, and the panel had rows in it rather than
+the empty box. That closes the first of the checks below — the one no harness here can make,
+because the rows are animated by `XpSummary` over a torn-down match.
+
 ### Needs a browser
 
-- **A deliberately bad match, then the summary screen.** The number must not be zero and the panel
-  must have rows in it — that is B6 verbatim. `Match complete 500` should be the first row to
-  land, before anything the player did.
 - **A sub-minute match.** Leave a solo match immediately after it starts: the panel should show
   `Match complete` alone, rather than a `Time played x0` row reading zero.
 - **The menu behind it.** The bar should have moved, and "500 XP TO NEXT" should no longer be the
@@ -11595,3 +11599,198 @@ average match, which is the ratio the two numbers were chosen against.
   is a per-weapon lifetime stat rather than a threshold, so a few hundredths of a second across a
   match crosses nothing — but it is the same arithmetic, and if a rule is ever hung off it the
   first thing to do is count ticks instead.
+
+## Playtest round 5 — a public interface with three copies and no check
+
+**B9** was two documented URL flags not doing what `README.md` says: two clients opened with
+`?name=BRAVO` and `?name=ALICE` both joined as `OPERATOR-013`, and `?server=1` left the game in
+the menu until `PLAY MULTIPLAYER` was clicked by hand.
+
+Only one of those is a defect, and neither is a parsing bug.
+
+### `?name=` was read, discarded, and documented as a feature
+
+`parseJoinOptions` read `params.get('name')` and built a `HandshakeOptions` around it.
+`multiplayerJoinOptions` — its **only** caller — spread that object and replaced `displayName`
+with the profile callsign on the very next line. So the parse was dead code, and the dead code
+was the thing `README.md` described.
+
+That shape is the finding rather than the line: a second entry point whose whole purpose was to
+overwrite the first. It is the same smell as round 5's B7 — *a shared class with one caller is
+not shared, it is misfiled* — and it is why the fix is one function rather than a corrected line.
+
+### `?server=1` was never broken, and the prose was
+
+There is no auto-connect path and there never has been. `isServerConfigured` enables the Play
+Multiplayer button and nothing else; `Game.playMultiplayer` is reached from that click and from
+no other call site. The README's *table* was accurate — the flag says which address — and the
+*prose* around it (*"open the client with a `?server=` flag"*) is what promised a connection.
+
+**The decision, made explicitly: no auto-connect.** `VITE_SERVER_URL` is baked to `1` on the
+deployed build, so a flag that connected on sight would throw every visitor straight into a
+socket and put Play Solo behind a disconnect. §6.1's flow is menu-first by design. The README is
+what changes, and it now says so in a sentence rather than leaving it to be inferred:
+*"The flags choose an address; they do not connect."*
+
+### The precedence, decided and recorded: URL over profile
+
+Not on taste. `parseJoinOptions` already documented a ladder for the address — *"`?server` wins,
+then the build-time `VITE_SERVER_URL`, then the page's own origin"* — an explicit per-session
+instruction beating a stored default beating a generated one. `?name=` gets the identical ladder:
+**URL, then profile callsign, then `OPERATOR`.** One parser resolving two flags in opposite
+directions is the disagreement this session exists to remove, and it is how `?name=` came to be
+read, discarded and documented all at once.
+
+The argument for the profile winning — *"a stray URL should not silently rename them"* — does not
+survive contact with what a URL override actually is: nothing is written back, the profile is
+untouched, the override lasts as long as the tab and the cause is visible in the address bar.
+`resolveDisplayName` reads the profile and never writes it, and the audit asserts that rather
+than leaving it to prose. The README's own developer workflow decides the rest: *"open it twice,
+in two windows, with different names"* cannot work under any other precedence, because both
+windows share one profile.
+
+### The artefact: one declaration, and a check that fails
+
+`shared/net/UrlFlags.ts` holds every flag this client understands — the documented ones as the
+README's cells verbatim, and the undocumented ones as a map of key to the reason it is not
+public, because "undocumented" is a decision and not a gap. `scripts/check-flags.mjs` is in
+`npm run check` and asserts three things:
+
+1. The README's table and `URL_FLAGS` agree row for row, cell for cell, in order.
+2. Every documented flag names a key the client actually reads — the brief's ask in one sentence,
+   *the next flag cannot be documented into existence without existing*.
+3. Every key the client reads is declared, one way or the other.
+
+**What it cannot catch, written into the script so nobody trusts it further than it goes:** a
+flag that is parsed and then ignored is invisible to a grep, because the key *is* read and the
+README *does* describe it. That is exactly what `?name=` was. So the behavioural half is
+`shared/debug/UrlFlagAudit`, which runs the resolution for real and looks at what comes out. B9
+needed both halves and neither would have found it alone.
+
+### Three rules that existed twice, and one of them had already drifted
+
+The flags carry rules the server shares, and they were duplicated:
+
+- **`sanitiseName` existed character for character in two files** — `client/net/JoinOptions` and
+  `server/net/Session` — the same loop over the same code points with the same cap, differing
+  only in what each returned for an empty name.
+- **The `#rw` suffix string existed three times**, in `Handshake`, `NetClient` and `net/Session`.
+- **And the duplication had hidden a real bug.** The client capped the name at twenty characters
+  and *then* appended `#rw`, producing twenty-three; the server sanitised the incoming name —
+  capping it at twenty again — and only then asked whether it ended in `#rw`. The three
+  characters carrying the answer were the three the cap had just removed, so `?rewinddebug=1` was
+  **silently ignored for any callsign of eighteen characters or more**. The wire's string field
+  holds 255 bytes, so the suffix never needed to be inside the budget at all.
+
+All three live in `UrlFlags` now, and the server strips the suffix *before* the cap.
+
+### A third flag that does nothing, found by tracing readers rather than by the check
+
+`?rewinddebug=1` is documented as *"ask the server for the per-shot rewind feed"*. **There is no
+such feed.** No message on the wire carries one; `NetPanel` computes all three of its Rewind
+fields from the client's own RTT; and `Session.wantsRewindDebug` — the flag the entire chain from
+query string to handshake to session exists to set — is **written and never read**, on the server
+or anywhere else.
+
+The plumbing is real and the destination is not. The key has moved into `UNDOCUMENTED_URL_KEYS`
+with that reason attached, rather than being ripped out: `HandshakeOptions`, `NetClient` and
+`HeadlessClient` all carry the request and it is what the feed will be built on. The row goes back
+in the README the day something reads it.
+
+`NetPanel`'s comment claiming the server sends the record has been rewritten. A comment describing
+a feed the code cannot receive is what let this look finished for a milestone, and it is the same
+finding B7 made about `ModeStateHash` — which is now twice in one round, so it is worth saying
+plainly: **this project's most reliable bug detector is asking who reads a thing.** Two of B9's
+three flags were found that way and neither was findable by a grep.
+
+While there: the panel's `const interpMs = 100` is `DEFAULT_INTERPOLATION_DELAY_MS` now. A
+read-out keeping its own copy of a replicated number is a read-out that lies the day the number
+moves.
+
+### Measured
+
+Every number came out of a run in this session.
+
+**`scripts/check-flags.mjs`, watched red three times before it was trusted green:**
+
+| Red control | What it reported |
+|---|---|
+| Declaration unread | `README.md documents 7 flag row(s); URL_FLAGS declares 0` — and the cause was the check's own bug: `export const URL_FLAGS: readonly UrlFlag[] = [` has a `[` in the **type**, so brace-matching from the first bracket returned the empty pair. It went red for the right reason on the wrong evidence, which is why the bracket is now found after the `=`. |
+| README drifted | The three effect cells this session deliberately rewrote, each printed with both texts and the README line number |
+| Flag documented into existence | A fabricated `?spectate=1` row: *"documented but nothing under src/client/ reads `spectate`"* |
+
+And a fourth, found by reading its own output: the first scan matched only `params.get(...)` and
+`searchParams.get(...)`, so `?show` — read through an inline
+`new URLSearchParams(window.location.search).get('show')` — was invisible to it. It reported **ok
+over 11 of the 12 keys**. A grep that passes over what it cannot see is worse than one that
+fails, so the check now counts every `new URLSearchParams` under `src/client/` and fails when it
+cannot follow one. Green reads **12 keys across 116 client files**.
+
+**`auditUrlFlags` — `shared/debug/UrlFlagAudit`**, at the top of every harness run beside
+`auditAccuracy` and `auditMatchXp`. Eight name cases and four rewind round trips:
+
+| case | `?name=` | profile | resolves to |
+|---|---|---|---|
+| url wins | `BRAVO` | `OPERATOR-013` | **BRAVO** |
+| second window | `ALICE` | `OPERATOR-013` | **ALICE** |
+| no flag | absent | `OPERATOR-013` | `OPERATOR-013` |
+| empty flag | `""` | `OPERATOR-013` | `OPERATOR-013` |
+| blank flag | `"   "` | `OPERATOR-013` | `OPERATOR-013` |
+| no profile | absent | `""` | `OPERATOR` |
+| control chars | `ALICE` | `OPERATOR-013` | `ALICE` |
+| over-long | 32 × `A` | `OPERATOR-013` | 20 × `A` |
+
+    short name, asked          sent "OPERATOR-013#rw"         -> "OPERATOR-013"         rewind=true
+    name at the cap, asked     sent "OPERATOR-013-LONGEST#rw" -> "OPERATOR-013-LONGEST" rewind=true
+
+**The red control, on the two rules as they stood.** With `resolveDisplayName` returning the
+profile and the cap applied before the suffix, the audit exits **1** with six problems, including
+the report verbatim:
+
+    two windows with different ?name= values both resolved to "OPERATOR-013"
+    name at the cap: ?rewinddebug=1 on a 20-character name came back as false
+
+**The rest of the gate.** `npm run check` green, including the new flag audit. `npm run harness`
+five matches, all completed, with P3's and P4's audits still green beside the new one. `npm run
+leak` 100 cycles, **LEAK CHECK PASSED**. `npm run netharness` against a real `serve.js`, 2
+clients, 30 s, **0 snapshots lost**, worst misprediction p99 0.701.
+
+### What was not verified
+
+- **`npm run netharness` cannot test `?name=` precedence, and the brief's suggested check is not
+  available.** `HeadlessClient` takes a name directly and never traverses `JoinOptions`, which is
+  client-only code; and it does not keep the roster's names, so "two clients appear on the
+  scoreboard with distinct names" is not observable from that harness at all. The netharness run
+  above proves the link is healthy and nothing more. Making it observable means replicating the
+  scoreboard's names to a headless client, which is a wire question rather than a flag question.
+- **No browser opened two windows.** The precedence is a headless fact about a pure function; that
+  two tabs of the real client show two names on one scoreboard is the thing only a browser can
+  say, and it is the check the README's own workflow rests on.
+- **`?net=` and the `?server=host:port` form were not exercised end to end.** They are unchanged
+  by this session and now checked for existence, but neither was run.
+
+### Needs a browser
+
+- **Two windows, two names, one scoreboard.** `?server=1&name=BRAVO` and `?server=1&name=ALICE`
+  against a local `npm run serve`, Play Multiplayer in each. Both names on Tab, distinct, and
+  neither of them the profile callsign. This is B9 verbatim.
+- **One window with no `?name=`.** The scoreboard should show the profile callsign, and the
+  callsign in Settings should be unchanged after a match played under an override — the "nothing
+  is written back" half.
+- **The menu with and without an address.** With `?server=` the Play Multiplayer button is
+  enabled and *does not connect until pressed*; with neither `?server=` nor `VITE_SERVER_URL` it
+  is disabled with the reason in its tooltip.
+
+### Found while here
+
+- **`Session.wantsRewindDebug` has no readers**, which is the sharper statement of the rewind
+  finding above. The whole `?rewinddebug=1` chain — query string, `HandshakeOptions`,
+  `withRewindSuffix`, the wire, `readIncomingName`, the session field — terminates in a boolean
+  nothing consults. Building the feed is a protocol change and a feature; it is not B9.
+- **`HeadlessClient` never learns anybody's display name.** It tracks entity ids, teams, scores
+  and hashes, but no roster names, which is why the netharness check above could not be written.
+  Worth knowing before the next session assumes a name is observable headlessly.
+- **`BotHarness` owns seven undocumented query keys** (`harness`, `bots`, `speed`, `tier`, `map`,
+  `mode`, `matches`) and the layout probe owns one (`show`). All eight are declared now with
+  reasons. None is a defect; the point is that the client understands twelve query keys and until
+  this session four of them were written down.

@@ -2,6 +2,7 @@ import { nowMs } from '../core/Clock';
 import { Btn, copyCommand, type InputCommand, type MutableInputCommand } from '../core/InputCommand';
 import { DT } from '../core/Loop';
 import { logger } from '../core/Log';
+import { withRewindSuffix } from './UrlFlags';
 import type { PlayerController } from '../player/PlayerController';
 import { makePlayerSimState, type PlayerSimState } from '../player/PlayerState';
 import { ClockSync } from './ClockSync';
@@ -455,9 +456,10 @@ export class NetClient {
     if (this.state !== 'idle' && this.state !== 'disconnected') return;
     this.state = 'connecting';
     this.closeReason = '';
-    // The `#rw` suffix is how a client opts into the rewind debug feed without the protocol
-    // growing a field only a debug panel reads.
-    const name = this.deps.wantRewindDebug === true ? `${this.deps.displayName}#rw` : this.deps.displayName;
+    // The rewind-feed opt-in rides the name rather than the protocol. One spelling of it, in
+    // `UrlFlags`, because it used to have three and the server's half was applied in the wrong
+    // order (round 5, B9).
+    const name = withRewindSuffix(this.deps.displayName, this.deps.wantRewindDebug === true);
     // The class rides the handshake, so the seat is built with it rather than reconfigured
     // afterwards. See `writeHello` for the measured cost of the alternative.
     this.deps.link.send(writeHello(this.writer, name, this.deps.loadout ?? null, this.reconnectToken));

@@ -11,6 +11,7 @@ import { auditRosterDeal } from '../shared/ai/RosterDeal';
 import { auditReplicatedScore } from '../shared/debug/ReplicatedScoreAudit';
 import { auditAccuracy } from '../shared/debug/AccuracyAudit';
 import { auditMatchXp } from '../shared/debug/MatchXpAudit';
+import { auditUrlFlags } from '../shared/debug/UrlFlagAudit';
 import { accuracy } from '../shared/combat/ScoreSystem';
 import { WEAPON_DEFS } from '../shared/weapons/WeaponDefs';
 import type { BotTeam } from '../shared/ai/Combatant';
@@ -485,6 +486,35 @@ function reportMatchXp(log: ReturnType<typeof logger>): number {
 }
 
 /**
+ * Which name a join ends up with, and whether the rewind opt-in survives (round 5, B9).
+ *
+ * The audit itself is `shared/debug/UrlFlagAudit`; this prints it. It is the behavioural half of
+ * B9 — the structural half is `scripts/check-flags.mjs`, which holds the README's flag table and
+ * `shared/net/UrlFlags` to each other and **could not have caught this one**: `?name=` was read
+ * and then overwritten, so every static rule about it passed.
+ */
+function reportUrlFlags(log: ReturnType<typeof logger>): number {
+  const audit = auditUrlFlags();
+  for (const row of audit.names) {
+    const from = row.urlName === null ? '(absent)' : `"${row.urlName}"`;
+    log.info(`  ${padEnd(row.shape, 14)} ?name=${padEnd(from, 24)} + ${padEnd(row.profileName, 22)} -> "${row.resolved}"`);
+  }
+  for (const row of audit.rewind) {
+    log.info(`  ${padEnd(row.shape, 26)} sent "${row.sent}" -> "${row.received}" rewind=${row.wantsRewindDebug}`);
+  }
+  for (const problem of audit.problems) log.error(`  ${problem}`);
+  if (audit.problems.length > 0) {
+    log.error(`URL FLAG AUDIT FAILED: ${audit.problems.length} problem(s).`);
+    return 1;
+  }
+  log.info(
+    `url flags: ${audit.names.length} name case(s) and ${audit.rewind.length} rewind round ` +
+      'trip(s); the URL wins, the profile is the fallback, and nothing is written back.',
+  );
+  return 0;
+}
+
+/**
  * Every authored spread, dealt at every split (playtest round 5, B4).
  *
  * The report was that the mix's only VETERAN always landed on the opposing team, and it was
@@ -689,6 +719,16 @@ async function main(): Promise<number> {
    */
   const xpFault = reportMatchXp(log);
   if (xpFault !== 0) return xpFault;
+
+  /**
+   * The URL flag audit (round 5, B9), in the same place and for the same reason.
+   *
+   * Pure strings in and out, so one run is a fact. Ahead of the matches because a name is the
+   * first thing a join decides and the last thing anybody checks — B9 ran for a milestone with
+   * two clients wearing one callsign.
+   */
+  const flagFault = reportUrlFlags(log);
+  if (flagFault !== 0) return flagFault;
 
   if (args.tierSweep) return runTierSweep(args, log);
 

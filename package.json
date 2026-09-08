@@ -33,7 +33,7 @@
     "//layout": "Playtest round 5 P1. Every full-screen surface mounted at six viewports in a headless Chrome, asserting that nothing is off the top of a screen that cannot scroll and that nothing scrolls sideways. Needs a browser on the machine (CHROME_PATH overrides the search), which is why it is an instrument and not part of the gate: the deploy host runs check and has none.",
     "layout": "node scripts/layout-probe.mjs",
     "//check": "The gate. Boundaries first: a partition violation makes the type errors that follow meaningless noise, so it is the thing that speaks. Then the S8.25 cosmetic audit and the S6.2 unlock audit, both cheap, each catching a whole class of mistake that compiles.",
-    "check": "npm run check:boundaries && npm run check:cosmetics && npm run check:optics && npm run check:unlocks && npm run check:cheats && npm run check:authority && npm run typecheck",
+    "check": "npm run check:boundaries && npm run check:cosmetics && npm run check:optics && npm run check:unlocks && npm run check:cheats && npm run check:authority && npm run check:flags && npm run typecheck",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "//typecheck": "Three targets, not one. shared/ compiles without the DOM lib, which is what makes a stray `document` a compile error instead of a crash in Node.",
     "typecheck": "npm run typecheck:shared && npm run typecheck:client && npm run typecheck:server",
@@ -48,7 +48,9 @@
     "//check:cheats": "Playtest round 4 F14. A code is input and an entitlement is state: no code string appears outside the table, and every entitlement bit is in exactly one half of the client/server partition. The second half is the security property.",
     "check:cheats": "node scripts/check-cheats.mjs",
     "//check:authority": "Playtest round 5 B7. A fact that moved to the server breaks every reader of the local copy, silently — the copy still compiles and still returns a plausible number. One row per migrated fact; today that is the team score, which three client call sites still read off the mode instead of off MatchFlow.",
-    "check:authority": "node scripts/check-authority.mjs"
+    "check:authority": "node scripts/check-authority.mjs",
+    "//check:flags": "Playtest round 5 B9. The URL flag table in README.md is a public interface; it had three copies and no check, so ?name= was parsed, discarded and documented as a feature for a milestone. Holds the README and shared/net/UrlFlags to each other, refuses a documented flag nothing reads, and refuses a key read where the scan cannot see it.",
+    "check:flags": "node scripts/check-flags.mjs"
   },
   "engines": {
     "node": ">=22.0.0"

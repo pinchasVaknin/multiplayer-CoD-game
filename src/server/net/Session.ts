@@ -25,6 +25,7 @@ import {
   type WelcomeInfo,
 } from '../../shared/net/Messages';
 import { CheatState } from '../../shared/cheats/Cheats';
+import { readIncomingName } from '../../shared/net/UrlFlags';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
 import {
   sanitiseNetLoadout,
@@ -498,10 +499,18 @@ export class Session {
       return;
     }
 
-    const clean = sanitiseName(name);
-    this.wantsRewindDebug = clean.endsWith('#rw');
-    this.displayName = this.wantsRewindDebug ? clean.slice(0, -3) : clean;
-    if (this.displayName === '') this.displayName = 'OPERATOR';
+    /**
+     * The suffix is stripped **before** the cap, which is the half that was backwards.
+     *
+     * This used to sanitise first — capping at twenty characters — and then ask whether the
+     * result ended in `#rw`. For a callsign of eighteen characters or more the three characters
+     * that answer the question were the three the cap had just removed, so `?rewinddebug=1`
+     * was silently ignored. `readIncomingName` does both halves in the order that works, and it
+     * is the same module the client appends from (round 5, B9).
+     */
+    const incoming = readIncomingName(name, 'OPERATOR');
+    this.wantsRewindDebug = incoming.wantsRewindDebug;
+    this.displayName = incoming.name;
 
     /**
      * The class, validated **before** the seat is asked for (Tier 1 #20).
@@ -739,17 +748,6 @@ function blankCommand(): MutableInputCommand {
  * every other player's client, so it is attacker-controlled text crossing a trust boundary —
  * the HUD sets it through `textContent`, never `innerHTML`, and this is the second layer.
  */
-function sanitiseName(raw: string): string {
-  let out = '';
-  for (const ch of raw) {
-    const code = ch.codePointAt(0) ?? 0;
-    if (code < 0x20 || code === 0x7f) continue;
-    out += ch;
-    if (out.length >= 20) break;
-  }
-  return out.trim();
-}
-
 /**
  * Snapshot ids wrap at 16 bits, so "newer" is a distance question rather than a comparison.
  * Half the space forward is newer; the rest is older.

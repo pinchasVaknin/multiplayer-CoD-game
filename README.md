@@ -97,19 +97,25 @@ Then open the client with a `?server=` flag:
 http://127.0.0.1:5173/?server=127.0.0.1:8080&name=ALICE
 ```
 
-Open it twice, in two windows, with different names — that is a two-player match. Without
-`?server=` the game boots into single-player exactly as it did before, which is deliberate:
-nothing about this milestone changes what happens when you just open the page.
+Open it twice, in two windows, with different names, and press **Play Multiplayer** in each —
+that is a two-player match.
+
+**The flags choose an address; they do not connect.** There is no auto-join: `?server=` decides
+where **Play Multiplayer** goes and enables the button, and the click is always yours. That is
+deliberate rather than unfinished — the deployed build bakes an address in, so an auto-join
+would throw every visitor straight into a socket and put Play Solo behind a disconnect.
+
+Without an address configured at all — no `?server=` and no `VITE_SERVER_URL` — the button is
+disabled with the reason on it and the game boots into single-player exactly as it did before.
 
 | Flag | Effect |
 |---|---|
-| `?server=host:port` | Connect to that server |
-| `?server=1` | Connect to this page's own origin at `/ws` |
-| `?name=ALICE` | Name on the scoreboard |
+| `?server=host:port` | Use that server when you press Play Multiplayer |
+| `?server=1` | Use this page's own origin at `/ws` |
+| `?name=ALICE` | Name on the scoreboard, overriding the profile callsign for this tab only |
 | `?net=100` | Add 100 ms round trip *on top of* the real link |
 | `?net=bad` | The 100 ms ±30 ms jitter, 2% loss preset |
 | `?net=250,40,5` | Latency, jitter, loss — explicitly |
-| `?rewinddebug=1` | Ask the server for the per-shot rewind feed |
 
 **F1** opens the overlay; the **Network**, **Prediction** and **Rewind** sections are the M10
 read-outs. If prediction is working, `Mispredictions` reads `0` at any latency — the number

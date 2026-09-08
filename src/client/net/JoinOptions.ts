@@ -1,5 +1,6 @@
 import { logger } from '../../shared/core/Log';
 import { NET_PERFECT, describeConditions, parseConditions, type NetConditions } from '../../shared/net/NetSim';
+import { resolveDisplayName } from '../../shared/net/UrlFlags';
 import { resolveServerUrl } from './BrowserLink';
 import type { HandshakeOptions } from './Handshake';
 
@@ -9,17 +10,13 @@ const log = logger('join');
  * Join-by-URL (M10, S6).
  *
  * S6 scopes this milestone to *"Join by URL"* with no lobby — S9 puts the lobby in M11 — so
- * the whole join flow is a query string:
+ * the whole join flow is a query string.
  *
- * ```
- *   ?server=example.com:8080        connect to that host
- *   ?server=1                       connect to this page's own origin at /ws
- *   ?name=ALICE                     display name on the scoreboard
- *   ?net=100                        layer +100 ms on the real link (S7)
- *   ?net=bad                        the 100ms +/-30ms, 2% loss preset
- *   ?net=250,40,5                   latency, jitter, loss, explicitly
- *   ?rewinddebug=1                  ask the server for the rewind panel feed
- * ```
+ * **The flags themselves are declared in `shared/net/UrlFlags`, not here.** There used to be a
+ * table in this comment, one in `README.md` and a parser below, and B9 is what three copies of
+ * an interface produce: `?name=` appeared in all three and worked in none of them.
+ * `scripts/check-flags.mjs` holds the README and the declaration to each other, and holds this
+ * file to reading no key that neither declares.
  *
  * The address is **never hardcoded** (S4.9). `?server` wins, then the build-time
  * `VITE_SERVER_URL`, then the page's own origin — which is what makes the documented
@@ -49,21 +46,18 @@ export function isServerConfigured(search: string): boolean {
 }
 
 /**
- * The join options for the Play Multiplayer button (M11, §6.1).
+ * The join options for the Play Multiplayer button (M11, §6.1; playtest round 5, B9).
  *
- * Differs from `parseJoinOptions` in exactly one way: the display name comes from the player's
- * profile rather than from the URL, because by M11 there is a field for it on the menu and a
- * persisted default behind that. Everything else — the address resolution order, the condition
- * simulator flag, the rewind debug flag — is shared, so a `?net=bad` run through the button
- * behaves the same as one through the URL.
+ * There used to be two of these. `parseJoinOptions` read `?name=` off the URL and this one, its
+ * only caller, replaced the result with the profile callsign on the next line — so the URL flag
+ * was parsed, discarded, and documented in `README.md` as a feature. That is B9's first half,
+ * and a second entry point whose whole purpose was to overwrite the first is how it survived.
+ *
+ * One function now, with the display name resolved by `resolveDisplayName`: **URL, then profile,
+ * then the generated default** — the same ladder the address below already uses. See
+ * `shared/net/UrlFlags` for why that precedence and not the other one.
  */
-export function multiplayerJoinOptions(search: string, displayName: string): HandshakeOptions | null {
-  const base = parseJoinOptions(search);
-  if (base === null) return null;
-  return { ...base, displayName: sanitiseName(displayName) };
-}
-
-export function parseJoinOptions(search: string): HandshakeOptions | null {
+export function multiplayerJoinOptions(search: string, profileName: string): HandshakeOptions | null {
   const params = new URLSearchParams(search);
 
   const serverParam = params.get('server');
@@ -91,7 +85,7 @@ export function parseJoinOptions(search: string): HandshakeOptions | null {
 
   const options: HandshakeOptions = {
     url,
-    displayName: sanitiseName(params.get('name')),
+    displayName: resolveDisplayName(params.get('name'), profileName),
     conditions,
     wantRewindDebug: params.get('rewinddebug') === '1',
   };
@@ -126,23 +120,11 @@ function parseNetFlag(raw: string | null): NetConditions {
   return parsed;
 }
 
-/**
- * A display name safe to put on a scoreboard.
+/*
+ * `sanitiseName` lives in `shared/net/UrlFlags` now.
  *
- * Trimmed, capped and stripped of control characters here as well as on the server. The
- * server's copy is the one that matters — this is a client and the client is untrusted — but
- * sending something sane costs nothing and means the local player sees the name they typed
- * rather than the name the server had to cut down.
+ * It was here and, character for character, in `server/net/Session` as well — the same loop
+ * over the same code points with the same cap, differing only in what each returned for an
+ * empty name. Two spellings of one rule is two rules, and this one had already drifted in a way
+ * that mattered: see `withRewindSuffix` for the order-of-operations bug the duplication hid.
  */
-function sanitiseName(raw: string | null): string {
-  if (raw === null) return 'OPERATOR';
-  let out = '';
-  for (const ch of raw) {
-    const code = ch.codePointAt(0) ?? 0;
-    if (code < 0x20 || code === 0x7f) continue;
-    out += ch;
-    if (out.length >= 20) break;
-  }
-  const trimmed = out.trim();
-  return trimmed === '' ? 'OPERATOR' : trimmed;
-}

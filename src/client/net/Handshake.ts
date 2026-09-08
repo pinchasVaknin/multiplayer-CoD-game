@@ -3,6 +3,7 @@ import { decodeHeader, writeHello, type WelcomeInfo } from '../../shared/net/Mes
 import type { NetLoadout } from '../../shared/net/Skirmish';
 import { HANDSHAKE_TIMEOUT_MS, PROTOCOL_VERSION, rejectText } from '../../shared/net/Protocol';
 import type { NetConditions } from '../../shared/net/NetSim';
+import { withRewindSuffix } from '../../shared/net/UrlFlags';
 import { ByteReader, ByteWriter } from '../../shared/net/Wire';
 import { BrowserLink } from './BrowserLink';
 
@@ -126,9 +127,8 @@ export async function handshake(options: HandshakeOptions): Promise<HandshakeRes
     throw new HandshakeError(err instanceof Error ? err.message : String(err), false);
   }
 
-  // The `#rw` suffix is how a client opts into the rewind debug feed without the protocol
-  // growing a field only a debug panel reads. Mirrored from `NetClient.connect`.
-  const name = options.wantRewindDebug ? `${options.displayName}#rw` : options.displayName;
+  // Mirrored from `NetClient.connect`, through the one function that spells the convention.
+  const name = withRewindSuffix(options.displayName, options.wantRewindDebug);
   /**
    * The class rides the `Hello` (M11, Tier 1 #20).
    *
