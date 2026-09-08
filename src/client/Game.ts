@@ -2532,11 +2532,21 @@ export class Game {
     this.transitionTo('MATCH');
   }
 
+  /**
+   * The line under PAUSED: mode, map and the score.
+   *
+   * The score comes off `MatchFlow`, which prefers the replicated value, and not off the mode
+   * (playtest round 5, B7). `GameMode.teamScore` is the local copy of a fact the server has
+   * owned since M10 and a replicated client deliberately never scores, so this line read
+   * `... · 0 – 0` in every networked match. Nobody reported it, which is the whole hazard of
+   * an authority migration: the stale reader keeps returning a plausible number.
+   */
   private pauseStatusLine(): string {
     const match = this.world?.match;
     if (match === undefined) return this.mapEntry().name;
     const mode = match.mode;
-    return `${mode.name} · ${this.mapEntry().name} · ${mode.teamScore('A')} – ${mode.teamScore('B')}`;
+    const flow = match.flow;
+    return `${mode.name} · ${this.mapEntry().name} · ${flow.teamScore('A')} – ${flow.teamScore('B')}`;
   }
 
   private readonly onResize = (): void => {

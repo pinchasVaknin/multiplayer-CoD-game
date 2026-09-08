@@ -5,35 +5,58 @@ import { phaseAt, type SnapshotHeader } from '../net/Messages';
 const log = logger('divergence');
 
 /**
- * Does this client's mode state agree with the server's? (M11, §7, §8.21)
+ * Does this client's mode state agree with the server's? (M11, S7, S8.21)
  *
- * §7: *"State-divergence checker: hash authoritative mode state on the instance and on each
- * client, logging any mismatch with the tick it appeared on."* §8.21 makes it a gate — *"any
+ * S7: *"State-divergence checker: hash authoritative mode state on the instance and on each
+ * client, logging any mismatch with the tick it appeared on."* S8.21 makes it a gate — *"any
  * mismatch is this milestone's blocking bug — report it, do not explain it away."*
  *
- * ## It compares two *independent* paths, which is the only version of this worth building
+ * ## What this used to claim, and why it was wrong (playtest round 5, B7)
  *
- * The obvious implementation compares the client's `MatchFlow` against the snapshot header —
- * and it is worthless, because `MatchFlow` is *assigned from* that header by
- * `NetSession.applyReplicated`. It would agree by construction and could never fail, which is
- * exactly the false green standing lesson 4 warns about: *"always stub the mechanism and watch
- * the probe go red before believing it green."*
+ * It used to compare the score two ways and call them independent:
  *
- * So the comparison is between the two ways this client knows the score:
- *
- * - **From replicated events.** Kills arrive as `damage.dealt` with a lethal flag, go through
- *   the same `ScoreSystem` a local match uses, and the mode derives a team score from the rows.
- *   Nothing about that path reads the header.
+ * - **From replicated events.** Kills arrive as `damage.dealt`, go through the same
+ *   `ScoreSystem` a local match uses, and the mode derives a team score from the rows.
  * - **From the snapshot header.** The server's own `mode.teamScore`, stated outright.
  *
- * They are computed by different code from different inputs and must land on the same number.
- * A dropped kill event, one counted twice, a tag credited to the wrong side in Kill Confirmed,
- * a Domination tick the client applied and the server did not — every one of those separates
- * these two figures and nothing else in the client would notice.
+ * The first of those does not exist. `MatchFlow` sets a replicated client up with
+ * `authoritative: false`, and its kill handler says so outright — *"The mode must not run here
+ * ... the server has already scored this kill and replicated the total"*. So `mode.teamScore`
+ * on a dedicated server is not an independent tally. For Team Deathmatch, Domination, Kill
+ * Confirmed and Search & Destroy it is a **structural constant zero**: all four read a team
+ * total that only `GameMode.addTeamScore` writes, and the mode never runs. The comparison was
+ * therefore zero against the server's score, and it fired — correctly, by its own rules — in
+ * every networked match of those four modes as soon as a score survived four snapshots. That
+ * is B7, verbatim, off the deployed build:
  *
- * The round and phase are also checked, and those *are* header-fed. They are included because
- * they cost nothing and because a future change that gives the client its own opinion about
- * either would find this already watching. They are marked as such below.
+ *     DIVERGENCE on tick 67010: scoreA — client says 0, server says 69.
+ *
+ * Free-for-All was the exception, and it is why this looked plausible for a milestone: its
+ * `teamScore` is the highest kill count among its own rows, which the replicated path *does*
+ * maintain. Even there it was only ever right for a client present since the first kill — one
+ * that joined or rejoined mid-match starts its tally at zero and never catches up.
+ *
+ * **A client on a dedicated server cannot audit the server's arithmetic.** It holds strictly
+ * less than the server held when it computed the number, and no amount of comparing gets that
+ * back. Pretending otherwise produced an error line per snapshot for a whole milestone.
+ *
+ * ## So what it checks now, and which half can fail
+ *
+ * **The state hash, and this is the one with teeth.** The instance hashes its authoritative
+ * mode state and sends it last, after every channel describing that tick; the client hashes
+ * what it ended up holding, and the two are compared. That catches the whole class of fault
+ * living between those two points — a channel that stopped, a field truncated by an encoder
+ * change on one side, a list capped differently, a frame applied to the wrong mode after a
+ * migration. `ModeStateHash` has the full list and, more importantly, what it does not catch.
+ *
+ * **The flow against the header, and this half is a guard rather than an audit.** Phase,
+ * round, the clock and the score are all *assigned* to the client's inert `MatchFlow` from the
+ * header by `NetSession`, so they agree by construction, and they are named here as such. They
+ * are still compared because it costs four comparisons and because "something wrote to the
+ * flow behind the header's back" is a fault this project has actually had: round 2's phase
+ * leak was exactly that — a client sitting in `MATCH_END` with a stale banner while the server
+ * had moved on. What it is not, and what the previous version of this comment claimed it was,
+ * is a second opinion about the score.
  *
  * ## Latency is not divergence
  *
@@ -46,9 +69,10 @@ const log = logger('divergence');
  *
  * - `timeLeft` is **continuously varying** and is compared with a tolerance, because the client
  *   is always some fraction of a second behind and always will be.
- * - Scores, phase and round are **discrete**, and a mismatch on them is confirmed across
- *   several consecutive samples before it is reported. A single disagreeing sample is an
- *   in-flight update, not a divergence; the same disagreement surviving four snapshots is.
+ * - The hash, the scores, the phase and the round are **discrete**, and a mismatch on them is
+ *   confirmed across several consecutive samples before it is reported. A single disagreeing
+ *   sample is an in-flight update, not a divergence; the same disagreement surviving four
+ *   snapshots is.
  *
  * Without the confirm step this reports a mismatch on essentially every kill, which is the
  * flaky-probe failure standing lesson 6 warns about — a check that cries wolf teaches its
@@ -56,10 +80,16 @@ const log = logger('divergence');
  *
  * ## Shared, so the browser and the harness run the same checker (M11 Gate B)
  *
- * It moved out of `client/debug` for §8.21, which asks for zero mismatches *across a full match
+ * It moved out of `client/debug` for S8.21, which asks for zero mismatches *across a full match
  * in each of the five modes* — five matches nobody is going to sit through by hand. Nothing in
  * here was ever client-only: it reads a snapshot header and a `MatchFlow`, both shared. Two
  * copies of a comparator is two comparators that can disagree about what agreement means.
+ *
+ * That argument had a hole in it until round 5, and the hole is why B7 survived a milestone of
+ * green harness runs: this class had exactly **one** caller, `MatchWorld`, in the browser.
+ * `HeadlessClient` never used it — it compares state hashes directly, with a streak counter of
+ * its own — so the comparator the gate exercised and the comparator the player ran were not the
+ * same code. The browser runs the hash check too now, through `checkHash` below.
  */
 
 export interface DivergenceRecord {
@@ -79,8 +109,11 @@ export class DivergenceChecker {
   /** Every confirmed mismatch, in order. Empty is the passing result. */
   readonly records: DivergenceRecord[] = [];
 
-  /** Samples taken. The denominator for "zero mismatches across a full match". */
+  /** Header samples taken. The denominator for "zero mismatches across a full match". */
   samples = 0;
+
+  /** Hash samples taken. Zero means this client is not running the hash check at all. */
+  hashSamples = 0;
 
   private readonly pending = new Map<string, { count: number; client: number | string; server: number | string }>();
 
@@ -91,16 +124,22 @@ export class DivergenceChecker {
    * change is samples that cannot fail, and a denominator inflated by them makes a mismatch
    * rate look better than it is.
    */
-  check(header: SnapshotHeader, flow: MatchFlow, scoreA: number, scoreB: number): void {
+  check(header: SnapshotHeader, flow: MatchFlow): void {
     this.samples++;
 
-    // The two independent paths. See the class comment — this is the pair that can fail.
-    this.compare(header.serverTick, 'scoreA', scoreA, header.scoreA);
-    this.compare(header.serverTick, 'scoreB', scoreB, header.scoreB);
-
-    // Header-fed today, so these agree by construction. Watched anyway: they cost one
-    // comparison each, and the day something gives the client its own opinion about the round
-    // number is the day this starts earning its place.
+    /*
+     * All four are header-fed, and saying so is the point (round 5, B7).
+     *
+     * `NetSession` assigns every one of these to the client's inert `MatchFlow` from the same
+     * header this is handed, so they agree by construction. They are a guard against a second
+     * writer, not a second opinion: what fails here is something having written to the flow
+     * behind the header's back. The comparison that can find the server wrong is `checkHash`.
+     *
+     * `flow.teamScore` rather than `mode.teamScore`, and that swap is the whole of B7 — see
+     * the class comment above.
+     */
+    this.compare(header.serverTick, 'scoreA', flow.teamScore('A'), header.scoreA);
+    this.compare(header.serverTick, 'scoreB', flow.teamScore('B'), header.scoreB);
     this.compare(header.serverTick, 'phase', flow.currentPhase, phaseAt(header.phase));
     this.compare(header.serverTick, 'round', flow.round, header.round);
 
@@ -136,17 +175,37 @@ export class DivergenceChecker {
     );
   }
 
+  /**
+   * The state hash the instance sent for this tick, against the client's own (S7, S8.21).
+   *
+   * The half of this class that can find the server and the client genuinely disagreeing, and
+   * until round 5 the browser did not run it at all: `HeadlessClient` had a copy of it and
+   * `MatchWorld` had nothing, so the gate and the player were exercising different code. Same
+   * confirm discipline as everything else here, and it depends on the same ordering guarantee —
+   * the instance sends this **last** in its tick, after every channel describing that tick, so
+   * one disagreement is a frame in flight and four in a row is a divergence.
+   *
+   * Counted in `hashSamples` rather than `samples`: the two arrive on different channels, and a
+   * denominator that mixes them cannot answer either question.
+   */
+  checkHash(tick: number, client: number, server: number): void {
+    this.hashSamples++;
+    this.compare(tick, 'modeStateHash', client, server);
+  }
+
   /** The one-line verdict the panel shows and the report quotes. */
   summary(): string {
-    if (this.samples === 0) return 'no samples';
-    if (this.records.length === 0) return `${this.samples} samples, 0 mismatches`;
+    if (this.samples === 0 && this.hashSamples === 0) return 'no samples';
+    const taken = `${this.samples} header, ${this.hashSamples} hash`;
+    if (this.records.length === 0) return `${taken}, 0 mismatches`;
     const first = this.records[0];
-    return `${this.records.length} mismatch(es) in ${this.samples} — first: ${first?.field} @ ${first?.tick}`;
+    return `${this.records.length} mismatch(es) in ${taken} — first: ${first?.field} @ ${first?.tick}`;
   }
 
   reset(): void {
     this.records.length = 0;
     this.pending.clear();
     this.samples = 0;
+    this.hashSamples = 0;
   }
 }

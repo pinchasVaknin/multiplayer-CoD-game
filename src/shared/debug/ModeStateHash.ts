@@ -1,3 +1,8 @@
+import { bombStateCode, phaseIndex } from '../net/Messages';
+import { MAX_TAGS, OBJ_TEAM_A, OBJ_TEAM_B, ownerCode } from '../net/Skirmish';
+import type { GameMode } from '../modes/GameMode';
+import type { MatchFlow } from '../modes/MatchFlow';
+
 /**
  * A hash of everything the server says about mode state, computed identically on both sides
  * (M11 Gate B, §7, §8.21).
@@ -128,4 +133,98 @@ export function hashModeState(f: ModeStateFacts): number {
     h = mix(h, f.bomb.interactEntity);
   }
   return h >>> 0;
+}
+
+// -- building the facts, once, for both runtimes ------------------------------
+
+/**
+ * Reused buffers, so an instance hashing sixty times a second allocates nothing.
+ *
+ * Per caller rather than module-level: the browser and the server both build facts, and a
+ * shared buffer between two callers on one process — which the harness is — would have them
+ * overwriting each other's zone list mid-hash.
+ */
+export interface ModeStateScratch {
+  zones: {
+    owner: number;
+    capturing: number;
+    progress: number;
+    countA: number;
+    countB: number;
+  }[];
+  tagIds: number[];
+}
+
+export function makeModeStateScratch(): ModeStateScratch {
+  return { zones: [], tagIds: [] };
+}
+
+/**
+ * The mode state, flattened exactly as the channels send it (playtest round 5, B7).
+ *
+ * **One builder, both runtimes**, which is the same argument `DivergenceChecker` makes about
+ * itself: the server's copy of this and the client's copy of it must agree about what "the
+ * state" is, and two hand-kept transcriptions of a quantisation rule are two rules that drift.
+ * The instance used to own this privately and the browser had no copy at all, which is why the
+ * browser ran no hash check for a whole milestone.
+ *
+ * The score comes off `MatchFlow.teamScore`, and that is what makes one builder possible:
+ * it returns the mode's own number where the mode is running and the replicated one where it
+ * is not, so the identical call is correct on an authoritative instance and on a client that
+ * scores nothing. Reading `mode.teamScore` here — which is what the instance used to do — would
+ * hash a structural zero on every client and report a divergence on every sample.
+ *
+ * Everything is quantised to the wire's precision before it is hashed. The server holds a
+ * capture progress of 0.4372 and the client holds 111/255; hashing the raw values would report
+ * a divergence on every objective in the game, which is a units bug dressed as a finding.
+ */
+export function modeStateFacts(
+  mode: GameMode,
+  flow: MatchFlow,
+  scratch: ModeStateScratch,
+): ModeStateFacts {
+  scratch.zones.length = 0;
+  for (const zone of mode.objectiveZones) {
+    scratch.zones.push({
+      owner: ownerCode(zone.owner),
+      capturing: ownerCode(zone.capturingTeam),
+      progress: Math.max(0, Math.min(255, Math.round(zone.progress * 255))),
+      countA: Math.min(255, zone.countA),
+      countB: Math.min(255, zone.countB),
+    });
+  }
+
+  scratch.tagIds.length = 0;
+  const tags = mode.dogTags;
+  if (tags !== null) {
+    // The same truncation `writeTags` applies — the newest win — so a match with more than the
+    // cap on the floor hashes what was actually sent rather than what was held.
+    const skip = Math.max(0, tags.length - MAX_TAGS);
+    for (let i = skip; i < tags.length; i++) {
+      const t = tags[i];
+      if (t !== undefined) scratch.tagIds.push(t.id & 0xffff);
+    }
+  }
+
+  const info = mode.bombInfo;
+  return {
+    scoreA: flow.teamScore('A'),
+    scoreB: flow.teamScore('B'),
+    round: flow.round,
+    phase: phaseIndex(flow.currentPhase),
+    zones: scratch.zones,
+    tagIds: scratch.tagIds,
+    bomb:
+      info === null
+        ? null
+        : {
+            state: bombStateCode(info.state),
+            carrierId: info.carrierId,
+            attackers: info.attackers === 'B' ? OBJ_TEAM_B : OBJ_TEAM_A,
+            plantedSite: info.plantedSiteIndex,
+            timerCs: Math.max(0, Math.min(0xffff, Math.round(info.secondsLeft * 100))),
+            interactProgress: Math.max(0, Math.min(255, Math.round(info.interactFraction * 255))),
+            interactEntity: info.interactEntity,
+          },
+  };
 }

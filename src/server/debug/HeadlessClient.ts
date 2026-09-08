@@ -505,6 +505,8 @@ export interface HeadlessClientReport {
   readonly resyncMs: number;
   /** The seat as it stood the instant before the drop, or null if this client never dropped. */
   readonly seatBeforeDrop: SeatSnapshot | null;
+  /** Header score on the first frame back, or null if this client never dropped (round 5, B7). */
+  readonly scoreOnReturn: { readonly a: number; readonly b: number } | null;
   /** The seat this client came back to, or null if it never came back. */
   readonly seatAfterReturn: SeatSnapshot | null;
   /** §7 divergence, counted only over frames **after** a return. Denominator included. */
@@ -737,6 +739,8 @@ export class HeadlessClient {
   private reconnectAtMs = 0;
   private resyncMs = -1;
   private returned = false;
+  /** The header score on the first synchronised frame after a return. See below (round 5, B7). */
+  private scoreOnReturn: { a: number; b: number } | null = null;
   private seatBeforeDrop: SeatSnapshot | null = null;
   private seatAfterReturn: SeatSnapshot | null = null;
   private hashSamplesAfterReturn = 0;
@@ -1414,6 +1418,17 @@ export class HeadlessClient {
         team: this.net.team,
         atMs: nowMs(),
       };
+      /**
+       * The first score this client holds after coming back (playtest round 5, B7).
+       *
+       * Read on the same frame as the seat, and for the same reason: it is the answer to *"what
+       * does a client that missed the first half of the match think the score is"*, and a
+       * reading taken later is a reading after the ordinary snapshot flow has had time to fix
+       * it. B7 raised the possibility that the score simply does not replicate on this path and
+       * that a rejoining player stares at 0 - 0 until the next kill; this is the number that
+       * settles it rather than the argument.
+       */
+      this.scoreOnReturn = { a: this.net.header.scoreA, b: this.net.header.scoreB };
     }
   }
 
@@ -1433,6 +1448,9 @@ export class HeadlessClient {
    * covers; the case F8 is about is the one where the server finds out on its own.
    */
   dropForReconnect(): void {
+    // Cleared with `seatAfterReturn` below and for the same reason: a leftover answer is a
+    // cycle that closes on its predecessor's numbers and reports them again, green.
+    this.scoreOnReturn = null;
     this.seatBeforeDrop = {
       entityId: this.net.entityId,
       matchId: this.net.matchId,
@@ -1590,6 +1608,7 @@ export class HeadlessClient {
       reconnects: this.reconnects,
       resyncMs: this.resyncMs,
       seatBeforeDrop: this.seatBeforeDrop,
+      scoreOnReturn: this.scoreOnReturn,
       seatAfterReturn: this.seatAfterReturn,
       hashSamplesAfterReturn: this.hashSamplesAfterReturn,
       hashMismatchesAfterReturn: this.hashMismatchesAfterReturn,

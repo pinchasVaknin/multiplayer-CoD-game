@@ -8,6 +8,7 @@ import { ServerMatch, type ServerMatchResult } from './Match';
 import { auditModeBriefs, MAPS } from '../shared/modes/ModeRegistry';
 import { BOT_TIERS, isBotDifficulty, type BotDifficulty } from '../shared/ai/DifficultyTiers';
 import { auditRosterDeal } from '../shared/ai/RosterDeal';
+import { auditReplicatedScore } from '../shared/debug/ReplicatedScoreAudit';
 import type { BotTeam } from '../shared/ai/Combatant';
 
 /**
@@ -335,6 +336,34 @@ function reportModeBriefs(log: ReturnType<typeof logger>): number {
 }
 
 /**
+ * Which team-score accessor a replicated client may read (playtest round 5, B7).
+ *
+ * The audit itself is `shared/debug/ReplicatedScoreAudit`; this prints it. It is the numeric
+ * half of B7 — the structural half is `scripts/check-authority.mjs`, which stops a client file
+ * reaching for the wrong accessor again, and cannot say what the wrong one returns.
+ */
+function reportReplicatedScore(log: ReturnType<typeof logger>): number {
+  const audit = auditReplicatedScore();
+  for (const row of audit.rows) {
+    log.info(
+      `  ${padEnd(row.modeId, 6)} server ${row.serverScore}  ` +
+        `client: mode.teamScore ${row.localCopy}, flow.teamScore ${row.replicated}` +
+        (row.localCopyTracks ? '  (this mode derives its score from the rows)' : ''),
+    );
+  }
+  for (const problem of audit.problems) log.error(`  ${problem}`);
+  if (audit.problems.length > 0) {
+    log.error(`REPLICATED SCORE AUDIT FAILED: ${audit.problems.length} problem(s).`);
+    return 1;
+  }
+  log.info(
+    `replicated score: ${audit.rows.length} mode(s), ${audit.kills} kill(s) replayed each; ` +
+      'MatchFlow.teamScore carries the server\'s number on every one.',
+  );
+  return 0;
+}
+
+/**
  * Every authored spread, dealt at every split (playtest round 5, B4).
  *
  * The report was that the mix's only VETERAN always landed on the opposing team, and it was
@@ -508,6 +537,16 @@ async function main(): Promise<number> {
    */
   const dealFault = reportRosterDeal(log);
   if (dealFault !== 0) return dealFault;
+
+  /**
+   * The replicated score audit (round 5, B7), in the same place and for the same reason.
+   *
+   * Ahead of the matches because it is a statement about which accessor is correct on a client,
+   * and every number a networked run reports downstream of the wrong one is a number about the
+   * wrong thing.
+   */
+  const scoreFault = reportReplicatedScore(log);
+  if (scoreFault !== 0) return scoreFault;
 
   if (args.tierSweep) return runTierSweep(args, log);
 

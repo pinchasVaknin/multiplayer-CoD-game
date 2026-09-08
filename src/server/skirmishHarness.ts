@@ -440,6 +440,18 @@ interface ReturnCycle {
   readonly keptSeat: boolean;
   /** The row this seat came back to is the row it left with, and nothing in it went backwards. */
   readonly keptScore: boolean;
+  /**
+   * The **team** score, three ways, for playtest round 5's B7.
+   *
+   * B7 left open whether a client that misses part of a match ever learns the score, or sits on
+   * `0 - 0` until the next kill moves it. `rendered` is what the returning client held on its
+   * first synchronised frame; `serverAtDrop` and `serverAtReturn` bracket it on the instance.
+   * See `sawTheScore` for what is asserted and why it is a bracket rather than an equality.
+   */
+  readonly renderedOnReturn: TeamScores | null;
+  readonly serverAtDrop: TeamScores | null;
+  readonly serverAtReturn: TeamScores | null;
+  readonly sawTheScore: boolean;
 }
 
 /** What one named client was told. Keyed by name because a cycle records the name, not the report. */
@@ -450,10 +462,26 @@ function clientNotices(
   return reports.find((r) => r.name === name)?.notices ?? [];
 }
 
+/** Both team scores in one token, or why there are not two. */
+function describeTeamScores(t: TeamScores | null): string {
+  return t === null ? 'none' : `${t.a}-${t.b}`;
+}
+
 /** One seat's row in one line, or why there is not one. Always prints its denominators. */
 function describeSeatScore(s: SeatScore | null): string {
   if (s === null) return 'no row';
   return `e${s.entityId} ${s.kills}k/${s.deaths}d/${s.score}pt/${s.shotsFired}sh`;
+}
+
+/** Both team scores as the instance holds them, at a named instant (round 5, B7). */
+interface TeamScores {
+  readonly a: number;
+  readonly b: number;
+}
+
+function readTeamScores(instance: MatchInstance): TeamScores {
+  const flow = instance.match.flow;
+  return { a: flow.teamScore('A'), b: flow.teamScore('B') };
 }
 
 function readSeatScore(instance: MatchInstance, entityId: number): SeatScore | null {
@@ -481,12 +509,33 @@ function closeReturnCycle(
   victim: HeadlessClient,
   after: SeatSnapshot,
   scoreBefore: SeatScore | null,
+  teamAtDrop: TeamScores | null,
   server: Server,
 ): ReturnCycle {
   const report = victim.report();
   const before = report.seatBeforeDrop;
   const instance = server.instances.find((i) => i.id === after.matchId) ?? null;
   const scoreAfter = instance === null ? null : readSeatScore(instance, after.entityId);
+  const teamAtReturn = instance === null ? null : readTeamScores(instance);
+  const rendered = report.scoreOnReturn;
+  /**
+   * Did the returning client come back knowing the score? (round 5, B7)
+   *
+   * A **bracket**, not an equality, and the reason is standing lesson 3: the client's header is
+   * up to one snapshot interval old, so a kill landing inside that window makes an exact
+   * comparison fail on a timing accident rather than on a bug. What cannot happen if the score
+   * replicates is for it to come back *below what it was when this client left* — that is the
+   * reset-to-zero B7 asked about — or *above what the server holds now*, which no honest client
+   * can be. Both bounds are sampled on the instance, so neither is an invented tolerance.
+   */
+  const sawTheScore =
+    rendered !== null &&
+    teamAtDrop !== null &&
+    teamAtReturn !== null &&
+    rendered.a >= teamAtDrop.a &&
+    rendered.b >= teamAtDrop.b &&
+    rendered.a <= teamAtReturn.a &&
+    rendered.b <= teamAtReturn.b;
   const keptSeat =
     before !== null &&
     before.entityId === after.entityId &&
@@ -513,6 +562,10 @@ function closeReturnCycle(
     scoreAfter,
     keptSeat,
     keptScore,
+    renderedOnReturn: rendered,
+    serverAtDrop: teamAtDrop,
+    serverAtReturn: teamAtReturn,
+    sawTheScore,
   };
 }
 
@@ -609,6 +662,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let dropVictim: HeadlessClient | null = null;
   let dropAtMs = 0;
   let dropScoreBefore: SeatScore | null = null;
+  /** The instance's team scores at the instant of the drop. See `ReturnCycle` (round 5, B7). */
+  let dropTeamBefore: TeamScores | null = null;
   let dropNext = 0;
   /** When `--abandon` emptied the live match, and whether the server then released it. */
   let abandonedAtMs = 0;
@@ -780,6 +835,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
             dropNext++;
             dropVictim = victim;
             dropScoreBefore = score;
+            dropTeamBefore = readTeamScores(live);
             dropPhase = 'down';
             dropAtMs = nowMs();
             log.info(
@@ -803,10 +859,13 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
         const victim = dropVictim;
         const after = victim === null ? null : victim.report().seatAfterReturn;
         if (victim !== null && after !== null) {
-          returnCycles.push(closeReturnCycle(victim, after, dropScoreBefore, server));
+          returnCycles.push(
+            closeReturnCycle(victim, after, dropScoreBefore, dropTeamBefore, server),
+          );
           dropPhase = 'idle';
           dropVictim = null;
           dropScoreBefore = null;
+          dropTeamBefore = null;
         }
       }
     }
@@ -1585,6 +1644,23 @@ function reportFlow(input: FlowReportInput): number {
           'synchronised frame after dialling back in (F8)',
       );
     }
+    /**
+     * The score a returning client renders on its first frame back (playtest round 5, B7).
+     *
+     * B7 raised two possibilities and asked which. One was that the score does not replicate on
+     * this path — that a player who joins or rejoins mid-match reads `0 - 0` on the banner until
+     * the next kill moves it, *"a real, visible, shipping bug ... invisible to every previous
+     * round, because every previous round joined at the start"*. This is the number that
+     * settles it, and it is asserted whichever way it lands: it is the property a player cares
+     * about, and it had never been measured.
+     */
+    const sawScore = cycles.filter((c) => c.sawTheScore).length;
+    if (sawScore < cycles.length) {
+      problems.push(
+        `${cycles.length - sawScore} of ${cycles.length} reconnect(s) came back without the ` +
+          'score — the first frame after a return did not carry what the instance held (B7)',
+      );
+    }
     const returnSamples = reports.reduce((n, r) => n + r.hashSamplesAfterReturn, 0);
     const returnMismatches = reports.reduce((n, r) => n + r.hashMismatchesAfterReturn, 0);
     if (returnMismatches > 0) {
@@ -1611,7 +1687,8 @@ function reportFlow(input: FlowReportInput): number {
     }
     log.info(
       `reconnect: ${cycles.length} cycle(s), ${keptSeat} kept the seat, ${keptScore} kept the ` +
-        `score, ${resynced} resynced; divergence after return ${returnMismatches}/${returnSamples}` +
+        `score, ${resynced} resynced, ${sawScore} came back knowing the team score; ` +
+        `divergence after return ${returnMismatches}/${returnSamples}` +
         (returnSamples === 0 ? ' (NOT EXERCISED — no hash arrived after a return)' : '') +
         `; registry ${held.reserved} reserved / ${held.claimed} claimed / ${held.expired} expired ` +
         `/ ${held.unknown} unknown, ${held.held} still held (must be 0)`,
@@ -1622,7 +1699,10 @@ function reportFlow(input: FlowReportInput): number {
           `${c.entityAfter}@${c.matchAfter}/${c.teamAfter}` +
           `${c.keptSeat ? '' : '  SEAT LOST'}, resync ${c.resyncMs}ms, ` +
           `score ${describeSeatScore(c.scoreBefore)} -> ${describeSeatScore(c.scoreAfter)}` +
-          `${c.keptScore ? '' : '  SCORE LOST'}`,
+          `${c.keptScore ? '' : '  SCORE LOST'}` +
+          `; team ${describeTeamScores(c.serverAtDrop)} at drop -> rendered ` +
+          `${describeTeamScores(c.renderedOnReturn)} -> ${describeTeamScores(c.serverAtReturn)} ` +
+          `on the instance${c.sawTheScore ? '' : '  TEAM SCORE LOST'}`,
       );
     }
   } else if (opts.dropReturn === 0) {

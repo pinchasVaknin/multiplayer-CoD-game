@@ -12,6 +12,11 @@ import type { Renderer } from './engine/Renderer';
 import { BotHarness, type BotHarnessOptions } from './debug/BotHarness';
 import { DebugSuite } from './debug/DebugSuite';
 import { DivergenceChecker } from '../shared/debug/DivergenceChecker';
+import {
+  hashModeState,
+  makeModeStateScratch,
+  modeStateFacts,
+} from '../shared/debug/ModeStateHash';
 import type { BuildReport } from './world/MapBuildQueue';
 import type { FrameStats } from './debug/FrameStats';
 import type { MatchHarness } from './debug/MatchHarness';
@@ -225,6 +230,8 @@ export class MatchWorld {
    * while somebody is looking at it is not a check.
    */
   readonly divergence = new DivergenceChecker();
+  /** Scratch for the §7 hash, so a per-snapshot comparison allocates nothing. */
+  private readonly hashScratch = makeModeStateScratch();
   /** M8. Airborne dust or haze, or null on a map that authors none. */
   readonly particulate: Particulate | null;
 
@@ -475,12 +482,29 @@ export class MatchWorld {
       };
 
       net.onAuthoritativeState = (header) => {
-        this.divergence.check(
-          header,
-          this.match.flow,
-          this.match.mode.teamScore('A'),
-          this.match.mode.teamScore('B'),
+        this.divergence.check(header, this.match.flow);
+      };
+
+      /**
+       * The §7 state hash, which this client did not run until playtest round 5 (B7).
+       *
+       * `HeadlessClient` has compared these since Gate B and the browser compared nothing —
+       * so the comparator the gate exercised and the comparator a player ran were different
+       * code, and the browser's half was the broken one. What it had instead was a score
+       * comparison whose "independent" operand was `mode.teamScore`, which is a structural
+       * zero on a replicated client; that is B7, and `DivergenceChecker` carries the autopsy.
+       *
+       * The facts are built by the same shared function the instance builds its own with, off
+       * this client's mode and flow — the objects `onObjectives`, `onTags` and `onBomb` above
+       * have just finished writing. The hash message is sent **last** in the instance's tick,
+       * after every one of those channels, which is what makes "what do you think tick N
+       * looked like" a fair question rather than a guaranteed miss.
+       */
+      net.onStateHash = (tick, hash) => {
+        const mine = hashModeState(
+          modeStateFacts(this.match.mode, this.match.flow, this.hashScratch),
         );
+        this.divergence.checkHash(tick, mine, hash);
       };
 
       /**

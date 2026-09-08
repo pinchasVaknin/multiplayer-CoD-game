@@ -10987,14 +10987,9 @@ no version to bump.
 Nothing for correctness — the deal measures cleanly, which is what the brief predicted. Two
 things a human would see and a harness cannot:
 
-- **Solo, twice.** Start two solo matches on Foundry and open the scoreboard in each. The bot
-  names differ (they come off the same index counter) but the *tiers* are no longer readable
-  from the board, so the check is behavioural: the opposing side should no longer feel like it
-  has one player who is not like the others.
-- **A live match with a friend.** Join a server, have one player leave mid-match, and confirm
-  the bot that takes the seat does not visibly stand out — the log line
-  `entity N left; NAME took over on team T at TIER` names the tier, so the claim is checkable
-  against the console rather than argued about.
+- ~~**Solo, twice.**~~ **Done.** Two solo matches played; the opposing side no longer reads as
+  having one player who is not like the others.
+- ~~**A live match with a friend.**~~ **Done.** The balance was reported as good.
 
 ### Found while here
 
@@ -11013,3 +11008,242 @@ things a human would see and a harness cannot:
   and load-bearing for the client-side bot harness — but it means *nothing* in a solo match
   varies between runs except the player. Any future report of the form "it is the same every
   time" should start there rather than at the system being blamed.
+
+## Playtest round 5 — the checker was comparing the score against a value nothing writes
+
+**B7** is the only item this round the game reported about itself: dozens of `error` lines from
+the deployed build, *"DIVERGENCE on tick 67010: scoreA — client says 0, server says 69"*, both
+scores, same tick, confirmed across four consecutive snapshots.
+
+The brief offered two readings and asked which. **Both are wrong**, and the real one is worse
+than either.
+
+### The two the brief offered, and how each died
+
+**A rotation seam, with the detector comparing across a boundary.** The console lines around the
+divergence are a rotation, a rebuild and a rejoin, and the hypothesis was that the detector was
+holding an outgoing match's score against an incoming world. It cannot: `MatchWorld.divergence`
+is `readonly divergence = new DivergenceChecker()` on the **world**, and a rotation rebuilds the
+world. There is no boundary for records to cross. The rotation lines are contemporaneous noise.
+
+**The score does not replicate to a client that joins mid-match.** This one was worth the fear —
+it would have been a real, visible, shipping bug invisible to every earlier round, because every
+earlier round joined at the start. It is not true, and now there is a number instead of an
+argument. `NetSession.update` re-emits `EV.ScoreChanged` from the header, edge-triggered against
+`lastScoreA = -1`, so the *first* snapshot a joining client applies already differs from the
+baseline and paints the server's score. Measured on three drop-and-return cycles: a client
+dropped while the score was **8-11** came back rendering **9-13**, which is the score as it stood
+after two kills it never saw. It did not miss the score; it did not even miss the update.
+
+### What it actually was
+
+`ModeStateHash`'s own comment promised the pair: the hash catches transport faults and *"the
+score-versus-events comparison in `DivergenceChecker`"* catches the server being wrong about its
+own game. `DivergenceChecker`'s comment described that comparison in detail — kills arrive as
+`damage.dealt`, go through `ScoreSystem`, the mode derives a team score, and that number is
+compared against the header.
+
+**That comparison does not exist on a dedicated server**, and the file next door says so.
+`MatchFlow` builds a replicated client with `authoritative: false`, and its kill handler is
+explicit: *"The mode must not run here ... the server has already scored this kill and
+replicated the total."* So `mode.teamScore` on a networked client is not a second opinion. For
+Team Deathmatch, Domination, Kill Confirmed and Search & Destroy it is a **structural constant
+zero** — all four read a team total that only `GameMode.addTeamScore` writes, and the mode never
+runs. The checker compared zero against the server's score and fired, correctly by its own
+rules, in every networked match of those four modes as soon as a score survived four snapshots.
+The `75` in the report is Team Deathmatch's `scoreLimit`, exactly.
+
+Free-for-All is the exception and it is why this survived a milestone looking plausible: its
+`teamScore` is the highest kill count among its own rows, which the replicated path *does*
+maintain. Measured, it reads **2** where the server says 69 — so even the one mode that tracked
+was wrong for any client that had missed a kill, which is every client that ever joined late.
+
+**The conclusion this forces, and it is the finding:** a client on a dedicated server cannot
+audit the server's arithmetic. It holds strictly less than the server held when it computed the
+number. The comparison was written against a client that simulates its own match — which is
+single-player, where there is no header to compare against.
+
+### Why a milestone of green harness runs never saw it
+
+`DivergenceChecker` is in `shared/` with a comment arguing that two copies of a comparator are
+two comparators that can disagree. It had **one** caller: `MatchWorld`, in the browser.
+`HeadlessClient` never used it — it compares state hashes directly, with a streak counter of its
+own. So the comparator the gate exercised and the comparator a player ran were different code,
+and the browser's was the broken one. That is P0 rule 7's verification split turning up as a bug
+rather than as a gap, and it is the sentence to carry forward: **a shared class with one caller
+is not shared, it is misfiled.**
+
+### The fix, in three parts
+
+**1. The readers, because a migrated fact breaks all of them at once.** `mode.teamScore` had
+three client call sites. The divergence checker was the loud one; the other two were silent and
+had never been reported — `Game.pauseStatusLine` and `debug/ModePanel` both printed `0 – 0` for
+the whole of every networked match, on the two surfaces whose job is to say what the state is.
+All three read `MatchFlow.teamScore` now, which prefers the replicated value and falls back to
+the mode in single-player.
+
+**2. A gate, so the next migration is not found by a player.** `scripts/check-authority.mjs`,
+in the family with `check-optics` and `check-unlocks`: one row per fact that has moved to the
+server, naming the local accessor a client may not reach for. Both accessors are
+`(team: ScoreTeam) => number`, so no type can tell them apart and a grep is the honest
+enforcement — the same instrument `check-cheats` uses for the same reason. In `npm run check`.
+
+**3. A check that can actually fail, because otherwise the fix is a false green.** With the
+score comparison demoted to what it always was — header-fed, a guard against a second writer
+rather than a second opinion — `DivergenceChecker` had nothing left that could find the server
+wrong. So the browser now runs the state-hash comparison `HeadlessClient` has run since Gate B:
+`NetSession` forwards `onStateHash`, and `MatchWorld` hashes its own mode state against the
+instance's. The fact builder moved into `shared/debug/ModeStateHash` so there is **one**
+description of what the hash covers instead of the instance's private copy and no client copy at
+all — and that is only possible because of part 1: `MatchFlow.teamScore` is the one accessor
+that is correct in both runtimes, so the identical call works on an authoritative instance and
+on a client that scores nothing.
+
+`ModeStateHash`'s comment claiming the score-versus-events comparison exists has been rewritten,
+and so has `DivergenceChecker`'s. A comment that describes a check the code cannot perform is
+the thing that let this run for a milestone.
+
+### Two defects in the new wiring, both found by running it in a browser
+
+Wiring the browser check found two faults in it within twenty minutes, which is the argument for
+having wired it:
+
+- **A client the server had dropped kept comparing.** Every other replicated fact is applied
+  inside `update()`'s `state === 'joined'` guard, but a hash arrives on the socket. A dropped
+  client stops applying snapshots, keeps decoding what is still buffered, and its `MatchFlow`
+  freezes at the last phase it was told while the hashes describe a live match — a guaranteed,
+  confirmed mismatch, at `error`, about a connection that is gone. Measured: **39 error lines in
+  six seconds** from one starved client. That is B7's own shape, and shipping it inside B7's fix
+  would have been a poor joke.
+- **The comparison ran before the state it describes was applied.** The instance sends the hash
+  **last** in its tick precisely so a client has applied every channel for tick N before being
+  asked about tick N. This client does not apply the header on the socket callback; it applies it
+  in `update()`, once, from the newest snapshot. So a burst of buffered frames fired the callback
+  several times before `applyReplicated` ran once, and every one of those compared a `MatchFlow`
+  still holding its constructed `WARMUP`. Measured: **three confirmed records on every join**,
+  all the same pair, none after the first half-second. The hash is held and compared in
+  `update()` after `onMatchState` now, which is where the ordering contract is actually
+  satisfied.
+
+### Measured
+
+Every number came out of a run in this session. **No protocol change** — nothing new is on the
+wire; `StateHash` has been sent since Gate B and the browser was simply not listening.
+
+**`scripts/check-authority.mjs`**, red control on the tree as it stood:
+
+| Run | Client files scanned | Readers of the local copy |
+|---|---|---|
+| Red control | 116 | **6**, across 3 lines — `MatchWorld` x2, `Game.pauseStatusLine` x2, `ModePanel` x2 |
+| After | 116 | **0** |
+
+The red control found its own bug first, and it is worth recording: the first stripper blanked
+template literals wholesale, so `` `${mode.teamScore('A')}` `` was invisible and only two of the
+three call sites were reported. Watching it go red is what showed that two were missing.
+
+**`npm run harness` — the replicated-score audit**, a pure function of the shipped modes, so one
+run is a fact. Twelve kills replayed onto a replicated `MatchFlow` per mode, then both accessors
+asked what the score is against a server saying 69:
+
+| Mode | `mode.teamScore` — the old operand | `flow.teamScore` — the new one |
+|---|---|---|
+| TDM | **0** | 69 |
+| DOM | **0** | 69 |
+| KC | **0** | 69 |
+| FFA | **2** (derives from the rows) | 69 |
+| SND | **0** | 69 |
+| RANGE | **0** | 69 |
+
+That table is B7 in six lines: four structural zeros, one mode that tracks and is still wrong by
+67, and one accessor that carries the server's number every time.
+
+The audit was itself wrong once, and the mode that caught it is the one that could: emitting the
+kills before the replicated `LIVE` phase put every one of them into a `WARMUP` that dropped them,
+and Free-for-All read zero for the audit's own reason rather than the code's. Ordering fixed;
+the row that proves the exception is the row that proved the probe.
+
+**`npm run skirmish -- --drop-return 3`** — the mid-match rejoin, which is the join-in-progress
+path this game actually has:
+
+    reconnect: 3 cycle(s), 3 kept the seat, 3 kept the score, 3 resynced,
+               3 came back knowing the team score; divergence after return 0/12474
+
+    team 8-11  at drop -> rendered 9-13  -> 9-13  on the instance
+    team 11-23 at drop -> rendered 11-24 -> 11-24 on the instance
+    team 11-24 at drop -> rendered 11-24 -> 11-24 on the instance
+
+Asserted as a **bracket** rather than an equality, for standing lesson 3's reason: the client's
+header is up to a snapshot old, so exact equality fails on a timing accident. What cannot happen
+if the score replicates is for it to come back below what it was when the client left, or above
+what the instance holds now. Both bounds are read off the instance, so neither is an invented
+tolerance. Cycle one is the whole answer to H2: the score moved by three points while that client
+was away and its first frame back carried the new number.
+
+**A real browser, against a real `serve.js`, on the built client:**
+
+| | Before | After |
+|---|---|---|
+| Header samples | — | **5178** |
+| Hash samples | **0, ever** | **539** |
+| Confirmed mismatches | — | **0** |
+| `scoreA` / `scoreB` divergence lines | the report's dozens | **none, in the whole session** |
+
+The zero in that table is the point: the browser had never taken a state-hash sample, because
+nothing wired it.
+
+**The rest of the gate.** `npm run check` green, including the new audit. `npm run harness` five
+matches, all completed. `npm run skirmish` `FLOW CHECK PASSED`. `npm run leak` 100 cycles,
+subscriptions 29 → 29 (+0), heap 13.13 → 13.82 MiB (+0.69). `npm run netharness` against a real
+server, 2 clients, 30 s, 0 snapshots lost, worst misprediction p99 1.041.
+
+### What was not verified
+
+- **B7's log line was not reproduced in a browser.** The warmup arena is the only instance a
+  pane can reach without a vote cycle, and it scores nothing (`records: false`), so both sides
+  are zero there and the comparison cannot fire. The mechanism is proved by the audit's numbers
+  and the observation is the report's own log; the two agree, but they are not the same evidence
+  and it would be dishonest to present them as one.
+- **A full match's worth of hash samples in a browser.** The pane does not fire
+  `requestAnimationFrame` — measured, not assumed: the server tick sat at 0 and the server
+  eventually closed the connection with `timeout`. The session was driven by pumping
+  `NetSession.update()` from the console, which is the same code path minus the rendering, and
+  which is what the numbers above come from. Whether a real browser stays at zero mismatches
+  across a whole live match, through a vote and a migration, is a browser pass.
+- **The score comparison can no longer find the server wrong**, and nothing can. That is not a
+  regression, it is the truth becoming visible: it never could. The state hash is the check with
+  teeth, and its limits are written in `ModeStateHash` rather than implied.
+
+### Needs a browser
+
+- **Join a live match from a second window and read the banner on the first frame.** The
+  headless bracket says the score is there; what a person can check is that it is on screen and
+  not `0 – 0`.
+- **Pause, mid-match, on a server.** The status line under PAUSED should now read the real score.
+  It read `0 – 0` for the whole of M10 and M11 and nobody reported it, which is worth knowing
+  about how visible that surface is.
+- **A whole live match with the console open.** Zero `[divergence]` lines is the claim; a vote,
+  a migration into a live match, ten minutes, and back to the arena is the test. Anything that
+  does appear now is a real transport fault and worth reporting verbatim.
+
+### Found while here
+
+- **`HeadlessClient` still has its own copy of the hash comparison**, with its own confirm
+  streak and its own counters, next to the shared `DivergenceChecker` the browser now uses. It
+  is kept because it carries a dimension the shared one does not — samples and mismatches counted
+  separately *after a return*, which is what round 4's F8 probe reads. Two comparators of one
+  thing is the smell this session's finding is about, and folding the after-return dimension into
+  the shared checker is the way to close it. Not this session's item; recorded because the next
+  person to read `DivergenceChecker`'s "two copies" argument should know there are still two.
+- **`MatchFlow.publishScore` reads `mode.teamScore` and is only ever called from the simulated
+  path**, so on a replicated client `EV.ScoreChanged` comes from `NetSession` re-emitting the
+  header instead. Two emitters of one event, split by runtime, and the reason the HUD banner was
+  fine while the pause line was not. It works; it is not obvious; it is the next place this class
+  of bug will be found.
+- **B8 reproduced itself while this was being verified.** `[Input] pointer lock request rejected:
+  WrongDocumentError` in the pane, exactly as the round-5 report describes, followed by a match
+  that runs on unaimable. P6 owns it.
+- **F12's observation reproduced too**, and not in a hidden tab: `[netclient] 60 ticks behind the
+  server clock; resynchronising` in a run of dozens, ending in `server closed the connection:
+  timeout` — from a *visible* pane that was not being driven. The report flagged it as needing
+  reproduction because it was seen in a hidden tab; the same lines come out of any client whose
+  frame loop stops, which is a broader cause than P14's brief assumes.

@@ -151,6 +151,24 @@ export class NetSession {
   onAuthoritativeState: ((header: SnapshotHeader) => void) | null = null;
 
   /**
+   * The instance's hash of this tick's mode state (M11 §7; wired in the browser at round 5).
+   *
+   * Forwarded like the objective channels below rather than left to `deps.skirmish`, because
+   * the reader is `MatchWorld` and the sink belongs to whoever opened the connection. The
+   * message arrives last in the instance's tick, after every channel describing that tick, so
+   * by the time this fires the client's mode holds its complete answer.
+   */
+  onStateHash: ((tick: number, hash: number) => void) | null = null;
+
+  /**
+   * The most recent state hash off the wire, waiting for the state it describes to be applied.
+   *
+   * The latest, not a queue: `update()` applies the newest header and nothing older, so the
+   * newest hash is the only one there will ever be an answer for. See the sink above.
+   */
+  private pendingHash: { tick: number; hash: number } | null = null;
+
+  /**
    * Where replicated objective state lands (M11 Gate B, §6.8).
    *
    * Set by `MatchWorld` once the match exists, like the other two — the session is built first
@@ -234,9 +252,26 @@ export class NetSession {
           this.onStreaks?.(view);
           deps.skirmish?.onStreaks?.(view);
         },
-        onProjectiles: (projectiles, smoke) => {
-          this.onProjectiles?.(projectiles, smoke);
-          deps.skirmish?.onProjectiles?.(projectiles, smoke);
+        onStateHash: (tick, hash) => {
+          /*
+           * Held, not compared. The comparison happens in `update()` — see `pendingHash`.
+           *
+           * This is the ordering the check depends on and the place this client breaks it. The
+           * instance sends the hash **last** in its tick so that a client has applied every
+           * channel describing tick N before it is asked what tick N looked like; but this
+           * client does not apply the header here. It applies it in `update()`, once, from the
+           * latest snapshot — so a burst of buffered frames fires this callback several times
+           * before `applyReplicated` runs even once, and every one of those comparisons is
+           * against a `MatchFlow` still holding whatever it was constructed with.
+           *
+           * Measured, on a real client against a real server: three confirmed `modeStateHash`
+           * records on every join, all of them the same pair — a client in `WARMUP` against a
+           * server in `LIVE` — and none after the first half-second. A checker that reports on
+           * every join is the flaky probe standing lesson 6 warns about, and it would have been
+           * the second thing in this session to cry wolf about a value nothing had written yet.
+           */
+          this.pendingHash = { tick, hash };
+          deps.skirmish?.onStateHash?.(tick, hash);
         },
         onMigrated: (welcome) => {
           // Same reason as `onNewMatch` above, and it has to happen here as well: a migration
@@ -422,6 +457,8 @@ export class NetSession {
   detach(): void {
     this.onMatchState = null;
     this.onAuthoritativeState = null;
+    this.onStateHash = null;
+    this.pendingHash = null;
     this.onObjectives = null;
     this.onTags = null;
     this.onBomb = null;
@@ -465,9 +502,15 @@ export class NetSession {
       replicatedState.scoreB = h.scoreB;
       replicatedState.serverTick = h.serverTick;
       this.onMatchState?.(replicatedState);
-      // §7's divergence checker, sampled once per applied snapshot. See `DivergenceChecker`
-      // for why it is fed the header *and* an independently derived score.
+      // §7's divergence checker, sampled once per applied snapshot. Both of these run *after*
+      // `onMatchState` and that is the whole of their correctness: the client's answer to
+      // "what did this tick look like" is only its answer once the tick has been applied.
       this.onAuthoritativeState?.(h);
+      const hash = this.pendingHash;
+      if (hash !== null && this.client.synchronised) {
+        this.pendingHash = null;
+        this.onStateHash?.(hash.tick, hash.hash);
+      }
     }
 
     /**

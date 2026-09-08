@@ -241,9 +241,16 @@ export class ModePanel {
       `${flow.currentPhase} · round ${flow.round}/${mode.roundsToWin}` +
         (flow.sidesSwapped ? ' · SWAPPED' : ''),
     );
+    /*
+     * Off the flow, not off the mode (playtest round 5, B7).
+     *
+     * `mode.teamScore` is the local copy of a fact the server has owned since M10, and a
+     * replicated client never writes it — so this panel read `0 / 0` for the whole of every
+     * networked match, on the one surface whose job is to say what the state actually is.
+     */
     set(
       this.fScore,
-      `${mode.teamScore('A')} / ${mode.teamScore('B')} (limit ${mode.scoreLimit})`,
+      `${flow.teamScore('A')} / ${flow.teamScore('B')} (limit ${mode.scoreLimit})`,
     );
     set(
       this.fClock,
