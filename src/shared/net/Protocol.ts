@@ -17,6 +17,17 @@
 /**
  * Bump on any layout change to any message in this file.
  *
+ * v15 (M11 Gate B, playtest round 5, F9): `KilledEvent` carries the killer's **remaining health
+ * at the instant of the kill**.
+ *
+ * The death screen names nobody, and F9 asks it to carry what a player can act on next time —
+ * of which the killer's remaining health is the one that changes behaviour. Every entity's
+ * health is already replicated in the snapshot, so a client can produce *a* number without this
+ * byte; it would be a number from a frame up to a tick and an interpolation delay old, possibly
+ * already carrying damage the killer took afterwards. That is a different fact with the same
+ * name, which is this milestone's recurring failure, and it is not worth repeating to save one
+ * byte on an event that happens a few times a minute.
+ *
  * v14 (M11 Gate B, playtest round 5, B5): `FiredEvent` carries **how many of the pull's rays
  * connected** where it carried a "did anything connect" bit.
  *
@@ -105,7 +116,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'

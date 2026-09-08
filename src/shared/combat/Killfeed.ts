@@ -121,6 +121,18 @@ export class Killfeed {
     this.directory = directory;
   }
 
+  /**
+   * Who this entity is, by the same directory the feed lines are written from.
+   *
+   * Exposed for the death panel (playtest round 5, F9), which needs the *same* answer the feed
+   * gives — a panel resolving names through a second source would be able to name a different
+   * killer than the line in the corner, which is the class of defect this round has spent five
+   * sessions on. `null` for an entity the directory has never heard of.
+   */
+  nameOf(entityId: number): string | null {
+    return this.directory.nameOf(entityId);
+  }
+
   get count(): number {
     return Math.min(this.written, FEED_HISTORY);
   }

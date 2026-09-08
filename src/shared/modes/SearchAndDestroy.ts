@@ -16,6 +16,7 @@ import {
   type ColumnDef,
   type Entity,
   type GameModeId,
+  type HeaderSlot,
   type KillEvent,
   type MatchResult,
   type ModeDeps,
@@ -353,6 +354,31 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
    * runtimes build that array from `MapDef.objectives` in the same order, so an index is
    * identity and costs one byte where a string costs its length.
    */
+  /**
+   * One cell per bomb site, with the planted one filling (playtest round 5, F8).
+   *
+   * Search & Destroy's sites are not captured, so `owner` says something different here and the
+   * difference is deliberate: a site is neutral until the bomb is on it, at which point it
+   * belongs to the **attackers**, because that is the fact a defender needs off a glance — not
+   * which team is nearer it, but which one it is now costing.
+   *
+   * `progress` is the fuse running down, expressed the same way a capture is: how full the cell
+   * is. The HUD does not know which of the two it is drawing and does not need to, because both
+   * mean "this one is about to decide the round".
+   */
+  override get headerSlots(): readonly HeaderSlot[] {
+    const planted = this.plantedSite;
+    return this.sites.map((site) => {
+      if (site !== planted) {
+        return { label: site.label, owner: 'NONE' as const, progress: 0, capturing: 'NONE' as const };
+      }
+      // Full at the plant and empty at detonation, so the cell drains as the round does.
+      const fuse = this.config.bombTimerSeconds;
+      const left = fuse > 0 ? Math.max(0, Math.min(1, this.bombTimer / fuse)) : 0;
+      return { label: site.label, owner: this.attackers, progress: left, capturing: this.attackers };
+    });
+  }
+
   override get bombInfo(): BombInfo | null {
     const info = this.bombScratch;
     info.state = this.bomb;

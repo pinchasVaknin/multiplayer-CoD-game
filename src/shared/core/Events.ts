@@ -327,7 +327,25 @@ export type GameEvents = {
     penetrationLoss: number;
     lethal: boolean;
   };
-  [EV.EntityKilled]: { targetId: number; sourceId: number; weaponId: string; zone: HitZone };
+  /**
+   * `killerHealth` is what the killer had **left at the instant of the kill** (round 5, F9).
+   *
+   * Stamped here rather than looked up by whoever wants it, and that is the whole point. On a
+   * networked client the killer's health is replicated per entity and sitting in `RemoteActor` —
+   * so it can be read, and reading it gives a *different number wearing the same name*: the
+   * snapshot is up to a tick and an interpolation delay old and may already carry damage the
+   * killer took after killing you. "He had 8 health" is a lesson about how close you came, and
+   * the late version of it says that about a fight you lost cleanly.
+   *
+   * 0 when there was no killer — a fall, a suicide, or a source that is already gone.
+   */
+  [EV.EntityKilled]: {
+    targetId: number;
+    sourceId: number;
+    weaponId: string;
+    zone: HitZone;
+    killerHealth: number;
+  };
 
   [EV.BotSpawned]: {
     entityId: number;

@@ -130,6 +130,33 @@ export interface ModeDeps {
  */
 export type MatchVariant = 'STANDARD' | 'SKIRMISH' | 'WARMUP';
 
+/**
+ * One cell of the mode's persistent header strip (playtest round 5, F8).
+ *
+ * Deliberately four fields and no more. The temptation is a per-mode shape — flags for
+ * Domination, a bomb for Search & Destroy — and it is the wrong one for the reason `brief`'s
+ * comment gives about a HUD that knows the name of every mode. What every header cell in this
+ * game has in common is a short label, a side that currently holds it, and possibly something
+ * filling; anything a mode wants said beyond that belongs in `brief` or in the contextual
+ * banner, both of which already exist.
+ */
+export interface HeaderSlot {
+  /** One or two characters: a flag's letter, a bomb site's letter. Drawn as given. */
+  readonly label: string;
+  /** Who holds it now, or `'NONE'` for neutral. Drives the cell's colour. */
+  readonly owner: ScoreTeam | 'NONE';
+  /**
+   * 0..1 of something filling this cell, or 0 for nothing happening.
+   *
+   * A capture in Domination; a plant's fuse in Search & Destroy. The HUD draws it as a fill and
+   * does not care which, because both mean the same thing to somebody deciding where to go: this
+   * one is about to change hands.
+   */
+  readonly progress: number;
+  /** Whose `progress` it is, when it is not the owner's. */
+  readonly capturing: ScoreTeam | 'NONE';
+}
+
 export abstract class GameMode {
   abstract readonly id: GameModeId;
   abstract readonly name: string;
@@ -227,6 +254,32 @@ export abstract class GameMode {
    * from the same data, so index N on the server is index N on the client.
    */
   get objectiveZones(): readonly ObjectiveZone[] {
+    return [];
+  }
+
+  /**
+   * What this mode wants standing in the top bar for the whole match (playtest round 5, F8).
+   *
+   * F8 reported that in Domination *"which team holds A, B or C is readable only from the
+   * minimap"*. The objective banner exists and works, but it is contextual — it appears when you
+   * are standing in a point, which is after the decision it would have informed. The information
+   * is on the client the whole time: `MatchWorld` writes every replicated `ObjectiveState` onto
+   * these zones, so unlike `teamScore` this is live rather than a structural zero.
+   *
+   * The artefact F8 asks for is *"not flags in the top bar but a header slot the mode fills"*,
+   * and this is the same idea as `brief` above, made permanent instead of shown once: the HUD
+   * draws whatever list it is handed and knows the name of no mode, so the next mode gets a
+   * header without a new component and without an edit to the HUD.
+   *
+   * ## Why this is a default and `brief` is abstract
+   *
+   * Every mode owes the player a sentence about what they are here to do, so forgetting one is
+   * a compile error. Not every mode has a persistent header worth drawing — Kill Confirmed's
+   * tags are loose objects on the floor with no owner and no progress, and forcing it to invent
+   * a row would put something meaningless in the one strip that is always on screen. An empty
+   * list is a real answer here in a way it is not for `brief`.
+   */
+  get headerSlots(): readonly HeaderSlot[] {
     return [];
   }
 

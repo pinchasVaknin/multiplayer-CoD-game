@@ -64,7 +64,7 @@ import type { CamoId } from '../shared/meta/Camos';
 import type { ResolvedLoadout } from '../shared/meta/Loadouts';
 import type { Profile } from './meta/Profile';
 import type { XpReport } from '../shared/meta/XpRules';
-import type { GameMode } from '../shared/modes/GameMode';
+import type { GameMode, HeaderSlot } from '../shared/modes/GameMode';
 import { isObjectiveProvider } from '../shared/ai/ObjectiveIntent';
 import { MatchFlow } from '../shared/modes/MatchFlow';
 import type { MapEntry, ModeEntry } from '../shared/modes/ModeRegistry';
@@ -72,7 +72,8 @@ import { Health, type HealthConfig } from '../shared/player/Health';
 import type { MovementConfig } from '../shared/player/MovementConfig';
 import type { PlayerController } from '../shared/player/PlayerController';
 import type { ViewmodelLayer } from './player/Viewmodel';
-import { LOW_HEALTH_THRESHOLD } from './ui/Hud';
+import { LOW_HEALTH_THRESHOLD, type DeathReport } from './ui/Hud';
+import type { HitZone } from '../shared/combat/HitboxRig';
 import { SCOPE_VIEWMODEL_HIDDEN } from './ui/HudTactical';
 import { MatchHud } from './ui/MatchHud';
 import type { CollisionWorld } from '../shared/world/CollisionWorld';
@@ -82,7 +83,7 @@ import { ViewmodelAnim, makeViewmodelDrive, type ViewmodelDrive } from './weapon
 import type { ViewmodelConfig } from '../shared/weapons/ViewmodelConfig';
 import { WeaponAudio } from './weapons/WeaponAudio';
 import { Melee } from '../shared/weapons/Melee';
-import type { WeaponDef } from '../shared/weapons/WeaponDefs';
+import { WEAPON_DEFS, type WeaponDef } from '../shared/weapons/WeaponDefs';
 import { buildWeaponModel, type WeaponModel } from './weapons/WeaponMesh';
 import { buildKnifeModel, type KnifeModel } from './weapons/KnifeMesh';
 import { WeaponSystem, type WeaponSnapshot } from '../shared/weapons/WeaponSystem';
@@ -384,6 +385,9 @@ export class Match {
 
   private readonly spawnChoice: SpawnChoice = makeSpawnChoice();
   private swapSubscription: (() => void) | null = null;
+  private deathSubscription: (() => void) | null = null;
+  /** F9's panel content, latched on the local player's death and cleared on their next spawn. */
+  private deathReport: DeathReport | null = null;
   private roundResetSubscription: (() => void) | null = null;
 
   private active = false;
@@ -686,6 +690,24 @@ export class Match {
       bodyAt: (entityId) => this.bodyAt(entityId),
       onPlayerKilled: () => this.onPlayerKilled(),
       listener: () => this.listenerAt,
+    });
+
+    /**
+     * The death report (playtest round 5, F9).
+     *
+     * Built here rather than in the HUD because this is the only object that holds all four
+     * facts at once: the killfeed's directory for the name, `bodyAt` for the killer's position,
+     * the weapon table for the label, and the event itself for the health the server stamped.
+     * Latched on the kill and cleared on the next spawn — the same lifetime as being dead, which
+     * is exactly how long the panel is up.
+     *
+     * `EV.EntityKilled` and not `EV.KillfeedEntry`: the feed line is written for a different
+     * purpose and carries no health, and correlating two events that happen to arrive on one
+     * tick is the kind of coupling that survives until the day something reorders them.
+     */
+    this.deathSubscription = deps.bus.on(EV.EntityKilled, (p) => {
+      if (p.targetId !== this.localId) return;
+      this.deathReport = this.buildDeathReport(p.sourceId, p.weaponId, p.zone, p.killerHealth);
     });
 
     // The mesh follows the inventory. `weapon.swapped` fires at the hand-over, which is the
@@ -1031,6 +1053,45 @@ export class Match {
    * one-shot placed at the instant it fires; blending it against the previous frame would
    * buy nothing audible.
    */
+  /**
+   * Everything the death screen says, assembled at the moment of death (round 5, F9).
+   *
+   * Each field degrades on its own rather than the whole report being withheld: a killstreak has
+   * a name and no health, a fall has neither, and a killer who has already been removed from the
+   * roster has a health the server stamped and no body to measure to. `describeDeath` drops
+   * whatever is missing, so a partial report is a shorter sentence rather than a wrong one.
+   */
+  private buildDeathReport(
+    killerId: number,
+    weaponId: string,
+    zone: HitZone,
+    killerHealth: number,
+  ): DeathReport | null {
+    if (killerId === this.localId) return null; // your own grenade needs no explaining
+    const killerName = this.flow.killfeed.nameOf(killerId);
+    if (killerName === null) return null;
+
+    /*
+     * Distance between the two bodies, measured now.
+     *
+     * `bodyAt` returns a shared scratch, so the numbers are read out before anything else can
+     * ask — which is the contract that comment states and the reason this does not hold the
+     * pose. The player's own position comes off the sim rather than the same scratch for the
+     * same reason.
+     */
+    const sim = this.deps.player.sim;
+    const body = this.bodyAt(killerId);
+    const distanceM = body === null ? -1 : Math.hypot(body.x - sim.x, body.y - sim.y, body.z - sim.z);
+
+    return {
+      killerName,
+      weaponName: WEAPON_DEFS[weaponId]?.name ?? '',
+      distanceM,
+      killerHealth,
+      headshot: zone === 'head',
+    };
+  }
+
   private bodyAt(entityId: number): Readonly<BodyPose> | null {
     const bot = this.bots.get(entityId);
     if (bot !== undefined) {
@@ -1261,6 +1322,18 @@ export class Match {
   /** B8's aim warning. One writer, `Game.updateHudSurfaces`, like every other HUD surface. */
   setAimWarning(text: string): void {
     this.ui.hud.setAimWarning(text);
+  }
+
+  /** F8's mode header. Same one writer; the slots are the mode's, drawn without interpretation. */
+  setHeaderSlots(slots: readonly HeaderSlot[]): void {
+    // The viewer context is this match's, so a cell is coloured by what its owner is *to this
+    // client* — the `(viewer, subject)` invariant round 4's B12 established.
+    this.ui.hud.setHeaderSlots(this.viewer, slots);
+  }
+
+  /** What this mode wants in the header this frame. Empty for a mode with nothing to say. */
+  get headerSlots(): readonly HeaderSlot[] {
+    return this.mode.headerSlots;
   }
 
   get isActive(): boolean {
@@ -2157,6 +2230,9 @@ export class Match {
     state.respawnSeconds = this.playerRespawnTimer;
     // One life: there is no timer to show, because nobody is coming back until the round does.
     state.awaitingRound = this.playerDead && !this.flow.respawnAllowed(this.localId);
+    // Only while dead: a report that outlived the body it describes would be a panel telling a
+    // living player how they died a minute ago (round 5, F9).
+    state.deathReport = this.playerDead ? this.deathReport : null;
     this.fillTacticalState();
     this.fillStreakHud();
     this.fillMinimapStreaks();
@@ -2507,6 +2583,7 @@ export class Match {
     this.fx.dispose();
     this.deps.scene.remove(this.fx.group);
     this.swapSubscription?.();
+    this.deathSubscription?.();
     this.swapSubscription = null;
     this.roundResetSubscription?.();
     this.roundResetSubscription = null;

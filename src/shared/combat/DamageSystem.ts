@@ -127,7 +127,7 @@ const evDamage = {
   lethal: false,
 };
 
-const evKilled = { targetId: 0, sourceId: 0, weaponId: '', zone: 'torso' as HitZone };
+const evKilled = { targetId: 0, sourceId: 0, weaponId: '', zone: 'torso' as HitZone, killerHealth: 0 };
 
 /**
  * Damage multiplier for a zone, taken from the weapon rather than the rig.
@@ -323,6 +323,16 @@ export class DamageSystem {
       evKilled.sourceId = req.sourceId;
       evKilled.weaponId = def.id;
       evKilled.zone = req.zone;
+      /**
+       * The killer's remaining health, read at the one instant it is the answer (round 5, F9).
+       *
+       * Here rather than at the subscriber, because this is the only line in the game that runs
+       * with both bodies in hand and the kill already resolved. A shooter who is not a
+       * `Damageable` — a sentry, a mortar, a killstreak — has no health to report and gives 0,
+       * which the death panel reads as "not a person" and does not print.
+       */
+      const killer = req.sourceId === req.targetId ? undefined : this.entities.get(req.sourceId);
+      evKilled.killerHealth = killer === undefined ? 0 : Math.max(0, Math.round(killer.health.current));
       this.bus.emit(EV.EntityKilled, evKilled);
     }
 

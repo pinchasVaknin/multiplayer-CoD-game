@@ -1,6 +1,13 @@
 import type { HitZone } from '../../shared/combat/HitboxRig';
 import type { GameEvents } from '../../shared/core/Events';
 import { clamp01, RAD2DEG } from '../../shared/core/MathUtil';
+import type { HeaderSlot } from '../../shared/modes/GameMode';
+import {
+  relationClass,
+  relationTo,
+  type RelationClass,
+  type ViewerContext,
+} from '../../shared/ui/TeamColour';
 import { CROSSHAIR_LINE_LENGTH, crosshairGapPx, crosshairOpacity } from '../../shared/ui/Crosshair';
 import type { MapDef } from '../../shared/world/maps/types';
 import { HudBanner, makeBannerState, type BannerState } from './HudBanner';
@@ -48,6 +55,33 @@ const HURT_FLASH_SECONDS = 0.42;
  */
 export const LOW_HEALTH_THRESHOLD = 35;
 
+/**
+ * What the death screen tells the player about the fight they just lost (round 5, F9).
+ *
+ * F9 asks for what a player *can act on next time*, which is a shorter list than everything
+ * known about a kill: who, with what, from how far, and what they had left. The last one is the
+ * one that changes behaviour — "he had 8 health" is a different lesson from "he had 100" — and
+ * it is the only one that could not be derived on the client, which is why it is on the wire
+ * from protocol v15 rather than sampled off a stale snapshot.
+ */
+export interface DeathReport {
+  readonly killerName: string;
+  /** The weapon's display name, or `''` when it was not a weapon anybody carries. */
+  readonly weaponName: string;
+  /**
+   * Metres between the two bodies, or -1 when the killer's position is unknown.
+   *
+   * Derived on the client rather than replicated: the killer's interpolated position is up to a
+   * snapshot old, which at a walking pace is well under a metre on a figure printed as a whole
+   * number. That is the opposite conclusion to `killerHealth` on the same event, and the
+   * difference is that health can change by 100 in the time position changes by half a metre.
+   */
+  readonly distanceM: number;
+  /** The killer's health at the instant of the kill, or 0 when there was no person to ask. */
+  readonly killerHealth: number;
+  readonly headshot: boolean;
+}
+
 export interface HudState {
   mag: number;
   reserve: number;
@@ -82,6 +116,14 @@ export interface HudState {
    * what is actually happening.
    */
   awaitingRound: boolean;
+  /**
+   * What killed the player, or null when they are alive or nobody knows (round 5, F9).
+   *
+   * The death screen said `YOU WERE KILLED` and counted down, and everything a player could act
+   * on was in the killfeed, in the corner, for a few seconds — while they were reading the
+   * middle of the screen. This is the same facts put where they are already looking.
+   */
+  deathReport: DeathReport | null;
 
   /** M4: where the player is, so the minimap can rotate around them. */
   playerX: number;
@@ -91,6 +133,30 @@ export interface HudState {
   banner: BannerState;
   /** M5: weapons, equipment, the flash, the grenade indicator and the scope. */
   tactical: TacticalState;
+}
+
+/**
+ * One line of death report, or `''` for nothing to say (playtest round 5, F9).
+ *
+ * A pure function so the sentence is testable without a DOM, which is what `MatchXpAudit` and
+ * `CapabilityAudit` established as the shape for this kind of rule — and because "what does the
+ * panel say when the killer was a mortar" is a question with an answer, not a rendering
+ * accident.
+ *
+ * Every field is dropped when it has nothing to contribute rather than printed as a zero: a
+ * killstreak has no health to report, a fall has no killer, and `HEALTH 0 LEFT` about a sentry
+ * gun would be worse than silence. The order is fixed so the eye lands in the same place every
+ * time — this is read in a second and a half, three or four times a minute.
+ */
+export function describeDeath(report: DeathReport | null): string {
+  if (report === null || report.killerName === '') return '';
+  const parts: string[] = [report.killerName.toUpperCase()];
+  if (report.weaponName !== '') parts.push(report.weaponName.toUpperCase());
+  if (report.distanceM >= 0) parts.push(`${Math.round(report.distanceM)}M`);
+  if (report.headshot) parts.push('HEADSHOT');
+  // The one that changes behaviour, and it goes last because it is the one worth pausing on.
+  if (report.killerHealth > 0) parts.push(`${Math.round(report.killerHealth)} HP LEFT`);
+  return parts.join(' · ');
 }
 
 export function makeHudState(): HudState {
@@ -110,6 +176,7 @@ export function makeHudState(): HudState {
     dead: false,
     respawnSeconds: 0,
     awaitingRound: false,
+    deathReport: null,
     playerX: 0,
     playerZ: 0,
     playerYaw: 0,
@@ -168,6 +235,8 @@ export class Hud {
   private readonly healthFill: HTMLElement;
   private readonly deadOverlay: HTMLElement;
   private readonly deadCount: HTMLElement;
+  private readonly deadDetail: HTMLElement;
+  private lastDeadDetail = '';
   private readonly lowVignette: HTMLElement;
   /** F14's tag, and the last text written to it. See `setCheatTag`. */
   private readonly cheatTag: HTMLElement;
@@ -176,6 +245,11 @@ export class Hud {
   /** B8's aim warning, and the last text written to it. See `setAimWarning`. */
   private readonly aimWarning: HTMLElement;
   private lastAimWarning = '';
+
+  /** F8's mode header strip, its cells, and the last state written to them. */
+  private readonly headerStrip: HTMLElement;
+  private readonly headerCells: Array<{ root: HTMLElement; fill: HTMLElement }> = [];
+  private lastHeader = '';
 
   private hurtTimer = 0;
   private hurtPeak = 0;
@@ -302,7 +376,15 @@ export class Hud {
     deadLabel.textContent = 'You were killed';
     this.deadCount = document.createElement('span');
     this.deadCount.className = 'hud-dead__count op-num';
-    this.deadOverlay.append(deadLabel, this.deadCount);
+    /**
+     * F9's detail line, under the countdown.
+     *
+     * One element rewritten on change rather than four, because the four facts are one sentence
+     * and are only ever set together — a death report arrives whole or not at all.
+     */
+    this.deadDetail = document.createElement('span');
+    this.deadDetail.className = 'hud-dead__detail op-label';
+    this.deadOverlay.append(deadLabel, this.deadCount, this.deadDetail);
     this.root.appendChild(this.deadOverlay);
 
     /**
@@ -338,6 +420,18 @@ export class Hud {
     this.aimWarning.className = 'hud-aim';
     this.aimWarning.appendChild(document.createElement('span'));
     this.root.appendChild(this.aimWarning);
+
+    /**
+     * The mode header strip (playtest round 5, F8).
+     *
+     * Empty at construction and grown to whatever the mode hands over — the HUD knows the name
+     * of no mode, which is the whole point of `GameMode.headerSlots`. Under the score banner,
+     * so the two answers to "how is this going" are in one place rather than one on screen and
+     * one on the minimap.
+     */
+    this.headerStrip = document.createElement('div');
+    this.headerStrip.className = 'hud-header';
+    this.root.appendChild(this.headerStrip);
 
     // ---- M4 ---------------------------------------------------------------
     this.root.append(
@@ -387,6 +481,76 @@ export class Hud {
     this.aimWarning.classList.toggle('hud-aim--on', text !== '');
     const span = this.aimWarning.firstElementChild;
     if (span instanceof HTMLElement) span.textContent = text;
+  }
+
+  /**
+   * The mode's header cells (playtest round 5, F8).
+   *
+   * Called every frame from `Game.updateHudSurfaces` through `Match.setHeaderSlots`, and guarded
+   * on a signature so sixty DOM writes a second become one write per change — the same shape as
+   * `setCheatTag` and `setAimWarning`. The signature includes the fill because a capture in
+   * progress is the one thing on this strip that moves, and quantising it to whole percent is
+   * what keeps a moving flag from writing every frame.
+   *
+   * Cells are created once per slot count and then reused. A mode's slot list is fixed for the
+   * life of a match — it comes off the map's authored objectives — so the rebuild path exists
+   * for the world being replaced under the HUD, not for a mode changing its mind.
+   */
+  setHeaderSlots(viewer: ViewerContext, slots: readonly HeaderSlot[]): void {
+    /**
+     * The signature carries the **relation**, not the team.
+     *
+     * That is not an optimisation detail: a cell is coloured by what its owner is *to this
+     * viewer*, so two clients on opposite sides see opposite colours for the same flag. Keying
+     * the guard on the raw team would be correct today and wrong the moment a viewer's own team
+     * changes under it — which is what a side swap at half-time does.
+     */
+    const own = (s: HeaderSlot): RelationClass => relationClass(relationTo(viewer, s.owner));
+    const cap = (s: HeaderSlot): RelationClass => relationClass(relationTo(viewer, s.capturing));
+    const signature = slots
+      .map((s) => `${s.label}${own(s)}${cap(s)}${Math.round(s.progress * 100)}`)
+      .join('|');
+    if (signature === this.lastHeader) return;
+    this.lastHeader = signature;
+
+    if (this.headerCells.length !== slots.length) this.rebuildHeader(slots.length);
+    this.headerStrip.classList.toggle('hud-header--on', slots.length > 0);
+
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      const cell = this.headerCells[i];
+      if (slot === undefined || cell === undefined) continue;
+      /*
+       * Relative colour, through the one door (round 4, B12).
+       *
+       * B12 was three surfaces picking out of the right palette with the wrong index, and
+       * `relationClass` is the door that was built so there is only one way from a team to a
+       * colour. A header painted `--a` and `--b` would have been the fourth surface.
+       */
+      cell.root.className = `hud-header__cell hud-header__cell--${own(slot)}`;
+      const label = cell.root.firstElementChild;
+      if (label instanceof HTMLElement) label.textContent = slot.label;
+      // The fill belongs to whoever is taking it, which is not always the owner — a flag being
+      // taken off you fills in the *attacker's* colour, which is the warning.
+      cell.fill.className = `hud-header__fill hud-header__fill--${cap(slot)}`;
+      cell.fill.style.transform = `scaleX(${Math.max(0, Math.min(1, slot.progress)).toFixed(3)})`;
+    }
+  }
+
+  private rebuildHeader(count: number): void {
+    this.headerStrip.replaceChildren();
+    this.headerCells.length = 0;
+    for (let i = 0; i < count; i++) {
+      const root = document.createElement('div');
+      root.className = 'hud-header__cell';
+      const label = document.createElement('span');
+      label.className = 'hud-header__label';
+      const fill = document.createElement('i');
+      fill.className = 'hud-header__fill';
+      root.append(label, fill);
+      this.headerStrip.appendChild(root);
+      this.headerCells.push({ root, fill });
+    }
   }
 
   /** 0 while healthy, rising to 1 at zero health. Drives the muffle and the heartbeat. */
@@ -744,9 +908,17 @@ export class Hud {
       : state.respawnSeconds > 0
         ? state.respawnSeconds.toFixed(1)
         : 'RESPAWNING';
-    if (text === this.lastDeadText) return;
-    this.lastDeadText = text;
-    this.deadCount.textContent = text;
+    if (text !== this.lastDeadText) {
+      this.lastDeadText = text;
+      this.deadCount.textContent = text;
+    }
+
+    const detail = describeDeath(state.deathReport);
+    if (detail !== this.lastDeadDetail) {
+      this.lastDeadDetail = detail;
+      this.deadDetail.textContent = detail;
+      this.deadDetail.classList.toggle('hud-dead__detail--on', detail !== '');
+    }
   }
 
   private clearMarkers(): void {

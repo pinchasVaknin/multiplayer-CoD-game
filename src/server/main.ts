@@ -13,6 +13,7 @@ import { auditAccuracy } from '../shared/debug/AccuracyAudit';
 import { auditMatchXp } from '../shared/debug/MatchXpAudit';
 import { auditUrlFlags } from '../shared/debug/UrlFlagAudit';
 import { auditCapabilities } from '../shared/debug/CapabilityAudit';
+import { auditHeaderSlots } from '../shared/debug/HeaderSlotAudit';
 import { accuracy } from '../shared/combat/ScoreSystem';
 import { WEAPON_DEFS } from '../shared/weapons/WeaponDefs';
 import type { BotTeam } from '../shared/ai/Combatant';
@@ -547,6 +548,31 @@ function reportCapabilities(log: ReturnType<typeof logger>): number {
 }
 
 /**
+ * What each mode puts in the header strip (playtest round 5, F8).
+ *
+ * The audit itself is `shared/debug/HeaderSlotAudit`; this prints it. Every mode is listed
+ * including the ones with nothing to say, because "this mode draws no header" is the answer the
+ * default exists to give and a table that hid it would not show whether the default still works.
+ */
+function reportHeaderSlots(log: ReturnType<typeof logger>): number {
+  const audit = auditHeaderSlots();
+  for (const row of audit.rows) {
+    const cells = row.slots.length === 0 ? '(none)' : row.slots.map((s) => s.label).join(' ');
+    log.info(`  ${padEnd(row.modeId, 6)} ${padEnd(row.mapId, 12)} ${row.slots.length} cell(s) over ${row.zones} zone(s): ${cells}`);
+  }
+  for (const problem of audit.problems) log.error(`  ${problem}`);
+  if (audit.problems.length > 0) {
+    log.error(`HEADER SLOT AUDIT FAILED: ${audit.problems.length} problem(s).`);
+    return 1;
+  }
+  log.info(
+    `header slots: ${audit.rows.length} mode(s); one cell per objective or none, and the HUD ` +
+      'knows the name of none of them.',
+  );
+  return 0;
+}
+
+/**
  * Every authored spread, dealt at every split (playtest round 5, B4).
  *
  * The report was that the mix's only VETERAN always landed on the opposing team, and it was
@@ -770,6 +796,16 @@ async function main(): Promise<number> {
    */
   const deviceFault = reportCapabilities(log);
   if (deviceFault !== 0) return deviceFault;
+
+  /**
+   * The header slot audit (round 5, F8), in the same place and for the same reason.
+   *
+   * A pure function of each mode's own state, so one run is a fact. Ahead of the matches because
+   * it constructs every registered mode, which is the cheapest possible check that they all
+   * still build.
+   */
+  const headerFault = reportHeaderSlots(log);
+  if (headerFault !== 0) return headerFault;
 
   if (args.tierSweep) return runTierSweep(args, log);
 

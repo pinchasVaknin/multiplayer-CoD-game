@@ -126,6 +126,9 @@ function auditOne(flow: MatchFlow, bus: ReturnType<typeof createGameBus>): void 
       sourceId: attacker,
       weaponId: 'm4',
       zone: 'torso',
+      // Irrelevant to this audit — nothing here reads the death panel — but stated rather than
+      // defaulted, because a zero that means "no killer" would be a lie about these rows.
+      killerHealth: 100,
     });
   }
 }

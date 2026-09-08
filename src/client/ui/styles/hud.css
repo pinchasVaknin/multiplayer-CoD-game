@@ -1390,3 +1390,118 @@
   padding: 3px var(--s-3);
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
 }
+
+/* ---- the mode header strip (playtest round 5, F8) ---------------------- */
+
+/**
+ * One cell per objective, under the score banner.
+ *
+ * F8 reported that in Domination *"which team holds A, B or C is readable only from the
+ * minimap"* — the objective banner exists and works, but it is contextual: it appears when you
+ * are standing in a point, which is after the decision it would have informed. This is the same
+ * facts, permanently, where the score already is.
+ *
+ * Colours are **relative** and come through `relationClass` — `--friendly`, `--hostile`,
+ * `--neutral` and never `--a`/`--b`. Round 4's B12 was three surfaces picking out of the right
+ * palette with the wrong index, and a header keyed on the absolute team would be the fourth.
+ */
+.hud-header {
+  position: absolute;
+  left: 50%;
+  top: 46px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: var(--s-2);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--dur-med) var(--ease), visibility var(--dur-med);
+}
+
+.hud-header--on {
+  opacity: 1;
+  visibility: visible;
+}
+
+.hud-header__cell {
+  position: relative;
+  overflow: hidden;
+  min-width: 26px;
+  padding: 2px var(--s-2);
+  border: 1px solid var(--c-line-hi);
+  border-radius: 2px;
+  background: rgba(7, 8, 10, 0.62);
+  text-align: center;
+}
+
+.hud-header__cell--friendly {
+  border-color: var(--c-good);
+}
+
+.hud-header__cell--hostile {
+  border-color: var(--c-bad);
+}
+
+.hud-header__label {
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-display);
+  color: var(--c-text-dim);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.hud-header__cell--friendly .hud-header__label {
+  color: var(--c-good);
+}
+
+.hud-header__cell--hostile .hud-header__label {
+  color: var(--c-bad);
+}
+
+/**
+ * The capture fill, behind the letter.
+ *
+ * `transform: scaleX` from the left edge rather than a width, so a capture in progress animates
+ * on the compositor and never triggers layout — the rule the top of this file states for
+ * everything in the HUD.
+ */
+.hud-header__fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(0);
+  opacity: 0.34;
+  background: var(--c-text-faint);
+}
+
+.hud-header__fill--friendly {
+  background: var(--c-good);
+}
+
+.hud-header__fill--hostile {
+  background: var(--c-bad);
+}
+
+/* ---- the death report (playtest round 5, F9) --------------------------- */
+
+/**
+ * The detail line under the respawn countdown.
+ *
+ * Dim and small on purpose: the countdown is what the player is waiting on and must stay the
+ * loudest thing on the overlay. This is what they read once, in the second and a half they have
+ * nothing else to do, and it is the reason `describeDeath` drops empty fields instead of
+ * printing zeroes — a shorter line is read, a padded one is skipped.
+ */
+.hud-dead__detail {
+  font-size: var(--t-small);
+  letter-spacing: var(--track-label);
+  color: var(--c-text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-med) var(--ease);
+}
+
+.hud-dead__detail--on {
+  opacity: 1;
+}

@@ -369,6 +369,7 @@ export class NetSession {
           evKilled.sourceId = e.sourceId;
           evKilled.weaponId = weaponIdAt(e.weaponIndex) ?? '';
           evKilled.zone = e.zone;
+          evKilled.killerHealth = e.killerHealth;
           this.deps.bus.emit(EV.EntityKilled, evKilled);
         },
 
@@ -711,7 +712,7 @@ const evDamage = {
   lethal: false,
 };
 
-const evKilled = { targetId: 0, sourceId: 0, weaponId: '', zone: 'torso' as HitZone };
+const evKilled = { targetId: 0, sourceId: 0, weaponId: '', zone: 'torso' as HitZone, killerHealth: 0 };
 
 const evStep = {
   entityId: 0,

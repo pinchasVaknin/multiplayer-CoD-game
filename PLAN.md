@@ -12112,22 +12112,14 @@ No protocol change and no simulation change.
   code does; whether that reads as displaced material once the decal beside it is a third of the
   size is exactly the thing this session decided not to guess at.
 
-### Needs a browser, and this one genuinely does
+### Verified by eye, in a real browser
 
-The list for the human, in the order that makes each one cheap:
-
-- **Dunes, midday, look at the sky and then at the sand.** The crosshair must hold on both, and
-  the dot in the middle with it. This is the report.
-- **Fire a magazine into a wall on Dunes, then the same on Foundry.** Each strike should read as
-  a small hole with a bright lip and a puff that is gone before the next round lands. The group
-  should be legible as a group — that is what the pool exists for — and the rim should not read
-  as a stain the size of a fist.
-- **Then keep firing.** Past 376 holes the oldest recycle; the wall should never accumulate
-  visibly beyond that and the frame time should not move when it starts recycling.
-- **Land hits on a bot standing on the sand at the edge of the map.** The hitmarker against
-  bright ground is the case that matters most and the one with no second look.
-- **A dark interior on Depot for the control.** Nothing should have got worse where it was
-  already fine — the ringed figures say 13.98:1 against 12.36:1, so if anything it is cleaner.
+All five checks were run and passed. The crosshair and the hitmarker hold on Dunes' bright sand
+and in Depot's dark interiors — the two ends of the 7.94× spread the ring was chosen to collapse.
+The particle puffs read as proportional now that the decals are a third of their old size, which
+is the specific claim this session made instead of adding particles: the puff was never missing,
+it was outsized. And the pool cycles through hundreds of rounds without a hitch, which is the
+derived 376-instance cap doing what the arithmetic said it would.
 
 ### Found while here
 
@@ -12144,3 +12136,184 @@ The list for the human, in the order that makes each one cheap:
   score-versus-events comparison, B9's rewind feed and its per-player XP lines, and this one's
   two full magazines. Each was found by asking what the sentence would have to be true of, and
   checking. It is the cheapest audit in this project and nothing automates it.
+
+## Playtest round 5 — what the HUD knew and did not say
+
+**F8**: in Domination the top bar shows two scores and a timer, and which team holds A, B or C is
+readable only from the minimap. **F9**: the death screen says `YOU WERE KILLED` and counts down,
+while everything a player could act on sits in the killfeed, in the corner, for a few seconds —
+in the opposite corner from where they are looking.
+
+One omission twice: **the fact is already in client state and no surface asks for it.** Except
+one, which turned out to be in state that is a snapshot too late to mean what it would say.
+
+### F8 — the state was live, unlike the last time this looked familiar
+
+The first thing to check was whether this was B7 again: a client reading a local copy of a fact
+the server owns, getting a structural zero, and nobody noticing. It is not. `MatchWorld:419`
+writes `owner`, `capturingTeam` and `progress` onto `mode.objectiveZones` from every replicated
+`ObjectiveState`, so the ownership a Domination client holds is the server's and is current. The
+minimap has been drawing it all along; nothing else asked.
+
+So the work is a surface, and the artefact the brief asks for is *"not flags in the top bar but a
+header slot the mode fills"*. `GameMode.headerSlots` is that, and it is deliberately the same
+shape as round 4's `brief`: the mode says what it wants shown and the HUD draws whatever it is
+handed, so the HUD knows the name of no mode and the next one gets a header without a new
+component.
+
+**Four fields and no more** — a label, an owner, a fill, and whose fill it is. The temptation is
+a per-mode shape and it is wrong for the reason `brief`'s comment already gives: a HUD that knows
+what a bomb is has to be edited when a mode is added, and the sixth mode is the one that gets
+forgotten.
+
+**`headerSlots` is a default returning empty; `brief` is abstract. That difference is a
+decision.** Every mode owes the player a sentence about what they are here to do, so forgetting
+one should be a compile error. Not every mode has a persistent header worth drawing — Kill
+Confirmed's tags are loose objects with no owner and no progress — and forcing it to invent a row
+would put something meaningless in the one strip that is always on screen.
+
+Two modes fill it. Domination maps its flags. Search & Destroy maps its sites, where `owner`
+means something deliberately different: a site is neutral until the bomb is on it and then
+belongs to the **attackers**, because what a defender needs off a glance is not who is nearer it
+but which one is now costing them the round, and `progress` is the fuse draining rather than a
+capture filling. The HUD does not know which of the two it is drawing and does not need to.
+
+**The colours are relative and go through `relationClass`.** A header keyed on the absolute team
+would have been round 4's B12 for the fourth time — the palette was right and three surfaces
+chose from it wrongly — so the cell asks what its owner is *to this viewer*, and the guard
+signature is keyed on the relation rather than the team so a side swap at half-time cannot leave
+a stale colour behind.
+
+### F9 — three facts were free and the fourth was a trap
+
+Killer, weapon and distance are all obtainable on the client. The killer's **remaining health**
+is the one F9 singles out as the one that changes behaviour, and the brief was right to say
+*check before you promise it*.
+
+It is not on the wire's `KilledEvent` and it is not on `EV.EntityKilled`. But every entity's
+health **is** replicated in the snapshot and sitting in `RemoteActor.health`, so it can be read —
+and that is the trap rather than the answer. The snapshot is up to a tick and an interpolation
+delay old and may already carry damage the killer took *after* killing you. "He had 8 health" is
+a lesson about how close you came; the late version of that sentence says it about a fight you
+lost cleanly, and on a busy server that is common rather than exotic.
+
+**So it goes on the wire, stamped by the server at the instant of the kill (protocol v15).** One
+byte, on an event that happens a few times a minute per player, against a number only the server
+holds at the moment it is true. Producing a different number and calling it the same thing is
+this milestone's recurring failure and it is not worth repeating to save a byte.
+
+**Distance goes the other way and is derived locally**, and the contrast is the point: the
+killer's interpolated position is stale by the same snapshot, which at a walking pace is well
+under a metre on a figure printed as a whole number. Health can change by 100 in the time
+position changes by half a metre. Same staleness, opposite conclusion, for a stated reason.
+
+`DamageSystem.apply` is where the stamp is taken, because it is the only line in the game that
+runs with both bodies in hand and the kill already resolved. A shooter that is not a `Damageable`
+— a sentry, a mortar, a killstreak — has no health to report and gives 0, which the panel reads
+as "not a person" and does not print.
+
+### The panel drops what it does not have rather than padding it
+
+`describeDeath` is a pure function so the sentence is testable without a DOM, and every field is
+omitted when it has nothing to say:
+
+    CINDER · M4 CARBINE · 42M · HEADSHOT · 8 HP LEFT
+    SENTRY
+
+A fall has no killer, a killstreak has no health, and `HEALTH 0 LEFT` about a sentry gun would be
+worse than silence. This is read in a second and a half, three or four times a minute, so a
+shorter line is read and a padded one is skipped.
+
+It is built from `EV.EntityKilled` and **not** `EV.KillfeedEntry`, even though the feed line
+already carries a resolved name: the feed is written for a different purpose, carries no health,
+and correlating two events that happen to arrive on the same tick is the kind of coupling that
+survives right up until something reorders them. The name comes through `Killfeed.nameOf`, which
+is the same directory the feed lines are written from — a panel resolving names through a second
+source could name a different killer than the line in the corner, which is the defect this round
+has spent five sessions on.
+
+### Measured
+
+Every number came out of a run in this session.
+
+**`auditHeaderSlots` — `shared/debug/HeaderSlotAudit`**, at the top of every harness run. P12
+asks for *"the header model is a pure function of mode state, tested per mode without a DOM"*,
+which is the whole reason the model is four plain fields and not a component:
+
+| mode | cells | zones | labels |
+|---|---|---|---|
+| TDM | 0 | 0 | (none) |
+| **DOM** | **3** | 3 | **A B C** |
+| KC | 0 | 0 | (none) |
+| FFA | 0 | 0 | (none) |
+| **SND** | **2** | 2 | **A B** |
+| RANGE | 0 | 0 | (none) |
+
+**The red control failed, and finding that out is the most useful thing in this session.** With
+Domination's `headerSlots` blanked — the exact bug — the audit came back **green**. The rule was
+*"a cell per zone, or no cells at all"*, so Domination fell into the "no cells" arm; Search &
+Destroy still filled its two; and the vacuity guard only fires when *every* mode is empty. An
+assertion that passes on the bug it was written for is worth less than no assertion, because it
+is also a claim that somebody checked.
+
+The rule is now the one sentence F8 is actually about — **a mode that has objectives draws
+them**, exactly — and modes with no zones satisfy it by arithmetic rather than by an exemption.
+Re-run against the same blanked Domination:
+
+    DOM: 0 header slot(s) against 3 objective zone(s). A mode draws one cell per objective
+    HEADER SLOT AUDIT FAILED: 1 problem(s).        exit 1
+
+**The rest of the gate.** `npm run check` green including the cosmetics audit. `npm run harness`
+five matches, all completed, with every earlier audit still green beside the new one. `npm run
+skirmish` **FLOW CHECK PASSED**, three clients, divergence 0/7373 each. `npm run leak` 100
+cycles, subscriptions 29 → 29 (+0), heap 13.16 → 13.87 MiB (+0.71). `npm run layout` 11 surfaces
+at 6 viewports, PASS. `npm run netharness` against a real `serve.js` reporting **protocol v15**,
+2 clients, 30 s, **0 snapshots lost**, worst misprediction p99 0.25.
+
+### What was not verified
+
+- **Neither surface was rendered.** The header model is asserted per mode and the death sentence
+  is a pure function with printed output, but that a cell fills as a flag is taken, or that the
+  detail line is legible under the countdown, are claims about a browser.
+- **`headerSlots` was only ever read at rest.** The audit constructs each mode and asks — which
+  is why one of its assertions is that nothing is owned or filling on a match nobody has played.
+  A flag actually *changing hands* is driven by `ObjectiveZone.step` and by replication, and no
+  headless run in this session watched a cell go from neutral to held.
+- **The S&D fuse fill was not run at all.** It is derived from `bombTimer` against
+  `config.bombTimerSeconds` and no test in this session plants a bomb, so the arithmetic is
+  reasoned rather than measured. It is the row most likely to be wrong.
+- **`killerHealth` was not observed end to end over a socket.** The byte is written, decoded and
+  replayed, and `netharness` proves the protocol still handshakes and loses nothing — but no
+  assertion in this session reads a non-zero killer health out of the far end of a real
+  connection. That is a headless probe somebody could write and I did not.
+
+### Needs a browser
+
+- **A Domination match with the flags changing hands.** Three cells under the score banner. Take
+  a flag and watch its fill run in **your** colour; stand on one of yours while an enemy caps and
+  watch it fill in **theirs** — that is the warning the strip exists for. Contested by both
+  teams should show a fill that has stopped rather than one that reverses.
+- **A Search & Destroy round with a plant.** Two cells, both neutral, until the bomb goes down —
+  then the planted one takes the attackers' colour and drains for 45 seconds.
+- **Three deaths in multiplayer.** The detail line should name the right killer and weapon, and
+  the metres should be plausible for the fight you just lost. Die to a grenade and to a
+  killstreak as well: neither should print a health figure, and neither should print a blank one.
+- **A side swap in Search & Destroy at half-time.** The header must recolour, because the cells
+  are relative to a viewer whose team just changed. This is the case the signature guard was
+  written for and the one most likely to be wrong.
+
+### Found while here
+
+- **`Killfeed` had no way to ask who an entity is.** It resolved names internally and exposed
+  nothing, so the second surface that needed a name would have reached for a second source. It
+  has `nameOf` now — one line, and it is the difference between two surfaces agreeing by
+  construction and agreeing by luck.
+- **The `HeaderSlot` model has no room for a count**, and Search & Destroy's round number
+  therefore is not in it. F8's brief mentions *"two sites and a round count"*; the round is
+  already in the score banner and putting it in a strip of ownership cells would have meant a
+  fifth field every other slot ignores. Recorded rather than done, because the moment a second
+  mode wants a number in the header the shape should change once for both.
+- **Nothing replicates a killstreak's owner health**, which is why `killerHealth` is 0 for a
+  sentry rather than the owner's. That is the right answer for the panel — the sentry's health is
+  not the lesson — but it means the field genuinely means "the person who killed you", and a
+  future reader wanting "whatever killed you" would need a different one.

@@ -15,6 +15,7 @@ import {
   type ColumnDef,
   type Entity,
   type GameModeId,
+  type HeaderSlot,
   type KillEvent,
   type MatchResult,
   type ModeDeps,
@@ -194,6 +195,28 @@ export class Domination extends GameMode implements ObjectiveProvider {
    * The same array the renderer walks, so the client's zone N and the server's zone N are the
    * same authored objective.
    */
+  /**
+   * One cell per flag, in the map's authored order (playtest round 5, F8).
+   *
+   * The whole of Domination's answer, and it is three lines because the state was already
+   * there: `MatchWorld` writes every replicated `ObjectiveState` onto these zones, so this reads
+   * the same objects the capture logic and the minimap read rather than keeping a copy that
+   * could disagree with either.
+   *
+   * `capturingTeam` is reported even while a zone is contested. `ObjectiveZone` freezes progress
+   * with both teams inside rather than reversing it, so a contested flag shows a fill that has
+   * stopped — which is the honest picture, and more useful than hiding it: a bar that is stuck
+   * where it is means somebody is standing on it.
+   */
+  override get headerSlots(): readonly HeaderSlot[] {
+    return this.zones.map((zone) => ({
+      label: zone.label,
+      owner: zone.owner,
+      progress: zone.progress,
+      capturing: zone.capturingTeam,
+    }));
+  }
+
   override get objectiveZones(): readonly ObjectiveZone[] {
     return this.zones;
   }

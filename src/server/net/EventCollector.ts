@@ -115,6 +115,8 @@ export class EventCollector {
         killed.sourceId = p.sourceId;
         killed.weaponIndex = weaponIndexOf(p.weaponId);
         killed.zone = p.zone;
+        // Stamped by `DamageSystem` at the kill, not read off a body afterwards (round 5, F9).
+        killed.killerHealth = p.killerHealth;
         this.write(() => writeKilled(this.writer, killed));
       }),
     );
@@ -229,7 +231,7 @@ const damage: DamageEvent = {
   y: 0,
   z: 0,
 };
-const killed: KilledEvent = { targetId: 0, sourceId: 0, weaponIndex: 0, zone: 'torso' };
+const killed: KilledEvent = { targetId: 0, sourceId: 0, weaponIndex: 0, zone: 'torso', killerHealth: 0 };
 const footstep: FootstepEvent = {
   entityId: 0,
   x: 0,

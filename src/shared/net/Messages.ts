@@ -166,6 +166,18 @@ export interface KilledEvent {
   sourceId: number;
   weaponIndex: number;
   zone: HitZone;
+  /**
+   * The killer's remaining health at the instant of the kill (protocol v15, round 5, F9).
+   *
+   * Every entity's health is already in the snapshot, so a client *can* answer this without the
+   * byte — from a frame up to a tick and an interpolation delay old, which may already include
+   * damage the killer took afterwards. The death panel's whole value is "he had 8 health left"
+   * versus "he had 100", and the stale version of that sentence describes a different fight.
+   *
+   * One byte on an event that happens a few times a minute per player, against a number that
+   * only the server holds at the moment it is true. 0 means there was no killer to ask.
+   */
+  killerHealth: number;
 }
 
 export interface FootstepEvent {
@@ -988,6 +1000,8 @@ export function writeKilled(w: ByteWriter, e: KilledEvent): void {
   w.u8v(e.sourceId);
   w.u8v(e.weaponIndex);
   w.u8v(zoneIndex(e.zone));
+  // Health is 0-255 on the wire everywhere else in this protocol; see `EntitySnapshot.health`.
+  w.u8v(Math.max(0, Math.min(255, Math.round(e.killerHealth))));
 }
 
 export function writeFootstep(w: ByteWriter, e: FootstepEvent): void {
@@ -1666,6 +1680,7 @@ export function readEvents(r: ByteReader, count: number, sink: EventSink): boole
         e.sourceId = r.u8v();
         e.weaponIndex = r.u8v();
         e.zone = zoneAt(r.u8v());
+        e.killerHealth = r.u8v();
         if (r.overran) return false;
         sink.onKilled?.(e);
         break;
@@ -1730,7 +1745,7 @@ const damageScratch: DamageEvent = {
   y: 0,
   z: 0,
 };
-const killedScratch: KilledEvent = { targetId: 0, sourceId: 0, weaponIndex: 0, zone: 'torso' };
+const killedScratch: KilledEvent = { targetId: 0, sourceId: 0, weaponIndex: 0, zone: 'torso', killerHealth: 0 };
 const footstepScratch: FootstepEvent = {
   entityId: 0,
   x: 0,

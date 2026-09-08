@@ -42,6 +42,7 @@ import { MatchHarness } from './debug/MatchHarness';
 import { Speedometer } from './debug/Speedometer';
 import { nowMs } from '../shared/core/Clock';
 import { isLegalGameTransition, type GameStateId } from '../shared/core/GameStates';
+import type { HeaderSlot } from '../shared/modes/GameMode';
 import { playability } from '../shared/ui/Capabilities';
 import { readDeviceCapabilities } from './input/DeviceCapabilities';
 import {
@@ -131,6 +132,9 @@ interface StateHandlers {
 }
 
 const stateChangePayload = { from: 'BOOT' as GameStateId, to: 'BOOT' as GameStateId };
+
+/** F8. Shared rather than a fresh literal per frame; nothing mutates it. */
+const EMPTY_HEADER: readonly HeaderSlot[] = [];
 
 const netLog = logger('join');
 
@@ -1236,6 +1240,18 @@ export class Game {
     // from state that outlives it — which is what makes it survive a pause and a rejoin without
     // anything being remembered across either.
     if (match !== undefined) match.setAimWarning(aimWarningText(state));
+    /**
+     * F8's mode header, on the same predicate the banner and the board share.
+     *
+     * `resultSurfacesVisible` is the arena test round 4 established: the waiting room has no
+     * objectives worth a strip, and a header showing three neutral flags in a room with no flags
+     * would be the fourth surface that forgot to ask. The slots themselves come from the mode
+     * and are drawn without interpretation — this line is the whole of the HUD's knowledge of
+     * what Domination is.
+     */
+    if (match !== undefined) {
+      match.setHeaderSlots(resultSurfacesVisible(state) ? match.headerSlots : EMPTY_HEADER);
+    }
     this.screens.pauseMenu.setDebugAvailable(debugUnlocked(state));
   }
 
