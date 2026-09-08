@@ -62,6 +62,16 @@ export interface RenderableActor {
   readonly visual: BotVisualState;
   /** False while dead or not yet in the fight. Drives the initial fall pose. */
   readonly participating: boolean;
+  /**
+   * What this body is carrying, so the renderer can put it in their hands (round 5, F4).
+   *
+   * Not new state. A remote player's comes from `EntitySnapshot.weaponIndex`, which the
+   * cosmetic audit already lists as §4.15 gameplay and which has been on the wire since M10;
+   * a local bot's is the def `drawBotWeapon` dealt it at spawn. The interface is where the two
+   * meet, exactly as it is for the pose — and it is the reason F4's first item needed no wire
+   * change at all. Null means an unknown id, and an unarmed body is better than a wrong one.
+   */
+  readonly weaponId: string | null;
   renderX(alpha: number): number;
   renderY(alpha: number): number;
   renderZ(alpha: number): number;

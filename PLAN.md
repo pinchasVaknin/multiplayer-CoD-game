@@ -8732,6 +8732,16 @@ places this milestone has touched:
   `buildZoneGeometry` walks `HUMANOID_RIG.boxes` — the same boxes `Ballistics` tests a round
   against. What you shoot is what you see, by construction rather than by discipline. **F4 is a
   proposal to break that identity**, and that is the whole of F4.
+
+  **Round 5 executed F4 and broke it, in one direction and by a measured amount.** The paragraph
+  above stands as the statement of what was at stake; what actually happened is in *"bodies, and
+  the identity that had to be broken in exactly one direction"* below. The short version: the
+  head and the torso are still exactly the rig and diverge by zero, the legs swing and the arms
+  are posed onto the weapon, and the worst divergence is 0.412 m on a leg and 0.257 m on an arm
+  — both on the two zones carrying the lowest multipliers in the game. It is measured every run
+  by `npm run readability` rather than promised here. The identity is now a rule about *which*
+  boxes rather than about all of them, and that is the thing a later session must not quietly
+  widen.
 - **F9, one session ago**, found the darkest map in the game was dark because a number in a
   *painter* was 0.019 where it should have been 0.07. With no assets there is no texture to
   inspect in an image editor; the only way to know what a surface looks like is to compute it,
@@ -13016,3 +13026,244 @@ round.
   harnesses, and the one number the brief for a rendering feature asks for is the one thing only
   a real browser can produce. That is not a gap this session should close, but it is the reason
   every cosmetic session ends with the same list.
+
+
+## Playtest round 5 — bodies, and the identity that had to be broken in exactly one direction
+
+**F4**: *"A torso box and a head. No arms, no legs, no walk cycle, no weapon in the hands."* The
+largest visual item in the round, and the one where the report and the tree disagreed most.
+
+### Two thirds of the report was already false, and the measurement says why it read as true
+
+`HUMANOID_RIG` has carried `armL`, `armR`, `legL` and `legR` since M2, and `BotMesh` has drawn
+all four since M3 — `buildZoneGeometry(['torso', 'arm', 'leg'])`, one merged mesh. The limbs
+were there. Two things made them invisible, and both are numbers rather than opinions:
+
+- **They could not move.** Four boxes welded into one static mesh with the torso. A limb that
+  never moves is a bump on a silhouette.
+- **The two legs are 4 cm apart.** `legL` and `legR` sit at ±0.11 and are 0.18 wide, so their
+  inner faces are at ∓0.02. At 1080p and 90° that gap is **4.3 px at 5 m, 1.1 px at 20 m and
+  0.43 px at 50 m.** Sub-pixel legs are no legs, and the report was reading a picture correctly
+  while describing it wrongly.
+
+This is the shape of mistake round 5's own preamble says to kill before fixing — the withdrawn
+auto-reload item. Killing it changed the work: a session that had only added an animation would
+have left a standing body reading as a pillar, and one that had only widened the stance would
+have broken the rig for no gain. **What makes the legs read is that they move**, which the
+probe now says in the same units: the soles are 0.976 m apart at full stride, which is 26 px at
+20 m against the standing gap's 1.1.
+
+The third claim was correct and had no caveat: nothing anywhere advanced a phase.
+
+### The weapon was not missing. It was the third description of a rifle
+
+`buildGearGeometry` held five hand-typed boxes — a body, a magazine and a stock — the same on
+every bot regardless of what `drawBotWeapon` dealt them. That is worse than absent, and it is
+the exact defect round 4's F15 removed once already: `WeaponIcons` was a second description of
+what a weapon looks like, it drifted, and the fix was to project the killfeed's glyph from
+`WeaponModelSpec` so there is one source. This was the third.
+
+`buildHeldWeaponGeometry` is that source applied to the third place that needed it. Same specs,
+same parts, `lens` and `reticle` skipped for the same reason `WeaponSilhouette` skips them, and
+the scale baked in because a shared geometry has no root to scale.
+
+**It is not `buildWeaponModel`.** The viewmodel is five draw calls and a fresh set of
+geometries, and it is five because the magazine and the charging handle are separate groups so
+a reload can move them — a thing nothing outside the first person can see. So a held weapon is
+one merged geometry with one material, cached per weapon id on `BotRenderer`: **ten bots drawing
+from an eleven-weapon arsenal build four or five geometries, not ten.** The material is the
+viewmodel's own shared gunmetal; a held weapon allocates none of its own.
+
+The plumbing was the easy half, exactly as the brief predicted. `RenderableActor` gained
+`weaponId`, and **neither side needed anything new**: a remote player's comes from
+`EntitySnapshot.weaponIndex`, on the wire since M10 and already in the cosmetic audit's
+allowlist as §4.15 gameplay state; a local bot's is `weapons.definition.id`, derived rather than
+stored for the same reason `weaponProfile` is — `applyWeaponDef` can change the gun under a
+live bot.
+
+### The identity is rewritten, not silently dropped
+
+`BotMesh` has said since M3: *"The mesh IS the rig: the boxes drawn here are the boxes a round
+is tested against, so what you can hit is what you can see."* The M12 planning section quotes it
+and says **"F4 is a proposal to break that identity, and that is the whole of F4."** It was
+right, so the sentence is rewritten rather than left standing, and the M12 bullet above has been
+rewritten with it.
+
+What it says now:
+
+- **The head and the torso are still exactly the rig.** They are the two boxes that decide
+  fights and nothing moves them by a millimetre.
+- **The arms and the legs are not.** The legs swing about their hips and the arms are pitched
+  0.55 rad forward onto the weapon, while `HitboxRig` keeps both boxes upright.
+
+F4 states the rule — *"if the legs move and the hitbox does not, that is correct and must be
+stated in `PLAN.md` so nobody later fixes it"* — and the reason it is correct is that a hitbox
+following a cosmetic animation is a cosmetic deciding gameplay, which is the §4.15 line. The rig
+takes a yaw and a stance scale and nothing else, deliberately, and that has not changed.
+
+**Stating it as prose is weaker than stating it as a number, so it is a number.** `npm run
+readability` prints how far each drawn limb gets from its box, in metres and in pixels at the
+three distances the browser check names:
+
+| Limb | Worst | at 5 m | at 20 m | at 50 m | |
+|---|---:|---:|---:|---:|---|
+| leg | 0.412 m | 45 px | 11 px | 4.5 px | `limbMult` 0.92-0.94, the cheapest hit in the game |
+| arm | 0.257 m | 28 px | 7 px | 2.8 px | a pose, not an animation — it never moves |
+| torso | **0.000 m** | 0 | 0 | 0 | exactly the rig, and it decides fights |
+| head | **0.000 m** | 0 | 0 | 0 | exactly the rig |
+
+The divergence is confined to the two zones `HitboxRig`'s own comment calls *"the silhouette
+edges where a sloppy spray lands"*, and they carry the two lowest multipliers in the game. That
+is not a coincidence, it is the reason the split falls where it does.
+
+### The gait is distance, not time, and that is what keeps it inside the boundary
+
+F4's constraint: *"The animation is a function of replicated state that already exists. If you
+find yourself wanting to send a phase, stop."* The strongest form is not to read velocity off
+the snapshot either. **The phase is the integral of the distance the body was drawn to move**,
+which the renderer already has because it just computed it — so there is no phase on the wire,
+none in a snapshot, and no interface between the simulation and the animation at all. A remote
+player and a local bot walk the same way because they covered the same ground.
+
+It also removes the failure a time-driven cycle has and that people notice: legs that keep
+walking while the body is stopped against a wall.
+
+`shared/ai/Gait.ts` holds it, next to `BotVisualState.ts`, which is the same category of thing —
+cosmetic data both halves of the partition have to agree about. It is in `shared/` for the
+reason `MapLuminance`, `HudSurfaces` and `SkyProfile` are: so a headless process can read it.
+
+**Two things it cannot do, and both are geometry rather than tuning.**
+
+`STRIDE_METRES` is anchored to **cadence**, which is what an eye reads and is near-constant
+across running speeds at about three footfalls a second. At this game's `walkSpeed` of 4.6 m/s,
+3.07 m per cycle gives exactly 3.00 footfalls a second, and 4.50 at `sprintSpeed` 6.9. Measured,
+not asserted — the probe prints the table.
+
+But a rigid leg on a hip has no knee, so its sole can only travel `2 · L · sin(swing)` = 0.976 m
+while the body covers 3.07 m. **68% of the stride is foot slide, and no amount of tuning removes
+it.** Choosing the stride the other way round — the one a knee-less leg can cover honestly —
+would put the cadence at eleven footfalls a second at a walk, which is not a run, it is a blur.
+The slide is the price of the readable option and the probe prints the receipt.
+
+And the sole rises 0.156 m at the extremes of the swing, because a rigid leg sweeps an arc.
+Nothing compensates, and that is a decision with two rejected alternatives: dropping the leg
+away from the hip opens a hole at the pelvis, and dipping the whole body moves the head and
+torso boxes — the two the table above keeps at zero. At 4.6 m/s a body is running and a runner's
+feet do leave the ground, so the artefact points at the truth.
+
+### What the probe asserts, and it has no numbers in it
+
+Four rules, each exact, in the same discipline the sky table keeps:
+
+| Rule | Why it is a rule and not a taste |
+|---|---|
+| a cycle later is the same pose | a gait that is not periodic pops once a stride |
+| the right leg is the left one half a cycle on | one that is not antisymmetric is a hop |
+| both soles are on the ground at mid-stride | one whose sole is not is a body on tiptoe |
+| a body that is not moving has its legs down | the phase stops with the body, so without the amplitude term the legs freeze mid-stride |
+
+Plus one the respawn path needs: a 500 m jump wraps into one cycle rather than looping 163 times.
+
+Cadence, slide and divergence are **readings**, printed and not asserted. They are consequences
+of a rigid leg with no knee, nobody has agreed a bound for them, and inventing one here is what
+this file's own exit-code note bans.
+
+The red control is the tree this session started from: the 4 cm gap, in pixels, next to the
+0.976 m the stride opens up.
+
+### The cost, and the instancing question answered rather than dodged
+
+Three meshes per body became six: body, head, gear, two legs and a weapon. On a ten-bot roster
+that is **30 draw calls to 60**.
+
+What pays for it is that **the geometries are shared now and were not before**. `BotMesh`'s
+constructor used to call `buildZoneGeometry` twice and `buildGearGeometry` once *per bot* — ten
+bodies merging and uploading ten identical copies of the same boxes. Splitting the legs out
+would have made it thirty. They are built once in `BotAssets` and referenced by every mesh:
+**geometry uploads go from 30 to 4 for the whole roster**, plus one per distinct weapon.
+
+Instancing was considered and refused, and the argument is written into `BotAssets` rather than
+left as a shrug. One `InstancedMesh` per team would fold the legs into two draw calls, but every
+limb's world matrix would then be composed on the CPU and re-uploaded each frame — and the scene
+graph is already composing the death fall, the flinch lean, the stance scale and the gait
+correctly, for free, in the right order. Trading that for draw calls nobody has shown to be the
+bottleneck is the wrong trade until a frame report says otherwise. It is written down so the
+next person has the argument rather than the guess.
+
+### Measured
+
+Every number came out of a run in this session.
+
+**`npm run readability`** — the gait table above: 5 rules green, cadence 1.82 / 3.00 / 4.50
+footfalls a second at crouch / walk / sprint, slide 68%, and the divergence and red-control
+figures quoted above.
+
+**`npm run check`** green — 314 files across the partition (up 2: `Gait.ts` and the two probe
+sections), and **the cosmetic audit unchanged at 19 snapshot fields.** Nothing was added to the
+wire and no simulated value moved.
+
+**`npm run harness`** — 5 matches, 5 completed, and the five scorelines are **identical to the
+P13 and P8 runs earlier in this session** (75-66, 75-66, 62-75, 44-75, 75-63 on the same seeds).
+Third time in a row, and it is the point: `RenderableActor` gained a field and `Bot` gained a
+getter, and a seeded simulation produced the same ticks.
+
+**`npm run skirmish`** — FLOW CHECK PASSED. 3 clients, 3 migrations and 0 failed, 0 misrouted,
+0 mispredictions in all three windows. A control on the shared change, like P8's.
+
+**The bundle**: 1,393.55 kB raw / 398.97 kB gzip, against P8's 1,390.33 / 398.07 — **+3.22 kB
+raw, +0.90 kB gzip** for the gait, the held-weapon builder and the body rework.
+
+### What was not verified
+
+- **`npm run leak` cannot see any of this, and it was run anyway.** The brief names it, so it
+  ran: 100 cycles, subscriptions 29 → 29 (+0), heap 13.24 → 13.92 MiB (+0.68), LEAK CHECK
+  PASSED. But `HeadlessClient` builds no `ClientMatch`, no `BotRenderer` and no `three` at all,
+  so what those numbers prove is that the *server* still releases what it allocates. The
+  claim that a body's meshes are released with it rests on reading instead: `BotMesh.dispose`
+  now clears its group and disposes **nothing**, because every geometry on it belongs to
+  `BotAssets` or to `BotRenderer`'s weapon cache and both are disposed with the renderer. That
+  inversion is the one thing here a reviewer should check by eye — the old per-bot `disposables`
+  list would have torn shared geometry out from under the other nine bodies on the map.
+- **No frame numbers.** The brief asks for `frameReport()` with a full ten-bot roster before and
+  after. Same limit as P8: the preview pane never fires `requestAnimationFrame`. The draw-call
+  and upload arithmetic above is the part that can be established headlessly.
+- **Nothing about how it looks.** Whether 0.55 rad reads as a rifleman rather than a sleepwalker,
+  whether 68% slide is visible at 20 m, and whether the weapon sits in the hands rather than
+  near them are all judgements about a picture. The probe says the arithmetic holds.
+- **The bodies were never rendered.** As with P8's shader, this compiles and bundles without
+  anything having drawn a frame.
+
+### Needs a browser
+
+- **`frameReport()`, 600 samples, with a full ten-bot roster, before and after.** Depot at night
+  with ten bodies is the case: six draw calls each against three, and the shared geometry is
+  meant to more than pay for it.
+- **A bot walking across the frame at 5 m, 20 m and 50 m** — the brief's own check. At 5 m the
+  legs should read as two legs; at 50 m the *silhouette* should tell you the weapon, which is
+  the argument for putting the real one in their hands.
+- **A bot strafing while shooting.** The phase is driven by ground covered, so a sideways body
+  still walks — whether that reads as a sidestep or as a moonwalk is the thing a distance-driven
+  cycle can get wrong and no probe can see.
+- **A bot stopping.** The amplitude eases to zero over about a tenth of a second, so the legs
+  should settle upright rather than freezing mid-stride. Then watch one **die and respawn**: the
+  fall should still work, and the first frame after the respawn must not read as a sprint.
+- **Two bots with different weapons, side by side at 30 m.** A BREACHER 12 and a KESTREL .338
+  should be different shapes. If they are not, the held geometry is not carrying the spec.
+- **A Chopper Gunner over a moving roster.** The bodies are drawn hot and cold by group, and the
+  legs are new children of those groups — a leg that renders in the wrong group, or not at all,
+  would show there and nowhere else.
+
+### Found while here
+
+- **`BotMesh` was building ten copies of the same three geometries.** Not F4, and not new — it
+  has been true since M9 split the renderer out — but it is the reason the cost note in the
+  brief was worth taking seriously, and it is why six draw calls per body is affordable at all.
+- **`RemoteActor` already resolved a weapon id and nothing read it.** `weaponId` has been set
+  from `weaponIndex` on every snapshot since M10, and until this session the only consumer was
+  the killfeed's own lookup. A replicated fact with no reader is the shape this file keeps
+  recording; this one was benign, and it is the reason F4's first item cost no wire change.
+- **`Bot.grounded` exists and the gait does not use it.** A body mid-jump keeps whatever phase
+  it had, because the phase only advances with horizontal distance and a jump is mostly
+  vertical. Adding the flag to `RenderableActor` to special-case a jump would be widening a
+  shared interface to reach a case nobody reported; it is written here instead so the next
+  report about it lands on a known decision rather than an oversight.

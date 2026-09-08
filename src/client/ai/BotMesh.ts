@@ -2,16 +2,57 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { clamp01, lerp } from '../../shared/core/MathUtil';
 import { HUMANOID_RIG, type HitZone } from '../../shared/combat/HitboxRig';
+import {
+  AMPLITUDE_RESPONSE,
+  ARM_PITCH,
+  advanceGaitPhase,
+  gaitAmplitude,
+  gaitAt,
+  LEG_PIVOT_Y,
+} from '../../shared/ai/Gait';
 import { palette } from '../ui/Palette';
 import type { BotTeam } from '../../shared/ai/Combatant';
 
 /**
- * A bot's body, and the way it dies (brief S6.8).
+ * A bot's body, and the way it dies (brief S6.8; playtest round 5, F4).
  *
- * The mesh *is* the rig, the same way M2's dummies are: the boxes drawn here are the boxes
- * a round is tested against, so what you can hit is what you can see. The only geometry
- * that is not a hitbox is the rifle, which exists because an unarmed silhouette shooting
- * at you reads as a bug, and a visor plate, which exists because you have to be able to
+ * ## The mesh was the rig, and now it is the rig plus an animation
+ *
+ * Until round 5 this file could say *"the mesh IS the rig: the boxes drawn here are the boxes
+ * a round is tested against, so what you can hit is what you can see"*, and that sentence is
+ * rewritten rather than left standing, because F4 required breaking it in one direction.
+ *
+ * **The head and the torso are still exactly the rig.** They are the two boxes a fight is
+ * decided by, and nothing here moves them by a millimetre.
+ *
+ * **The arms and the legs are not, and that is the decision.** The legs swing about their hips
+ * and the arms are pitched forward onto the weapon, while `HitboxRig` keeps both boxes upright
+ * where it always had them. F4 states the rule plainly — *"if the legs move and the hitbox does
+ * not, that is correct"* — and the reason it is correct is that a hitbox that followed a
+ * cosmetic animation would be a cosmetic deciding gameplay, which is the §4.15 line. The rig
+ * takes yaw and a stance scale and nothing else, deliberately, and that has not changed.
+ *
+ * The cost is a real one and it is published rather than described: `npm run readability`
+ * prints how far each drawn limb gets from its box over a whole gait cycle. It lands on the
+ * arm and leg zones, which `HitboxRig`'s own comment calls *"the silhouette edges where a
+ * sloppy spray lands"* — the two zones with the lowest multipliers in the game.
+ *
+ * ## What the report was, and what it turned out to be
+ *
+ * F4 read *"a torso box and a head. No arms, no legs, no walk cycle, no weapon in the hands."*
+ * Two thirds of that was already false in the tree: `HUMANOID_RIG` has had `armL`, `armR`,
+ * `legL` and `legR` since M2 and this file has drawn all four since M3 — welded into **one
+ * static mesh** with the torso, with the two leg boxes four centimetres apart, which is
+ * 1.1 px at twenty metres. Limbs that cannot move and cannot be told apart are limbs nobody
+ * sees. They are separate nodes now, and the legs are driven by `shared/ai/Gait.ts`.
+ *
+ * The weapon was real and was worse than absent: five hand-typed boxes, identical on every
+ * bot no matter what `drawBotWeapon` dealt them — the third description of what a rifle looks
+ * like, after the one round 4's F15 deleted. It comes from `buildHeldWeaponGeometry` now,
+ * through the same `WeaponModelSpec` the viewmodel and the killfeed glyph are built from.
+ *
+ * The one piece of geometry here that is still not a hitbox and never was is the chest rig and
+ * the visor plate, which exist so a silhouette is not a bare stack of boxes and so you can
  * tell at a glance which way a bot is facing.
  *
  * **Ragdoll-lite death.** S6.8 asks for an impulse-driven fall taken from the killing hit,
@@ -36,7 +77,35 @@ const MAX_SHOVE = 0.55;
 const FLINCH_SECONDS = 0.18;
 const FLINCH_ANGLE = 0.075;
 
-export interface BotMaterials {
+/**
+ * Where the weapon sits, in rig-local metres, and it is authored against the arm pose above.
+ *
+ * The hands end up near (0, 0.94, -0.32) at `ARM_PITCH`; the weapon's origin is the centre of
+ * its receiver, so it sits a little above and behind them. Held **level** rather than dipped
+ * into a low ready: a bot spends much of a match shooting, `WeaponSystem` gives this file no
+ * firing pose to switch to, and a muzzle pointing at the floor during a firefight is a worse
+ * lie than one pointing where the body is facing.
+ */
+const WEAPON_OFFSET = { x: 0.04, y: 1.02, z: -0.3 } as const;
+
+/**
+ * Everything every body on the map shares: four materials and four geometries.
+ *
+ * The geometries are new in round 5 and they are the answer to F4's cost note. Before it,
+ * `BotMesh`'s constructor called `buildZoneGeometry` twice and `buildGearGeometry` once **per
+ * bot** — ten bodies merging and uploading ten identical copies of the same boxes. Splitting
+ * the legs out would have made that thirty. They are built once here and referenced by every
+ * mesh, which is what pays for the extra nodes: the draw calls go from three per body to six,
+ * and the geometry uploads go from thirty to four for the whole roster.
+ *
+ * Instancing was considered and refused. One `InstancedMesh` per team would fold the legs into
+ * two draw calls, but every limb's world matrix would then have to be composed on the CPU and
+ * re-uploaded each frame — and the scene graph is already composing the death fall, the flinch
+ * lean, the stance scale and the gait correctly, for free, in the right order. Trading that for
+ * draw calls nobody has shown to be the bottleneck is the wrong trade until a frame report says
+ * otherwise. It is written down here so the next person has the argument rather than the guess.
+ */
+export interface BotAssets {
   readonly bodyA: THREE.Material;
   readonly bodyB: THREE.Material;
   readonly headA: THREE.Material;
@@ -52,10 +121,19 @@ export interface BotMaterials {
   readonly bodyHostile: THREE.Material;
   readonly headHostile: THREE.Material;
   readonly gear: THREE.Material;
+
+  /** Torso and arms, merged. The arms carry `ARM_PITCH` baked in; the torso is the rig. */
+  readonly bodyGeometry: THREE.BufferGeometry;
+  readonly headGeometry: THREE.BufferGeometry;
+  /** Chest rig and visor. The only geometry here that is not a hitbox. */
+  readonly gearGeometry: THREE.BufferGeometry;
+  /** One leg, built with the hip pivot at its own origin so both legs share it. */
+  readonly legGeometry: THREE.BufferGeometry;
+
   dispose(): void;
 }
 
-export function buildBotMaterials(): BotMaterials {
+export function buildBotAssets(): BotAssets {
   // Two silhouettes that separate at a glance in grey-box lighting without either team
   // reading as "the enemy" by colour alone: cool slate versus warm sand.
   const bodyA = new THREE.MeshLambertMaterial({ color: 0x4a5a72 });
@@ -75,6 +153,11 @@ export function buildBotMaterials(): BotMaterials {
   const headHostile = new THREE.MeshLambertMaterial({ color: hostileHead() });
   const gear = new THREE.MeshLambertMaterial({ color: 0x1d2026 });
 
+  const bodyGeometry = buildBodyGeometry();
+  const headGeometry = buildZoneGeometry(['head']);
+  const gearGeometry = buildGearGeometry();
+  const legGeometry = buildLegGeometry();
+
   const repaint = palette.onChange(() => {
     bodyHostile.color.setHex(hostileBody());
     headHostile.color.setHex(hostileHead());
@@ -88,6 +171,10 @@ export function buildBotMaterials(): BotMaterials {
     bodyHostile,
     headHostile,
     gear,
+    bodyGeometry,
+    headGeometry,
+    gearGeometry,
+    legGeometry,
     dispose(): void {
       repaint();
       bodyA.dispose();
@@ -97,6 +184,10 @@ export function buildBotMaterials(): BotMaterials {
       bodyHostile.dispose();
       headHostile.dispose();
       gear.dispose();
+      bodyGeometry.dispose();
+      headGeometry.dispose();
+      gearGeometry.dispose();
+      legGeometry.dispose();
     },
   };
 }
@@ -124,7 +215,12 @@ export class BotMesh {
   private readonly body: THREE.Mesh;
   private readonly head: THREE.Mesh;
   private readonly gear: THREE.Mesh;
-  private readonly disposables: Array<{ dispose(): void }> = [];
+  /** Hip nodes. The geometry hangs below each one, so a rotation here is a hip rotation. */
+  private readonly legL = new THREE.Group();
+  private readonly legR = new THREE.Group();
+  /** The weapon in the hands. Null until the renderer knows which one this body carries. */
+  private weapon: THREE.Mesh | null = null;
+  private weaponId: string | null = null;
 
   private readonly quat = new THREE.Quaternion();
   private readonly axis = new THREE.Vector3();
@@ -142,27 +238,81 @@ export class BotMesh {
   private flinchZ = 0;
 
   /**
+   * The gait, integrated from the ground this body was drawn to cover.
+   *
+   * `seeded` is what keeps a respawn from being read as a sprint: the first frame after a
+   * teleport has no meaningful previous position, so the delta is dropped rather than divided
+   * by `dt`. `endDeath` clears it, which is the same signal the renderer already uses.
+   */
+  private phase = 0;
+  private amplitude = 0;
+  private lastX = 0;
+  private lastZ = 0;
+  private seeded = false;
+
+  /**
    * `hostile` forces the everybody-is-an-enemy look regardless of substrate side (post-M8).
    *
    * Decided at construction rather than per frame because it cannot change during a match:
    * a mode is Free-for-All or it is not. `BotDirector` passes its own `freeForAll`, which
    * `Match` has already set from the registry entry by the time the roster is populated.
    */
-  constructor(team: BotTeam, materials: BotMaterials, hostile = false) {
-    this.body = new THREE.Mesh(
-      buildZoneGeometry(['torso', 'arm', 'leg']),
-      hostile ? materials.bodyHostile : team === 'A' ? materials.bodyA : materials.bodyB,
-    );
+  constructor(team: BotTeam, assets: BotAssets, hostile = false) {
+    const skin = hostile ? assets.bodyHostile : team === 'A' ? assets.bodyA : assets.bodyB;
+    this.body = new THREE.Mesh(assets.bodyGeometry, skin);
     this.head = new THREE.Mesh(
-      buildZoneGeometry(['head']),
-      hostile ? materials.headHostile : team === 'A' ? materials.headA : materials.headB,
+      assets.headGeometry,
+      hostile ? assets.headHostile : team === 'A' ? assets.headA : assets.headB,
     );
-    this.gear = new THREE.Mesh(buildGearGeometry(), materials.gear);
+    this.gear = new THREE.Mesh(assets.gearGeometry, assets.gear);
+
+    /**
+     * The hips, at the top face of each leg box.
+     *
+     * `LEG_PIVOT_Y` comes from `Gait`, which reads it off `HUMANOID_RIG` — so the node the leg
+     * turns about and the box a shot is tested against are the same number, and a change to
+     * the rig's proportions moves both. The x offsets are the boxes' own, which is what keeps
+     * the legs where the hitboxes are while the swing takes them away from it.
+     */
+    for (const [node, sign] of [
+      [this.legL, -1],
+      [this.legR, 1],
+    ] as const) {
+      const mesh = new THREE.Mesh(assets.legGeometry, skin);
+      mesh.castShadow = true;
+      node.position.set(sign * LEG_OFFSET_X, LEG_PIVOT_Y, 0);
+      node.add(mesh);
+    }
+
     this.body.castShadow = true;
     this.head.castShadow = true;
     this.gear.castShadow = true;
-    this.disposables.push(this.body.geometry, this.head.geometry, this.gear.geometry);
-    this.group.add(this.body, this.head, this.gear);
+    this.group.add(this.body, this.head, this.gear, this.legL, this.legR);
+  }
+
+  /**
+   * Put a weapon in this body's hands, or take it away.
+   *
+   * The geometry is owned and cached by `BotRenderer` — ten bots carrying four distinct
+   * weapons build four of them — so this only ever swaps the reference. A null id draws
+   * nothing, which is the right answer for a body whose weapon index did not resolve: an
+   * unarmed silhouette is honest and a wrong silhouette is misinformation, and F4's own
+   * argument for this feature is that the silhouette tells you what you are about to be shot
+   * with.
+   */
+  setWeapon(weaponId: string | null, geometry: THREE.BufferGeometry | null, material: THREE.Material): void {
+    if (weaponId === this.weaponId) return;
+    this.weaponId = weaponId;
+    if (this.weapon !== null) {
+      this.group.remove(this.weapon);
+      this.weapon = null;
+    }
+    if (geometry === null) return;
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.position.set(WEAPON_OFFSET.x, WEAPON_OFFSET.y, WEAPON_OFFSET.z);
+    this.weapon = mesh;
+    this.group.add(mesh);
   }
 
   get isDying(): boolean {
@@ -191,6 +341,9 @@ export class BotMesh {
     this.deathTime = 0;
     this.group.quaternion.identity();
     this.group.scale.set(1, 1, 1);
+    // A respawn is a cut, not a run across the map. Dropping the seed makes the next frame's
+    // position delta the start of a new integration rather than a fifty-metre stride.
+    this.seeded = false;
   }
 
   /** A non-fatal hit: a short jolt away from the impact. */
@@ -217,9 +370,10 @@ export class BotMesh {
    * Place the body for this frame. `x/y/z` is the interpolated feet pose, `yaw` the facing
    * and `heightScale` the stance compression that the hitbox rig is also using.
    */
-  apply(x: number, y: number, z: number, yaw: number, heightScale: number): void {
+  apply(x: number, y: number, z: number, yaw: number, heightScale: number, dt: number): void {
     this.group.rotation.set(0, 0, 0);
     this.group.scale.set(1, this.dying ? 1 : heightScale, 1);
+    this.stepGait(x, z, dt);
 
     if (!this.dying) {
       this.group.position.set(x, y, z);
@@ -248,9 +402,47 @@ export class BotMesh {
     this.group.quaternion.copy(this.spinQuat).multiply(this.quat);
   }
 
+  /**
+   * Nothing here owns geometry any more.
+   *
+   * Every mesh on this body references one of `BotAssets`' four shared geometries or one of
+   * `BotRenderer`'s cached weapons, all of which outlive the body and are released by their
+   * owners. Disposing them from here would tear the geometry out from under the other nine
+   * bots on the map — which is exactly what the per-bot `disposables` list would have done the
+   * moment the geometries were shared.
+   */
   dispose(): void {
-    for (const d of this.disposables) d.dispose();
     this.group.clear();
+  }
+
+  /**
+   * Advance the walk cycle from the ground this body was drawn to cover.
+   *
+   * Distance rather than time (see `shared/ai/Gait.ts`): the phase is the integral of movement,
+   * so a body held against a wall stops walking and a body that is not moving eases back to a
+   * standing pose through the amplitude rather than freezing mid-stride.
+   *
+   * The two legs are the only things this touches. The rig is not consulted and cannot be
+   * written: `HitboxRig` takes a yaw and a stance scale, and this is neither.
+   */
+  private stepGait(x: number, z: number, dt: number): void {
+    if (!this.seeded) {
+      this.lastX = x;
+      this.lastZ = z;
+      this.seeded = true;
+    }
+    const distance = Math.hypot(x - this.lastX, z - this.lastZ);
+    this.lastX = x;
+    this.lastZ = z;
+
+    this.phase = advanceGaitPhase(this.phase, distance);
+    const target = this.dying ? 0 : gaitAmplitude(dt > 1e-5 ? distance / dt : 0);
+    // Exponential rather than linear, so the response is the same at 30 fps and at 144.
+    this.amplitude += (target - this.amplitude) * (1 - Math.exp(-AMPLITUDE_RESPONSE * Math.max(0, dt)));
+
+    const pose = gaitAt(this.phase, this.amplitude);
+    this.legL.rotation.x = pose.left.swing;
+    this.legR.rotation.x = pose.right.swing;
   }
 
   private applyFlinch(): void {
@@ -262,7 +454,15 @@ export class BotMesh {
   }
 }
 
-/** The mesh IS the rig: same boxes, same offsets, nothing to drift out of sync. */
+/**
+ * The x offset of a leg box, so the hip nodes sit where the hitboxes do.
+ *
+ * Read off the rig rather than typed, for the same reason `LEG_PIVOT_Y` is: two numbers
+ * describing one hip is one number too many.
+ */
+const LEG_OFFSET_X = Math.abs(HUMANOID_RIG.boxes.find((b) => b.name === 'legL')?.ox ?? 0.11);
+
+/** Boxes straight off the rig: same offsets, same extents, nothing to drift out of sync. */
 function buildZoneGeometry(zones: readonly HitZone[]): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
   for (const box of HUMANOID_RIG.boxes) {
@@ -279,8 +479,63 @@ function buildZoneGeometry(zones: readonly HitZone[]): THREE.BufferGeometry {
 }
 
 /**
- * The parts that are not hitboxes: a rifle held at the chest, a chest rig, and a visor
- * plate on the front of the head. Rig-local -Z is forward, matching `HitboxRig`.
+ * The torso, plus the two arms pitched forward onto the weapon.
+ *
+ * One mesh because neither half moves: `ARM_PITCH` is a pose rather than a joint, so baking it
+ * into the geometry costs nothing and a node holding a constant rotation would be a draw call
+ * with no animation behind it.
+ *
+ * The arms are rotated about the **top face of their own hitbox** — the shoulder — so the
+ * divergence from the box grows from zero there down to its worst at the hand. That is the
+ * cheapest place for it to be: it is the end of a limb, on the zone with the lowest multiplier
+ * in the game, and it is measured by `npm run readability` rather than described here.
+ */
+function buildBodyGeometry(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  for (const box of HUMANOID_RIG.boxes) {
+    if (box.zone !== 'torso' && box.zone !== 'arm') continue;
+    const g = new THREE.BoxGeometry(box.sx, box.sy, box.sz);
+    if (box.zone === 'arm') {
+      const shoulder = box.oy + box.sy * 0.5;
+      // Pivot to the origin, turn, and hang it back off the shoulder.
+      g.translate(0, -box.sy * 0.5, 0);
+      g.rotateX(ARM_PITCH);
+      g.translate(box.ox, shoulder, box.oz);
+    } else {
+      g.translate(box.ox, box.oy, box.oz);
+    }
+    parts.push(g);
+  }
+  const merged = mergeGeometries(parts, false);
+  for (const p of parts) p.dispose();
+  if (merged === null) throw new Error('Failed to merge bot body geometry');
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+/**
+ * One leg, built with its hip at the local origin so a node rotation is a hip rotation.
+ *
+ * Both legs share it. The box is the rig's own `legL` — same extents — hung below the pivot
+ * rather than centred on `oy`, which is the only difference between this and what
+ * `buildZoneGeometry` would produce, and the whole reason the leg can turn.
+ */
+function buildLegGeometry(): THREE.BufferGeometry {
+  const box = HUMANOID_RIG.boxes.find((b) => b.name === 'legL');
+  if (box === undefined) throw new Error('HUMANOID_RIG has no "legL" box to build a leg from.');
+  const g = new THREE.BoxGeometry(box.sx, box.sy, box.sz);
+  g.translate(0, -box.sy * 0.5, box.oz);
+  g.computeBoundingSphere();
+  return g;
+}
+
+/**
+ * The parts that are not hitboxes and never were: a chest rig and a visor plate.
+ *
+ * The rifle used to be here — five hand-typed boxes, the same on every bot regardless of what
+ * `drawBotWeapon` dealt it, and the third description in the client of what a rifle looks like
+ * after the one round 4's F15 deleted. It is `buildHeldWeaponGeometry` now, off the same
+ * `WeaponModelSpec` the viewmodel is built from. Rig-local -Z is forward, matching `HitboxRig`.
  */
 function buildGearGeometry(): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
@@ -289,11 +544,6 @@ function buildGearGeometry(): THREE.BufferGeometry {
     g.translate(ox, oy, oz);
     parts.push(g);
   };
-  // Rifle: body, magazine, stock. Held across the chest, muzzle forward.
-  put(0.06, 0.07, 0.62, 0.16, 1.24, -0.28);
-  put(0.05, 0.16, 0.08, 0.16, 1.13, -0.16);
-  put(0.05, 0.09, 0.2, 0.16, 1.22, 0.12);
-  // Chest rig and visor, so the silhouette is not a bare stack of boxes.
   put(0.4, 0.24, 0.06, 0, 1.24, -0.15);
   put(0.15, 0.09, 0.03, 0, 1.68, -0.12);
 

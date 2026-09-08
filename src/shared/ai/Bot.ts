@@ -235,6 +235,17 @@ export class Bot implements Combatant, PathClient {
     return weaponProfileFor(this.weapons.definition.class);
   }
 
+  /**
+   * `RenderableActor.weaponId` — what to draw in this bot's hands (round 5, F4).
+   *
+   * Derived from the live `WeaponSystem` for the same reason `weaponProfile` above is: a bot
+   * whose weapon was swapped under it by `applyWeaponDef` would otherwise be drawn holding
+   * the one it used to have. Same expression, same object, one frame later.
+   */
+  get weaponId(): string | null {
+    return this.weapons.definition.id;
+  }
+
   get state(): BotState {
     return this.brain.state;
   }

@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { RenderableActor } from '../../shared/ai/BotVisualState';
 import type { BotTeam } from '../../shared/ai/Combatant';
-import { BotMesh, buildBotMaterials, type BotMaterials } from './BotMesh';
+import { BotMesh, buildBotAssets, type BotAssets } from './BotMesh';
+import { buildHeldWeaponGeometry, heldWeaponMaterial } from '../weapons/WeaponMesh';
 
 /**
  * Draws the bots (M9).
@@ -27,6 +28,12 @@ import { BotMesh, buildBotMaterials, type BotMaterials } from './BotMesh';
  * **Animations are started from serials, not from calls.** `BotVisualState` carries a
  * counter per event; this keeps the last value it saw and starts a fall or a flinch when
  * one moves. A frame that never rendered cannot swallow a death.
+ *
+ * **The weapons are cached here, per id** (round 5, F4). A held weapon is one merged geometry
+ * and the roster repeats itself — ten bots draw from an eleven-weapon arsenal, so four or five
+ * distinct geometries cover a match. Caching them on the renderer rather than the body means a
+ * bot that swaps weapons, or a mesh rebuilt after a respawn, costs a map lookup; caching them
+ * for the process would mean holding geometry across map changes for a saving nobody measured.
  */
 export class BotRenderer {
   /** Everything this renderer owns, as one node. Added to the scene by `ClientMatch`. */
@@ -43,7 +50,10 @@ export class BotRenderer {
   readonly groupA = new THREE.Group();
   readonly groupB = new THREE.Group();
 
-  private readonly materials: BotMaterials;
+  private readonly assets: BotAssets;
+  /** One merged geometry per weapon id, shared by every body carrying that weapon. */
+  private readonly weapons = new Map<string, THREE.BufferGeometry>();
+  private readonly weaponMaterial: THREE.Material;
   private readonly meshes = new Map<number, BotMesh>();
   /** Last serial this renderer acted on, per bot. */
   private readonly seen = new Map<number, { death: number; spawn: number; flinch: number }>();
@@ -57,8 +67,12 @@ export class BotRenderer {
   constructor(
     private readonly actors: () => Iterable<RenderableActor>,
     private readonly hostileLook: () => boolean,
+    anisotropy = 1,
   ) {
-    this.materials = buildBotMaterials();
+    this.assets = buildBotAssets();
+    // The viewmodel's own gunmetal, already built for the process. A held weapon allocates no
+    // material of its own — see `heldWeaponMaterial`.
+    this.weaponMaterial = heldWeaponMaterial(anisotropy);
     this.group.name = 'bots';
     this.groupA.name = 'bots:A';
     this.groupB.name = 'bots:B';
@@ -78,6 +92,9 @@ export class BotRenderer {
       this.present.add(actor.entityId);
       const mesh = this.meshFor(actor);
       this.applyEvents(actor, mesh);
+      // Cheap and idempotent: `setWeapon` returns immediately unless the id actually moved,
+      // which it does once per body per life rather than once per frame.
+      mesh.setWeapon(actor.weaponId, this.weaponGeometry(actor.weaponId), this.weaponMaterial);
       mesh.advance(dt);
       mesh.apply(
         actor.renderX(alpha),
@@ -85,6 +102,7 @@ export class BotRenderer {
         actor.renderZ(alpha),
         actor.renderYaw(alpha),
         actor.renderScale(alpha),
+        dt,
       );
     }
 
@@ -97,7 +115,7 @@ export class BotRenderer {
 
     // `freeForAll` cannot change during a match — a mode is FFA or it is not — so the
     // hostile look is decided once, here, exactly as it was at construction before M9.
-    const mesh = new BotMesh(bot.team, this.materials, this.hostileLook());
+    const mesh = new BotMesh(bot.team, this.assets, this.hostileLook());
     this.meshes.set(bot.entityId, mesh);
     this.groupFor(bot.team).add(mesh.group);
 
@@ -154,6 +172,16 @@ export class BotRenderer {
     }
   }
 
+  /** The merged geometry for a weapon id, built once and kept. Null for an unknown id. */
+  private weaponGeometry(weaponId: string | null): THREE.BufferGeometry | null {
+    if (weaponId === null) return null;
+    const existing = this.weapons.get(weaponId);
+    if (existing !== undefined) return existing;
+    const built = buildHeldWeaponGeometry(weaponId);
+    this.weapons.set(weaponId, built);
+    return built;
+  }
+
   /** Only walked when the counts disagree, which is a roster change and not a frame event. */
   private retireAbsent(): void {
     for (const [id, mesh] of this.meshes) {
@@ -174,6 +202,10 @@ export class BotRenderer {
     this.seen.clear();
     this.group.removeFromParent();
     this.group.clear();
-    this.materials.dispose();
+    // The bodies reference these and are already gone; the weapon material is the viewmodel's
+    // and belongs to `disposeWeaponSurfaces`, which the page teardown owns.
+    for (const geometry of this.weapons.values()) geometry.dispose();
+    this.weapons.clear();
+    this.assets.dispose();
   }
 }

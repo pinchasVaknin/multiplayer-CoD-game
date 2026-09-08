@@ -339,6 +339,83 @@ function addOpticSurfaces(out: Map<SurfaceKey, THREE.MeshStandardMaterial>): voi
   );
 }
 
+/**
+ * One weapon as a single merged geometry, for a body seen from the outside (round 5, F4).
+ *
+ * ## Why not `buildWeaponModel`
+ *
+ * F4 asks for the weapon in a bot's hands, and the obvious answer — build the viewmodel and
+ * parent it to the body — is five draw calls and a fresh set of geometries **per bot**, on a
+ * roster of ten, for an object that is between five and fifty metres away and is never
+ * reloaded, never aimed down and never animated. The magazine and the charging handle are
+ * separate groups in a viewmodel precisely so the reload can move them; nothing out here can
+ * see a reload.
+ *
+ * So this is the same parts through the same specs, merged flat into one geometry with the
+ * scale baked in. One draw call, and `BotRenderer` caches it per weapon id so ten bots
+ * carrying four distinct weapons build four geometries rather than ten.
+ *
+ * ## Why it is here and not in `ai/`
+ *
+ * Round 4's F15 is the reason. `WeaponIcons` was a second description of what a rifle looks
+ * like and it drifted; the fix was to project the killfeed's glyph from `WeaponModelSpec`, so
+ * there is one source. A hand-typed rifle in `BotMesh` was the *third* description of one — it
+ * has been there since M3 and it is what every bot has carried regardless of what
+ * `drawBotWeapon` dealt them. This deletes it rather than adding to it.
+ *
+ * `lens` and `reticle` are skipped for the same reason `WeaponSilhouette` skips them: they are
+ * apertures rather than material, and a filled optic window at fifty metres is a black dot on
+ * the one part of the weapon that should read as glass.
+ */
+export function buildHeldWeaponGeometry(weaponId: string): THREE.BufferGeometry {
+  const spec = modelSpecFor(weaponId);
+  const parts: THREE.BufferGeometry[] = [];
+
+  for (const part of [...bodyBoxes(spec), ...magazineBoxes(spec), ...chargingBoxes(spec)]) {
+    if (part.surface === 'lens' || part.surface === 'reticle') continue;
+    const g = new THREE.BoxGeometry(part.w, part.h, part.d);
+    if (part.rx !== undefined) g.rotateX(part.rx);
+    if (part.ry !== undefined) g.rotateY(part.ry);
+    if (part.rz !== undefined) g.rotateZ(part.rz);
+    g.translate(part.x, part.y, part.z);
+    parts.push(g);
+  }
+
+  for (const part of [...bodyTubes(spec), ...magazineTubes(spec)]) {
+    if (part.surface === 'lens' || part.surface === 'reticle') continue;
+    // Half the sides of the viewmodel's: a barrel that is twelve-sided at arm's length is
+    // eight-sided at twenty metres and nobody can tell, and this is ten of them.
+    const sides = Math.max(5, Math.round((part.sides ?? 12) * 0.5));
+    const g = new THREE.CylinderGeometry(part.radius, part.radius, part.length, sides, 1);
+    if (part.vertical !== true) g.rotateX(Math.PI / 2);
+    g.translate(part.x, part.y, part.z);
+    parts.push(g);
+  }
+
+  const merged = mergeGeometries(parts, false);
+  for (const g of parts) g.dispose();
+  if (merged === null) throw new Error(`Weapon "${weaponId}" merged to no geometry.`);
+  // The viewmodel scales its root; a shared geometry has no root to scale, so it is baked.
+  merged.scale(spec.scale, spec.scale, spec.scale);
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+/**
+ * The one material a held weapon uses.
+ *
+ * A viewmodel splits into gunmetal, polymer and glove because it fills a third of the screen
+ * and the eye reads the materials apart. At the distance a body is seen the split is three
+ * draw calls buying a difference nobody can resolve, so the whole weapon takes the receiver's
+ * finish. It is the *shared* gunmetal, already built for the viewmodel — a held weapon
+ * allocates no material of its own.
+ */
+export function heldWeaponMaterial(anisotropy: number): THREE.Material {
+  const material = sharedWeaponSurfaces(anisotropy).get('gunmetal');
+  if (material === undefined) throw new Error('The shared weapon surfaces have no gunmetal.');
+  return material;
+}
+
 /** Release the process-wide materials. Only the page teardown has any business calling it. */
 export function disposeWeaponSurfaces(): void {
   for (const set of cachedSurfaces.values()) {

@@ -545,6 +545,10 @@ export class Match {
     this.botRenderer = new BotRenderer(
       deps.actors ?? (() => this.bots.bots),
       () => this.bots.freeForAll,
+      // Round 5, F4: the bodies carry the weapon they were dealt, drawn with the viewmodel's
+      // own shared gunmetal, so the filtering setting reaches them the way it reaches the gun
+      // in the player's hands.
+      deps.anisotropy,
     );
     deps.scene.add(this.botRenderer.group);
 

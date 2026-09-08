@@ -19,7 +19,23 @@ import {
 import { MATERIAL_KEYS } from '../shared/world/maps/types';
 import { linearLuminance, readFloor } from '../shared/world/MapLuminance';
 import { readSkyline, skylineFeatureHeight, SKY_PROFILE_SAMPLES } from '../shared/world/SkyProfile';
-import { simCos, simSin } from '../shared/core/SimMath';
+import {
+  advanceGaitPhase,
+  armDivergence,
+  gaitAmplitude,
+  gaitAt,
+  legDivergence,
+  LEG_LENGTH,
+  LEG_PIVOT_Y,
+  MAX_SWING,
+  slideFraction,
+  soleExcursion,
+  solePosition,
+  STRIDE_METRES,
+} from '../shared/ai/Gait';
+import { HUMANOID_RIG } from '../shared/combat/HitboxRig';
+import { DEFAULT_MOVEMENT_CONFIG } from '../shared/player/MovementConfig';
+import { simCos, simSin, simTan } from '../shared/core/SimMath';
 import {
   makeScreenPoint,
   perspectiveMatrixFrom,
@@ -784,6 +800,223 @@ function hex(value: number): string {
   return `0x${value.toString(16).padStart(6, '0')}`;
 }
 
+// -- round 5 F4: the walk cycle, and the boxes it walks away from -------------
+
+/** Phases sampled across a cycle. Prime-ish, so no sample lands only on the easy angles. */
+const GAIT_SAMPLES = 257;
+
+/**
+ * The gait, and the two questions about a body that do not need a screen.
+ *
+ * F4 asked for arms, legs, a walk cycle and the weapon in hand. Three of those are pictures and
+ * belong on the browser list. The fourth thing — **how far the drawn limb gets from the box a
+ * shot is tested against** — is arithmetic, and F4 requires it to be stated rather than left as
+ * a shrug: *"if the legs move and the hitbox does not, that is correct and must be stated in
+ * PLAN.md so nobody later fixes it."* Stating it as a number is stronger than stating it as
+ * prose, so this is the number.
+ *
+ * The rules below have no thresholds in them, which is the same discipline the sky table keeps.
+ * A gait that is not periodic pops once a stride; one that is not antisymmetric is a hop; one
+ * whose sole is off the ground at mid-stride is a body on tiptoe. All three are exact
+ * properties of the arithmetic and none of them is a matter of taste. Cadence, slide and
+ * divergence are readings: they are consequences of a rigid leg with no knee, nobody has agreed
+ * a bound for them, and inventing one here is what this file's exit-code note bans.
+ */
+function gaitTable(): number {
+  let failures = 0;
+  const check = (name: string, ok: boolean, detail: string): void => {
+    if (!ok) failures++;
+    console.log('  %s %s  %s', ok ? 'ok  ' : 'FAIL', pad(name, 46), detail);
+  };
+
+  console.log('\n== round 5 F4: the walk cycle ==\n');
+  console.log(
+    '  leg %sm on a hip %sm up, stride %sm per cycle, peak swing %s deg\n',
+    LEG_LENGTH.toFixed(2),
+    LEG_PIVOT_Y.toFixed(2),
+    STRIDE_METRES.toFixed(2),
+    ((MAX_SWING * 180) / Math.PI).toFixed(1),
+  );
+
+  // -- 1. a cycle is a cycle -------------------------------------------------
+  let worstPeriod = 0;
+  let worstMirror = 0;
+  for (let i = 0; i < GAIT_SAMPLES; i++) {
+    const phase = i / GAIT_SAMPLES;
+    const here = gaitAt(phase, 1);
+    const roundTrip = gaitAt(phase + 1, 1);
+    worstPeriod = Math.max(worstPeriod, Math.abs(here.left.swing - roundTrip.left.swing));
+    // The right leg is the left one half a cycle on, which is what makes this a walk.
+    const half = gaitAt(phase + 0.5, 1);
+    worstMirror = Math.max(worstMirror, Math.abs(here.right.swing - half.left.swing));
+  }
+  check(
+    'a cycle later is the same pose',
+    worstPeriod < 1e-12,
+    `worst disagreement ${worstPeriod.toExponential(1)} rad over ${GAIT_SAMPLES} phases`,
+  );
+  check(
+    'the right leg is the left one half a cycle on',
+    worstMirror < 1e-12,
+    `worst disagreement ${worstMirror.toExponential(1)} rad`,
+  );
+
+  // -- 2. the sole is on the ground when a runner's would be -----------------
+  const mid = [0, 0.5];
+  let worstPlanted = 0;
+  for (const phase of mid) {
+    worstPlanted = Math.max(worstPlanted, Math.abs(solePosition(gaitAt(phase, 1).left).rise));
+  }
+  check(
+    'both soles are on the ground at mid-stride',
+    worstPlanted < 1e-12,
+    `worst lift ${(worstPlanted * 1000).toFixed(3)} mm at phases 0 and 0.5`,
+  );
+
+  // -- 3. a standing body stands ---------------------------------------------
+  const still = gaitAt(0.31, gaitAmplitude(0));
+  check(
+    'a body that is not moving has its legs down',
+    still.left.swing === 0 && still.right.swing === 0,
+    'amplitude 0 at speed 0, so the pose is upright whatever the phase was',
+  );
+
+  /**
+   * -- 4. the phase survives a respawn ---------------------------------------
+   *
+   * A body carried fifty metres by a respawn integrates fifty metres of stride in one frame.
+   * The wrap has to be a modulo rather than a loop, or the same event is a stall.
+   */
+  const teleported = advanceGaitPhase(0.4, 500);
+  check(
+    'a 500 m jump wraps into one cycle',
+    teleported >= 0 && teleported < 1,
+    `phase ${teleported.toFixed(4)} after a respawn-sized delta`,
+  );
+
+  // -- readings ---------------------------------------------------------------
+
+  console.log('\n  cadence, which is what an eye reads:\n');
+  console.log('  %s %s %s', pad('gait', 10), padStart('m/s', 7), padStart('footfalls/s', 13));
+  for (const [name, speed] of [
+    ['crouch', DEFAULT_MOVEMENT_CONFIG.crouchSpeed],
+    ['walk', DEFAULT_MOVEMENT_CONFIG.walkSpeed],
+    ['sprint', DEFAULT_MOVEMENT_CONFIG.sprintSpeed],
+  ] as const) {
+    console.log(
+      '  %s %s %s',
+      pad(name, 10),
+      padStart(speed.toFixed(1), 7),
+      padStart(((speed / STRIDE_METRES) * 2).toFixed(2), 13),
+    );
+  }
+
+  /**
+   * The slide, and it is the honest half of this feature.
+   *
+   * A rigid leg on a hip can move its sole `2 * L * sin(swing)` fore and aft. The body covers
+   * `STRIDE_METRES` in the same cycle. Everything in between is the foot sliding across the
+   * ground, and no amount of tuning removes it — only a knee does, which is a rigged model and
+   * is R4-F4 rather than this session.
+   */
+  console.log(
+    '\n  sole travel %sm per cycle against %sm of ground: **%s%% of the stride is slide**.',
+    soleExcursion(1).toFixed(3),
+    STRIDE_METRES.toFixed(2),
+    (slideFraction(1) * 100).toFixed(0),
+  );
+  console.log(
+    '  sole rise at the extremes of the swing: %sm, which is a running body leaving the ground.',
+    solePosition({ swing: MAX_SWING }).rise.toFixed(3),
+  );
+
+  /**
+   * The divergence table: F4's constraint, as a measurement.
+   *
+   * Reported in metres and in pixels at the three distances the browser check names, because
+   * "a quarter of a metre" and "four pixels at fifty metres" are the same fact and only one of
+   * them answers *does this matter*. The pixel figure uses the same 1080p / 90 degree frame the
+   * crosshair table above is computed against.
+   */
+  console.log('\n  how far the drawn limb gets from its hitbox:\n');
+  console.log(
+    '  %s %s %s %s %s  %s',
+    pad('limb', 8),
+    padStart('worst', 8),
+    padStart('at 5 m', 9),
+    padStart('at 20 m', 9),
+    padStart('at 50 m', 9),
+    'zone multiplier',
+  );
+  const rows: ReadonlyArray<readonly [string, number, string]> = [
+    ['leg', legDivergence(MAX_SWING), 'limbMult, 0.92-0.94 — the cheapest hit in the game'],
+    ['arm', armDivergence(), 'limbMult, and it never moves: this is a pose, not an animation'],
+    ['torso', 0, 'exactly the rig, and it decides fights'],
+    ['head', 0, 'exactly the rig'],
+  ];
+  for (const [limb, metres, note] of rows) {
+    console.log(
+      '  %s %s %s %s %s  %s',
+      pad(limb, 8),
+      padStart(`${metres.toFixed(3)}m`, 8),
+      padStart(`${metresToPx(metres, 5).toFixed(0)}px`, 9),
+      padStart(`${metresToPx(metres, 20).toFixed(0)}px`, 9),
+      padStart(`${metresToPx(metres, 50).toFixed(1)}px`, 9),
+      note,
+    );
+  }
+
+  /**
+   * The red control, and it is the tree this session started from.
+   *
+   * F4 read *"a torso box and a head. No arms, no legs."* The rig has had four limb boxes since
+   * M2 and `BotMesh` drew all of them — welded into one static mesh, with the two leg boxes
+   * four centimetres apart. Four centimetres is the number that makes the report true without
+   * the report being right, and it is printed here because it is the reason a fix that only
+   * added an animation would have left the legs unreadable.
+   */
+  const legs = HUMANOID_RIG.boxes.filter((box) => box.zone === 'leg');
+  const inner = legs.map((box) => Math.abs(box.ox) - box.sx * 0.5);
+  const gap = Math.min(...inner) * 2;
+  console.log(
+    '\n  RED CONTROL — the gap between the two leg boxes, which is what F4 saw as "no legs":' +
+      ' %sm, or %spx at 5 m, %spx at 20 m and %spx at 50 m.',
+    gap.toFixed(3),
+    metresToPx(gap, 5).toFixed(1),
+    metresToPx(gap, 20).toFixed(1),
+    metresToPx(gap, 50).toFixed(2),
+  );
+  /**
+   * And the answer to it, which is not a wider stance.
+   *
+   * The legs were not moved apart — they are still on their boxes, four centimetres from each
+   * other. What makes them read as two legs is that at full stride the soles are a metre apart
+   * fore and aft, which is twenty-five times the standing gap at every distance. A body only
+   * looks like a pillar while it is standing still, and a body standing still is one nobody is
+   * trying to read the legs of.
+   */
+  console.log(
+    '  ...against %sm between the soles at full stride: %spx at 5 m, %spx at 20 m, %spx at 50 m.',
+    soleExcursion(1).toFixed(3),
+    metresToPx(soleExcursion(1), 5).toFixed(0),
+    metresToPx(soleExcursion(1), 20).toFixed(0),
+    metresToPx(soleExcursion(1), 50).toFixed(0),
+  );
+
+  console.log('\ngait checks failed: %d', failures);
+  return failures;
+}
+
+/**
+ * How many pixels a size subtends at a distance, in the frame the tables above describe.
+ *
+ * Half the screen height is `tan(fov/2)` metres at one metre, so the scale is one division.
+ */
+function metresToPx(metres: number, distance: number): number {
+  const halfHeightAtOneMetre = simTan(((FOV_DEG * 0.5) * Math.PI) / 180);
+  return (metres / (distance * halfHeightAtOneMetre)) * (VIEWPORT_HEIGHT * 0.5);
+}
+
 // -- main -------------------------------------------------------------------
 
 console.log('OPERATOR readability probe — playtest round 4, P9 (B2, B12, F9)');
@@ -798,6 +1031,7 @@ const arenaFailures = arenaBrightness();
 const crosshairContrastFailures = crosshairContrastTable();
 const decalFailures = decalSizeTable();
 const skyFailures = skyTable();
+const gaitFailures = gaitTable();
 
 console.log('\n== summary ==');
 console.log('  crosshair gaps at the floor: %d of %d hip-fire states', crosshair.atFloor, crosshair.examined);
@@ -807,6 +1041,7 @@ console.log('  arena brightness failures:   %d', arenaFailures);
 console.log('  crosshair contrast failures: %d', crosshairContrastFailures);
 console.log('  decals outside the range:    %d', decalFailures);
 console.log('  sky failures:                %d', skyFailures);
+console.log('  gait failures:               %d', gaitFailures);
 
 /**
  * The exit code, and the one thing here that can fail a build.
@@ -850,6 +1085,15 @@ if (crosshairContrastFailures > 0) {
     crosshairContrastFailures,
     GROUNDS.length,
     MIN_CONTRAST,
+  );
+  process.exit(1);
+}
+if (gaitFailures > 0) {
+  console.error(
+    '\nGAIT CHECK FAILED: %d of the walk cycle properties do not hold. A cycle that is not ' +
+      'periodic pops once a stride, one that is not antisymmetric is a hop, and a sole off the ' +
+      'ground at mid-stride is a body on tiptoe.',
+    gaitFailures,
   );
   process.exit(1);
 }
