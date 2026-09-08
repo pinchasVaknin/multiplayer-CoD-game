@@ -1,6 +1,6 @@
-import { levelForXp, MAX_LEVEL, XP_TO_MAX } from '../../shared/meta/Levels';
-import { unlocksAtLevel } from '../../shared/meta/Unlocks';
-import { matchMinutes, XP_SOURCES, xpSource } from '../../shared/meta/XpRules';
+import { levelForXp, MAX_LEVEL, XP_TO_MAX } from './Levels';
+import { unlocksAtLevel } from './Unlocks';
+import { matchMinutes, XP_SOURCES, xpSource } from './XpRules';
 
 /**
  * The XP / unlock simulator (brief S7).
@@ -17,6 +17,18 @@ import { matchMinutes, XP_SOURCES, xpSource } from '../../shared/meta/XpRules';
  *
  * The profile is never touched. This is a projection, not a grant — `MetaPanel` has a
  * separate, explicit button for granting XP.
+ *
+ * ## Why it is in `shared/` (playtest round 5, F10)
+ *
+ * It was in `client/debug/`, next to the panel that draws it, and it has never touched the
+ * DOM: every line of it is arithmetic over `XP_SOURCES`, `LEVEL_XP` and the unlock tables.
+ * F10 asked for the weapon ladder to be re-spaced, and the only honest unit for that is the
+ * **match** rather than the level — which made "what is a match worth" a question a headless
+ * probe had to be able to ask. A second copy of `xpPerMatch` in `server/` would have been the
+ * two-sources mistake this file's own reason for existing warns about, so the projection moved
+ * to where both the panel and `npm run progression` can read the one of it. Same argument as
+ * `stepLevelBar`'s, one file away: the half that can be wrong invisibly belongs where it can
+ * be measured.
  */
 
 /**

@@ -9,7 +9,7 @@ import { resolveWeaponDef } from '../../shared/weapons/Attachments';
 import type { WeaponDef } from '../../shared/weapons/WeaponDefs';
 import type { DebugOverlay } from './DebugOverlay';
 import { SaveInspector } from './SaveInspector';
-import { AVERAGE_MATCH, simulateXp, simulationToLines } from './XpSimulator';
+import { AVERAGE_MATCH, simulateXp, simulationToLines } from '../../shared/meta/XpSimulator';
 
 /**
  * The M6 debug panels (brief S7).

@@ -14,8 +14,37 @@ import type { SaveV2, WeaponSaveData } from './SaveData';
  * different questions:
  *
  * **Account level** gates weapons, perks, equipment and field upgrades. Weapons use the
- * `unlockLevel` values M5 authored into the defs and enforced nowhere — S6.2's "enforce
- * the `unlockLevel` values" is this file, and the numbers were not touched.
+ * `unlockLevel` values on the defs — S6.2's "enforce the `unlockLevel` values" is this file.
+ * M5 authored those numbers and nothing questioned them until playtest round 5's F10, which
+ * is the one place the ladder has since been re-cut; the paragraph below is what it was cut
+ * against.
+ *
+ * ## The weapon ladder, and the two rules it is spaced by (playtest round 5, F10)
+ *
+ * F10 was *"at level 1 there is exactly one primary and all five classes show it"*. The
+ * levels moved; the mechanism did not. Two rules decided where they moved to, and both are
+ * asserted by `npm run progression` rather than left as intent:
+ *
+ * **1. Level 1 is a choice between feels, not a single gun.** Three primaries open there —
+ * the carbine, the WASP and the BREACHER — chosen so that `docs/BALANCE.md`'s band table
+ * gives each of them a different band and a different way of losing the others. Neither
+ * sniper nor either LMG is among them, because both cost a mechanic nobody has been taught
+ * yet. The set itself is written down in the probe, where changing it is an argument.
+ *
+ * **2. The remaining eight are spaced in matches, not in levels.** A level is not a unit of
+ * play here: `LEVEL_XP` is front-loaded hard enough that levels 2 through 5 all land inside
+ * the first match, so two unlocks three levels apart can arrive on one summary screen and
+ * "re-spaced" would be a claim about arithmetic nobody experiences. The probe converts each
+ * `unlockLevel` into the match an average player reaches it in and fails if two rungs share
+ * one. The ordering underneath is **archetype before variant**: the KESTREL and the BASTION
+ * are the fourth and fifth *kinds* of weapon, so they sit at 11 and 15, ahead of the two
+ * remaining ARs at 21 and 25. All five archetypes are owned inside the first ten matches and
+ * the long tail is variants.
+ *
+ * The VULCAN at 2 is the one deliberate exception to that ordering, and it is not about the
+ * weapon. Levels 2 to 5 are the first summary screen a new player ever sees; a flourish that
+ * names nothing there is the report's *"three separate systems all answer not yet"* said a
+ * fourth time. It is the cheapest thing on the ladder to pay that moment with.
  *
  * **Per-weapon kills** gate that weapon's attachments. A suppressor is something you earn
  * *with the gun*, not something you are handed for playing at all, and tying it to kills

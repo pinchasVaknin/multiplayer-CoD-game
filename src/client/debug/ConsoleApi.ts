@@ -22,7 +22,7 @@ import { ttkTableToMarkdown } from './ArsenalHarness';
 import type { Harness } from './Harness';
 import { Handover } from './Handover';
 import type { MatchHarness } from './MatchHarness';
-import { simulateXp, simulationToLines } from './XpSimulator';
+import { simulateXp, simulationToLines } from '../../shared/meta/XpSimulator';
 import { cssHex, palette } from '../ui/Palette';
 
 /**

@@ -122,7 +122,7 @@ export const SMG_WASP: WeaponDef = {
 
   penetration: 0.12,
 
-  unlockLevel: 4,
+  unlockLevel: 1,
   attachmentSlots: ['optic', 'muzzle', 'barrel', 'underbarrel', 'magazine', 'stock', 'laser'],
 
   adsFovScale: 0.86,
@@ -260,7 +260,7 @@ export const SMG_MERIDIAN: WeaponDef = {
 
   penetration: 0.16,
 
-  unlockLevel: 15,
+  unlockLevel: 18,
   attachmentSlots: ['optic', 'muzzle', 'barrel', 'underbarrel', 'magazine', 'stock', 'laser'],
 
   adsFovScale: 0.84,

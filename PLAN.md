@@ -12503,3 +12503,274 @@ viewports, PASS. `npm run leak` 100 cycles, subscriptions 29 → 29 (+0), heap 1
   carries on — which is correct, and is why F13 was a hitch rather than a crash. It is also why
   it survived a milestone: the fallback works, so nothing failed, so nothing was reported until
   a human sat through it.
+
+
+## Playtest round 5 — level 1, and a screen with nothing to offer at it
+
+**F10** was *"open two or three primaries at level 1"*: one weapon available, ten gated from 4 to
+38, and all five classes therefore showing `M4 CARBINE`. It is the only item this round that is a
+decision rather than a defect, and P13 asked for the decision to be made out loud rather than
+implemented from the brief's suggestion.
+
+### The five classes were identical because nothing else was legal, and the file said so
+
+The mechanism is one sentence and it was already written down, in `Loadouts.ts`'s own doc
+comment: **at level 1 the arsenal was the carbine and the sidearm, so five slots had nothing to
+differ on.** Everything else a class holds is gated too — FRAG and FLASHBANG are the only
+equipment under level 3, MUNITIONS the only field upgrade under 6, and tier 2 is empty until 5 —
+which leaves LIGHTWEIGHT and QUICKDRAW as the entire space of level-1 choice. Four combinations
+for five slots, and the shipped table used one of them twice.
+
+That is also why the presets could not have been fixed on their own. `sanitiseLoadout` runs after
+`normaliseSave` on every load and after every edit; a default naming a locked weapon is reverted
+to `ar_carbine` and the reversion is *reported*, so a table that showed a sniper at level 1 would
+have arrived on screen as the carbine anyway. **The presets are downstream of the arsenal, and
+the arsenal is the fix.** The probe below asserts that relationship rather than trusting it: it
+runs `sanitiseLoadout` over all five defaults on a fresh profile and fails if it changes a field.
+
+### The decision: three weapons that lose different fights
+
+The brief suggested the AR that already exists, an SMG and the shotgun, *"to argue with rather
+than implement"*. It is taken, and the argument is `docs/BALANCE.md`'s band table rather than the
+archetype names:
+
+| Level 1 | Its band | What it gives up |
+|---|---|---|
+| M4 CARBINE | 3-shot flat to 25 m, 0.167 s | never the fastest anywhere |
+| WASP 9 | 0-7 m at 0.117 s, the fastest kill in the game | seven rounds and 0.350 s past 18 m |
+| BREACHER 12 | one shell inside 6 m | nothing at all past 13 m, at 90 RPM |
+
+Three rows, three ways of losing. A level-1 arsenal of the carbine and the VULCAN would be two
+entries in one row, which is a second weapon and not a second choice.
+
+**What was refused is the other half of the principle.** Neither sniper and neither LMG opens at
+level 1, and not because they are strong: because each costs a *mechanic* nobody has been taught
+in their first hour — 0.35-0.44 s of scope-in with sway and a glint, and a 0.42 s ADS behind a
+four-second reload. The report's own framing is that a new player's first match is already a loss
+against a VETERAN paying zero XP; handing them the weapon that plays as "I never hit anything" is
+not generosity. The KESTREL is instead the ladder's first *archetype* rung, which is a better use
+of the best unlock in the game than giving it away.
+
+### A level is not a unit of play down here, and that is the whole re-spacing problem
+
+The brief said the curve in `Levels.ts` is the other half of the conversation. It is, and the
+measurement is the reason:
+
+- One match of the shipped `AVERAGE_MATCH` is worth **3,870 XP** (`xpPerMatch`, from `XP_SOURCES`).
+- `xpAtLevelStart(5)` is **3,300**. Levels 2, 3, 4 and 5 are therefore all crossed on the **first
+  summary screen a player ever sees**.
+
+So a gate at level 2 and a gate at level 5 are the same gate to anybody playing, and "re-spaced
+the ladder from 4, 6, 9, 12 to 2, 5, 7, 9" would have been arithmetic nobody experiences. The
+rungs are placed in **matches**, and `npm run progression` asserts them in matches: it converts
+each `unlockLevel` into the match an average player first reaches it in and fails if two
+consecutive rungs share one.
+
+Because `AVERAGE_MATCH` describes a competent player — 18 kills, a third of them headshots — it is
+the optimistic end of the range and therefore the *strict* end for that assertion. The probe also
+prints a second column from a declared `NEWCOMER_MATCH` (6 kills, 1 headshot, 3 assists, no
+longshots, 35% wins, no MVP, 200 challenge XP, worth **2,025 XP**). It is labelled in the source as
+a scenario and not a measurement: this round's reporter was a script that stood still for long
+stretches, so the project has no measured new-player scoreline and this probe does not invent one.
+The two columns bracket the answer instead of one of them pretending to be it.
+
+### The ladder, before and after
+
+| Weapon | Class | Level was → is | Match was → is | Newcomer was → is |
+|---|---|---:|---:|---:|
+| M4 CARBINE | AR | 1 → 1 | 0 → 0 | 0 → 0 |
+| WASP 9 | SMG | 4 → **1** | 1 → 0 | 2 → 0 |
+| BREACHER 12 | SHOTGUN | 9 → **1** | 4 → 0 | 6 → 0 |
+| VULCAN 74 | AR | 6 → **2** | 2 → 1 | 3 → 1 |
+| KESTREL .338 | SNIPER | 18 → **11** | 16 → 5 | 29 → 10 |
+| BASTION 249 | LMG | 25 → **15** | 32 → 10 | 61 → 19 |
+| MERIDIAN P40 | SMG | 15 → **18** | 10 → 16 | 19 → 29 |
+| HALCYON B5 | AR | 12 → **21** | 6 → 22 | 12 → 42 |
+| LONGBOW MK3 | AR | 20 → **25** | 20 → 32 | 37 → 61 |
+| MONOLITH 60 | LMG | 32 → **31** | 55 → 52 | 105 → 98 |
+| VANTAGE SR | SNIPER | 38 → 38 | 80 → 80 | 152 → 152 |
+
+Two rules produced that column, and both are written into `Unlocks.ts` beside the gates they
+explain rather than left as intent:
+
+**Archetype before variant.** The KESTREL and the BASTION are the fourth and fifth *kinds* of
+weapon, so they sit at 11 and 15 — ahead of the two remaining ARs at 21 and 25. All five
+archetypes are owned inside the first ten matches; everything past that is a variant, which is
+the right shape for a long tail and the wrong shape for a first hour.
+
+**One exception, and it is not about the weapon.** The VULCAN at 2 breaks that ordering
+deliberately. Levels 2 to 5 are that first summary screen, and level 2's flourish named nothing at
+all — `unlocksAtLevel(2)` returned an empty list. The report's complaint is that three systems all
+answer "not yet" at the same moment; a level-up caption with nothing in it is a fourth. The VULCAN
+is the cheapest thing on the ladder to pay that moment with.
+
+The tail is unchanged on purpose. The VANTAGE stays at 38 — 80 matches, thirteen hours at ten
+minutes a match — because shortening the ladder was not what was asked for and the top of it is
+the only thing left to want.
+
+### The curve was looked at and deliberately not moved
+
+`LEVEL_XP` is unchanged. Three reasons, in the order they mattered:
+
+1. **Every other gated category is already authored against these numbers.** Twelve perks, five
+   pieces of equipment and four field upgrades sit on this curve. Re-pricing the opening to make
+   levels 2-5 distinct events would move all of them, and F10 is a weapons item.
+2. **The burst is a reward, not an accident.** Four flourishes on the first summary screen is what
+   a front-loaded curve is *for*, and the file says so. The defect was not that the burst exists;
+   it was that nothing was in it.
+3. **The unit problem is solved by measuring in matches**, which the probe now does permanently.
+   That is a smaller change than re-pricing 54 rows and it is the one that stays true if the XP
+   table moves later.
+
+What did move is a **number in a comment that had stopped being true**. `LEVEL_XP` said the first
+ten levels are *"about six matches"*; at 3,870 XP a match it is four to level 10 and five to level
+11. Corrected against the run rather than re-estimated, and the paragraph above it now states how
+front-loaded the opening actually is, because that is the fact anybody re-spacing against this
+table needs first.
+
+### The five classes, and what they are allowed to differ on
+
+| Class | Primary | Perks | Streaks |
+|---|---|---|---|
+| ASSAULT | M4 CARBINE | LIGHTWEIGHT · QUICKDRAW | UAV · CARE PACKAGE · MORTAR |
+| SCOUT | WASP 9 | LIGHTWEIGHT | UAV · COUNTER-UAV · CARE PACKAGE |
+| BREACH | BREACHER 12 | LIGHTWEIGHT · QUICKDRAW | UAV · CARE PACKAGE · SENTRY |
+| SUPPORT | M4 CARBINE | — | UAV · CARE PACKAGE · SENTRY |
+| MARKSMAN | M4 CARBINE | QUICKDRAW | UAV · COUNTER-UAV · MORTAR |
+
+**Two names still share the carbine, and the reason is the decision above rather than the old
+constraint.** SUPPORT wants an LMG and MARKSMAN wants a sniper; those are precisely the two
+archetypes the ladder holds back, and the carbine is the only level-1 primary that holds a fight
+past 15 m. Both become themselves when the ladder pays — the KESTREL at 11, the BASTION at 15 —
+and meanwhile they are separated by the two axes a level-1 profile actually has.
+
+The second of those axes is new here and worth naming: **streaks are gated by kills, not by
+level**, so all six are legal on a fresh profile and they are the widest choice the screen offers
+at level 1. The rule the trios keep is the one that was already in the file — a fresh profile
+should be able to earn everything it has equipped — so nothing above the SENTRY's eight kills
+appears and the CHOPPER GUNNER's twelve is in none of them.
+
+Two smaller things fell out of rewriting the table. `makeSlot` took `lethal`, `tactical` and
+`fieldUpgrade` as parameters and was handed the same three values five times: at level 1 there is
+exactly one legal argument for each, and **a parameter with one legal argument lies about what
+varies**. They are constants in the builder now, with the levels that would make them parameters
+again named in the comment. And `DEFAULT_STREAKS` is gone, because the trio is a per-class
+decision now rather than a default.
+
+### The probe, and it was red on the tree it was written against
+
+`npm run progression` gained a second half. The pattern this file keeps recording is a probe that
+reads the table it is checking and is therefore green on the bug, so the level-1 arsenal is
+**written out in the probe as a decision** — `LEVEL_ONE_PRIMARIES` — and compared against what the
+defs actually gate. Changing the arsenal means arguing with that list.
+
+Run against the tree as it was, before a def was touched:
+
+| # | What it said |
+|---|---|
+| 1 | `WASP 9 is meant to be available at level 1 and is gated at 4.` |
+| 2 | `BREACHER 12 is meant to be available at level 1 and is gated at 9.` |
+| 3 | `classes ASSAULT and MARKSMAN are identical in every field a player can see.` |
+| 4 | `WASP 9 is available at level 1 and no default class carries it.` |
+| 5 | `BREACHER 12 is available at level 1 and no default class carries it.` |
+
+Row 3 is the one nobody reported. F10 said the five classes all *show* the same weapon; ASSAULT
+and MARKSMAN were byte-identical in every field — same weapon, same perks, same equipment, same
+field upgrade, same streaks. Two of the five slots were not similar, they were the same class
+twice, and no browser was needed to see it.
+
+Seven assertions, and each is a way for this to be wrong again:
+
+1. Every weapon in `LEVEL_ONE_PRIMARIES` is a primary and is unlocked on a fresh save.
+2. No other primary is. A ladder with nothing left on it is the other way to fail F10.
+3. The level-1 arsenal spans at least three weapon classes — three of one class is one feel.
+4. No two consecutive gated rungs land in the same match at the optimistic rate.
+5. No two default classes are identical in any field a player can see.
+6. `sanitiseLoadout` changes nothing in any default class on a fresh profile.
+7. Every level-1 primary is carried by at least one default class. An unlock the screen never
+   shows is one nobody finds.
+
+### `XpSimulator` moved to `shared/`
+
+It lived in `client/debug/` beside the F1 panel that draws it, and it has never touched the DOM:
+every line is arithmetic over `XP_SOURCES`, `LEVEL_XP` and the unlock tables. Assertion 4 needs
+to know what a match is worth, and a second copy of `xpPerMatch` in `server/` would have been
+exactly the two-sources mistake the file's own header warns about. It is `shared/meta/XpSimulator.ts`
+now, with two import lines updated and nothing else changed — the same argument `stepLevelBar`
+makes one file away: the half that can be wrong invisibly belongs where it can be measured.
+
+### Measured
+
+Every number came out of a run in this session.
+
+**`npm run progression`** — both halves. The round-4 bar cases 0 failures with the red control
+still not terminating (>36,000 steps, 35,934 crossings), and the new ladder half 5 failures before
+the change and **0 after**. `AVERAGE_MATCH` 3,870 XP, `NEWCOMER_MATCH` 2,025 XP, and the
+before/after ladder table above.
+
+**`npm run check`** green — 311 files across the partition, and the unlock audit reads *"12
+weapons, 12 perks, 4 field upgrades, 5 equipment, 6 camos, every one with an unlock record, and
+all 6 requirement accessors reach the picker."* No `unlockLevel` was added or removed; ten changed
+value.
+
+**`npm run harness`** — 5 matches, 5 completed, 0 incomplete, `rowsOverHundred: 0`, heap 11.9 MiB.
+
+**`npm run skirmish`** — FLOW CHECK PASSED. 3 clients, 3 migrations and 0 failed, 0 misrouted,
+0 mispredictions in all three windows, 0 late builds, heap 28.2 MiB. It is a *control* here
+rather than a test of this change: the skirmish clients carry a hardcoded `ar_carbine` loadout
+and never read `defaultLoadouts`, so what it establishes is that nothing else moved. Its three
+standing `NOT EXERCISED` lines — the post-match hold, the return build and the reconnect — are
+the default-run limitation recorded in the P11 session above and are unrelated to this one.
+
+**No protocol change, and no simulated value changed.** `unlockLevel` is read only by
+`UnlockState`, and bot weapons come from `BOT_ARSENAL` by tier and have never consulted it — so
+what the ten bots on a map carry is identical before and after.
+
+### What was not verified
+
+- **Nothing here is balance.** The three level-1 weapons were chosen against `docs/BALANCE.md`'s
+  existing measurements; no time-to-kill was re-measured and none changed. Whether a first-time
+  player *should* have a one-shot shotgun is a feel question and this round measured no feel.
+- **The pacing numbers are projections, not observations.** "Five matches to the KESTREL" is
+  `xpAtLevelStart(11) / xpPerMatch(AVERAGE_MATCH)` and nothing has played five matches to check
+  it. The newcomer column is a declared scenario and is weaker still — it is an honest bracket,
+  not a measurement.
+- **An existing save between the old and new gates loses a weapon.** The HALCYON went 12 → 21, the
+  LONGBOW 20 → 25 and the MERIDIAN 15 → 18, so a profile in those bands has its primary reverted
+  to the carbine by `sanitiseLoadout` on next load. That is the designed behaviour for a locked
+  item and it is reported rather than silent — but only to the console (see *Found while here*).
+  No migration was written; on a game in playtest with no live population that was judged not to
+  be worth a save-schema field.
+
+### Needs a browser
+
+- **Reset progress, then open `CREATE A CLASS`.** The class strip should read `M4 CARBINE`,
+  `WASP 9`, `BREACHER 12`, `M4 CARBINE`, `M4 CARBINE` down the five rows — the strip's blurb is
+  `requireWeapon(slot.primary.weaponId).name`, so this is the whole visible half of F10.
+- **Open the primary picker on a fresh profile.** Three weapons with no chip, eight with
+  `LEVEL n` — 2, 11, 15, 18, 21, 25, 31, 38. The chips come from `weaponRequirement`, so a wrong
+  number there is a different bug from a wrong gate.
+- **Look at the 3D preview and the stat table for all three.** The screen's argument is that the
+  numbers come from `resolveLoadout` and the model from `buildWeaponModel`; three different
+  weapons at level 1 is the first time a new player can see that argument work.
+- **Play a match and press 1, 2 and 3.** The quick class selector now switches between three
+  genuinely different weapons on a fresh profile, which it has never been able to do.
+- **Finish a match from a fresh profile and watch the level-up flourishes.** Four of them, and the
+  first should name `VULCAN 74`. That caption is `unlocksAtLevel(2)`, which returned an empty list
+  before this session.
+
+### Found while here
+
+- **A reverted loadout is a `console.warn` and nothing else.** `Profile.loadReport` collects every
+  line `sanitiseLoadout` produces and the only reader is `console.warn`. A player whose weapon was
+  taken away by a re-spacing — or by a prestige, which is the same path — is told nothing on
+  screen. Same cause as this session in the sense that raising a gate is what makes it fire, but a
+  different fix (a surface, not a table), so it is recorded rather than done.
+- **Seventeen levels at the top of the ladder unlock nothing at all.** Past the VANTAGE at 38 and
+  COLD-BLOODED at 30, levels 39-55 award only XP. That is 369,000 XP — more than half the curve —
+  against a prestige icon. Not a defect and not in F10's scope; it is the shape of the argument
+  M12's content list will have to answer.
+- **`unlocksAtLevel` is the only reader of the whole ladder as a ladder**, and it is a caption
+  builder. There is no screen anywhere that shows a player what is coming — the picker shows a
+  locked row's level one item at a time. A "next unlock" line on the summary screen would be cheap
+  and is the natural companion to this session; it was not built because F10 did not ask for it.

@@ -93,7 +93,7 @@ export const SHOTGUN_BREACHER: WeaponDef = {
 
   penetration: 0.06,
 
-  unlockLevel: 9,
+  unlockLevel: 1,
   attachmentSlots: ['optic', 'muzzle', 'barrel', 'magazine', 'stock', 'laser'],
 
   adsFovScale: 0.88,

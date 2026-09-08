@@ -75,55 +75,77 @@ export interface ResolvedLoadout {
 /**
  * The five shipped classes.
  *
- * **Everything here is legal on a fresh level-1 profile**, which is a stronger constraint
- * than it looks: at level 1 the arsenal is the carbine and the sidearm, tier 2 is empty
- * until level 5, and the only attachments are the ones that weapon's own kill count has
- * earned — which is none. So all five start with the same weapon, and that is correct
- * rather than lazy. A default set that showed a sniper the player cannot equip would be
- * silently rewritten by `sanitiseLoadout` on first load, and a rewritten default is
- * indistinguishable from a bug.
+ * **Everything here is legal on a fresh level-1 profile**, and that constraint used to
+ * decide the whole table rather than merely bound it: until playtest round 5 the level-1
+ * arsenal was one primary, so all five slots named the carbine and differed only in
+ * whether they took the two perks available at level 1. That is what F10 reported — five
+ * classes and one class — and the fix is upstream of this file. Three primaries open at
+ * level 1 now (see `Unlocks.ts` for the principle and `npm run progression` for the
+ * assertion), so there is finally something for five slots to disagree about.
  *
- * What varies is what *can* vary at level 1: equipment, the two available perks, and the
- * field upgrade. The names are the intent for each slot, and the editor is where they
- * grow into it.
+ * The constraint itself has not moved. A default that named a locked weapon would be
+ * silently rewritten by `sanitiseLoadout` on first load, and a rewritten default is
+ * indistinguishable from a bug; the probe runs `sanitiseLoadout` over all five and fails
+ * if it changes anything.
+ *
+ * **Two names still share the carbine, and it is the same reason as before, narrowed.**
+ * SUPPORT wants an LMG and MARKSMAN wants a sniper, and those are the two archetypes the
+ * ladder deliberately holds back — the BASTION at 15 and the KESTREL at 11. Both fall back
+ * to the carbine because it is the only level-1 primary that holds a fight past 15 m
+ * (`docs/BALANCE.md`'s band table), and both become themselves when the ladder pays out.
+ * What separates them meanwhile is what a level-1 profile can actually vary: the two
+ * available perks and the streak trio.
  */
 export function defaultLoadouts(): LoadoutSlot[] {
   return [
-    makeSlot('ASSAULT', 'frag', 'flashbang', ['lightweight', null, 'quickdraw'], 'munitions'),
-    makeSlot('SCOUT', 'frag', 'flashbang', ['lightweight', null, null], 'munitions'),
-    makeSlot('BREACH', 'frag', 'flashbang', [null, null, 'quickdraw'], 'munitions'),
-    makeSlot('SUPPORT', 'frag', 'flashbang', [null, null, null], 'munitions'),
-    makeSlot('MARKSMAN', 'frag', 'flashbang', ['lightweight', null, 'quickdraw'], 'munitions'),
+    // The all-rounder takes both perks it can have and the three cheapest streaks.
+    makeSlot('ASSAULT', 'ar_carbine', ['lightweight', null, 'quickdraw'], ['uav', 'care_package', 'mortar']),
+    // Movement and information. QUICKDRAW buys least on the fastest ADS in the arsenal.
+    makeSlot('SCOUT', 'smg_wasp', ['lightweight', null, null], ['uav', 'counter_uav', 'care_package']),
+    // Close the distance, then a room at a time. The sentry holds the room afterwards.
+    makeSlot('BREACH', 'shotgun_breacher', ['lightweight', null, 'quickdraw'], ['uav', 'care_package', 'sentry']),
+    // Holds ground, so neither perk on offer fits: LIGHTWEIGHT is movement and QUICKDRAW is
+    // a rifle's problem. Its own perks and its LMG arrive together, at 14 and 15.
+    makeSlot('SUPPORT', 'ar_carbine', [null, null, null], ['uav', 'care_package', 'sentry']),
+    // Holds an angle rather than a position: QUICKDRAW, no movement perk, and the two
+    // streaks that answer a lane — a sweep and a barrage.
+    makeSlot('MARKSMAN', 'ar_carbine', [null, null, 'quickdraw'], ['uav', 'counter_uav', 'mortar']),
   ];
 }
 
-/** The weapon every profile starts with. Both are `unlockLevel` 1. */
-const STARTER_PRIMARY = 'ar_carbine';
+/** The sidearm every profile starts with. `unlockLevel` 1, and the only one there is. */
 const STARTER_SECONDARY = 'pistol_talon';
 
+/**
+ * Lethal and tactical are not parameters.
+ *
+ * At level 1 there is exactly one of each — FRAG and FLASHBANG; SMOKE is 3, SEMTEX 8 and
+ * the CLAYMORE 16 — so a per-class argument here could only ever be handed the same value
+ * five times, and a parameter with one legal argument is a parameter that lies about what
+ * varies. The same goes for the field upgrade: MUNITIONS is the only one under level 6.
+ */
 function makeSlot(
   name: string,
-  lethal: EquipmentId,
-  tactical: EquipmentId,
+  primary: string,
   perks: Array<PerkId | null>,
-  fieldUpgrade: FieldUpgradeId,
+  streaks: ReadonlyArray<StreakId | null>,
 ): LoadoutSlot {
   return {
     name,
-    primary: { weaponId: STARTER_PRIMARY, attachments: [], camo: null },
+    primary: { weaponId: primary, attachments: [], camo: null },
     secondary: { weaponId: STARTER_SECONDARY, attachments: [], camo: null },
-    lethal,
-    tactical,
+    lethal: 'frag',
+    tactical: 'flashbang',
     perks: [...perks],
-    fieldUpgrade,
-    // The three cheapest streaks by default: a fresh profile should be able to earn all of
-    // what it has equipped rather than staring at a Chopper Gunner it will never reach.
-    streaks: [...DEFAULT_STREAKS],
+    fieldUpgrade: 'munitions',
+    // Streaks are gated by kills rather than by level, so all six are legal at level 1 and
+    // they are the widest axis a fresh profile has. The rule the trios keep is the one that
+    // was already here: a fresh profile should be able to *earn* everything it has equipped,
+    // so nothing above the SENTRY's eight kills appears and the CHOPPER GUNNER's twelve is
+    // in none of them.
+    streaks: [...streaks],
   };
 }
-
-/** What every new class starts with. Cheap enough to actually see in a match. */
-const DEFAULT_STREAKS: ReadonlyArray<StreakId | null> = ['uav', 'care_package', 'mortar'];
 
 export function cloneLoadout(src: LoadoutSlot): LoadoutSlot {
   return {

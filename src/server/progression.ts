@@ -7,6 +7,11 @@ import {
   xpAtLevelStart,
   xpForLevel,
 } from '../shared/meta/Levels';
+import { defaultLoadouts, type LoadoutSlot } from '../shared/meta/Loadouts';
+import { defaultSave, defaultSettings } from '../shared/meta/SaveData';
+import { sanitiseLoadout, UnlockState } from '../shared/meta/Unlocks';
+import { AVERAGE_MATCH, xpPerMatch, type SimulatedMatch } from '../shared/meta/XpSimulator';
+import { ALL_WEAPONS, requireWeapon } from '../shared/weapons/WeaponDefs';
 
 /**
  * The summary screen's XP bar, stepped to completion without a screen.
@@ -230,5 +235,237 @@ function main(): number {
   console.log('\nprogression checks failed: %d', failures);
   return failures;
 }
+// -- the unlock ladder, and the first hour (playtest round 5, F10) -------------------------
 
-process.exitCode = main() > 0 ? 1 : 0;
+/**
+ * The primaries a level-1 profile is meant to hold.
+ *
+ * **This is the decision, not a reading of the table.** A probe that asked `WEAPON_DEFS` which
+ * weapons unlock at level 1 and then asserted that those weapons unlock at level 1 would be
+ * green on every tree, including the one F10 was reported against. The list is written out here
+ * so that changing the arsenal is an argument with this file rather than a side effect of
+ * editing a def.
+ *
+ * The principle, so a future change has something to disagree with: **three weapons that lose
+ * different fights.** `docs/BALANCE.md`'s band table gives the carbine 15-25 m at 0.167 s, the
+ * WASP 0-7 m at 0.117 s with a cliff past 18 m, and the BREACHER one shell inside 6 m and
+ * nothing at all past 13. Neither sniper nor either LMG is here, and that is the same principle
+ * from the other side: both cost a mechanic a first-time player has not been taught — 0.35-0.44 s
+ * of scope-in with sway and a glint, and a 0.42 s ADS behind a four-second reload.
+ */
+const LEVEL_ONE_PRIMARIES: readonly string[] = ['ar_carbine', 'smg_wasp', 'shotgun_breacher'];
+
+/**
+ * A first match, as a **declared scenario rather than a measurement**.
+ *
+ * `AVERAGE_MATCH` is authored against the M4/M5 acceptance runs and describes a competent
+ * player: 18 kills, a third of them headshots. Nobody at level 1 plays that match, so every
+ * "matches to unlock" number computed from it is the optimistic end of a range. This is the
+ * other end, written down so the two bracket the answer instead of one of them pretending to be
+ * it. It is nobody's measurement: playtest round 5 was driven by a script that stood still for
+ * long stretches, so this project has no measured new-player scoreline and this file will not
+ * invent one.
+ */
+const NEWCOMER_MATCH: SimulatedMatch = {
+  kills: 6,
+  headshots: 1,
+  assists: 3,
+  objectives: 0,
+  longshots: 0,
+  bestStreak: 2,
+  winRate: 0.35,
+  mvpRate: 0,
+  challengeXp: 200,
+};
+
+/**
+ * The match a player earning `perMatch` first reaches `level` in. Level 1 is match zero.
+ *
+ * Closed form rather than a loop over `simulateXp`, and the same answer: the rate is constant
+ * per match, so the first total to clear `xpAtLevelStart(level)` is the ceiling of one division.
+ * The value that could drift — what a match is worth — comes from `xpPerMatch`, which reads the
+ * shipped `XP_SOURCES` table.
+ */
+function matchAtLevel(level: number, perMatch: number): number {
+  if (level <= 1) return 0;
+  return Math.ceil(xpAtLevelStart(level) / Math.max(1, perMatch));
+}
+
+interface Rung {
+  readonly id: string;
+  readonly name: string;
+  readonly cls: string;
+  readonly level: number;
+  readonly xp: number;
+  readonly averageMatch: number;
+  readonly newcomerMatch: number;
+}
+
+function buildLadder(averagePerMatch: number, newcomerPerMatch: number): Rung[] {
+  return ALL_WEAPONS.filter((def) => def.slot === 'primary')
+    .map((def) => ({
+      id: def.id,
+      name: def.name,
+      cls: def.class,
+      level: def.unlockLevel,
+      xp: xpAtLevelStart(def.unlockLevel),
+      averageMatch: matchAtLevel(def.unlockLevel, averagePerMatch),
+      newcomerMatch: matchAtLevel(def.unlockLevel, newcomerPerMatch),
+    }))
+    .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
+}
+
+/**
+ * Everything about a class a player can see on the Create a Class screen.
+ *
+ * Two classes with the same signature are the report. *"All five classes show M4 CARBINE"* was
+ * the visible half of five slots identical in every field, because at level 1 there was nothing
+ * legal for them to differ on.
+ */
+function presetSignature(slot: LoadoutSlot): string {
+  return [
+    slot.primary.weaponId,
+    slot.secondary.weaponId,
+    slot.lethal,
+    slot.tactical,
+    slot.fieldUpgrade,
+    slot.perks.map((perk) => perk ?? '-').join('/'),
+    slot.streaks.map((streak) => streak ?? '-').join('/'),
+  ].join(' · ');
+}
+
+function ladder(): number {
+  const problems: string[] = [];
+  const averagePerMatch = xpPerMatch(AVERAGE_MATCH);
+  const newcomerPerMatch = xpPerMatch(NEWCOMER_MATCH);
+
+  const save = defaultSave(defaultSettings('TDM', 'mp_foundry', 90));
+  const unlocks = UnlockState.fromSave(save);
+  const rungs = buildLadder(averagePerMatch, newcomerPerMatch);
+
+  console.log('\n\nOPERATOR — the unlock ladder (playtest round 5, F10)\n');
+  console.log(
+    'a match pays %s XP at the shipped AVERAGE_MATCH and %s at the declared NEWCOMER_MATCH;',
+    averagePerMatch.toLocaleString(),
+    newcomerPerMatch.toLocaleString(),
+  );
+  console.log('a fresh profile is level %d with %d XP.\n', save.profile.level, save.profile.xp);
+
+  console.log(
+    `  ${padEnd('primary', 16)}${padEnd('class', 9)}${padStart('level', 6)}${padStart('XP', 10)}` +
+      `${padStart('match', 7)}${padStart('newcomer', 10)}  at level 1`,
+  );
+  for (const rung of rungs) {
+    const open = unlocks.weaponUnlocked(rung.id);
+    console.log(
+      `  ${padEnd(rung.name, 16)}${padEnd(rung.cls, 9)}${padStart(String(rung.level), 6)}` +
+        `${padStart(rung.xp.toLocaleString(), 10)}${padStart(String(rung.averageMatch), 7)}` +
+        `${padStart(String(rung.newcomerMatch), 10)}  ${open ? 'OPEN' : 'locked'}`,
+    );
+  }
+
+  // 1. The level-1 arsenal is the one that was decided, and nothing else is.
+  for (const id of LEVEL_ONE_PRIMARIES) {
+    const def = requireWeapon(id);
+    if (def.slot !== 'primary') {
+      problems.push(`LEVEL_ONE_PRIMARIES names ${def.name}, which is a ${def.slot} and not a primary.`);
+      continue;
+    }
+    if (!unlocks.weaponUnlocked(id)) {
+      problems.push(
+        `${def.name} is meant to be available at level 1 and is gated at ${def.unlockLevel}. A ` +
+          'fresh profile cannot equip it, and sanitiseLoadout rewrites any class that names it.',
+      );
+    }
+  }
+  for (const rung of rungs) {
+    if (LEVEL_ONE_PRIMARIES.includes(rung.id)) continue;
+    if (unlocks.weaponUnlocked(rung.id)) {
+      problems.push(
+        `${rung.name} is open at level 1 and is not one of the primaries that decision names. A ` +
+          'ladder with nothing left on it is the other way to fail F10.',
+      );
+    }
+  }
+
+  // 2. Three weapons that lose different fights, rather than three of one kind.
+  const startingClasses = new Set(LEVEL_ONE_PRIMARIES.map((id) => requireWeapon(id).class));
+  if (startingClasses.size < 3) {
+    problems.push(
+      `the level-1 arsenal spans ${startingClasses.size} weapon class(es): ` +
+        `${[...startingClasses].join(', ')}. The point of opening more than one primary is a ` +
+        'choice between feels, and three of one class is one feel.',
+    );
+  }
+
+  /**
+   * 3. The rungs are spaced in **matches**, which is the unit the player experiences.
+   *
+   * This is the assertion that makes the level table half of the same conversation. The opening
+   * of `LEVEL_XP` is front-loaded hard enough that four early levels land inside one match, so
+   * two unlocks two levels apart arrive on the same summary screen — a re-spacing on paper that
+   * is no spacing at all in play. Measured at the optimistic rate, which is the strict one: a
+   * slower player only ever spreads these further apart.
+   */
+  const gated = rungs.filter((rung) => !LEVEL_ONE_PRIMARIES.includes(rung.id));
+  for (let i = 1; i < gated.length; i++) {
+    const previous = gated[i - 1];
+    const current = gated[i];
+    if (previous === undefined || current === undefined) continue;
+    if (current.averageMatch <= previous.averageMatch) {
+      problems.push(
+        `${previous.name} (level ${previous.level}) and ${current.name} (level ${current.level}) ` +
+          `both arrive in match ${current.averageMatch}: ${current.level - previous.level} ` +
+          'level(s) apart on paper and no matches apart in play.',
+      );
+    }
+  }
+  const firstGated = gated[0];
+  if (firstGated !== undefined && firstGated.averageMatch < 1) {
+    problems.push(`${firstGated.name} is reached before a single match has been played.`);
+  }
+
+  // 4. The five classes, which is the screen the report is about.
+  const presets = defaultLoadouts();
+  console.log('\n  the five shipped classes, on a fresh profile:\n');
+  const seen = new Map<string, string>();
+  for (const slot of presets) {
+    const signature = presetSignature(slot);
+    console.log(`  ${padEnd(slot.name, 10)}${signature}`);
+    const twin = seen.get(signature);
+    if (twin !== undefined) {
+      problems.push(
+        `classes ${twin} and ${slot.name} are identical in every field a player can see. That is ` +
+          'F10 as reported: five slots and one class.',
+      );
+    }
+    seen.set(signature, slot.name);
+  }
+
+  // 5. A class that names a locked item is rewritten on first load, and a rewritten default is
+  //    indistinguishable from a bug. This is what holds the two halves to each other.
+  for (const slot of presets) {
+    const losses: string[] = [];
+    if (sanitiseLoadout(slot, unlocks, losses)) {
+      for (const loss of losses) problems.push(`default class rewritten on a fresh profile: ${loss}`);
+    }
+  }
+
+  // 6. Nothing is opened at level 1 that the screen never shows.
+  const carried = new Set(presets.map((slot) => slot.primary.weaponId));
+  for (const id of LEVEL_ONE_PRIMARIES) {
+    if (!carried.has(id)) {
+      problems.push(
+        `${requireWeapon(id).name} is available at level 1 and no default class carries it. The ` +
+          'screen is where the decision becomes visible, and an unlock nothing shows is one ' +
+          'nobody finds.',
+      );
+    }
+  }
+
+  for (const problem of problems) console.log(`\n  LADDER: ${problem}`);
+  console.log('\nladder checks failed: %d', problems.length);
+  return problems.length;
+}
+
+process.exitCode = main() + ladder() > 0 ? 1 : 0;

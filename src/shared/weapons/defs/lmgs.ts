@@ -114,7 +114,7 @@ export const LMG_BASTION: WeaponDef = {
 
   penetration: 0.56,
 
-  unlockLevel: 25,
+  unlockLevel: 15,
   attachmentSlots: ['optic', 'muzzle', 'barrel', 'underbarrel', 'magazine', 'stock', 'laser'],
 
   adsFovScale: 0.72,
@@ -240,7 +240,7 @@ export const LMG_MONOLITH: WeaponDef = {
 
   penetration: 0.6,
 
-  unlockLevel: 32,
+  unlockLevel: 31,
   attachmentSlots: ['optic', 'muzzle', 'barrel', 'underbarrel', 'magazine', 'stock', 'laser'],
 
   adsFovScale: 0.74,

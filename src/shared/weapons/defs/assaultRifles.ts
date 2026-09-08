@@ -224,7 +224,7 @@ export const AR_VULCAN: WeaponDef = {
 
   penetration: 0.36,
 
-  unlockLevel: 6,
+  unlockLevel: 2,
   attachmentSlots: ['optic', 'muzzle', 'barrel', 'underbarrel', 'magazine', 'stock', 'laser'],
 
   adsFovScale: 0.76,
@@ -339,7 +339,7 @@ export const AR_HALCYON: WeaponDef = {
 
   penetration: 0.22,
 
-  unlockLevel: 12,
+  unlockLevel: 21,
   attachmentSlots: ['optic', 'muzzle', 'barrel', 'underbarrel', 'magazine', 'stock', 'laser'],
 
   adsFovScale: 0.78,
@@ -445,7 +445,7 @@ export const AR_LONGBOW: WeaponDef = {
 
   penetration: 0.46,
 
-  unlockLevel: 20,
+  unlockLevel: 25,
   attachmentSlots: ['optic', 'muzzle', 'barrel', 'underbarrel', 'magazine', 'stock', 'laser'],
 
   adsFovScale: 0.68,

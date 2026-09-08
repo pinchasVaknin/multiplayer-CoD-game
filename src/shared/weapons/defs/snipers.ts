@@ -80,7 +80,7 @@ export const SNIPER_KESTREL: WeaponDef = {
 
   penetration: 0.9,
 
-  unlockLevel: 18,
+  unlockLevel: 11,
   attachmentSlots: ['optic', 'muzzle', 'barrel', 'magazine', 'stock', 'laser'],
 
   adsFovScale: 0.34,

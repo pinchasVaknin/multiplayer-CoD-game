@@ -7,15 +7,24 @@
  * `n + 1` to level `n + 2`, so the array has 54 entries for 55 levels.
  *
  * The shape is deliberately front-loaded. The first ten levels cost 18,600 XP between
- * them — about six matches — because every weapon with an `unlockLevel` under 12 needs to
- * arrive while the player is still deciding whether to keep playing. From level 11 the
- * steps settle into a steady climb, and the last stretch to 55 is the wall prestige
- * exists to make meaningful.
+ * them — five matches of `AVERAGE_MATCH`, which is worth 3,870 XP — because every weapon
+ * near the bottom of the ladder needs to arrive while the player is still deciding whether
+ * to keep playing. From level 11 the steps settle into a steady climb, and the last stretch
+ * to 55 is the wall prestige exists to make meaningful.
  *
- * Every number here is reachable from the XP simulator in the F1 panel
- * (`__operator.simulateXp(n)`), which fast-forwards N matches of average performance and
- * reports where the curve puts you — S7's requirement, and the thing that makes this
- * table tunable without playing 55 levels.
+ * **How front-loaded, exactly, is the thing to know before re-spacing anything against it**
+ * (playtest round 5, F10). The first four rows total 3,300 XP and a match pays 3,870, so
+ * levels 2, 3, 4 and 5 are all crossed on the first summary screen a player ever sees. A
+ * level is therefore not a unit of pacing down here; it is four flourishes in a row. Gates
+ * placed at 2 and at 5 are the same gate as far as anybody playing is concerned, which is
+ * why the weapon ladder is spaced — and asserted — in matches. The table was left alone
+ * rather than re-priced: the burst is the reward for finishing a first match, and every
+ * other gated category is already authored against these numbers.
+ *
+ * Every number here is reachable from the XP simulator (`__operator.simulateXp(n)` in the
+ * F1 panel, `xpPerMatch` in `npm run progression`), which fast-forwards N matches of a
+ * declared performance and reports where the curve puts you — S7's requirement, and the
+ * thing that makes this table tunable without playing 55 levels.
  */
 
 export const MAX_LEVEL = 55;
@@ -29,7 +38,7 @@ export const MAX_LEVEL = 55;
  * forty-five, and the simulator made that obvious the first time it was run.
  */
 export const LEVEL_XP: readonly number[] = [
-  // 1 -> 11: the opening. Six matches to level 10.
+  // 1 -> 11: the opening. Four matches to level 10, five to level 11; measured, not estimated.
   500, 700, 900, 1200, 1500, 1900, 2300, 2700, 3200, 3700,
   // 11 -> 21
   4200, 4700, 5200, 5700, 6200, 6700, 7200, 7700, 8200, 8700,
