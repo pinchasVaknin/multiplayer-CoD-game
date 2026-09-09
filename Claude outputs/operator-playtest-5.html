@@ -1,0 +1,483 @@
+<title>OPERATOR Playtest 5</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Suez+One&family=Assistant:wght@300;400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#e8eaee;
+  --surface:#fbfcfd;
+  --surface-2:#eff2f5;
+  --line:#d2d7de;
+  --line-soft:#e3e7eb;
+  --ink:#161a1f;
+  --ink-dim:#576069;
+  --ink-faint:#848d97;
+  --amber:#a06403;
+  --amber-ink:#7d4e02;
+  --amber-wash:#f7edda;
+  --c-bug:#a32617;
+  --c-art:#2b6382;
+  --c-gap:#6b5a1f;
+  --c-ops:#37634a;
+  --shadow:0 1px 2px rgba(20,26,32,.06), 0 8px 24px -14px rgba(20,26,32,.28);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0f1216;
+    --surface:#171b21;
+    --surface-2:#1d222a;
+    --line:#2b323b;
+    --line-soft:#232932;
+    --ink:#e3e7ec;
+    --ink-dim:#98a1ac;
+    --ink-faint:#6c7681;
+    --amber:#efab3e;
+    --amber-ink:#f3bd66;
+    --amber-wash:#2a2113;
+    --c-bug:#e8695a;
+    --c-art:#69abcd;
+    --c-gap:#c9b46b;
+    --c-ops:#78c395;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0f1216;
+  --surface:#171b21;
+  --surface-2:#1d222a;
+  --line:#2b323b;
+  --line-soft:#232932;
+  --ink:#e3e7ec;
+  --ink-dim:#98a1ac;
+  --ink-faint:#6c7681;
+  --amber:#efab3e;
+  --amber-ink:#f3bd66;
+  --amber-wash:#2a2113;
+  --c-bug:#e8695a;
+  --c-art:#69abcd;
+  --c-gap:#c9b46b;
+  --c-ops:#78c395;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -16px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+body{
+  direction:rtl;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:"Assistant","Segoe UI",system-ui,sans-serif;
+  font-size:17px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+code,.mono,.num{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+.wrap{max-width:62rem;margin:0 auto;padding:clamp(24px,5vw,64px) clamp(18px,5vw,44px) 96px}
+
+/* ---------- masthead ---------- */
+.mast{
+  display:flex;flex-direction:column;gap:14px;
+  padding-bottom:26px;margin-bottom:34px;
+  border-bottom:2px solid var(--ink);
+}
+.eyebrow{
+  font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--amber-ink);font-weight:700;
+}
+h1{
+  font-family:"Suez One",Georgia,serif;
+  font-weight:400;
+  font-size:clamp(38px,7vw,66px);
+  line-height:1;margin:0;letter-spacing:-.01em;
+  text-wrap:balance;
+}
+.mast .sub{
+  display:flex;flex-wrap:wrap;gap:8px 20px;align-items:baseline;
+  color:var(--ink-dim);font-size:14.5px;
+}
+.mast .sub a{color:var(--amber-ink);text-decoration:none;border-bottom:1px solid var(--line)}
+.mast .sub a:hover{border-bottom-color:currentColor}
+
+.lede{
+  font-size:19.5px;line-height:1.6;max-width:44rem;color:var(--ink);
+  margin:0 0 12px;
+}
+.lede strong{font-weight:700}
+.lede + .lede{color:var(--ink-dim);font-size:17px}
+
+/* ---------- telemetry ---------- */
+.telemetry{
+  margin:38px 0 8px;
+  border:1px solid var(--line);border-radius:3px;
+  background:var(--surface);box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.telemetry h2{
+  margin:0;padding:11px 16px;
+  font-family:"Assistant",sans-serif;font-size:12px;font-weight:700;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--ink-faint);
+  background:var(--surface-2);border-bottom:1px solid var(--line-soft);
+}
+.tgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr))}
+.tcell{padding:16px 16px 18px;border-inline-start:1px solid var(--line-soft);border-top:1px solid var(--line-soft)}
+.tcell:first-child{border-inline-start:none}
+.tcell .v{
+  font-family:"IBM Plex Mono",monospace;font-size:25px;font-weight:500;
+  letter-spacing:-.02em;font-variant-numeric:tabular-nums;
+  direction:ltr;text-align:right;color:var(--ink);
+}
+.tcell .v em{font-style:normal;font-size:14px;color:var(--ink-faint)}
+.tcell .k{font-size:13px;color:var(--ink-dim);margin-top:3px}
+@media (max-width:640px){.tcell{border-inline-start:none}}
+
+/* ---------- sections ---------- */
+section{margin-top:56px}
+.shead{display:flex;align-items:baseline;gap:12px;margin-bottom:6px}
+.shead h2{
+  font-family:"Suez One",Georgia,serif;font-weight:400;
+  font-size:27px;margin:0;line-height:1.2;
+}
+.shead .count{
+  font-family:"IBM Plex Mono",monospace;font-size:13px;color:var(--ink-faint);
+  direction:ltr;
+}
+.sintro{color:var(--ink-dim);max-width:44rem;margin:0 0 22px;font-size:16px}
+
+/* ---------- findings ---------- */
+.find{
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-inline-start:3px solid var(--cat,var(--line));
+  border-radius:3px;
+  padding:18px 20px 20px;
+  margin-bottom:14px;
+  box-shadow:var(--shadow);
+}
+.find--bug{--cat:var(--c-bug)}
+.find--art{--cat:var(--c-art)}
+.find--gap{--cat:var(--c-gap)}
+.find--ops{--cat:var(--c-ops)}
+
+.fhead{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-bottom:9px}
+.fid{
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;font-weight:500;
+  color:var(--cat);direction:ltr;letter-spacing:.02em;
+}
+.tag{
+  font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  padding:2px 7px;border-radius:2px;border:1px solid var(--cat);color:var(--cat);
+}
+.tag--blocker{background:var(--cat);color:var(--surface);border-color:var(--cat)}
+.find h3{
+  font-size:19px;font-weight:700;margin:0 0 10px;line-height:1.35;
+  text-wrap:balance;
+}
+.find p{margin:0 0 10px;max-width:46rem}
+.find p:last-child{margin-bottom:0}
+.find .lab{
+  font-size:11.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-faint);margin-inline-end:7px;
+}
+code{
+  font-size:.87em;background:var(--surface-2);
+  border:1px solid var(--line-soft);border-radius:2px;
+  padding:.5px 5px;direction:ltr;display:inline-block;
+  color:var(--ink);white-space:nowrap;
+}
+.fix{
+  background:var(--amber-wash);border:1px solid color-mix(in srgb,var(--amber) 30%,transparent);
+  border-radius:2px;padding:11px 13px;margin-top:12px;
+}
+.fix .lab{color:var(--amber-ink)}
+.logline{
+  background:var(--surface-2);border:1px solid var(--line-soft);
+  border-radius:2px;padding:10px 12px;margin:0 0 10px;
+  font-family:"IBM Plex Mono",monospace;font-size:13px;line-height:1.7;
+  direction:ltr;text-align:left;color:var(--ink-dim);
+  overflow-x:auto;white-space:pre;
+}
+
+/* roster table inside a finding */
+.tblwrap{overflow-x:auto;margin:10px 0 12px}
+table{border-collapse:collapse;font-size:14px;min-width:26rem}
+th,td{padding:6px 12px 6px 0;text-align:right;border-bottom:1px solid var(--line-soft)}
+th{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);font-weight:700}
+td.m{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;direction:ltr;text-align:right}
+tr.hot td{color:var(--c-bug);font-weight:600}
+
+/* ---------- closing notes ---------- */
+.note{
+  border-top:1px solid var(--line);
+  padding-top:22px;margin-top:56px;
+}
+.note h2{
+  font-family:"Suez One",Georgia,serif;font-weight:400;font-size:22px;margin:0 0 10px;
+}
+.note p,.note li{color:var(--ink-dim);font-size:15.5px;max-width:46rem}
+.note ul{margin:0;padding-inline-start:1.1em}
+.note li{margin-bottom:5px}
+.note strong{color:var(--ink)}
+
+.done{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0}
+.chip{
+  font-size:13px;padding:4px 10px;border-radius:2px;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink-dim);
+}
+.chip b{color:var(--c-ops);font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:500}
+
+a:focus-visible,.chip:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap" dir="rtl">
+
+  <header class="mast">
+    <div class="eyebrow">סבב בדיקה · 7 בספטמבר 2026</div>
+    <h1>OPERATOR</h1>
+    <div class="sub">
+      <span><a href="https://multiplayer-cod-game.onrender.com/" dir="ltr">multiplayer-cod-game.onrender.com</a></span>
+      <span>Foundry · Dunes · Testbed</span>
+      <span>TDM · Domination · S&amp;D</span>
+      <span>22 ממצאים</span>
+    </div>
+  </header>
+
+  <p class="lede">המשחק עובד, ועובד <strong>טוב</strong>. 60 פריימים נעולים בלי ספייק אחד, 397KB בשלוש בקשות רשת בלי קובץ נכס אחד, ומולטיפלייר אמיתי מול שרת ייעודי עם אפס אובדן חבילות. זה לא דמו — זה משחק.</p>
+  <p class="lede">מה שבלם אותי הכי הרבה לא היה שום דבר מהמנוע. שני באגים דטרמיניסטיים — אחד ב-CSS של התפריט ואחד בחלוקת הבוטים לקבוצות — קבעו את שני הרשמים הראשונים שקיבלתי, ושניהם תיקון של שורות בודדות. הפירוק המלא, עם P0 ו-14 סשנים, יושב ב-<code dir="ltr">docs/PLAYTEST-ROUND-5.md</code>; המזהים כאן ושם זהים.</p>
+
+  <div class="telemetry">
+    <h2>מה נמדד</h2>
+    <div class="tgrid">
+      <div class="tcell"><div class="v">16.7 <em>ms</em></div><div class="k">p50 לפריים · p99 = 17.0 · הגרוע 17.5</div></div>
+      <div class="tcell"><div class="v">397 <em>KB</em></div><div class="k">gzip · 1.37MB גולמי · 3 בקשות</div></div>
+      <div class="tcell"><div class="v">468 <em>ms</em></div><div class="k">טעינת עמוד כשהשרת ער</div></div>
+      <div class="tcell"><div class="v">99.8 <em>ms</em></div><div class="k">RTT · jitter 0.29ms · אובדן 0%</div></div>
+      <div class="tcell"><div class="v">20 <em>Hz</em></div><div class="k">סנאפשוטים · 158B ממוצע לסנאפשוט</div></div>
+      <div class="tcell"><div class="v">4.1 <em>KB/s</em></div><div class="k">תעבורה נכנסת · 4.5 יוצאת</div></div>
+    </div>
+  </div>
+
+  <!-- ================= BUGS ================= -->
+  <section>
+    <div class="shead"><h2>באגים</h2><span class="count">9</span></div>
+    <p class="sintro">השניים הראשונים הם חוסמים: אחד מונע להתחיל משחק בחלון צר, השני קובע מראש מי ינצח. B7 הוא היחיד שהמשחק מדווח עליו בעצמו, בקונסולה, ברמת error.</p>
+
+    <article class="find find--bug">
+      <div class="fhead"><span class="fid">B1 · B2</span><span class="tag tag--blocker">חוסם</span><span class="tag">UI</span></div>
+      <h3>התפריט נחתך משני הקצוות ואי אפשר לגלול אליו</h3>
+      <p><span class="lab">מדידה</span>ב-viewport של 1366×626 — כלומר מסך 1366×768 עם כרום רגיל — גובה התוכן של התפריט הראשי הוא 744px. הכותרת <strong>OPERATOR</strong> יושבת ב-<code>y = −118</code>, מחוץ למסך למעלה. הכפתור <code>RESET PROGRESS</code> יושב ב-<code>y = 700</code>, מתחת לקצה. גלגלת העכבר לא עושה כלום. בלפטופ סטנדרטי שם המשחק לא נראה בכלל, וכפתור אחד לא ניתן ללחיצה.</p>
+      <p><span class="lab">שורש</span><code>.op-screen</code> ב-<code>src/client/ui/styles/app.css</code> (סביב שורה 55) הוא <code>position:absolute; inset:0; display:flex; justify-content:center</code> בלי <code>overflow-y</code>. כשהתוכן גבוה מהמסך, מרכוז ב-flex מחלק את העודף לשני הקצוות — והחצי שיוצא מלמעלה לא נגיש גם כשגלילה מופעלת. זו בדיוק הסיבה שזה נקרא "הגלגלת לא עובדת" ולא "הדף ארוך".</p>
+      <p><span class="lab">חמור יותר</span>מתחת ל-840px רוחב, <code>.op-pickers</code> מתקפל מ-3 עמודות לעמודה אחת, מסך בחירת המשחק מגיע ל-833px גובה, ו-<code>START MATCH</code> יורד מתחת לקצה. בחלון צר, בטאבלט או בטלפון — <strong>אי אפשר בכלל להתחיל משחק סולו</strong>. זה באג של רוחב שמתחזה לבאג של גובה.</p>
+      <div class="fix"><span class="lab">תיקון</span><code>overflow-y:auto</code> + <code>justify-content:safe center</code> + ריפוד אנכי על <code>.op-screen</code>. מסך ה-Settings כבר פותר בדיוק את זה עם <code>max-height:56vh; overflow-y:auto</code>, והוא היחיד בלי הבאג — זה לא צירוף מקרים. צריך להעלות את הפתרון שכבה אחת למעלה.</div>
+    </article>
+
+    <article class="find find--bug">
+      <div class="fhead"><span class="fid">B4</span><span class="tag tag--blocker">חוסם</span><span class="tag">איזון</span></div>
+      <h3>ה-VETERAN היחיד תמיד נופל לקבוצה היריבה</h3>
+      <p><span class="lab">מדידה</span>שני משחקים, אותה חלוקה בדיוק בשניהם. (הראשון הסתיים 47–75; השני עמד על 59–113 כשעזבתי אותו — התוצאות עצמן לא ראיה לכלום, כי השחקן היה גרוע בכוונה. ה-roster הוא הראיה.)</p>
+      <div class="tblwrap">
+        <table>
+          <tr><th>קבוצה</th><th>Tiers</th><th>אינדקסים</th><th>הריגות</th></tr>
+          <tr><td>A — הצד שלי</td><td class="m">REGULAR · HARDENED · RECRUIT · REGULAR</td><td class="m">0-3</td><td class="m">40</td></tr>
+          <tr class="hot"><td>B — היריב</td><td class="m">VETERAN · HARDENED · REGULAR · RECRUIT · REGULAR</td><td class="m">4-8</td><td class="m">69</td></tr>
+        </table>
+      </div>
+      <p>MARLOW, ה-VETERAN היחיד על המפה, סיים <code>36 kills / 5 deaths</code> — יותר ממחצית ההריגות של הקבוצה שלו, ופי שלושה מהשחקן הכי טוב בצד שלי.</p>
+      <p><span class="lab">שורש</span><code>BotDirector.populate</code> (<code>src/shared/ai/BotDirector.ts:385</code>) מחלק tiers ב-round-robin עם מונה <em>אחד</em>, וממלא את כל קבוצה A ורק אחר כך את B. ה-mix ב-<code>src/shared/modes/ModeRegistry.ts:190</code> מציב את ה-VETERAN באינדקס 4. במשחק 5v5 עם שחקן אנושי לצד A יש 4 בוטים, ולכן אינדקס 4 נופל תמיד על הבוט הראשון של B. זה לא מזל רע — זה חשבון. <code>server/Match.ts:1485</code> קורא לאותה פונקציה, אז זה גם המולטיפלייר.</p>
+      <div class="fix"><span class="lab">תיקון</span>לחלק לסירוגין במקום ברצף. ומעבר לזה יש החלטה שצריך לכתוב במפורש: מושב אנושי חלש בממוצע מבוט VETERAN, אז מירור מדויק עדיין משאיר ליריב יתרון — שווה לשקול לתת דווקא לצד של השחקן את החצי החזק.</div>
+    </article>
+
+    <article class="find find--bug">
+      <div class="fhead"><span class="fid">B7</span><span class="tag">רפליקציה</span><span class="tag">חדש</span></div>
+      <h3>המשחק מדווח בעצמו על divergence בתוצאה</h3>
+      <p><span class="lab">מדידה</span>בקונסולה של הבילד החי, ברמת <code>error</code>, עשרות פעמים:</p>
+      <p class="logline">[divergence] DIVERGENCE on tick 67010: scoreA — client says 0, server says 69.
+             Confirmed across 4 consecutive snapshots.
+[divergence] DIVERGENCE on tick 67010: scoreB — client says 0, server says 75.
+             Confirmed across 4 consecutive snapshots.</p>
+      <p>שתי התוצאות, אותו טיק, וחלון האישור של הגלאי עצמו התמלא — כלומר זו לא התנגשות של פריים אחד. והעותק של הקליינט הוא <strong>אפס</strong>, לא ערך ישן: זה הערך של עולם שזה עתה נבנה.</p>
+      <p><span class="lab">ההקשר</span>השורות שמסביב הן כולן על אותו רגע: <code dir="ltr">rejoined as entity 5</code>, <code dir="ltr">server rotated to FFA on mp_testbed — rebuilding the world</code>, <code dir="ltr">world built</code>. רוטציה, בנייה מחדש, וחיבור מחדש.</p>
+      <div class="fix"><span class="lab">מה לבדוק לפני שמתקנים</span>שתי אפשרויות, ושתיהן שוות עבודה. או שהגלאי משווה מעבר לגבול של מאצ' והתיקון הוא לצמצם את ההשוואה ל-<code>matchId</code> (שכבר קיים ב-<code>Welcome</code>) — כלומר הבאג הוא של הגלאי. או שהתוצאה באמת לא מגיעה בנתיב הזה, ואז <strong>מי שמצטרף באמצע מאצ' רואה 0–0 על ה-HUD</strong> — באג אמיתי שכל הסבבים הקודמים לא יכלו לראות, כי הם תמיד הצטרפו בהתחלה.</div>
+    </article>
+
+    <article class="find find--bug">
+      <div class="fhead"><span class="fid">B5</span><span class="tag">סטטיסטיקה</span></div>
+      <h3>אחוז הפגיעה יכול לעבור 100% — נמדד 267%</h3>
+      <p><span class="lab">מדידה</span>לוח הסיום הציג <code>CINDER · ACC 267%</code>, מתוך <code>25 shots / 62 hits</code>. אותו מספר מופיע גם בלוח שנפתח עם Tab באמצע המשחק.</p>
+      <p><span class="lab">שורש</span>ב-<code>src/shared/combat/ScoreSystem.ts</code> — <code>shotsFired++</code> יושב על <code>EV.WeaponFired</code>, כלומר משיכת הדק אחת (שורה 177), אבל <code>shotsHit++</code> יושב על <code>EV.DamageDealt</code> (שורה 184), כלומר פעם לכל כדורית שוטגן, לכל מטרה בחדירה ולכל טיק נזק של חומר נפץ. אירוע נזק הוא לא יריה.</p>
+      <div class="fix"><span class="lab">תיקון</span><code>EV.WeaponFired</code> כבר נושא <code>pellets</code> ו-<code>pelletsHit</code> בדיוק בשביל זה — יש שם אפילו הערה שמסבירה למה — ו-<code>MatchProgression.ts:137</code> כבר משתמש בהם נכון. שתי מערכות מחשבות את אותו מספר משתי הגדרות, ואחת מהן צודקת. שווה גם להחליט במפורש אם נזק מרימון בכלל נחשב "פגיעה".</div>
+    </article>
+
+    <article class="find find--bug">
+      <div class="fhead"><span class="fid">B6</span><span class="tag">התקדמות</span></div>
+      <h3>משחק שלם יכול לשלם אפס XP</h3>
+      <p><span class="lab">מדידה</span>סיימתי מאצ' עם 0 הריגות, 6 מיתות והפסד. לוח הסיום הראה <code>+0 XP</code>, פאנל הפירוט מתחת לבר נשאר קופסה ריקה, והתפריט אחריו חזר להגיד "500 XP TO NEXT" עם הבר על אפס.</p>
+      <p><span class="lab">שורש</span><code>XP_SOURCES</code> ב-<code>src/shared/meta/XpRules.ts:63</code>: kill, headshot, assist, objective, longshot, challenge, weaponLevel, win, mvp, streak. כל שורה מותנית בהצלחה. אין שורה על עצם ההשתתפות.</p>
+      <p>ויש כאן גם פגם שני, ואולי גרוע יותר: הפאנל הריק נקרא כמו תקלה, לא כמו עונש.</p>
+      <div class="fix"><span class="lab">תיקון</span>מקור <code>flat</code> על סיום מאצ' ועוד איבר לפי דקות, בתוך אותה טבלה. קשור ישירות ל-B4: כשהצד של השחקן מפסיד באופן שיטתי, המצב הזה קורה הרבה יותר ממה שהתכנון מניח.</div>
+    </article>
+
+    <article class="find find--bug">
+      <div class="fhead"><span class="fid">B3</span><span class="tag">UI</span></div>
+      <h3>לוח הסיום נחתך לרוחב</h3>
+      <p>בחלון צר עמודות ה-AXIS יוצאות מהמסך ומופיע scrollbar אופקי מתחת ללוח. אותו שורש כמו B1, בציר האחר — ו-R4-F11 כבר קבע את הקונבנציה שלא הוחלה כאן: התוכן נושא את התקרה, השכבה נשארת מלאה וממרכזת.</p>
+    </article>
+
+    <article class="find find--bug">
+      <div class="fhead"><span class="fid">B8</span><span class="tag">קלט</span></div>
+      <h3>כשה-pointer lock נדחה, השחקן לא מקבל שום הודעה</h3>
+      <p><span class="lab">מדידה</span>הדפדפן שבו בדקתי סירב לבקשה (<code>WrongDocumentError</code>). המשחק כתב <code dir="ltr">[Input] pointer lock error</code> לקונסולה והמשיך כרגיל — נכנסתי למאצ' חי, עם HUD מלא וטיימר שרץ, שאי אפשר לכוון בו. שום דבר על המסך לא רמז למה.</p>
+      <p><span class="lab">שורש</span><code>Input</code> כבר מחזיק את המצב בשדה <code>lockRejectedWhileArmed</code>. הוא פשוט לא מסופר לאף אחד מחוץ לקונסולה.</p>
+      <div class="fix"><span class="lab">תיקון</span>באנר, או חסימה — צריך להחליט מה מהשניים. רלוונטי לכל iframe, לכל דפדפן מוטמע ולכל הגדרת פרטיות שחוסמת pointer lock.</div>
+    </article>
+
+    <article class="find find--bug">
+      <div class="fhead"><span class="fid">B9</span><span class="tag">קטן</span></div>
+      <h3><code dir="ltr">?name=</code> ו-<code dir="ltr">?server=1</code> מתועדים ולא נתפסים</h3>
+      <p>ה-README מתעד טבלת דגלים. שני קליינטים שנפתחו עם <code dir="ltr">?name=BRAVO</code> התחברו שניהם כ-<code>OPERATOR-013</code> — ה-callsign מהפרופיל מנצח. ו-<code dir="ltr">?server=1</code> השאיר את המשחק ב-MENU עד לחיצה ידנית.</p>
+      <p>שווה לקרוא את הקוד לפני שקוראים שוב את ה-README: <code>VITE_SERVER_URL</code> נצרב ל-<code>"1"</code> בזמן build ב-Render, כך שבבילד החי הדגל השני מיותר מעצם ההגדרה. יכול להיות שההתנהגות המתועדת נשברה, ויכול להיות שה-README מתאר משהו שמעולם לא היה.</p>
+    </article>
+  </section>
+
+  <!-- ================= GRAPHICS ================= -->
+  <section>
+    <div class="shead"><h2>גרפיקה</h2><span class="count">6</span></div>
+    <p class="sintro">הסביבה עצמה נראית טוב — טקסטורות רועשות במידה, חומרים מובחנים, ערפל שיושב נכון. מה שמושך את הרושם למטה הוא שלושה דברים, ואחד מהם זול במיוחד.</p>
+
+    <article class="find find--art">
+      <div class="fhead"><span class="fid">F2</span><span class="tag">הכי משתלם</span></div>
+      <h3>השמיים הם צבע אחד שטוח</h3>
+      <p>הרמתי מבט ב-Dunes וקיבלתי מלבן בז' אחיד. <code>MapRender.ts:404</code> עושה <code dir="ltr">scene.background = new THREE.Color(def.ambient.fogColor)</code> — השמיים הם פשוט צבע הערפל. אין גרדיאנט, אין שמש, אין עננים, ומעבר לקירות הגבול אין אופק בכלל: עפתי מעל Dunes וראיתי כפר צף בתוך ריק בצבע חול.</p>
+      <div class="fix"><span class="lab">הצעה</span>כדור שמיים עם shader גרדיאנט אנכי, ובאילוץ אחד שהופך אותו לטוב ולא רק לקיים: <strong>צבע האופק חייב להיות ה-<code>fogColor</code> של המפה</strong>, ואז אין תפר בשום מקום. הזניט הוא צבע שני, ומקומו ב-<code>def.ambient</code> ליד הערפל — כי Foundry בלילה ו-Dunes בצהריים רוצים תשובות שונות. אחר כך דיסקת שמש שנגזרת מה-directional light הקיים, ורצועות צללית רחוקות. אפס נכסים, ומשנה כל צילום מסך.</div>
+    </article>
+
+    <article class="find find--art">
+      <div class="fhead"><span class="fid">F3</span><span class="tag">FX</span></div>
+      <h3>חורי הכדורים גדולים מדי</h3>
+      <p>ריססתי קיר ב-ADS וקיבלתי שורה של כתמים שחורים רכים ברוחב של 30–40 ס"מ בעולם. הם לא נקראים כפגיעות אלא כחורים שמישהו ניקב בקיר.</p>
+      <div class="fix"><span class="lab">הצעה</span>קטן יותר, עם שפה בהירה, ועם ענן אבק שמת תוך פחות משנייה — הענן הוא מה שמוכר את הפגיעה, והוא מה שחסר.</div>
+    </article>
+
+    <article class="find find--art">
+      <div class="fhead"><span class="fid">F4</span><span class="tag">המשך ל-R4-F4</span></div>
+      <h3>הדמויות הן הדבר החלש ביותר על המסך</h3>
+      <p>קופסת גוף וראש. אין ידיים, אין נשק ביד, אין מחזור הליכה. הסביבה — לבנים, בטון, מעברים, סככות, פסי אזהרה — ברמה גבוהה משמעותית מהדבר שמסתכלים עליו בפועל, וזה הפער שהעין נתפסת אליו.</p>
+      <div class="fix"><span class="lab">הצעה</span>לפני סקינים: קודם כל <strong>הנשק ביד</strong>. לכל בוט כבר יש def נשק משלו מאז ה-hotfix של M7, ו-<code>match.models</code> כבר בונה רשתות נשק — זה בעיקר חיווט, וזו השינוי הבודד שהכי הופך גוף לאדם. אחר כך ידיים ורגליים כקופסאות, ואחר כך מחזור הליכה שנגזר מהמהירות שכבר יש לרנדרר.</div>
+    </article>
+
+    <article class="find find--art">
+      <div class="fhead"><span class="fid">F5</span><span class="tag">HUD</span></div>
+      <h3>הכוונת נעלמת על חול בהיר</h3>
+      <p>ב-Foundry החשוך הכוונת ברורה. ב-Dunes באור מלא היא כמעט בלתי נראית. <code>.hud-cross__line</code> הוא מלבן 2×7px לבן עם <code dir="ltr">box-shadow: 0 0 2px rgba(0,0,0,.9)</code>.</p>
+      <div class="fix"><span class="lab">תיקון</span>צל מטושטש של 2px פורש את הכהות שלו על ארבעה פיקסלים של סימן בן שני פיקסלים, אז על רקע בהיר לא נשאר ממנו כלום. טבעת קשה — <code dir="ltr">0 0 0 1px rgba(0,0,0,.85)</code> — מציבה פיקסל כהה מלא מול כל פיקסל בהיר ומחזיקה על כל רקע. אותו דבר ל-hitmarker, שסובל מאותו צל ומשנה יותר.</div>
+    </article>
+
+    <article class="find find--art">
+      <div class="fhead"><span class="fid">F6</span><span class="tag">הרחבה ל-R4-F9</span></div>
+      <h3>חדר ההמתנה חשוך כמעט כמו Foundry</h3>
+      <p>R4-F9 מדבר על "המגרש השלישי". בפועל זה רחב יותר: ה-testbed שאליו נוחתים מיד אחרי <code>PLAY MULTIPLAYER</code> הוא כמעט שחור — וזה הרושם הראשון של כל מי שנכנס דרך הלינק.</p>
+    </article>
+
+    <article class="find find--art">
+      <div class="fhead"><span class="fid">F7</span><span class="tag">Domination</span></div>
+      <h3>מעגל הכיבוש הוא דיסקה אטומה</h3>
+      <p>עמידה בתוך נקודה מציירת דיסקה ירוקה רוויה ואטומה על הרצפה. הטבעת של הצד השני דווקא נראית טוב — הבעיה היא רק המילוי.</p>
+      <div class="fix"><span class="lab">הצעה</span>מילוי שקוף עם פעימה שקצבה נגזר מקצב הכיבוש שכבר מחושב, כך שהדיסקה אומרת משהו במקום רק להיות צבועה.</div>
+    </article>
+  </section>
+
+  <!-- ================= GAPS ================= -->
+  <section>
+    <div class="shead"><h2>חסר</h2><span class="count">4</span></div>
+    <p class="sintro">דברים שהמשחק כבר עושה ברמה גבוהה מספיק כדי שהיעדרם ירגיש כמו חור.</p>
+
+    <article class="find find--gap">
+      <div class="fhead"><span class="fid">F1</span><span class="tag">נייד</span></div>
+      <h3>בטלפון אין שום סיפור — גם לא הודעה</h3>
+      <p>ב-375×812 העמוד נטען רגיל, ממשיך להציג את טבלת המקשים (WASD, עכבר ימני, F11 למסך מלא), והתוכן נחתך שוב (844px בתוך 812px). חיפשתי ב-<code>src/client/</code> — אין <code>touchstart</code>, אין <code>pointerdown</code>, אין <code>maxTouchPoints</code>. אין קלט מגע בכלל.</p>
+      <div class="fix"><span class="lab">הצעה</span>שער, לא פיצ'ר: לזהות מכשיר מגע ולהחליף את התפריט בהודעה אחת. משחק אמיתי בטלפון הוא מיילסטון משלו שמתחיל מתנועה, לא משער. אם שולחים לינק לאנשים, חלק גדול יפתח אותו בטלפון.</div>
+    </article>
+
+    <article class="find find--gap">
+      <div class="fhead"><span class="fid">F8</span><span class="tag">Domination</span></div>
+      <h3>אין חיווי A/B/C בסרגל העליון</h3>
+      <p>הסרגל מציג שתי תוצאות וטיימר, וזהו. מי מחזיק איזה דגל קריא רק מהמיני-מפה. באנר האובייקטיב (<code>HudStreaks.ts</code>) קיים ועובד יפה, אבל הוא הקשרי — הוא מופיע כשאתה בתוך נקודה, לא כשאתה צריך להחליט לאן ללכת.</p>
+      <div class="fix"><span class="lab">הצעה</span>לא "דגלים בסרגל" אלא <strong>חריץ בכותרת שהמוד ממלא</strong> — ל-S&amp;D יש שני אתרים וספירת סיבובים, ל-Kill Confirmed יש תגים. R4-F10 כבר קבע שמוד יכול לתאר את עצמו לשחקן; זה אותו רעיון, קבוע במקום חד-פעמי.</div>
+    </article>
+
+    <article class="find find--gap">
+      <div class="fhead"><span class="fid">F9</span><span class="tag">משוב</span></div>
+      <h3>מסך המוות לא אומר מי הרג אותך</h3>
+      <p>מתים, רואים <code>YOU WERE KILLED</code> וספירה לאחור. מי הרג, עם מה, ומאיזה מרחק — נמצא רק בשורת ה-killfeed בפינה, שנגללת תוך שניות.</p>
+      <div class="fix"><span class="lab">הצעה</span>הפרט שבאמת משנה התנהגות הוא <strong>כמה חיים נשארו לו</strong> — "היו לו 8" זה לקח אחר לגמרי מ-"היו לו 100". שווה לבדוק אם זה בכלל על הרשת לפני שמבטיחים אותו.</div>
+    </article>
+
+    <article class="find find--gap">
+      <div class="fhead"><span class="fid">F10</span><span class="tag">התקדמות</span></div>
+      <h3>ברמה 1 יש נשק ראשי אחד</h3>
+      <p>כל 10 הנשקים האחרים נעולים מרמה 4 ומעלה (Wasp 9 ב-4, Vulcan ב-6, Breacher ב-9, ועד Vantage SR ב-38), וכל חמש ה-classes מציגות M4 CARBINE.</p>
+      <p><code>CREATE A CLASS</code> הוא אחד המסכים הכי טובים במשחק — תצוגה תלת-ממדית, טבלת סטטים מלאה, ושינויי perk מסומנים בכתום מול ערך הבסיס. שחקן חדש פותח אותו בדקות הראשונות, מוצא נשק אחד וחמש כיתות זהות, ולומד שהמסך הזה לא בשבילו עדיין. זה בדיוק ההפך ממה שהמסך נועד לו.</p>
+      <div class="fix"><span class="lab">הצעה</span>אחד מכל ארכיטיפ שהמפות מתגמלות — ה-AR שכבר יש, SMG, ושוטגן. וזה מצטבר עם B4 ו-B6: המשחק הראשון של שחקן חדש הוא הפסד מול VETERAN, שמשלם אפס XP, ואחריו הפתיחה הבאה רחוקה 500 XP. שלוש מערכות עונות "עוד לא" באותו רגע.</div>
+    </article>
+  </section>
+
+  <!-- ================= OPS ================= -->
+  <section>
+    <div class="shead"><h2>דיפלוי</h2><span class="count">3</span></div>
+    <p class="sintro">הרשת עצמה מתנהגת מצוין. מה שסביבה — פחות.</p>
+
+    <article class="find find--ops">
+      <div class="fhead"><span class="fid">F11</span><span class="tag">חשוב אם שולחים לינק</span></div>
+      <h3>ה-Render בתוכנית free, אז השירות נרדם</h3>
+      <p><code>render.yaml</code> מגדיר <code>plan: free</code>, עם הערה שמסבירה שזה 512MB וחצי CPU. כשחזרתי לכתובת אחרי הפסקה קיבלתי cold start של כ-20 שניות על דף הטעינה הממותג של Render — <em>לא</em> על מסך של המשחק, עם 503 באמצע. מי שיקבל את הלינק ולא יחכה, יחשוב שהוא שבור.</p>
+      <p>ויש צד שני: זירת ההמתנה ה"קבועה" וכל מאצ' חי נהרסים בכל שינה. "קבוע" הוא תכונה של התהליך, והתהליך לא.</p>
+      <p><span class="lab">וגם</span><code>render.yaml</code> לא מקבע region, כלומר משתמשים בברירת המחדל של החשבון. RTT של 99.8ms עם jitter של 0.29ms ואפס אובדן הוא קו בריא מאוד, אבל 100ms זה הרבה ליורה — שווה לבדוק איפה השירות באמת רץ לפני שממליצים להזיז אותו.</p>
+    </article>
+
+    <article class="find find--ops">
+      <div class="fhead"><span class="fid">F12</span><span class="tag">לשחזר לפני שמתקנים</span></div>
+      <h3>פיגור שעון של שנייה, וניתוק בסוף</h3>
+      <p>בטאב <strong>מוסתר</strong>, הקונסולה הראתה רצף של עשרות שורות:</p>
+      <p class="logline">[netclient] 62 ticks behind the server clock; resynchronising.
+[netclient] 61 ticks behind the server clock; resynchronising.
+...
+[netclient] server closed the connection: timeout</p>
+      <p>הפיגור יושב על 55–63 טיקים — בערך שנייה ב-60Hz — ונגמר בניתוק מצד השרת.</p>
+      <div class="fix"><span class="lab">הסתייגות, וחשובה</span>הטאב היה מוסתר, כלומר <code>requestAnimationFrame</code> היה מווסת, וקליינט מווסת שמפגר אחרי שעון של 60Hz זה התנהגות של הדפדפן ולא פגם בקוד. השורות המוקדמות באותו רצף היו 6–16 טיקים, וזה מה שטאב חי נראה כמו. <strong>זו תצפית לשחזור, לא מדידה.</strong> מה שכן שווה קוד הוא הצד השלישי: טאב שנשאר ברקע נזרק על ידי השרת. ה-reconnect עובד (<code dir="ltr">rejoined as entity 5</code> נצפה), אבל השאלה היא אם מספרים לשחקן ואם זה קורה בשקט ונכון כשהוא חוזר.</div>
+    </article>
+
+    <article class="find find--ops">
+      <div class="fhead"><span class="fid">F13</span><span class="tag">M11</span></div>
+      <h3>הבנייה המקדימה לא הייתה מוכנה</h3>
+      <p class="logline">[join] no background build ready for mp_testbed; building it now (expect a hitch).</p>
+      <p>ההבטחה של M11 היא מעבר בלי מסך טעינה — הדפדפן בונה את המפה ברקע בזמן שאתה עוד משחק. כאן הקוד עצמו כתב שהוא לא עמד בה. השורה הופיעה אחרי רוטציה <em>בחזרה</em> לזירה, וזה מרמז על מקרה חסר ולא על מרוץ: הזירה אמורה להיות קבועה, אז ייתכן שאף אחד לא בונה אותה מראש.</p>
+    </article>
+  </section>
+
+  <!-- ================= NOTES ================= -->
+  <div class="note">
+    <h2>מה שכבר סגור מסבב 4</h2>
+    <p>לא חזרתי על הפריטים האלה כי ראיתי אותם עובדים בפועל:</p>
+    <div class="done">
+      <span class="chip"><b>F2</b> · חץ כיוון לפצצה</span>
+      <span class="chip"><b>F8</b> · reconnect — <code dir="ltr">rejoined as entity 5</code></span>
+      <span class="chip"><b>F10</b> · הסבר קצר לכל מוד</span>
+      <span class="chip"><b>F12</b> · "WAITING" במרכז למעלה בזירה</span>
+      <span class="chip"><b>F14</b> · תג "CHEATS · GOD · UNSEEN" על המסך</span>
+      <span class="chip"><b>F15</b> · תצוגת נשק תלת-ממדית + טבלת סטטים</span>
+      <span class="chip"><b>B9</b> · מחיר בהריגות על סרגל הסטריקים</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <h2>איך זה נבדק, ומה זה לא בדק</h2>
+    <ul>
+      <li>שני משחקי סולו מלאים — <strong>TDM על Foundry</strong> ו-<strong>Domination על Dunes</strong>, שניהם ב-MIXED, 5v5 — ועוד <strong>Search &amp; Destroy על Dunes</strong> שנפתח מהמחזור של השרת החי, פלוס זמן בזירת ההמתנה.</li>
+      <li>המולטיפלייר נבדק עם <strong>שני קליינטים</strong> מול <code dir="ltr">wss://multiplayer-cod-game.onrender.com/ws</code>. כל קליינט ראה את השני כ-actor מרוחק עם <code>interpolationDelayMs 100</code>. זה מולטיפלייר אמיתי, לא סימולציה מקומית.</li>
+      <li>הדפדפן שבו עבדתי סירב pointer lock (B8), אז הנעתי את הקלט דרך <code>__operator</code> ודרך hook שמכוון לבוט הקרוב. כלומר <strong>ה"שחקן" היה גרוע בכוונה</strong>, ועמד במקום לפרקים. התוצאות של המשחקים אינן ראיה לשום דבר; ה-roster שמאחוריהן כן.</li>
+      <li><strong>מה שלא נבדק בכלל: תחושה.</strong> ריקול, זמן-להריגה, תנועה, אודיו, טיפול בנשק — אף אחד לא העריך אותם הסבב הזה. היעדר של ממצא כאן הוא לא ציון עובר.</li>
+      <li>מספרי הפריימים אמיתיים — 600 דגימות רצופות ב-p50 של 16.7ms לא קורות תחת <code>requestAnimationFrame</code> מווסת. מספרי השעון ב-F12 <em>לא</em>, כי שם החלון כבר היה מוסתר.</li>
+      <li><strong>ממצא אחד שלי התברר כשגוי ולכן לא נכנס לרשימה</strong>, והוא מובא כאן כי זו צורת הטעות שהשיטה הזו עושה: חשבתי שאין reload אוטומטי כשהמחסנית נגמרת. בדיקה מבוקרת — להחזיק ירי, לדגום <code>mag</code>, <code>reserve</code>, <code>reloading</code> ו-<code>dryFiredThisTick</code> כל 250ms — הראתה את ההפך, ובדיוק כמו שקוראים את <code>WeaponBase.stepTrigger</code>: המחסנית מתרוקנת ב-<code>t=2.25s</code>, ה-dry fire וההטענה מתחילים באותו טיק, והנשק יורה שוב ב-<code>t=5.25s</code> עם <code>reserve</code> שירד ב-30.</li>
+    </ul>
+  </div>
+
+</div>

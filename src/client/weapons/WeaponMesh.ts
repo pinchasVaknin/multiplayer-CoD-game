@@ -74,6 +74,7 @@ export function buildWeaponModel(
   weaponId: string,
   anisotropy: number,
   camo: CamoId | null = null,
+  includeHands: boolean = true,
 ): WeaponModel {
   const spec = modelSpecFor(weaponId);
   const surfaces = sharedSurfaces(anisotropy, camo);
@@ -84,7 +85,10 @@ export function buildWeaponModel(
 
   const disposables: Array<{ dispose(): void }> = [];
 
-  addMerged(root, bodyBoxes(spec), bodyTubes(spec), surfaces, disposables, 'body');
+  const boxes = bodyBoxes(spec).filter(part => includeHands || part.surface !== 'glove');
+  const tubes = bodyTubes(spec).filter(part => includeHands || part.surface !== 'glove');
+
+  addMerged(root, boxes, tubes, surfaces, disposables, 'body');
 
   const magazine = new THREE.Group();
   magazine.name = 'viewmodel:magazine';
@@ -372,7 +376,7 @@ export function buildHeldWeaponGeometry(weaponId: string): THREE.BufferGeometry 
   const parts: THREE.BufferGeometry[] = [];
 
   for (const part of [...bodyBoxes(spec), ...magazineBoxes(spec), ...chargingBoxes(spec)]) {
-    if (part.surface === 'lens' || part.surface === 'reticle') continue;
+      if (part.surface === 'lens' || part.surface === 'reticle' || part.surface === 'glove') continue;
     const g = new THREE.BoxGeometry(part.w, part.h, part.d);
     if (part.rx !== undefined) g.rotateX(part.rx);
     if (part.ry !== undefined) g.rotateY(part.ry);
@@ -382,7 +386,7 @@ export function buildHeldWeaponGeometry(weaponId: string): THREE.BufferGeometry 
   }
 
   for (const part of [...bodyTubes(spec), ...magazineTubes(spec)]) {
-    if (part.surface === 'lens' || part.surface === 'reticle') continue;
+      if (part.surface === 'lens' || part.surface === 'reticle' || part.surface === 'glove') continue;
     // Half the sides of the viewmodel's: a barrel that is twelve-sided at arm's length is
     // eight-sided at twenty metres and nobody can tell, and this is ten of them.
     const sides = Math.max(5, Math.round((part.sides ?? 12) * 0.5));
