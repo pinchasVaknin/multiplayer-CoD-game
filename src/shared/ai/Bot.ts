@@ -435,10 +435,31 @@ export class Bot implements Combatant, PathClient {
     this.currYaw = sim.yaw;
   }
 
-  /** Interpolated facing, radians. Interpolated the short way round. */
-  renderYaw(alpha: number): number {
-    return this.prevYaw + shortestAngle(this.prevYaw, this.currYaw) * alpha;
-  }
+    /** Interpolated facing, radians. Interpolated the short way round. */
+    renderYaw(alpha: number): number {
+        const baseYaw = this.prevYaw + shortestAngle(this.prevYaw, this.currYaw) * alpha;
+
+        if (!this.alive) {
+            return baseYaw;
+        }
+
+        const speedSq = this.vx * this.vx + this.vz * this.vz;
+
+        if (speedSq > 0.01) {
+            const isAiming =
+                this.state === 'ENGAGE' ||
+                this.state === 'SUPPRESS' ||
+                this.state === 'FLANK' ||
+                this.state === 'PUSH' ||
+                this.blackboard.hasLos;
+
+            if (!isAiming) {
+                return Math.atan2(this.vx, this.vz) + Math.PI;
+            }
+        }
+
+        return baseYaw;
+    }
 
   /** Interpolated stance compression, 1 standing. */
   renderScale(alpha: number): number {
