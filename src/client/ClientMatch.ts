@@ -3,8 +3,7 @@ import type { ViewerContext } from '../shared/ui/TeamColour';
 import type { SchedulerConfig } from '../shared/ai/AiScheduler';
 import { BotDirector, RESPAWN_SECONDS } from '../shared/ai/BotDirector';
 import { BotRenderer } from './ai/BotRenderer';
-import { TACTICAL_SOLDIER } from './characters/CharacterCatalog';
-import { GltfCharacterAvatarProvider } from './characters/CharacterAvatarProvider';
+import type { CharacterAvatarProviderResolver } from './characters/CharacterAvatarProvider';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
 import type { BotTeam } from '../shared/ai/Combatant';
 import { tiersFor, type BotDifficulty, type PerceptionConfig, type TierTable } from '../shared/ai/DifficultyTiers';
@@ -115,6 +114,8 @@ import { WeaponSystem, type WeaponSnapshot } from '../shared/weapons/WeaponSyste
 export interface MatchDeps {
   readonly bus: GameBus;
   readonly scene: THREE.Scene;
+  /** Resolves Match-scoped factory handles over Game's long-lived parsed character assets. */
+  readonly characterAvatarProvider: CharacterAvatarProviderResolver;
   readonly viewmodel: ViewmodelLayer;
   readonly cameraRig: CameraRig;
   readonly cameraConfig: CameraConfig;
@@ -553,10 +554,10 @@ export class Match {
       // own shared gunmetal, so the filtering setting reaches them the way it reaches the gun
       // in the player's hands.
       deps.anisotropy,
-      // Composition root: the renderer depends only on a synchronous avatar provider. This
-      // provider starts one background GLB preload and exposes a factory only when it is safe
-      // to create instances; the procedural body remains the non-blocking fallback.
-      new GltfCharacterAvatarProvider(TACTICAL_SOLDIER),
+      // Composition root: the renderer resolves a synchronous provider for each actor. Each
+      // handle reads the app-level GLB cache and exposes a factory only when it is safe to
+      // create instances; the procedural body remains the non-blocking fallback.
+      deps.characterAvatarProvider,
     );
     deps.scene.add(this.botRenderer.group);
 

@@ -166,8 +166,33 @@ function prepareClip(
     }
   }
 
+  scaleBoneTranslations(clip, rig.animationTranslationScale ?? 1);
   lockRootTranslation(clip, rig, bindMotionPosition, definition.id);
   return clip;
+}
+
+/**
+ * A skin may use a different local unit from the reviewed animation export. Convert the cloned
+ * position tracks at the asset boundary, before they reach a mixer or a shared template.
+ */
+function scaleBoneTranslations(clip: THREE.AnimationClip, scale: number): void {
+  if (!Number.isFinite(scale) || scale <= 0) {
+    throw new Error(`Character rig declares invalid animation translation scale ${scale}.`);
+  }
+  if (scale === 1) return;
+
+  for (const track of clip.tracks) {
+    if (!track.name.endsWith('.position')) continue;
+    const valueSize = track.getValueSize();
+    if (valueSize !== 3) {
+      throw new Error(`Animation position track "${track.name}" is not a Vector3 track.`);
+    }
+    for (let offset = 0; offset < track.values.length; offset += valueSize) {
+      track.values[offset] = (track.values[offset] ?? 0) * scale;
+      track.values[offset + 1] = (track.values[offset + 1] ?? 0) * scale;
+      track.values[offset + 2] = (track.values[offset + 2] ?? 0) * scale;
+    }
+  }
 }
 
 function selectSourceClip(

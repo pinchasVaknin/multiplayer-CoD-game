@@ -3,13 +3,19 @@
 The character system deliberately separates asset data, I/O, and per-actor behaviour:
 
 ```text
-CharacterCatalog (semantic IDs + rig contract)
+Game (application lifetime)
+              |
+              v
+CharacterAssetService (shared cache owner + preload)
               |
               v
 CharacterAssetRepository (one fetch/parse/cache per asset)
               |
               v
-CharacterAvatarProvider (preload lifecycle + graceful fallback)
+CharacterAvatarProviderResolver (one stable provider per rendered actor)
+              |
+              v
+CharacterAvatarProvider (match-scoped factory + graceful fallback)
               |
               v
 CharacterAvatarFactory (SkeletonUtils.clone, synchronous)
@@ -24,16 +30,31 @@ BotRenderer (roster reconciliation, events, scene ownership)
 `shared/` supplies only `RenderableActor` poses, replicated event serials, and an
 `ActorAnimationInput`. It must never import Three.js or let a skeleton modify a hitbox. The
 outer actor transform continues to come from the authoritative simulation/interpolator.
-`BotRenderer` receives only the small `CharacterAvatarProvider` interface; the concrete GLTF
-loader is assembled in `ClientMatch`, the composition root.
+`BotRenderer` receives only a small `CharacterAvatarProviderResolver` interface. `Game`
+owns one `CharacterAssetService` for the lifetime of the application, warms the default bundle
+during BOOT/MENU, and resolves a lightweight provider for each rendered actor. Match teardown
+releases avatars and their providers, but not successfully parsed GLB templates.
 
 ## Current supplied assets
 
-The current `tactical_soldier` skin and animation files use a compatible 65-joint Mixamo rig,
-which is a good starting point. They are not ready to be treated as a production asset pack:
+Seven compatible bot skins are explicitly registered in `CharacterCatalog`: `Apex`, `Echo`,
+`Hazard`, `Pulse`, `Rhino`, `Sentry`, and `Viper`. They use compatible Mixamo landmarks
+and textures no larger than 2048px. `Hazard` is the largest at 37.56 MiB; `Echo` and
+`Viper` are also relatively heavy because they use several 2K diffuse and normal maps.
 
-- The skin is approximately 117.56 MiB and embeds nine 4096px PNGs. The complete current
-  character directory is approximately 124.48 MiB.
+- `Apex.glb` has a 0.001 armature root while its bones use the centimetre-scale unit of the
+  regular animation exports. Its dedicated rig profile scales cloned animation translation tracks
+  and the support-palm marker at the asset boundary; do not change gameplay transforms or add a
+  renderer special case for it.
+- The app-lifetime cache intentionally keeps a successfully rendered template alive across mode
+  changes. A busy roster can therefore load several of the six skins and retain substantial GPU
+  texture memory. Assets are loaded on demand — the game warms only `Echo`, never preloads the
+  entire catalogue — but a production cosmetic system still needs quality tiers and an LRU budget.
+- `RandomBotCharacterSelector` creates a new shuffled deck for each Match. The first seven
+  rendered actors receive distinct skins; a bot keeps its assigned skin across fallback-to-GLB
+  upgrades and respawns. This is intentional presentation-only randomness, so separate
+  multiplayer clients may see a different random assignment until player appearances are
+  replicated by the server.
 - Each nominal animation file contains multiple cumulative clips named `mixamo.com` rather than
   one semantic clip. The first clip is a 0.017s placeholder, so `animations[0]` is incorrect.
 - All clips include `mixamorigHips.position` root motion. The loader locks only the configured
@@ -44,9 +65,10 @@ which is a good starting point. They are not ready to be treated as a production
   browser before accepting cross-fades.
 - The current source folder is tracked through Git LFS. A deployment/build environment must pull
   LFS objects (or deliberately host the assets on a CDN) before it can serve these URLs.
-- The pack currently has only one configured character. A player-specific skin needs a
+- This is currently bot-only presentation selection. A player-specific skin needs a
   server-validated, replicated `characterId`; it must not be chosen locally from an arbitrary
-  URL. The current default is deliberately hard-coded at the composition root.
+  URL. That future value can override the deterministic fallback at the composition root without
+  making the renderer know about profiles or networking.
 - The old procedural body had four directional death variants. This supplied pack has only
   stand/crouch deaths, so the GLB path deliberately retains posture but not that visual variant
   until matching authored clips exist.
@@ -67,18 +89,20 @@ selector. Every skin must satisfy its `CharacterRigProfile`:
 - texture/mesh budgets suitable for the target GPU.
 
 Use KTX2/Basis texture compression, reduced texture resolution, mesh compression, versioned
-asset URLs, and Git LFS or a CDN for production delivery. Load the bundle during a loading/warmup
-phase; `BotRenderer` keeps the procedural body only as a non-blocking fallback while that work
-is in flight or fails. It creates or upgrades at most two GLB avatars per render frame so a ready
-template cannot synchronously replace an entire roster. This amortizes cloning, but it does not
-make the current 117.56 MiB download/parse acceptable: optimizing the source pack and moving
-preload before gameplay are release requirements.
+asset URLs, and Git LFS or a CDN for production delivery. Load only reviewed, selected assets
+during a loading/warmup phase; `BotRenderer` keeps the procedural body only as a non-blocking
+fallback while that work is in flight or fails. It creates or upgrades at most two GLB avatars
+per render frame so a ready template cannot synchronously replace an entire roster. This
+amortizes cloning; it does not remove the need for a texture budget when many cosmetics are in
+play.
 
 The catalog version is part of both the repository cache key and the public asset query string.
 Bump it whenever an exported file changes. This is a simple browser-cache guard; a content-hashed
 CDN manifest remains the stronger production solution. A failed load intentionally falls back for
-the current match rather than retrying from the render loop. Add bounded retries to a loading
-phase if product requirements call for recovery from a transient network failure.
+the current match rather than retrying from the render loop. The repository evicts failed requests,
+so a later Match or an explicit `CharacterAssetService.retry` can make one bounded retry without
+discarding successful templates for other characters; a live provider observes a successful retry
+and upgrades its fallback body on the renderer's normal frame budget.
 
 ## Animation policy
 

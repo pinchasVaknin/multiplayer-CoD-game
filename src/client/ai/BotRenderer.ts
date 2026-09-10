@@ -5,7 +5,10 @@ import { relationTo, type ViewerContext } from '../../shared/ui/TeamColour';
 import { BotMesh, buildBotAssets, type BotAssets } from './BotMesh';
 import { buildHeldWeaponGeometry, heldWeaponMaterial } from '../weapons/WeaponMesh';
 import type { ActorAvatar, TeamVisualTint } from '../characters/ActorAvatar';
-import type { CharacterAvatarProvider } from '../characters/CharacterAvatarProvider';
+import type {
+  CharacterAvatarProvider,
+  CharacterAvatarProviderResolver,
+} from '../characters/CharacterAvatarProvider';
 import { palette } from '../ui/Palette';
 
 // Skeleton cloning and material setup are intentionally amortized. A finished preload can make
@@ -68,6 +71,8 @@ export class BotRenderer {
   private readonly weaponMaterial: THREE.Material;
   /** GLB avatars once ready; `BotMesh` instances are the safe procedural fallback. */
   private readonly avatars = new Map<number, ActorAvatar>();
+  /** Each actor keeps one skin provider for its entire rendered lifetime. */
+  private readonly characterProviders = new Map<number, CharacterAvatarProvider>();
   /** Last serial this renderer acted on, per bot. */
   private readonly seen = new Map<number, { death: number; spawn: number; flinch: number }>();
   private readonly present = new Set<number>();
@@ -85,7 +90,7 @@ export class BotRenderer {
     private readonly actors: () => Iterable<RenderableActor>,
     private readonly viewer: () => ViewerContext,
     anisotropy = 1,
-    private readonly characterProvider: CharacterAvatarProvider,
+    private readonly characterProviderFor: CharacterAvatarProviderResolver,
   ) {
     this.assets = buildBotAssets();
     // The viewmodel's own gunmetal, already built for the process. A held weapon allocates no
@@ -138,20 +143,21 @@ export class BotRenderer {
   }
 
   private avatarFor(bot: RenderableActor): ActorAvatar {
+    const characterProvider = this.characterProviderForActor(bot);
     const existing = this.avatars.get(bot.entityId);
     if (existing !== undefined) {
       this.applyTeamTint(bot.entityId, bot.team, existing);
       if (
         existing instanceof BotMesh &&
         this.gltfAvatarCreationsRemaining > 0 &&
-        this.characterProvider.isReady
+        characterProvider.isReady
       ) {
-        return this.replaceFallback(bot, existing);
+        return this.replaceFallback(bot, existing, characterProvider);
       }
       return existing;
     }
 
-    const avatar = this.createAvatar(bot);
+    const avatar = this.createAvatar(bot, characterProvider);
     this.avatars.set(bot.entityId, avatar);
     this.teams.set(bot.entityId, bot.team);
     this.groupFor(bot.team).add(avatar.group);
@@ -163,6 +169,15 @@ export class BotRenderer {
     this.seen.set(bot.entityId, { death: v.deathSerial, spawn: v.spawnSerial, flinch: v.flinchSerial });
     if (!bot.participating) avatar.beginDeath(v.deathDirX, v.deathDirZ, v.deathVariant, bot.animation);
     return avatar;
+  }
+
+  private characterProviderForActor(actor: RenderableActor): CharacterAvatarProvider {
+    const existing = this.characterProviders.get(actor.entityId);
+    if (existing !== undefined) return existing;
+
+    const provider = this.characterProviderFor(actor);
+    this.characterProviders.set(actor.entityId, provider);
+    return provider;
   }
 
   private applyEvents(bot: RenderableActor, mesh: ActorAvatar, animation: RenderableActor['animation']): void {
@@ -211,9 +226,9 @@ export class BotRenderer {
   }
 
   /** Create a GLB avatar if its already-preloaded template is trustworthy; otherwise fallback. */
-  private createAvatar(bot: RenderableActor): ActorAvatar {
+  private createAvatar(bot: RenderableActor, characterProvider: CharacterAvatarProvider): ActorAvatar {
     if (this.gltfAvatarCreationsRemaining > 0) {
-      const character = this.characterProvider.create();
+      const character = characterProvider.create();
       if (character !== null) {
         this.gltfAvatarCreationsRemaining--;
         return character;
@@ -225,8 +240,12 @@ export class BotRenderer {
   }
 
   /** Swap an existing fallback only at a frame boundary, preserving serial/event semantics. */
-  private replaceFallback(bot: RenderableActor, fallback: BotMesh): ActorAvatar {
-    const avatar = this.characterProvider.create();
+  private replaceFallback(
+    bot: RenderableActor,
+    fallback: BotMesh,
+    characterProvider: CharacterAvatarProvider,
+  ): ActorAvatar {
+    const avatar = characterProvider.create();
     if (avatar === null) return fallback;
 
     this.gltfAvatarCreationsRemaining--;
@@ -262,6 +281,8 @@ export class BotRenderer {
       this.avatars.delete(id);
       this.seen.delete(id);
       this.teams.delete(id);
+      this.characterProviders.get(id)?.dispose();
+      this.characterProviders.delete(id);
     }
   }
 
@@ -272,6 +293,8 @@ export class BotRenderer {
       mesh.dispose();
     }
     this.avatars.clear();
+    for (const provider of this.characterProviders.values()) provider.dispose();
+    this.characterProviders.clear();
     this.seen.clear();
     this.teams.clear();
     this.group.removeFromParent();
@@ -281,7 +304,6 @@ export class BotRenderer {
     for (const geometry of this.weapons.values()) geometry.dispose();
     this.weapons.clear();
     this.assets.dispose();
-    this.characterProvider.dispose();
   }
 
   private applyTeamTint(entityId: number, team: BotTeam, avatar: ActorAvatar): void {

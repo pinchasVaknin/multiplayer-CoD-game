@@ -45,6 +45,7 @@ import { isArenaInstance, ownerFromCode, type NetLoadout } from '../shared/net/S
 import { NetSession } from './net/NetSession';
 import { logger } from '../shared/core/Log';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
+import type { CharacterAvatarProviderResolver } from './characters/CharacterAvatarProvider';
 import { applyAmbient, loadMap, type LoadedMap } from './world/MapRender';
 import { Particulate } from './world/Particulate';
 
@@ -94,6 +95,8 @@ export interface MatchWorldDeps {
   readonly scene: THREE.Scene;
   readonly renderer: Renderer;
   readonly textures: ProceduralTextures;
+  /** Resolves Match-scoped handles over Game's app-lifetime character asset cache. */
+  readonly characterAvatarProvider: CharacterAvatarProviderResolver;
   readonly viewmodel: ViewmodelLayer;
   readonly cameraRig: CameraRig;
   readonly audio: ProceduralAudio;
@@ -343,6 +346,7 @@ export class MatchWorld {
             },
       cheats: deps.cheats,
       scene: deps.scene,
+      characterAvatarProvider: deps.characterAvatarProvider,
       viewmodel: deps.viewmodel,
       cameraRig: deps.cameraRig,
       cameraConfig: deps.cameraConfig,

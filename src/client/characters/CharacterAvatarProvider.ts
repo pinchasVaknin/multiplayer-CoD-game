@@ -1,73 +1,67 @@
 import { logger } from '../../shared/core/Log';
+import type { RenderableActor } from '../../shared/ai/BotVisualState';
 import type { ActorAvatar } from './ActorAvatar';
 import type { CharacterDefinition } from './CharacterCatalog';
-import { CharacterAvatarFactory } from './CharacterAvatarFactory';
-import {
-  GltfCharacterAssetRepository,
-  type CharacterAssetRepository,
-} from './CharacterAssetRepository';
+import type { CharacterAvatarFactory } from './CharacterAvatarFactory';
 
 const log = logger('CharacterAssets');
 
-/**
- * The renderer's dependency on optional character presentation.
- *
- * It exposes a synchronous factory only once background preload succeeds. The renderer never
- * owns GLTFLoader, URLs, cache policy, or a promise lifecycle.
- */
+/** The renderer's narrow dependency on optional character presentation. */
 export interface CharacterAvatarProvider {
   readonly isReady: boolean;
   create(): ActorAvatar | null;
   dispose(): void;
 }
 
-/** Browser provider for one configured character bundle. */
-export class GltfCharacterAvatarProvider implements CharacterAvatarProvider {
-  private factory: CharacterAvatarFactory | null = null;
-  private failed = false;
+/**
+ * Resolves a stable, Match-scoped provider for one replicated actor.
+ *
+ * The resolver is deliberately presentation-only. A future player-selected
+ * appearance can replace the deterministic bot selection at this boundary,
+ * without coupling the renderer to account or networking code.
+ */
+export type CharacterAvatarProviderResolver = (
+  actor: RenderableActor,
+) => CharacterAvatarProvider;
+
+/**
+ * Match-scoped view of an app-scoped character factory.
+ *
+ * The provider owns no GLB resources. A clone failure is isolated to this Match, while the
+ * service remains free to finish a retry and make its factory visible to other providers.
+ */
+export class FactoryCharacterAvatarProvider implements CharacterAvatarProvider {
+  private creationFailed = false;
   private disposed = false;
 
   constructor(
-    definition: CharacterDefinition,
-    private readonly repository: CharacterAssetRepository = new GltfCharacterAssetRepository(),
-  ) {
-    // Starts once during composition, not during a render frame and not once per entity.
-    void this.repository.preload(definition).then(
-      (assets) => {
-        if (this.disposed) return;
-        this.factory = new CharacterAvatarFactory(assets);
-        log.info(`GLB character template "${assets.definition.id}" is ready.`);
-      },
-      (error: unknown) => {
-        if (this.disposed) return;
-        this.failed = true;
-        log.warn(`GLB character assets unavailable; renderer will retain its procedural fallback. ${errorMessage(error)}`);
-      },
-    );
-  }
+    private readonly definition: CharacterDefinition,
+    private readonly factory: () => CharacterAvatarFactory | null,
+  ) {}
 
   get isReady(): boolean {
-    return !this.disposed && !this.failed && this.factory !== null;
+    return !this.disposed && !this.creationFailed && this.factory() !== null;
   }
 
   create(): ActorAvatar | null {
-    if (!this.isReady) return null;
+    const factory = this.factory();
+    if (this.disposed || this.creationFailed || factory === null) return null;
+
     try {
-      return this.factory?.create() ?? null;
+      return factory.create();
     } catch (error) {
-      // A bad clone/socket is an asset failure, not a reason to let the render loop throw on
-      // every actor every frame. Degrade once to the battle-tested procedural representation.
-      this.failed = true;
-      log.warn(`GLB character instance creation failed; renderer will retain its procedural fallback. ${errorMessage(error)}`);
+      // Do not let one malformed clone throw in every render frame. This is deliberately local
+      // to the Match: a later provider can retry after a new versioned asset is published.
+      this.creationFailed = true;
+      log.warn(
+        `GLB character instance creation failed for "${this.definition.id}"; this match will retain its procedural fallback. ${errorMessage(error)}`,
+      );
       return null;
     }
   }
 
   dispose(): void {
-    if (this.disposed) return;
     this.disposed = true;
-    this.factory = null;
-    this.repository.dispose();
   }
 }
 

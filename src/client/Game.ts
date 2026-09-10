@@ -72,6 +72,12 @@ import type { Match } from './ClientMatch';
 import type { MatchResult } from '../shared/modes/GameMode';
 import { matchFloorLine, type XpLine, type XpLines, type XpReport } from '../shared/meta/XpRules';
 import { MatchWorld } from './MatchWorld';
+import { CharacterAssetService } from './characters/CharacterAssetService';
+import {
+  characterDefinition,
+  DEFAULT_CHARACTER_ID,
+} from './characters/CharacterCatalog';
+import { RandomBotCharacterSelector } from './characters/RandomBotCharacterSelector';
 import { GameScreens } from './GameScreens';
 import { applyEquippedLoadout, asModeId } from './GameLoadout';
 import type { ResolvedLoadout } from '../shared/meta/Loadouts';
@@ -216,6 +222,8 @@ export class Game {
   private readonly scene = new THREE.Scene();
   private readonly renderer: Renderer;
   private readonly textures: ProceduralTextures;
+  /** Parsed GLB templates survive MatchWorld teardown and are shared by every mode. */
+  private readonly characterAssets = new CharacterAssetService();
   private readonly viewmodel: ViewmodelLayer;
   private readonly cameraRig: CameraRig;
   private readonly audio = new ProceduralAudio();
@@ -505,6 +513,10 @@ export class Game {
     this.renderer = new Renderer(canvas);
     this.renderer.setSize(window.innerWidth, window.innerHeight, settings.renderScale);
     this.textures = new ProceduralTextures(this.renderer.three);
+    // Warm one representative bundle while BOOT/MENU are visible. Other skins load only when
+    // an actor receives them, so a match does not reserve the whole cosmetic catalogue on the
+    // GPU just because those files exist in public/.
+    void this.characterAssets.preload(characterDefinition(DEFAULT_CHARACTER_ID)).catch(() => undefined);
     this.uiHost = uiHost;
     this.debugHost = debugHost;
     this.viewmodel = new ViewmodelLayer(this.cameraConfig);
@@ -1442,11 +1454,18 @@ export class Game {
   private buildWorld(): void {
     if (this.world !== null) return;
     const modeEntry = this.modeEntry();
+    // One nondeterministic cosmetic deck per Match. It remains outside shared/simulation code:
+    // gameplay never depends on the skin a client happened to draw.
+    const botCharacterSelector = new RandomBotCharacterSelector();
     this.world = new MatchWorld({
       bus: this.bus,
       scene: this.scene,
       renderer: this.renderer,
       textures: this.textures,
+      characterAvatarProvider: (actor) =>
+        this.characterAssets.avatarProvider(
+          characterDefinition(botCharacterSelector.characterIdFor(actor.entityId)),
+        ),
       viewmodel: this.viewmodel,
       cameraRig: this.cameraRig,
       audio: this.audio,
