@@ -1,3 +1,5 @@
+import type { StanceId } from '../player/Stance';
+
 /**
  * The cosmetic side of a bot, as plain replicable data (M9).
  *
@@ -45,6 +47,23 @@ export interface BotVisualState {
 }
 
 /**
+ * The small slice of actor state that selects a presentation animation.
+ *
+ * This deliberately belongs beside `RenderableActor`, instead of in a Three.js class.  A
+ * local bot and a remote player already have these facts through different routes (simulation
+ * state and snapshots respectively), but the renderer must not know which route supplied
+ * them.  The values are presentation inputs only: no animation is permitted to write them
+ * back into movement, hitboxes, or network state.
+ */
+export interface ActorAnimationInput {
+  readonly stance: StanceId;
+  readonly aiming: boolean;
+  readonly sprinting: boolean;
+  readonly reloading: boolean;
+  readonly firing: boolean;
+}
+
+/**
  * Anything the bot renderer can draw (M10, S6.5).
  *
  * S6.5: *"Remote humans reuse the bot visual representation from M3 — same mesh, same stance
@@ -72,6 +91,8 @@ export interface RenderableActor {
    * change at all. Null means an unknown id, and an unarmed body is better than a wrong one.
    */
   readonly weaponId: string | null;
+  /** Semantic state used to choose a visual animation. See `ActorAnimationInput`. */
+  readonly animation: ActorAnimationInput;
   renderX(alpha: number): number;
   renderY(alpha: number): number;
   renderZ(alpha: number): number;

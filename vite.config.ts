@@ -25,7 +25,12 @@ export default defineConfig({
     dedupe: ['three'],
   },
   optimizeDeps: {
-    include: ['three', 'three/examples/jsm/utils/BufferGeometryUtils.js'],
+    include: [
+      'three',
+      'three/examples/jsm/utils/BufferGeometryUtils.js',
+      'three/examples/jsm/utils/SkeletonUtils.js',
+      'three/examples/jsm/loaders/GLTFLoader.js',
+    ],
   },
   server: {
     host: '127.0.0.1',

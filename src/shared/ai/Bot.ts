@@ -1,13 +1,14 @@
 import { HitboxRig, HUMANOID_RIG } from '../combat/HitboxRig';
 import type { DamageSystem } from '../combat/DamageSystem';
 import { EV, type GameBus } from '../core/Events';
-import type { MutableInputCommand, InputCommand } from '../core/InputCommand';
+import { Btn, isDown, type MutableInputCommand, type InputCommand } from '../core/InputCommand';
 import { shortestAngle } from '../core/MathUtil';
 import { DT } from '../core/Loop';
 import { Rng } from '../core/Rng';
 import { Health, type HealthConfig } from '../player/Health';
 import type { MovementConfig } from '../player/MovementConfig';
 import { PlayerController } from '../player/PlayerController';
+import type { StanceId } from '../player/Stance';
 import type { CollisionWorld } from '../world/CollisionWorld';
 import type { ViewmodelConfig } from '../weapons/ViewmodelConfig';
 import type { WeaponDef } from '../weapons/WeaponDefs';
@@ -18,6 +19,7 @@ import {
     DEATH_VARIANTS,
     deathVariantFor,
     makeBotVisualState,
+    type ActorAnimationInput,
     type BotVisualState,
 } from './BotVisualState';
 import type { BotState } from './BotStates';
@@ -96,6 +98,20 @@ export class Bot implements Combatant, PathClient {
      * server bumps these counters and never knows anything is drawing.
      */
     readonly visual: BotVisualState = makeBotVisualState();
+    /** Reused view of semantic animation inputs; rendering must not allocate per actor/frame. */
+    private readonly animation_: {
+        stance: StanceId;
+        aiming: boolean;
+        sprinting: boolean;
+        reloading: boolean;
+        firing: boolean;
+    } = {
+        stance: 'STAND',
+        aiming: false,
+        sprinting: false,
+        reloading: false,
+        firing: false,
+    };
     readonly rng: Rng;
 
     /** Live-tunable: the debug panel can promote a bot mid-match. */
@@ -244,6 +260,25 @@ export class Bot implements Combatant, PathClient {
      */
     get weaponId(): string | null {
         return this.weapons.definition.id;
+    }
+
+    /**
+     * `RenderableActor.animation` for the client presentation layer.
+     *
+     * These facts already exist in the simulation; exposing the narrow read-only view keeps
+     * the renderer from depending on `Bot`, and lets `RemoteActor` provide the same contract
+     * from snapshots.  It is not animation state owned by the bot.
+     */
+    get animation(): ActorAnimationInput {
+        const state = this.animation_;
+        const sim = this.controller.sim;
+        const weapon = this.weapons.weapon;
+        state.stance = sim.stance;
+        state.aiming = weapon.adsFraction > 0.5;
+        state.sprinting = sim.sprintActive || sim.tacSprintActive;
+        state.reloading = weapon.reloading;
+        state.firing = isDown(this.cmd.buttons, Btn.Fire);
+        return state;
     }
 
     get state(): BotState {
@@ -480,4 +515,3 @@ export class Bot implements Combatant, PathClient {
     }
 
 }
-

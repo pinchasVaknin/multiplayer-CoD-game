@@ -65,6 +65,41 @@ export function muzzleZ(spec: WeaponModelSpec): number {
   return handguardEnd(spec) - spec.barrelLength - spec.muzzleLength * 0.5;
 }
 
+/**
+ * Centre of the trigger hand in unscaled weapon-local metres. Both the first-person gloves
+ * and a third-person character socket use this, so a weapon's grip has one source of truth.
+ */
+export function triggerHandAnchor(spec: WeaponModelSpec): Readonly<{ x: number; y: number; z: number }> {
+  const back = spec.receiverLength * 0.5;
+  return {
+    x: 0.006,
+    y: -spec.receiverHeight * 0.88,
+    z: back * 0.48,
+  };
+}
+
+/**
+ * Centre of the support palm in unscaled weapon-local metres. Third-person IK and the
+ * first-person glove block deliberately share this datum, so one weapon cannot acquire two
+ * incompatible handguard locations.
+ */
+export function supportHandAnchor(spec: WeaponModelSpec): Readonly<{ x: number; y: number; z: number }> {
+  const back = spec.receiverLength * 0.5;
+  if (spec.handguardLength <= 0) {
+    return {
+      x: -0.03,
+      y: -spec.receiverHeight * 0.92,
+      z: back * 0.42,
+    };
+  }
+
+  return {
+    x: 0,
+    y: barrelY(spec) - spec.handguardHeight * 0.62 - 0.006,
+    z: receiverFront(spec) - spec.handguardLength * 0.45,
+  };
+}
+
 export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
   const out: BoxPart[] = [];
   const by = barrelY(spec);
@@ -299,11 +334,13 @@ export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
   const twoHandedGrip = spec.handguardLength <= 0;
 
   // Trigger hand and its forearm. Always present.
+  const triggerHand = triggerHandAnchor(spec);
+  const supportHand = supportHandAnchor(spec);
   out.push({
     surface: 'glove',
-    x: 0.006,
-    y: -spec.receiverHeight * 0.88,
-    z: back * 0.48,
+    x: triggerHand.x,
+    y: triggerHand.y,
+    z: triggerHand.z,
     w: 0.058,
     h: 0.085,
     d: 0.088,
@@ -325,9 +362,9 @@ export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
     // first rather than reaching forward.
     out.push({
       surface: 'glove',
-      x: -0.03,
-      y: -spec.receiverHeight * 0.92,
-      z: back * 0.42,
+      x: supportHand.x,
+      y: supportHand.y,
+      z: supportHand.z,
       w: 0.05,
       h: 0.082,
       d: 0.078,
@@ -347,12 +384,11 @@ export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
     return out;
   }
 
-  const supportZ = front - spec.handguardLength * 0.45;
   out.push({
     surface: 'glove',
-    x: 0,
-    y: by - spec.handguardHeight * 0.62 - 0.006,
-    z: supportZ,
+    x: supportHand.x,
+    y: supportHand.y,
+    z: supportHand.z,
     w: 0.064,
     h: 0.076,
     d: 0.1,
@@ -361,7 +397,7 @@ export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
     surface: 'glove',
     x: -0.056,
     y: by - 0.15,
-    z: supportZ + 0.094,
+    z: supportHand.z + 0.094,
     w: 0.076,
     h: 0.076,
     d: 0.19,

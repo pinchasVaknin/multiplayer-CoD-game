@@ -12,6 +12,8 @@ import {
 } from '../../shared/ai/Gait';
 import { palette } from '../ui/Palette';
 import type { BotTeam } from '../../shared/ai/Combatant';
+import { DEATH_VARIANTS, type ActorAnimationInput } from '../../shared/ai/BotVisualState';
+import type { ActorAvatar, TeamVisualTint } from '../characters/ActorAvatar';
 
 /**
  * A bot's body, and the way it dies (brief S6.8; playtest round 5, F4).
@@ -65,8 +67,6 @@ import type { BotTeam } from '../../shared/ai/Combatant';
  *
  * Flinch is the same trick at 1/20th the scale on a 0.18 s decay.
  */
-
-export const DEATH_VARIANTS = 4;
 
 /** Seconds the fall takes to settle. The body stays put afterwards until respawn. */
 const FALL_SECONDS = 1.05;
@@ -209,7 +209,7 @@ function mixToward(colour: number, target: number, amount: number): number {
   return (r << 16) | (g << 8) | b;
 }
 
-export class BotMesh {
+export class BotMesh implements ActorAvatar {
   readonly group = new THREE.Group();
 
   private readonly body: THREE.Mesh;
@@ -320,7 +320,7 @@ export class BotMesh {
   }
 
   /** Start the fall. `dx/dz` is the direction the killing round was travelling. */
-  beginDeath(dx: number, dz: number, variant: number): void {
+  beginDeath(dx: number, dz: number, variant: number, _animation: ActorAnimationInput): void {
     const len = Math.hypot(dx, dz);
     this.fallX = len > 1e-4 ? dx / len : 0;
     this.fallZ = len > 1e-4 ? dz / len : 1;
@@ -358,6 +358,23 @@ export class BotMesh {
   setVisible(on: boolean): void {
     if (this.group.visible === on) return;
     this.group.visible = on;
+  }
+
+  /** The procedural fallback already bakes team material selection at construction. */
+  setTeamTint(_tint: TeamVisualTint): void {}
+
+  /** `ActorAvatar` bridge: preserve the existing procedural gait/death implementation. */
+  update(
+    _animation: ActorAnimationInput,
+    x: number,
+    y: number,
+    z: number,
+    yaw: number,
+    heightScale: number,
+    dt: number,
+  ): void {
+    this.advance(dt);
+    this.apply(x, y, z, yaw, heightScale, dt);
   }
 
   /** Advance the death and flinch animations. Render-rate: these are visuals only. */

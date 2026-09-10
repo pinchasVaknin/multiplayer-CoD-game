@@ -3,6 +3,8 @@ import type { ViewerContext } from '../shared/ui/TeamColour';
 import type { SchedulerConfig } from '../shared/ai/AiScheduler';
 import { BotDirector, RESPAWN_SECONDS } from '../shared/ai/BotDirector';
 import { BotRenderer } from './ai/BotRenderer';
+import { TACTICAL_SOLDIER } from './characters/CharacterCatalog';
+import { GltfCharacterAvatarProvider } from './characters/CharacterAvatarProvider';
 import type { RenderableActor } from '../shared/ai/BotVisualState';
 import type { BotTeam } from '../shared/ai/Combatant';
 import { tiersFor, type BotDifficulty, type PerceptionConfig, type TierTable } from '../shared/ai/DifficultyTiers';
@@ -544,11 +546,17 @@ export class Match {
     // mesh set against the roster each frame and drives the animations off `BotVisualState`.
     this.botRenderer = new BotRenderer(
       deps.actors ?? (() => this.bots.bots),
-      () => this.bots.freeForAll,
+      // Colour is a relation to this viewer, not an absolute A/B property. That keeps an
+      // enemy red from either side of a networked match and makes every FFA opponent hostile.
+      () => this.viewer,
       // Round 5, F4: the bodies carry the weapon they were dealt, drawn with the viewmodel's
       // own shared gunmetal, so the filtering setting reaches them the way it reaches the gun
       // in the player's hands.
       deps.anisotropy,
+      // Composition root: the renderer depends only on a synchronous avatar provider. This
+      // provider starts one background GLB preload and exposes a factory only when it is safe
+      // to create instances; the procedural body remains the non-blocking fallback.
+      new GltfCharacterAvatarProvider(TACTICAL_SOLDIER),
     );
     deps.scene.add(this.botRenderer.group);
 

@@ -11,6 +11,8 @@ import {
   magazineBoxes,
   magazineTubes,
   muzzleZ,
+  supportHandAnchor,
+  triggerHandAnchor,
   type BoxPart,
   type SurfaceKey,
   type TubePart,
@@ -403,6 +405,27 @@ export function buildHeldWeaponGeometry(weaponId: string): THREE.BufferGeometry 
   merged.scale(spec.scale, spec.scale, spec.scale);
   merged.computeBoundingSphere();
   return merged;
+}
+
+/**
+ * Position of a weapon's trigger grip after the scale baked into `buildHeldWeaponGeometry`.
+ * Third-person code attaches this point to the character's right-hand socket instead of
+ * attaching the receiver centre, so every weapon class has the correct attachment rule.
+ */
+export function heldWeaponGripAnchor(weaponId: string): THREE.Vector3 {
+  const spec = modelSpecFor(weaponId);
+  const anchor = triggerHandAnchor(spec);
+  return new THREE.Vector3(anchor.x, anchor.y, anchor.z).multiplyScalar(spec.scale);
+}
+
+/**
+ * Position of the support palm after the scale baked into `buildHeldWeaponGeometry`.
+ * `CharacterSkin` uses it as the target for the animated left-arm constraint.
+ */
+export function heldWeaponSupportAnchor(weaponId: string): THREE.Vector3 {
+  const spec = modelSpecFor(weaponId);
+  const anchor = supportHandAnchor(spec);
+  return new THREE.Vector3(anchor.x, anchor.y, anchor.z).multiplyScalar(spec.scale);
 }
 
 /**

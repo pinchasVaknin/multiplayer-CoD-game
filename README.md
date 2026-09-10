@@ -3,11 +3,14 @@
 A browser-based arena FPS. Bots, progression, loadouts, killstreaks, five modes and three
 maps, playable end to end from the main menu to the post-match board.
 
-**Zero external assets.** Every mesh is built from primitives in code, every texture is a
-`CanvasTexture` painted from seeded value noise, and every sound is synthesised through the
-Web Audio API — oscillators, noise buffers, filters, envelopes and a convolution reverb
-whose impulse response is generated per map. There are no model files, no texture packs, no
-audio files and no webfonts. The whole build is TypeScript, Three.js and Vite.
+**Procedural world, skinned character assets.** Maps, weapons, effects, generated textures and
+audio are still built in code; character presentation can additionally load a GLB skin and
+separate GLB animation clips through the client-only character asset pipeline. The current
+model sources live under `public/models/bots/`; optimize and version them before deployment.
+The whole build is TypeScript, Three.js and Vite.
+
+See [the character asset pipeline](docs/CHARACTER-ASSETS.md) for the GLB export contract,
+runtime ownership model, and the current source-asset limitations.
 
 ---
 

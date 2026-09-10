@@ -1,4 +1,9 @@
-import { makeBotVisualState, type BotVisualState, type RenderableActor } from '../../shared/ai/BotVisualState';
+import {
+  makeBotVisualState,
+  type ActorAnimationInput,
+  type BotVisualState,
+  type RenderableActor,
+} from '../../shared/ai/BotVisualState';
 import type { BotTeam } from '../../shared/ai/Combatant';
 import { DEATH_VARIANTS, deathVariantFor } from '../../shared/ai/BotVisualState';
 import { HitboxRig, HUMANOID_RIG } from '../../shared/combat/HitboxRig';
@@ -55,6 +60,14 @@ export class RemoteActor implements RenderableActor {
   private prevYaw = 0;
   private prevScale = 1;
   private seeded = false;
+  /** Reused presentation DTO; the renderer reads it synchronously once per frame. */
+  private readonly animation_ = {
+    stance: 'STAND' as StanceId,
+    aiming: false,
+    sprinting: false,
+    reloading: false,
+    firing: false,
+  };
 
   /**
    * The spawn serial the *interpolator* has been snapped for.
@@ -89,8 +102,22 @@ export class RemoteActor implements RenderableActor {
     return (this.flags & EFlag.Ads) !== 0;
   }
 
+  get sprinting(): boolean {
+    return (this.flags & EFlag.Sprinting) !== 0;
+  }
+
   get stance(): StanceId {
     return this.pose.stance;
+  }
+
+  /** The same narrow animation contract a local `Bot` exposes, sourced from snapshots. */
+  get animation(): ActorAnimationInput {
+    this.animation_.stance = this.pose.stance;
+    this.animation_.aiming = this.ads;
+    this.animation_.sprinting = this.sprinting;
+    this.animation_.reloading = this.reloading;
+    this.animation_.firing = this.firing;
+    return this.animation_;
   }
 
   get x(): number {
