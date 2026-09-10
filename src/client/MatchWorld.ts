@@ -309,6 +309,7 @@ export class MatchWorld {
             receivedAtMs: server.receivedAtMs,
             pending: server.pending,
             displayName: server.displayName,
+            healthMax: () => deps.healthConfig.max,
             bus: deps.bus,
             controller: player,
             identity: this.identity,

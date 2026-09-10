@@ -1,24 +1,25 @@
 import * as THREE from 'three';
 import { heldWeaponGripAnchor, heldWeaponSupportAnchor } from '../weapons/WeaponMesh';
-import type { TeamVisualTint } from './ActorAvatar';
+import type { ActorIndicatorAnchor } from './ActorAvatar';
 import type { CharacterRigProfile } from './CharacterCatalog';
 import { WeaponSupportHandConstraint } from './WeaponSupportHandConstraint';
 
 /**
  * One cloned skin and its cosmetic attachments.
  *
- * Geometry, textures, and skeleton source data are shared by the repository. Materials are
- * cloned per avatar because team tint is mutable; mutating a template material would repaint
- * every soldier on the map.
+ * Geometry, textures, materials, and skeleton source data are shared by the repository. The
+ * skin has no viewer-relative material mutation: its authored textures are the same for every
+ * team, while the renderer owns separate IFF markers and nameplates.
  */
 export class CharacterSkin {
   readonly root = new THREE.Group();
 
-  private readonly materials = new Set<THREE.Material>();
-  private readonly baseColours = new Map<THREE.Material, THREE.Color>();
   private readonly weaponSocket = new THREE.Group();
   private readonly supportGripTarget = new THREE.Object3D();
   private readonly supportHandConstraint: WeaponSupportHandConstraint;
+  private readonly indicatorBones: IndicatorBones;
+  private readonly anchorStart = new THREE.Vector3();
+  private readonly anchorEnd = new THREE.Vector3();
   private weapon: THREE.Mesh | null = null;
   private weaponId: string | null = null;
   private hasSupportGrip = false;
@@ -27,7 +28,7 @@ export class CharacterSkin {
     this.root.name = `character-skin:${rig.id}`;
     this.root.rotation.y = rig.modelYaw;
     this.root.scale.setScalar(rig.modelScale);
-    this.cloneMutableMaterials(instance);
+    this.prepareMeshes(instance);
 
     const hand = instance.getObjectByName(rig.weaponBone);
     if (hand === undefined) {
@@ -41,6 +42,7 @@ export class CharacterSkin {
     this.weaponSocket.add(this.supportGripTarget);
     this.root.add(instance);
     this.supportHandConstraint = new WeaponSupportHandConstraint(this.root, this.supportGripTarget, rig.supportHand);
+    this.indicatorBones = findIndicatorBones(instance, rig);
     this.configureWeaponSocketUnits(hand, rig);
   }
 
@@ -77,15 +79,30 @@ export class CharacterSkin {
     this.supportHandConstraint.solve();
   }
 
-  setTeamTint(tint: TeamVisualTint): void {
-    const target = new THREE.Color(tint.color);
-    const blend = THREE.MathUtils.clamp(tint.blend, 0, 1);
-    for (const material of this.materials) {
-      const base = this.baseColours.get(material);
-      if (base === undefined || !hasColour(material)) continue;
-      // Preserve the authored texture/material identity; this is a readable IFF wash, not a
-      // replacement shader or a destructive change to the shared source material.
-      material.color.copy(base).lerp(target, blend);
+  /** Resolve an animated semantic landmark for the renderer's separate IFF layer. */
+  getIndicatorAnchor(anchor: ActorIndicatorAnchor, target: THREE.Vector3): boolean {
+    switch (anchor) {
+      case 'head':
+        this.indicatorBones.head.getWorldPosition(target);
+        return true;
+      case 'leftUpperArm':
+        return this.midpoint(
+          this.indicatorBones.leftUpperArmStart,
+          this.indicatorBones.leftUpperArmEnd,
+          target,
+        );
+      case 'rightUpperArm':
+        return this.midpoint(
+          this.indicatorBones.rightUpperArmStart,
+          this.indicatorBones.rightUpperArmEnd,
+          target,
+        );
+      case 'leftKnee':
+        this.indicatorBones.leftKnee.getWorldPosition(target);
+        return true;
+      case 'rightKnee':
+        this.indicatorBones.rightKnee.getWorldPosition(target);
+        return true;
     }
   }
 
@@ -94,21 +111,23 @@ export class CharacterSkin {
     this.weapon = null;
     this.weaponId = null;
     this.hasSupportGrip = false;
-    for (const material of this.materials) material.dispose();
-    this.materials.clear();
-    this.baseColours.clear();
     this.root.clear();
   }
 
-  private cloneMutableMaterials(instance: THREE.Object3D): void {
-    const variants = new Map<THREE.Material, THREE.Material>();
+  private prepareMeshes(instance: THREE.Object3D): void {
     instance.traverse((node) => {
       if ((node as THREE.Object3D & { isMesh?: boolean }).isMesh !== true) return;
       const mesh = node as THREE.Mesh;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      mesh.material = cloneMaterialSet(mesh.material, variants, this.materials, this.baseColours);
     });
+  }
+
+  private midpoint(start: THREE.Object3D, end: THREE.Object3D, target: THREE.Vector3): boolean {
+    start.getWorldPosition(this.anchorStart);
+    end.getWorldPosition(this.anchorEnd);
+    target.lerpVectors(this.anchorStart, this.anchorEnd, 0.5);
+    return true;
   }
 
   /**
@@ -131,6 +150,37 @@ export class CharacterSkin {
   }
 }
 
+interface IndicatorBones {
+  readonly head: THREE.Object3D;
+  readonly leftUpperArmStart: THREE.Object3D;
+  readonly leftUpperArmEnd: THREE.Object3D;
+  readonly rightUpperArmStart: THREE.Object3D;
+  readonly rightUpperArmEnd: THREE.Object3D;
+  readonly leftKnee: THREE.Object3D;
+  readonly rightKnee: THREE.Object3D;
+}
+
+function findIndicatorBones(instance: THREE.Object3D, rig: CharacterRigProfile): IndicatorBones {
+  const profile = rig.indicators;
+  return {
+    head: requiredBone(instance, profile.headBone, rig.id),
+    leftUpperArmStart: requiredBone(instance, profile.leftUpperArmStartBone, rig.id),
+    leftUpperArmEnd: requiredBone(instance, profile.leftUpperArmEndBone, rig.id),
+    rightUpperArmStart: requiredBone(instance, profile.rightUpperArmStartBone, rig.id),
+    rightUpperArmEnd: requiredBone(instance, profile.rightUpperArmEndBone, rig.id),
+    leftKnee: requiredBone(instance, profile.leftKneeBone, rig.id),
+    rightKnee: requiredBone(instance, profile.rightKneeBone, rig.id),
+  };
+}
+
+function requiredBone(instance: THREE.Object3D, name: string, rigId: string): THREE.Object3D {
+  const bone = instance.getObjectByName(name);
+  if (bone === undefined) {
+    throw new Error(`Character rig "${rigId}" is missing indicator bone "${name}".`);
+  }
+  return bone;
+}
+
 function relativeUniformScale(root: THREE.Vector3, child: THREE.Vector3, rigId: string): number {
   const rootAverage = (Math.abs(root.x) + Math.abs(root.y) + Math.abs(root.z)) / 3;
   const childAverage = (Math.abs(child.x) + Math.abs(child.y) + Math.abs(child.z)) / 3;
@@ -138,36 +188,4 @@ function relativeUniformScale(root: THREE.Vector3, child: THREE.Vector3, rigId: 
     throw new Error(`Character rig "${rigId}" has a zero-scale weapon attachment.`);
   }
   return rootAverage / childAverage;
-}
-
-function cloneMaterialSet(
-  source: THREE.Material | readonly THREE.Material[],
-  variants: Map<THREE.Material, THREE.Material>,
-  materials: Set<THREE.Material>,
-  baseColours: Map<THREE.Material, THREE.Color>,
-): THREE.Material | THREE.Material[] {
-  if (Array.isArray(source)) {
-    return (source as readonly THREE.Material[]).map((material) => cloneMaterial(material, variants, materials, baseColours));
-  }
-  return cloneMaterial(source as THREE.Material, variants, materials, baseColours);
-}
-
-function cloneMaterial(
-  source: THREE.Material,
-  variants: Map<THREE.Material, THREE.Material>,
-  materials: Set<THREE.Material>,
-  baseColours: Map<THREE.Material, THREE.Color>,
-): THREE.Material {
-  const existing = variants.get(source);
-  if (existing !== undefined) return existing;
-
-  const clone = source.clone();
-  variants.set(source, clone);
-  materials.add(clone);
-  if (hasColour(clone)) baseColours.set(clone, clone.color.clone());
-  return clone;
-}
-
-function hasColour(material: THREE.Material): material is THREE.Material & { color: THREE.Color } {
-  return 'color' in material && (material as { color?: unknown }).color instanceof THREE.Color;
 }

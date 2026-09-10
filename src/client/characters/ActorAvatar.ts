@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import type { ActorAnimationInput } from '../../shared/ai/BotVisualState';
 
-/** A viewer-relative colour wash applied by an avatar without knowing game-team rules. */
-export interface TeamVisualTint {
-  readonly color: number;
-  /** 0 preserves the authored material; 1 replaces it with `color`. */
-  readonly blend: number;
-}
+/** Semantic landmarks used by the client-only world identification layer. */
+export type ActorIndicatorAnchor =
+  | 'head'
+  | 'leftUpperArm'
+  | 'rightUpperArm'
+  | 'leftKnee'
+  | 'rightKnee';
 
 /**
  * The narrow scene-object contract consumed by `BotRenderer`.
@@ -20,8 +21,14 @@ export interface ActorAvatar {
 
   setWeapon(weaponId: string | null, geometry: THREE.BufferGeometry | null, material: THREE.Material): void;
   setVisible(on: boolean): void;
-  /** `tint` is a per-instance presentation colour, never a mutation of shared materials. */
-  setTeamTint(tint: TeamVisualTint): void;
+  /**
+   * Write an animated, world-space landmark to `target`.
+   *
+   * The renderer owns the viewer-relative IFF policy. Avatars expose only geometry landmarks,
+   * which keeps a future skin free to use a different skeleton without teaching the renderer
+   * about its bone names.
+   */
+  getIndicatorAnchor(anchor: ActorIndicatorAnchor, target: THREE.Vector3): boolean;
   beginDeath(dx: number, dz: number, variant: number, animation: ActorAnimationInput): void;
   endDeath(): void;
   flinch(dx: number, dz: number): void;

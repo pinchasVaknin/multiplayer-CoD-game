@@ -118,11 +118,11 @@ selector chooses them for a body that actually carries a weapon. The weapon mesh
 own trigger-grip anchor, while the rig catalog supplies only the hand-axis calibration. This
 keeps weapon-class geometry and character-rig alignment independent.
 
-`AnimationMixer` and `AnimationAction` are per avatar. Parsed clips, source geometry, and source
-textures are shared. Materials are cloned per avatar because a team tint must never repaint a
-different actor using the same template. Team appearance is resolved relative to the local
-viewer, so the enemy is consistently hostile/red from either A or B; it is not an absolute
-"team A/team B" colour.
+`AnimationMixer` and `AnimationAction` are per avatar. Parsed clips, source geometry, source
+materials, and textures are shared and remain authored: teams never recolour a skin. Viewer-
+relative IFF lives in the separate client-only actor-indicator layer instead — red emissive
+points on hostile upper arms/knees, plus a red/blue nameplate and continuous segmented health
+bar above the visible body. This keeps a future skin pack independent of team presentation.
 
 The third-person weapon uses two semantic anchors from the weapon layout: `triggerHandAnchor`
 attaches the mesh to the animated right hand, and `supportHandAnchor` marks its physical support

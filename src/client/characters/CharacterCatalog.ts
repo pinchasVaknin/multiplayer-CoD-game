@@ -61,6 +61,22 @@ export interface CharacterSupportHandProfile {
   readonly palmOffset: readonly [number, number, number];
 }
 
+/**
+ * Skeleton landmarks for the client-only IFF markers and overhead nameplate.
+ *
+ * These stay with the rig profile rather than in the renderer: a new skin can use a different
+ * skeleton without making the roster reconciler know about imported bone names.
+ */
+export interface CharacterIndicatorProfile {
+  readonly headBone: string;
+  readonly leftUpperArmStartBone: string;
+  readonly leftUpperArmEndBone: string;
+  readonly rightUpperArmStartBone: string;
+  readonly rightUpperArmEndBone: string;
+  readonly leftKneeBone: string;
+  readonly rightKneeBone: string;
+}
+
 export interface CharacterRigProfile {
   readonly id: string;
   readonly minimumBoneCount: number;
@@ -76,6 +92,7 @@ export interface CharacterRigProfile {
   readonly weaponOffset: readonly [number, number, number];
   readonly weaponRotation: readonly [number, number, number];
   readonly supportHand: CharacterSupportHandProfile;
+  readonly indicators: CharacterIndicatorProfile;
   readonly modelScale: number;
   readonly modelYaw: number;
 }
@@ -101,7 +118,13 @@ const MIXAMO_V1_RIG: CharacterRigProfile = {
     'mixamorigLeftArm',
     'mixamorigLeftForeArm',
     'mixamorigLeftHand',
+    'mixamorigRightArm',
+    'mixamorigRightForeArm',
     'mixamorigRightHand',
+    'mixamorigLeftUpLeg',
+    'mixamorigLeftLeg',
+    'mixamorigRightUpLeg',
+    'mixamorigRightLeg',
     'mixamorigLeftFoot',
     'mixamorigRightFoot',
   ],
@@ -115,6 +138,15 @@ const MIXAMO_V1_RIG: CharacterRigProfile = {
     forearmBone: 'mixamorigLeftForeArm',
     handBone: 'mixamorigLeftHand',
     palmOffset: [-0.46, 4.98, -0.03],
+  },
+  indicators: {
+    headBone: 'mixamorigHead',
+    leftUpperArmStartBone: 'mixamorigLeftArm',
+    leftUpperArmEndBone: 'mixamorigLeftForeArm',
+    rightUpperArmStartBone: 'mixamorigRightArm',
+    rightUpperArmEndBone: 'mixamorigRightForeArm',
+    leftKneeBone: 'mixamorigLeftLeg',
+    rightKneeBone: 'mixamorigRightLeg',
   },
   modelScale: 0.975,
   modelYaw: Math.PI,

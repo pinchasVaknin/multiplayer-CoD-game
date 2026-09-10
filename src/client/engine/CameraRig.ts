@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { clamp, damp, DEG2RAD, lerp } from '../../shared/core/MathUtil';
 import type { CameraConfig } from '../player/CameraConfig';
 import { CameraShake } from '../player/CameraShake';
-import { SKY_LAYER } from './Renderer';
+import { ACTOR_INDICATOR_LAYER, SKY_LAYER } from './Renderer';
 import type { PlayerSnapshot } from '../../shared/player/PlayerState';
 import type { ViewmodelLayer } from '../player/Viewmodel';
 
@@ -89,6 +89,8 @@ export class CameraRig {
      * where it would be a caster the size of the world.
      */
     this.camera.layers.enable(SKY_LAYER);
+    // World-space IFF stays outside the Chopper Gunner's thermal pass. See `Renderer`.
+    this.camera.layers.enable(ACTOR_INDICATOR_LAYER);
   }
 
   resize(aspect: number): void {

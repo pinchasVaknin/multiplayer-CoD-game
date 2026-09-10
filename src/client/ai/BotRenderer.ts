@@ -2,22 +2,18 @@ import * as THREE from 'three';
 import type { RenderableActor } from '../../shared/ai/BotVisualState';
 import type { BotTeam } from '../../shared/ai/Combatant';
 import { relationTo, type ViewerContext } from '../../shared/ui/TeamColour';
+import { ActorIndicator, buildActorIndicatorAssets } from './ActorIndicator';
 import { BotMesh, buildBotAssets, type BotAssets } from './BotMesh';
 import { buildHeldWeaponGeometry, heldWeaponMaterial } from '../weapons/WeaponMesh';
-import type { ActorAvatar, TeamVisualTint } from '../characters/ActorAvatar';
+import type { ActorAvatar } from '../characters/ActorAvatar';
 import type {
   CharacterAvatarProvider,
   CharacterAvatarProviderResolver,
 } from '../characters/CharacterAvatarProvider';
-import { palette } from '../ui/Palette';
 
 // Skeleton cloning and material setup are intentionally amortized. A finished preload can make
 // an entire roster eligible in one frame, and replacing every fallback at once is a visible hitch.
 const MAX_GLTF_AVATAR_CREATIONS_PER_FRAME = 2;
-// These are intentionally strong enough to read through the supplied dark tactical texture.
-// They remain viewer-relative, so switching to team B never makes your own side look hostile.
-const FRIENDLY_SKIN_TINT_BLEND = 0.55;
-const HOSTILE_SKIN_TINT_BLEND = 0.72;
 
 /**
  * Draws the bots (M9).
@@ -64,22 +60,24 @@ export class BotRenderer {
    */
   readonly groupA = new THREE.Group();
   readonly groupB = new THREE.Group();
+  /** Client-only relation markers; deliberately outside either thermal body group. */
+  private readonly indicatorGroup = new THREE.Group();
 
   private readonly assets: BotAssets;
+  private readonly indicatorAssets = buildActorIndicatorAssets();
   /** One merged geometry per weapon id, shared by every body carrying that weapon. */
   private readonly weapons = new Map<string, THREE.BufferGeometry>();
   private readonly weaponMaterial: THREE.Material;
   /** GLB avatars once ready; `BotMesh` instances are the safe procedural fallback. */
   private readonly avatars = new Map<number, ActorAvatar>();
+  /** One client-only nameplate/health/marker presentation per rendered actor. */
+  private readonly indicators = new Map<number, ActorIndicator>();
   /** Each actor keeps one skin provider for its entire rendered lifetime. */
   private readonly characterProviders = new Map<number, CharacterAvatarProvider>();
   /** Last serial this renderer acted on, per bot. */
   private readonly seen = new Map<number, { death: number; spawn: number; flinch: number }>();
   private readonly present = new Set<number>();
-  private readonly teams = new Map<number, BotTeam>();
-  private readonly repaintTeams: () => void;
   private gltfAvatarCreationsRemaining = 0;
-  private viewerSignature = '';
 
   /**
    * `actors` is a supplier rather than an array so the caller can decide per frame what is
@@ -99,9 +97,8 @@ export class BotRenderer {
     this.group.name = 'bots';
     this.groupA.name = 'bots:A';
     this.groupB.name = 'bots:B';
-    this.group.add(this.groupA, this.groupB);
-
-    this.repaintTeams = palette.onChange(() => this.reapplyTeamTints());
+    this.indicatorGroup.name = 'actor-indicators';
+    this.group.add(this.groupA, this.groupB, this.indicatorGroup);
   }
 
   /** The scene node holding one side's bodies. See `groupA`. */
@@ -114,11 +111,6 @@ export class BotRenderer {
     this.present.clear();
     this.gltfAvatarCreationsRemaining = MAX_GLTF_AVATAR_CREATIONS_PER_FRAME;
     const viewer = this.viewer();
-    const viewerSignature = `${viewer.team}:${viewer.freeForAll}`;
-    if (viewerSignature !== this.viewerSignature) {
-      this.viewerSignature = viewerSignature;
-      this.reapplyTeamTints(viewer);
-    }
 
     for (const actor of this.actors()) {
       this.present.add(actor.entityId);
@@ -128,13 +120,28 @@ export class BotRenderer {
       // Cheap and idempotent: `setWeapon` returns immediately unless the id actually moved,
       // which it does once per body per life rather than once per frame.
       mesh.setWeapon(actor.weaponId, this.weaponGeometry(actor.weaponId), this.weaponMaterial);
+      const x = actor.renderX(alpha);
+      const y = actor.renderY(alpha);
+      const z = actor.renderZ(alpha);
+      const yaw = actor.renderYaw(alpha);
+      const scale = actor.renderScale(alpha);
       mesh.update(
         animation,
-        actor.renderX(alpha),
-        actor.renderY(alpha),
-        actor.renderZ(alpha),
-        actor.renderYaw(alpha),
-        actor.renderScale(alpha),
+        x,
+        y,
+        z,
+        yaw,
+        scale,
+        dt,
+      );
+      this.indicatorFor(actor).update(
+        {
+          displayName: actor.displayName,
+          healthFraction: actor.healthFraction,
+          relation: relationTo(viewer, actor.team),
+          participating: actor.participating,
+        },
+        mesh,
         dt,
       );
     }
@@ -146,7 +153,6 @@ export class BotRenderer {
     const characterProvider = this.characterProviderForActor(bot);
     const existing = this.avatars.get(bot.entityId);
     if (existing !== undefined) {
-      this.applyTeamTint(bot.entityId, bot.team, existing);
       if (
         existing instanceof BotMesh &&
         this.gltfAvatarCreationsRemaining > 0 &&
@@ -159,9 +165,7 @@ export class BotRenderer {
 
     const avatar = this.createAvatar(bot, characterProvider);
     this.avatars.set(bot.entityId, avatar);
-    this.teams.set(bot.entityId, bot.team);
     this.groupFor(bot.team).add(avatar.group);
-    avatar.setTeamTint(this.tintFor(bot.team));
 
     // Adopt the bot's current serials rather than zero, so a renderer built mid-match does
     // not replay every death the roster has already had.
@@ -178,6 +182,16 @@ export class BotRenderer {
     const provider = this.characterProviderFor(actor);
     this.characterProviders.set(actor.entityId, provider);
     return provider;
+  }
+
+  private indicatorFor(actor: RenderableActor): ActorIndicator {
+    const existing = this.indicators.get(actor.entityId);
+    if (existing !== undefined) return existing;
+
+    const indicator = new ActorIndicator(actor.entityId, this.indicatorAssets);
+    this.indicators.set(actor.entityId, indicator);
+    this.indicatorGroup.add(indicator.group);
+    return indicator;
   }
 
   private applyEvents(bot: RenderableActor, mesh: ActorAvatar, animation: RenderableActor['animation']): void {
@@ -234,9 +248,10 @@ export class BotRenderer {
         return character;
       }
     }
-    // `freeForAll` is fixed for a match. Preserve the old material-based IFF fallback while a
-    // GLB template is loading or unavailable.
-    return new BotMesh(bot.team, this.assets, this.viewer().freeForAll);
+    // The fallback stays neutral while a GLB template is loading or unavailable. IFF belongs
+    // to the separate markers/nameplate layer, never to a broad body-colour wash.
+    void bot;
+    return new BotMesh(this.assets);
   }
 
   /** Swap an existing fallback only at a frame boundary, preserving serial/event semantics. */
@@ -254,7 +269,6 @@ export class BotRenderer {
     fallback.dispose();
     this.avatars.set(bot.entityId, avatar);
     this.groupFor(bot.team).add(avatar.group);
-    avatar.setTeamTint(this.tintFor(bot.team));
     if (!bot.participating) {
       const visual = bot.visual;
       avatar.beginDeath(visual.deathDirX, visual.deathDirZ, visual.deathVariant, bot.animation);
@@ -279,50 +293,33 @@ export class BotRenderer {
       mesh.group.removeFromParent();
       mesh.dispose();
       this.avatars.delete(id);
+      const indicator = this.indicators.get(id);
+      indicator?.dispose();
+      this.indicators.delete(id);
       this.seen.delete(id);
-      this.teams.delete(id);
       this.characterProviders.get(id)?.dispose();
       this.characterProviders.delete(id);
     }
   }
 
   dispose(): void {
-    this.repaintTeams();
     for (const mesh of this.avatars.values()) {
       mesh.group.removeFromParent();
       mesh.dispose();
     }
     this.avatars.clear();
+    for (const indicator of this.indicators.values()) indicator.dispose();
+    this.indicators.clear();
     for (const provider of this.characterProviders.values()) provider.dispose();
     this.characterProviders.clear();
     this.seen.clear();
-    this.teams.clear();
     this.group.removeFromParent();
     this.group.clear();
     // The bodies reference these and are already gone; the weapon material is the viewmodel's
     // and belongs to `disposeWeaponSurfaces`, which the page teardown owns.
     for (const geometry of this.weapons.values()) geometry.dispose();
     this.weapons.clear();
+    this.indicatorAssets.dispose();
     this.assets.dispose();
-  }
-
-  private applyTeamTint(entityId: number, team: BotTeam, avatar: ActorAvatar): void {
-    if (this.teams.get(entityId) === team) return;
-    this.teams.set(entityId, team);
-    avatar.setTeamTint(this.tintFor(team));
-  }
-
-  private reapplyTeamTints(viewer = this.viewer()): void {
-    for (const [id, avatar] of this.avatars) {
-      const team = this.teams.get(id);
-      if (team !== undefined) avatar.setTeamTint(this.tintFor(team, viewer));
-    }
-  }
-
-  private tintFor(team: BotTeam, viewer = this.viewer()): TeamVisualTint {
-    if (relationTo(viewer, team) === 'HOSTILE') {
-      return { color: palette.current.hostile, blend: HOSTILE_SKIN_TINT_BLEND };
-    }
-    return { color: palette.current.friendly, blend: FRIENDLY_SKIN_TINT_BLEND };
   }
 }

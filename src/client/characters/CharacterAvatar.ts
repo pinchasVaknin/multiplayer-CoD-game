@@ -3,7 +3,7 @@ import type { ActorAnimationInput } from '../../shared/ai/BotVisualState';
 import type { CharacterAssetBundle } from './CharacterAssetRepository';
 import { CharacterAnimator } from './CharacterAnimator';
 import { CharacterSkin } from './CharacterSkin';
-import type { ActorAvatar, TeamVisualTint } from './ActorAvatar';
+import type { ActorAvatar, ActorIndicatorAnchor } from './ActorAvatar';
 
 const FLINCH_SECONDS = 0.18;
 const FLINCH_ANGLE = 0.075;
@@ -50,8 +50,8 @@ export class CharacterAvatar implements ActorAvatar {
     this.group.visible = on;
   }
 
-  setTeamTint(tint: TeamVisualTint): void {
-    this.skin.setTeamTint(tint);
+  getIndicatorAnchor(anchor: ActorIndicatorAnchor, target: THREE.Vector3): boolean {
+    return this.skin.getIndicatorAnchor(anchor, target);
   }
 
   beginDeath(dx: number, dz: number, variant: number, animation: ActorAnimationInput): void {

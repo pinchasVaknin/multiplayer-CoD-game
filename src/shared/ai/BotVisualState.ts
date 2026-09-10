@@ -77,6 +77,8 @@ export interface ActorAnimationInput {
  */
 export interface RenderableActor {
   readonly entityId: number;
+  /** Replicated/profiled identity for the client-only overhead nameplate. */
+  readonly displayName: string;
   readonly team: 'A' | 'B';
   readonly visual: BotVisualState;
   /** False while dead or not yet in the fight. Drives the initial fall pose. */
@@ -93,6 +95,13 @@ export interface RenderableActor {
   readonly weaponId: string | null;
   /** Semantic state used to choose a visual animation. See `ActorAnimationInput`. */
   readonly animation: ActorAnimationInput;
+  /**
+   * Exact authoritative health fraction, exposed only for client presentation.
+   *
+   * The renderer reads this for its overhead bar; it cannot write health, hitboxes, or network
+   * state through this interface.
+   */
+  readonly healthFraction: number;
   renderX(alpha: number): number;
   renderY(alpha: number): number;
   renderZ(alpha: number): number;

@@ -10,10 +10,8 @@ import {
   gaitAt,
   LEG_PIVOT_Y,
 } from '../../shared/ai/Gait';
-import { palette } from '../ui/Palette';
-import type { BotTeam } from '../../shared/ai/Combatant';
 import { DEATH_VARIANTS, type ActorAnimationInput } from '../../shared/ai/BotVisualState';
-import type { ActorAvatar, TeamVisualTint } from '../characters/ActorAvatar';
+import type { ActorAvatar, ActorIndicatorAnchor } from '../characters/ActorAvatar';
 
 /**
  * A bot's body, and the way it dies (brief S6.8; playtest round 5, F4).
@@ -106,20 +104,9 @@ const WEAPON_OFFSET = { x: 0.04, y: 1.02, z: -0.3 } as const;
  * otherwise. It is written down here so the next person has the argument rather than the guess.
  */
 export interface BotAssets {
-  readonly bodyA: THREE.Material;
-  readonly bodyB: THREE.Material;
-  readonly headA: THREE.Material;
-  readonly headB: THREE.Material;
-  /**
-   * The everybody-is-an-enemy set (post-M8).
-   *
-   * Free-for-All has no teams, so the two-silhouette scheme below is not merely unhelpful
-   * there — it is a lie: half the lobby was drawn in the colour the player's own side wears,
-   * and playtesting reported exactly that as "bot colours are mixed". In FFA every bot wears
-   * this instead, so "not me" and "shoot it" are the same reading.
-   */
-  readonly bodyHostile: THREE.Material;
-  readonly headHostile: THREE.Material;
+  /** Neutral fallback surfaces: never used as a viewer-relative team tint. */
+  readonly body: THREE.Material;
+  readonly head: THREE.Material;
   readonly gear: THREE.Material;
 
   /** Torso and arms, merged. The arms carry `ARM_PITCH` baked in; the torso is the rig. */
@@ -134,23 +121,10 @@ export interface BotAssets {
 }
 
 export function buildBotAssets(): BotAssets {
-  // Two silhouettes that separate at a glance in grey-box lighting without either team
-  // reading as "the enemy" by colour alone: cool slate versus warm sand.
-  const bodyA = new THREE.MeshLambertMaterial({ color: 0x4a5a72 });
-  const bodyB = new THREE.MeshLambertMaterial({ color: 0x6e5a44 });
-  const headA = new THREE.MeshLambertMaterial({ color: 0x8a6a3c });
-  const headB = new THREE.MeshLambertMaterial({ color: 0x8a6a3c });
-  /**
-   * Hostile orange, taken from the live palette rather than written here.
-   *
-   * That is what makes it move with colourblind mode: the minimap dot, the killfeed row and
-   * the body in front of you are then all the same colour by construction, which is the whole
-   * argument in `ui/Palette.ts`. Darkened toward the body's own value rather than used raw —
-   * a fully saturated HUD orange on a Lambert surface under Depot's mast lights reads as a
-   * light source rather than as a person.
-   */
-  const bodyHostile = new THREE.MeshLambertMaterial({ color: hostileBody() });
-  const headHostile = new THREE.MeshLambertMaterial({ color: hostileHead() });
+  // A fallback may be visible while a GLB loads or after an asset error. It must not carry a
+  // broad team colour, or its brief appearance would still hide the author's skin/IFF design.
+  const body = new THREE.MeshLambertMaterial({ color: 0x59616e });
+  const head = new THREE.MeshLambertMaterial({ color: 0x8a6a3c });
   const gear = new THREE.MeshLambertMaterial({ color: 0x1d2026 });
 
   const bodyGeometry = buildBodyGeometry();
@@ -158,31 +132,17 @@ export function buildBotAssets(): BotAssets {
   const gearGeometry = buildGearGeometry();
   const legGeometry = buildLegGeometry();
 
-  const repaint = palette.onChange(() => {
-    bodyHostile.color.setHex(hostileBody());
-    headHostile.color.setHex(hostileHead());
-  });
-
   return {
-    bodyA,
-    bodyB,
-    headA,
-    headB,
-    bodyHostile,
-    headHostile,
+    body,
+    head,
     gear,
     bodyGeometry,
     headGeometry,
     gearGeometry,
     legGeometry,
     dispose(): void {
-      repaint();
-      bodyA.dispose();
-      bodyB.dispose();
-      headA.dispose();
-      headB.dispose();
-      bodyHostile.dispose();
-      headHostile.dispose();
+      body.dispose();
+      head.dispose();
       gear.dispose();
       bodyGeometry.dispose();
       headGeometry.dispose();
@@ -190,23 +150,6 @@ export function buildBotAssets(): BotAssets {
       legGeometry.dispose();
     },
   };
-}
-
-/** The palette's hostile colour, pulled down so a body is lit rather than glowing. */
-function hostileBody(): number {
-  return mixToward(palette.current.hostile, 0x14171c, 0.42);
-}
-
-/** A shade brighter than the body, so the head still reads as the head. */
-function hostileHead(): number {
-  return mixToward(palette.current.hostile, 0x14171c, 0.24);
-}
-
-function mixToward(colour: number, target: number, amount: number): number {
-  const r = Math.round((((colour >> 16) & 0xff) * (1 - amount)) + (((target >> 16) & 0xff) * amount));
-  const g = Math.round((((colour >> 8) & 0xff) * (1 - amount)) + (((target >> 8) & 0xff) * amount));
-  const b = Math.round(((colour & 0xff) * (1 - amount)) + ((target & 0xff) * amount));
-  return (r << 16) | (g << 8) | b;
 }
 
 export class BotMesh implements ActorAvatar {
@@ -218,6 +161,12 @@ export class BotMesh implements ActorAvatar {
   /** Hip nodes. The geometry hangs below each one, so a rotation here is a hip rotation. */
   private readonly legL = new THREE.Group();
   private readonly legR = new THREE.Group();
+  /** Presentation landmarks; the IFF renderer reads these rather than procedural box offsets. */
+  private readonly headAnchor = new THREE.Object3D();
+  private readonly leftUpperArmAnchor = new THREE.Object3D();
+  private readonly rightUpperArmAnchor = new THREE.Object3D();
+  private readonly leftKneeAnchor = new THREE.Object3D();
+  private readonly rightKneeAnchor = new THREE.Object3D();
   /** The weapon in the hands. Null until the renderer knows which one this body carries. */
   private weapon: THREE.Mesh | null = null;
   private weaponId: string | null = null;
@@ -250,20 +199,9 @@ export class BotMesh implements ActorAvatar {
   private lastZ = 0;
   private seeded = false;
 
-  /**
-   * `hostile` forces the everybody-is-an-enemy look regardless of substrate side (post-M8).
-   *
-   * Decided at construction rather than per frame because it cannot change during a match:
-   * a mode is Free-for-All or it is not. `BotDirector` passes its own `freeForAll`, which
-   * `Match` has already set from the registry entry by the time the roster is populated.
-   */
-  constructor(team: BotTeam, assets: BotAssets, hostile = false) {
-    const skin = hostile ? assets.bodyHostile : team === 'A' ? assets.bodyA : assets.bodyB;
-    this.body = new THREE.Mesh(assets.bodyGeometry, skin);
-    this.head = new THREE.Mesh(
-      assets.headGeometry,
-      hostile ? assets.headHostile : team === 'A' ? assets.headA : assets.headB,
-    );
+  constructor(assets: BotAssets) {
+    this.body = new THREE.Mesh(assets.bodyGeometry, assets.body);
+    this.head = new THREE.Mesh(assets.headGeometry, assets.head);
     this.gear = new THREE.Mesh(assets.gearGeometry, assets.gear);
 
     /**
@@ -278,16 +216,40 @@ export class BotMesh implements ActorAvatar {
       [this.legL, -1],
       [this.legR, 1],
     ] as const) {
-      const mesh = new THREE.Mesh(assets.legGeometry, skin);
+      const mesh = new THREE.Mesh(assets.legGeometry, assets.body);
       mesh.castShadow = true;
       node.position.set(sign * LEG_OFFSET_X, LEG_PIVOT_Y, 0);
       node.add(mesh);
     }
 
+    const head = requiredRigBox('head');
+    this.headAnchor.name = 'indicator-anchor:head';
+    this.headAnchor.position.set(head.ox, head.oy + head.sy * 0.5, head.oz);
+    this.leftUpperArmAnchor.name = 'indicator-anchor:left-upper-arm';
+    this.leftUpperArmAnchor.position.copy(proceduralArmAnchor('armL'));
+    this.rightUpperArmAnchor.name = 'indicator-anchor:right-upper-arm';
+    this.rightUpperArmAnchor.position.copy(proceduralArmAnchor('armR'));
+    this.leftKneeAnchor.name = 'indicator-anchor:left-knee';
+    this.rightKneeAnchor.name = 'indicator-anchor:right-knee';
+    const knee = proceduralKneeAnchor();
+    this.leftKneeAnchor.position.copy(knee);
+    this.rightKneeAnchor.position.copy(knee);
+    this.legL.add(this.leftKneeAnchor);
+    this.legR.add(this.rightKneeAnchor);
+
     this.body.castShadow = true;
     this.head.castShadow = true;
     this.gear.castShadow = true;
-    this.group.add(this.body, this.head, this.gear, this.legL, this.legR);
+    this.group.add(
+      this.body,
+      this.head,
+      this.gear,
+      this.legL,
+      this.legR,
+      this.headAnchor,
+      this.leftUpperArmAnchor,
+      this.rightUpperArmAnchor,
+    );
   }
 
   /**
@@ -360,8 +322,25 @@ export class BotMesh implements ActorAvatar {
     this.group.visible = on;
   }
 
-  /** The procedural fallback already bakes team material selection at construction. */
-  setTeamTint(_tint: TeamVisualTint): void {}
+  getIndicatorAnchor(anchor: ActorIndicatorAnchor, target: THREE.Vector3): boolean {
+    switch (anchor) {
+      case 'head':
+        this.headAnchor.getWorldPosition(target);
+        return true;
+      case 'leftUpperArm':
+        this.leftUpperArmAnchor.getWorldPosition(target);
+        return true;
+      case 'rightUpperArm':
+        this.rightUpperArmAnchor.getWorldPosition(target);
+        return true;
+      case 'leftKnee':
+        this.leftKneeAnchor.getWorldPosition(target);
+        return true;
+      case 'rightKnee':
+        this.rightKneeAnchor.getWorldPosition(target);
+        return true;
+    }
+  }
 
   /** `ActorAvatar` bridge: preserve the existing procedural gait/death implementation. */
   update(
@@ -478,6 +457,30 @@ export class BotMesh implements ActorAvatar {
  * describing one hip is one number too many.
  */
 const LEG_OFFSET_X = Math.abs(HUMANOID_RIG.boxes.find((b) => b.name === 'legL')?.ox ?? 0.11);
+
+function requiredRigBox(name: string): (typeof HUMANOID_RIG.boxes)[number] {
+  const box = HUMANOID_RIG.boxes.find((candidate) => candidate.name === name);
+  if (box === undefined) throw new Error(`HUMANOID_RIG has no "${name}" box for an indicator anchor.`);
+  return box;
+}
+
+/** Midpoint of an arm after the same baked forward pitch used by `buildBodyGeometry`. */
+function proceduralArmAnchor(name: 'armL' | 'armR'): THREE.Vector3 {
+  const arm = requiredRigBox(name);
+  const halfLength = arm.sy * 0.5;
+  const shoulder = arm.oy + halfLength;
+  return new THREE.Vector3(
+    arm.ox,
+    shoulder - halfLength * Math.cos(ARM_PITCH),
+    arm.oz - halfLength * Math.sin(ARM_PITCH),
+  );
+}
+
+/** The leg mesh hangs beneath its hip node, so this is its animated midpoint/knee landmark. */
+function proceduralKneeAnchor(): THREE.Vector3 {
+  const leg = requiredRigBox('legL');
+  return new THREE.Vector3(0, -leg.sy * 0.5, leg.oz);
+}
 
 /** Boxes straight off the rig: same offsets, same extents, nothing to drift out of sync. */
 function buildZoneGeometry(zones: readonly HitZone[]): THREE.BufferGeometry {

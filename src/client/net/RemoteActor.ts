@@ -79,10 +79,20 @@ export class RemoteActor implements RenderableActor {
    */
   private spawnSnapped = -1;
 
-  constructor(readonly entityId: number) {}
+  constructor(
+    readonly entityId: number,
+    /** Presentation reads the live Match config; the snapshot remains the authority for HP. */
+    private readonly healthMax: () => number = () => 100,
+  ) {}
 
   get participating(): boolean {
     return (this.flags & EFlag.Alive) !== 0;
+  }
+
+  get healthFraction(): number {
+    const max = this.healthMax();
+    if (!Number.isFinite(max) || max <= 0) return 0;
+    return Math.max(0, Math.min(1, this.health / max));
   }
 
   get isBot(): boolean {

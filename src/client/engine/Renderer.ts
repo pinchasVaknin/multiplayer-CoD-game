@@ -47,6 +47,14 @@ import type { ViewmodelLayer } from '../player/Viewmodel';
  */
 export const SKY_LAYER = 1;
 
+/**
+ * Client-only nameplates, health bars, and emissive IFF points.
+ *
+ * The normal player camera opts in, while the Chopper Gunner stays on layer 0 and therefore
+ * never turns these UI elements into thermal override-material geometry.
+ */
+export const ACTOR_INDICATOR_LAYER = 2;
+
 export const SHADOW_TIERS: Readonly<
   Record<ShadowQuality, { size: number; radiusScale: number; biasScale: number }>
 > = {

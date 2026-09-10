@@ -72,6 +72,8 @@ export interface NetSessionDeps {
    */
   readonly pending?: readonly Uint8Array[];
   readonly displayName: string;
+  /** Shared match max health, used only to normalize remote overhead health bars. */
+  readonly healthMax: () => number;
   readonly bus: GameBus;
   readonly controller: PlayerController;
   readonly sample: (tickIndex: number) => InputCommand;
@@ -595,7 +597,7 @@ export class NetSession {
       if (id === this.client.entityId) continue;
       let actor = this.actors.get(id);
       if (actor === undefined) {
-        actor = new RemoteActor(id);
+        actor = new RemoteActor(id, this.deps.healthMax);
         this.actors.set(id, actor);
       }
       actor.update(interp, renderMs);
