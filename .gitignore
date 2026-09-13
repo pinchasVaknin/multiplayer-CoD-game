@@ -15,3 +15,6 @@ harness-*.jsonl
 harness-*.err
 jitter-*.jsonl
 jitter-*.err
+
+# Session reports written beside the repo by the agent. Not part of the build.
+Claude outputs/

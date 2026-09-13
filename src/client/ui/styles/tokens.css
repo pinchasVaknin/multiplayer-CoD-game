@@ -25,8 +25,10 @@
   --c-accent-dim: #a8722a;
   --c-accent-glow: rgba(255, 179, 64, 0.16);
 
-  /* Semantic-only, used by instrumentation where meaning beats restraint. */
-  --c-good: #6fd08c;
+  /* Semantic-only, used by instrumentation where meaning beats restraint. `--c-good` is
+     the team colour (ui/Palette rewrites it at boot); `--c-positive` is good news. */
+  --c-good: #57a9ff;
+  --c-positive: #6fd08c;
   --c-warn: #ffb340;
   --c-bad: #e8604c;
 

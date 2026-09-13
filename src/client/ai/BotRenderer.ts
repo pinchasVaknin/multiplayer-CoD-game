@@ -4,8 +4,8 @@ import type { BotTeam } from '../../shared/ai/Combatant';
 import { relationTo, type ViewerContext } from '../../shared/ui/TeamColour';
 import { ActorIndicator, buildActorIndicatorAssets } from './ActorIndicator';
 import { BotMesh, buildBotAssets, type BotAssets } from './BotMesh';
-import { buildHeldWeaponGeometry, heldWeaponMaterial } from '../weapons/WeaponMesh';
-import type { ActorAvatar } from '../characters/ActorAvatar';
+import { buildHeldWeapon, heldWeaponMaterial } from '../weapons/WeaponMesh';
+import type { ActorAvatar, HeldWeaponAsset } from '../characters/ActorAvatar';
 import type {
   CharacterAvatarProvider,
   CharacterAvatarProviderResolver,
@@ -65,8 +65,8 @@ export class BotRenderer {
 
   private readonly assets: BotAssets;
   private readonly indicatorAssets = buildActorIndicatorAssets();
-  /** One merged geometry per weapon id, shared by every body carrying that weapon. */
-  private readonly weapons = new Map<string, THREE.BufferGeometry>();
+  /** One held weapon per id — merged geometry, anchors, the shared material — for every body carrying it. */
+  private readonly weapons = new Map<string, HeldWeaponAsset>();
   private readonly weaponMaterial: THREE.Material;
   /** GLB avatars once ready; `BotMesh` instances are the safe procedural fallback. */
   private readonly avatars = new Map<number, ActorAvatar>();
@@ -119,7 +119,7 @@ export class BotRenderer {
       this.applyEvents(actor, mesh, animation);
       // Cheap and idempotent: `setWeapon` returns immediately unless the id actually moved,
       // which it does once per body per life rather than once per frame.
-      mesh.setWeapon(actor.weaponId, this.weaponGeometry(actor.weaponId), this.weaponMaterial);
+      mesh.setWeapon(this.heldWeapon(actor.weaponId));
       const x = actor.renderX(alpha);
       const y = actor.renderY(alpha);
       const z = actor.renderZ(alpha);
@@ -163,7 +163,7 @@ export class BotRenderer {
       return existing;
     }
 
-    const avatar = this.createAvatar(bot, characterProvider);
+    const avatar = this.createAvatar(characterProvider);
     this.avatars.set(bot.entityId, avatar);
     this.groupFor(bot.team).add(avatar.group);
 
@@ -240,7 +240,7 @@ export class BotRenderer {
   }
 
   /** Create a GLB avatar if its already-preloaded template is trustworthy; otherwise fallback. */
-  private createAvatar(bot: RenderableActor, characterProvider: CharacterAvatarProvider): ActorAvatar {
+  private createAvatar(characterProvider: CharacterAvatarProvider): ActorAvatar {
     if (this.gltfAvatarCreationsRemaining > 0) {
       const character = characterProvider.create();
       if (character !== null) {
@@ -250,7 +250,6 @@ export class BotRenderer {
     }
     // The fallback stays neutral while a GLB template is loading or unavailable. IFF belongs
     // to the separate markers/nameplate layer, never to a broad body-colour wash.
-    void bot;
     return new BotMesh(this.assets);
   }
 
@@ -276,14 +275,27 @@ export class BotRenderer {
     return avatar;
   }
 
-  /** The merged geometry for a weapon id, built once and kept. Null for an unknown id. */
-  private weaponGeometry(weaponId: string | null): THREE.BufferGeometry | null {
+  /**
+   * The held weapon for an id, built once and kept. Null for an unknown id.
+   *
+   * This is where the weapon module and the avatar contract meet: `buildHeldWeapon` knows
+   * nothing about avatars and `HeldWeaponAsset` nothing about specs, and the renderer — which
+   * already depends on both — is the one place that joins them.
+   */
+  private heldWeapon(weaponId: string | null): HeldWeaponAsset | null {
     if (weaponId === null) return null;
     const existing = this.weapons.get(weaponId);
     if (existing !== undefined) return existing;
-    const built = buildHeldWeaponGeometry(weaponId);
-    this.weapons.set(weaponId, built);
-    return built;
+    const built = buildHeldWeapon(weaponId);
+    const asset: HeldWeaponAsset = {
+      weaponId,
+      geometry: built.geometry,
+      material: this.weaponMaterial,
+      gripAnchor: built.gripAnchor,
+      supportAnchor: built.supportAnchor,
+    };
+    this.weapons.set(weaponId, asset);
+    return asset;
   }
 
   /** Only walked when the counts disagree, which is a roster change and not a frame event. */
@@ -317,7 +329,7 @@ export class BotRenderer {
     this.group.clear();
     // The bodies reference these and are already gone; the weapon material is the viewmodel's
     // and belongs to `disposeWeaponSurfaces`, which the page teardown owns.
-    for (const geometry of this.weapons.values()) geometry.dispose();
+    for (const weapon of this.weapons.values()) weapon.geometry.dispose();
     this.weapons.clear();
     this.indicatorAssets.dispose();
     this.assets.dispose();

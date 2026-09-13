@@ -3,7 +3,7 @@ import type { ActorAnimationInput } from '../../shared/ai/BotVisualState';
 import type { CharacterAssetBundle } from './CharacterAssetRepository';
 import { CharacterAnimator } from './CharacterAnimator';
 import { CharacterSkin } from './CharacterSkin';
-import type { ActorAvatar, ActorIndicatorAnchor } from './ActorAvatar';
+import type { ActorAvatar, ActorIndicatorAnchor, HeldWeaponAsset } from './ActorAvatar';
 
 const FLINCH_SECONDS = 0.18;
 const FLINCH_ANGLE = 0.075;
@@ -41,9 +41,9 @@ export class CharacterAvatar implements ActorAvatar {
     return this.animator.isDying;
   }
 
-  setWeapon(weaponId: string | null, geometry: THREE.BufferGeometry | null, material: THREE.Material): void {
-    this.skin.setWeapon(weaponId, geometry, material);
-    this.armed = weaponId !== null && geometry !== null;
+  setWeapon(weapon: HeldWeaponAsset | null): void {
+    this.skin.setWeapon(weapon);
+    this.armed = weapon !== null;
   }
 
   setVisible(on: boolean): void {

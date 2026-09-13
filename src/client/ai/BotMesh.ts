@@ -11,7 +11,7 @@ import {
   LEG_PIVOT_Y,
 } from '../../shared/ai/Gait';
 import { DEATH_VARIANTS, type ActorAnimationInput } from '../../shared/ai/BotVisualState';
-import type { ActorAvatar, ActorIndicatorAnchor } from '../characters/ActorAvatar';
+import type { ActorAvatar, ActorIndicatorAnchor, HeldWeaponAsset } from '../characters/ActorAvatar';
 
 /**
  * A bot's body, and the way it dies (brief S6.8; playtest round 5, F4).
@@ -262,15 +262,16 @@ export class BotMesh implements ActorAvatar {
    * argument for this feature is that the silhouette tells you what you are about to be shot
    * with.
    */
-  setWeapon(weaponId: string | null, geometry: THREE.BufferGeometry | null, material: THREE.Material): void {
+  setWeapon(asset: HeldWeaponAsset | null): void {
+    const weaponId = asset?.weaponId ?? null;
     if (weaponId === this.weaponId) return;
     this.weaponId = weaponId;
     if (this.weapon !== null) {
       this.group.remove(this.weapon);
       this.weapon = null;
     }
-    if (geometry === null) return;
-    const mesh = new THREE.Mesh(geometry, material);
+    if (asset === null) return;
+    const mesh = new THREE.Mesh(asset.geometry, asset.material);
     mesh.castShadow = true;
     mesh.position.set(WEAPON_OFFSET.x, WEAPON_OFFSET.y, WEAPON_OFFSET.z);
     this.weapon = mesh;

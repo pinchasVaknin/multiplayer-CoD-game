@@ -323,7 +323,29 @@ export function bodyBoxes(spec: WeaponModelSpec): BoxPart[] {
     }
   }
 
-  // -- hands ---------------------------------------------------------------
+  return out;
+}
+
+/**
+ * The first-person gloves: a trigger hand and forearm, and a support hand and forearm.
+ *
+ * A separate part group rather than a tail on `bodyBoxes`, because only one of the builders
+ * that read the layout wants them. The viewmodel does — a viewmodel with no hands reads as a
+ * floating prop. The held weapon on a third-person body does not, since that body has hands
+ * of its own and a second pair floating beside them was the "overlapping limbs" report. The
+ * loadout preview and the killfeed silhouette are pictures of the *weapon*, and a glove is
+ * not part of a weapon. Keeping the hands out of `bodyBoxes` means none of them has to
+ * filter by surface, and there is no flag to forget.
+ *
+ * Both hands sit on the same anchors a third-person character socket uses
+ * (`triggerHandAnchor`, `supportHandAnchor`), so the two views cannot disagree about where
+ * a weapon is held.
+ */
+export function handBoxes(spec: WeaponModelSpec): BoxPart[] {
+  const out: BoxPart[] = [];
+  const by = barrelY(spec);
+  const back = spec.receiverLength * 0.5;
+
   // Grey-box, but a viewmodel with no hands reads as a floating prop.
   //
   // A weapon with no handguard is held in two hands *on the grip*, not with a support hand

@@ -1,6 +1,5 @@
 import * as THREE from 'three';
-import { heldWeaponGripAnchor, heldWeaponSupportAnchor } from '../weapons/WeaponMesh';
-import type { ActorIndicatorAnchor } from './ActorAvatar';
+import type { ActorIndicatorAnchor, HeldWeaponAsset } from './ActorAvatar';
 import type { CharacterRigProfile } from './CharacterCatalog';
 import { WeaponSupportHandConstraint } from './WeaponSupportHandConstraint';
 
@@ -46,7 +45,8 @@ export class CharacterSkin {
     this.configureWeaponSocketUnits(hand, rig);
   }
 
-  setWeapon(weaponId: string | null, geometry: THREE.BufferGeometry | null, material: THREE.Material): void {
+  setWeapon(asset: HeldWeaponAsset | null): void {
+    const weaponId = asset?.weaponId ?? null;
     if (weaponId === this.weaponId) return;
     this.weaponId = weaponId;
     if (this.weapon !== null) {
@@ -55,18 +55,17 @@ export class CharacterSkin {
     }
     this.hasSupportGrip = false;
     this.supportGripTarget.visible = false;
-    if (geometry === null || weaponId === null) return;
+    if (asset === null) return;
 
-    const weapon = new THREE.Mesh(geometry, material);
-    weapon.name = `held-weapon:${weaponId ?? 'unknown'}`;
+    const weapon = new THREE.Mesh(asset.geometry, asset.material);
+    weapon.name = `held-weapon:${asset.weaponId}`;
     weapon.castShadow = true;
     // `weaponSocket` sits at the hand. Move the mesh so its trigger grip — rather than the
     // centre of its receiver — occupies that point. The socket rotation remains rig-owned.
-    const triggerGrip = heldWeaponGripAnchor(weaponId);
-    weapon.position.copy(triggerGrip).multiplyScalar(-1);
+    weapon.position.copy(asset.gripAnchor).multiplyScalar(-1);
     // The target is a sibling of the mesh under the same calibrated socket. Subtracting the
     // trigger anchor maps the semantic weapon-local support grip into that socket space.
-    this.supportGripTarget.position.copy(heldWeaponSupportAnchor(weaponId)).sub(triggerGrip);
+    this.supportGripTarget.position.copy(asset.supportAnchor).sub(asset.gripAnchor);
     this.supportGripTarget.visible = true;
     this.hasSupportGrip = true;
     this.weaponSocket.add(weapon);

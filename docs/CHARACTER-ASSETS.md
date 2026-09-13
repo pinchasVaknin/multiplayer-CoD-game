@@ -9,7 +9,10 @@ Game (application lifetime)
 CharacterAssetService (shared cache owner + preload)
               |
               v
-CharacterAssetRepository (one fetch/parse/cache per asset)
+CharacterAssetRepository (fetch/parse/cache: one skin per character, one animation file per URL)
+              |
+              v
+CharacterAssetImport (pure: validate the skin, select/scale/lock each clip for this rig)
               |
               v
 CharacterAvatarProviderResolver (one stable provider per rendered actor)
@@ -50,11 +53,18 @@ and textures no larger than 2048px. `Hazard` is the largest at 37.56 MiB; `Echo`
   changes. A busy roster can therefore load several of the six skins and retain substantial GPU
   texture memory. Assets are loaded on demand — the game warms only `Echo`, never preloads the
   entire catalogue — but a production cosmetic system still needs quality tiers and an LRU budget.
-- `RandomBotCharacterSelector` creates a new shuffled deck for each Match. The first seven
-  rendered actors receive distinct skins; a bot keeps its assigned skin across fallback-to-GLB
-  upgrades and respawns. This is intentional presentation-only randomness, so separate
-  multiplayer clients may see a different random assignment until player appearances are
-  replicated by the server.
+- `RandomCharacterSelector` deals a new shuffled deck for each Match. The first seven rendered
+  actors receive distinct skins; an actor keeps its assigned skin across fallback-to-GLB
+  upgrades and respawns. It deals to every rendered actor, humans included. The deck is drawn
+  from a seeded `Rng` rather than `Math.random` — `Game` seeds it from the save's lifetime
+  match count and the session's build count, so consecutive matches differ and any one match
+  is reproducible from its save. It is still presentation-only and client-local, so separate
+  multiplayer clients will not agree on it until the server replicates a `characterId`.
+- The animation set is shared by every Mixamo-rigged skin, and the repository caches it that
+  way: one fetch and one parse per animation URL, for the page lifetime. What is per skin — the
+  Apex unit scale and the root lock against that skin's bind pose — is done on a clone by
+  `CharacterAssetImport.importClip`, which is cheap. Before this, each of the seven skins
+  re-fetched and re-parsed all eleven files and held its own copy of every clip.
 - Each nominal animation file contains multiple cumulative clips named `mixamo.com` rather than
   one semantic clip. The first clip is a 0.017s placeholder, so `animations[0]` is incorrect.
 - All clips include `mixamorigHips.position` root motion. The loader locks only the configured
@@ -120,13 +130,18 @@ keeps weapon-class geometry and character-rig alignment independent.
 
 `AnimationMixer` and `AnimationAction` are per avatar. Parsed clips, source geometry, source
 materials, and textures are shared and remain authored: teams never recolour a skin. Viewer-
-relative IFF lives in the separate client-only actor-indicator layer instead — red emissive
-points on hostile upper arms/knees, plus a red/blue nameplate and continuous segmented health
-bar above the visible body. This keeps a future skin pack independent of team presentation.
+relative IFF lives in the separate client-only actor-indicator layer instead — emissive points
+on hostile upper arms/knees, plus a nameplate and continuous segmented health bar above the
+visible body. Every colour in that layer comes from `ui/Palette` and repaints when the palette
+changes, so a colourblind mode reaches the body in front of the player the same way it reaches
+the minimap dot; none is written in the indicator itself. This keeps a future skin pack
+independent of team presentation.
 
-The third-person weapon uses two semantic anchors from the weapon layout: `triggerHandAnchor`
-attaches the mesh to the animated right hand, and `supportHandAnchor` marks its physical support
-grip. `WeaponSupportHandConstraint` runs after the mixer only for weapon-ready clips and rotates
-the cloned left upper arm/forearm until a rig-specific virtual palm marker meets that support
-grip. It is deliberately a visual constraint: it cannot move the authoritative actor transform,
+The third-person weapon arrives at the avatar as one `HeldWeaponAsset` — geometry, material and
+the two semantic anchors from the weapon layout, built together by `buildHeldWeapon` and joined
+to the avatar contract in `BotRenderer`, so `characters/` never looks anything up in
+`weapons/` by id. `gripAnchor` (the trigger hand) is the point placed at the animated right-hand
+socket, and `supportAnchor` marks the physical support grip. `WeaponSupportHandConstraint` runs
+after the mixer only for clips the catalog marks `weaponReady` and rotates the cloned left upper
+arm/forearm until a rig-specific virtual palm marker meets that support grip. It is deliberately a visual constraint: it cannot move the authoritative actor transform,
 does not run during deaths or relaxed sprint clips, and does not alter shared skeleton templates.

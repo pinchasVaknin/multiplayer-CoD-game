@@ -296,7 +296,7 @@
 }
 
 .lo-stat__to.is-better {
-  color: var(--c-good);
+  color: var(--c-positive, var(--c-good));
 }
 
 .lo-stat__to.is-worse {

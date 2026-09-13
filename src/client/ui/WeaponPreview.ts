@@ -120,7 +120,8 @@ export class WeaponPreview {
     if (key !== this.modelKey) {
       this.modelKey = key;
       this.disposeModel();
-      const model = buildWeaponModel(weaponId, this.deps.anisotropy(), camo, false);
+      // A picture of the weapon, not of somebody holding it: no gloves.
+      const model = buildWeaponModel(weaponId, this.deps.anisotropy(), camo, { hands: false });
       /**
        * Framed by its own size rather than by a per-weapon number.
        *

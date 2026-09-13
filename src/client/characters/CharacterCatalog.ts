@@ -47,6 +47,14 @@ export interface CharacterAnimationDefinition {
   readonly url: string;
   readonly selector: LegacyClipSelector | NamedClipSelector;
   readonly loop: boolean;
+  /**
+   * Whether the clip holds a firearm in both hands, so the presentation-only support-hand
+   * constraint may pull the left palm onto the weapon. Relaxed loops, the crouch-to-stand
+   * transition and the deaths do not: forcing a second hand onto a rifle there bends the arm
+   * into a pose the source animation never authored. A fact about the clip, so it lives with
+   * the clip rather than as a list of ids inside `CharacterAnimator`.
+   */
+  readonly weaponReady: boolean;
 }
 
 /**
@@ -77,12 +85,20 @@ export interface CharacterIndicatorProfile {
   readonly rightKneeBone: string;
 }
 
+/** A component of a bone-local translation. */
+export type RootTranslationAxis = 'x' | 'y' | 'z';
+
 export interface CharacterRigProfile {
   readonly id: string;
   readonly minimumBoneCount: number;
   readonly requiredBones: readonly string[];
   readonly motionBone: string;
-  readonly lockedRootTranslationAxes: readonly number[];
+  /**
+   * Components of the motion bone's translation that are pinned to the bind pose, named in the
+   * bone's own local frame. For the Mixamo export local `z` is rendered height, which is why
+   * the planar lock is `x` and `y` and not the two you would guess.
+   */
+  readonly lockedRootTranslationAxes: readonly RootTranslationAxis[];
   /**
    * Multiplier for imported bone translation tracks. Most reviewed Mixamo exports use 1;
    * Apex has a centimetre-scale skeleton beneath a millimetre-scale armature root.
@@ -129,7 +145,7 @@ const MIXAMO_V1_RIG: CharacterRigProfile = {
     'mixamorigRightFoot',
   ],
   motionBone: 'mixamorigHips',
-  lockedRootTranslationAxes: [0, 1],
+  lockedRootTranslationAxes: ['x', 'y'],
   weaponBone: 'mixamorigRightHand',
   weaponOffset: [0, 0, 0],
   weaponRotation: [1.4436, 0.234, -1.3767],
@@ -172,34 +188,37 @@ function versionedAssetUrl(path: string, version: string): string {
   return `${path}?v=${encodeURIComponent(version)}`;
 }
 
+type ClipKind = 'loop' | 'weaponReadyLoop' | 'oneShot';
+
 function animation(
   id: CharacterAnimationId,
   fileName: string,
   expectedDuration: number,
-  loop: boolean,
+  kind: ClipKind,
 ): CharacterAnimationDefinition {
   return {
     id,
     url: versionedAssetUrl(`${ANIMATION_ROOT}/${fileName}.glb`, CHARACTER_VERSION),
     selector: { kind: 'last', expectedDuration },
-    loop,
+    loop: kind !== 'oneShot',
+    weaponReady: kind === 'weaponReadyLoop',
   };
 }
 
 const MIXAMO_ANIMATIONS: Readonly<
   Record<CharacterAnimationId, CharacterAnimationDefinition>
 > = {
-  idleRelaxed: animation('idleRelaxed', 'Idle_Relaxed', 7.717, true),
-  idleWeaponReady: animation('idleWeaponReady', 'Idle_Aiming', 2.117, true),
-  walkRelaxed: animation('walkRelaxed', 'Walk_Relaxed', 1.317, true),
-  walkWeaponReady: animation('walkWeaponReady', 'Walk_Aiming', 1.383, true),
-  runRelaxed: animation('runRelaxed', 'Run_Relaxed', 0.517, true),
-  crouchIdleAiming: animation('crouchIdleAiming', 'Crouch_Idle_Aiming', 2.117, true),
-  crouchWalkAiming: animation('crouchWalkAiming', 'Crouch_Walk_Aiming', 1.017, true),
-  crouchRunAiming: animation('crouchRunAiming', 'Crouch_Run_Aiming', 0.783, true),
-  crouchToStand: animation('crouchToStand', 'Transition_Crouch_To_Stand', 1.1, false),
-  deathStand: animation('deathStand', 'Death_Stand', 3.033, false),
-  deathCrouch: animation('deathCrouch', 'Death_Crouch', 2.367, false),
+  idleRelaxed: animation('idleRelaxed', 'Idle_Relaxed', 7.717, 'loop'),
+  idleWeaponReady: animation('idleWeaponReady', 'Idle_Aiming', 2.117, 'weaponReadyLoop'),
+  walkRelaxed: animation('walkRelaxed', 'Walk_Relaxed', 1.317, 'loop'),
+  walkWeaponReady: animation('walkWeaponReady', 'Walk_Aiming', 1.383, 'weaponReadyLoop'),
+  runRelaxed: animation('runRelaxed', 'Run_Relaxed', 0.517, 'loop'),
+  crouchIdleAiming: animation('crouchIdleAiming', 'Crouch_Idle_Aiming', 2.117, 'weaponReadyLoop'),
+  crouchWalkAiming: animation('crouchWalkAiming', 'Crouch_Walk_Aiming', 1.017, 'weaponReadyLoop'),
+  crouchRunAiming: animation('crouchRunAiming', 'Crouch_Run_Aiming', 0.783, 'weaponReadyLoop'),
+  crouchToStand: animation('crouchToStand', 'Transition_Crouch_To_Stand', 1.1, 'oneShot'),
+  deathStand: animation('deathStand', 'Death_Stand', 3.033, 'oneShot'),
+  deathCrouch: animation('deathCrouch', 'Death_Crouch', 2.367, 'oneShot'),
 };
 
 function character(

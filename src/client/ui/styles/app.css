@@ -467,7 +467,7 @@ body.op-locked #viewport {
 }
 
 .eom__outcome--win {
-  color: var(--c-good);
+  color: var(--c-positive, var(--c-good));
 }
 
 .eom__outcome--loss {
@@ -839,7 +839,7 @@ body.op-locked #viewport {
   pointer-events: none;
 }
 
-.op-fps--good { color: var(--c-good); }
+.op-fps--good { color: var(--c-positive, var(--c-good)); }
 .op-fps--fair { color: var(--c-warn); }
 .op-fps--poor { color: var(--c-bad); }
 

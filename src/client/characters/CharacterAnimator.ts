@@ -40,21 +40,13 @@ export class CharacterAnimator {
   }
 
   /**
-   * Only supplied firearm-ready clips may receive the presentation support-hand constraint.
-   * Sprint and the authored crouch-to-stand transition are relaxed poses, so forcing a second
-   * hand onto a rifle there would bend the arm into a pose the source animation did not author.
+   * Whether the clip playing now holds a firearm, and so may receive the presentation
+   * support-hand constraint. The answer is the catalog's — see
+   * `CharacterAnimationDefinition.weaponReady` — not a list kept here.
    */
   get supportsWeaponSupportGrip(): boolean {
-    switch (this.active?.id) {
-      case 'idleWeaponReady':
-      case 'walkWeaponReady':
-      case 'crouchIdleAiming':
-      case 'crouchWalkAiming':
-      case 'crouchRunAiming':
-        return true;
-      default:
-        return false;
-    }
+    const active = this.active;
+    return active !== null && this.definition.animations[active.id].weaponReady;
   }
 
   /** Select a loop from authoritative presentation state; never moves the actor transform. */

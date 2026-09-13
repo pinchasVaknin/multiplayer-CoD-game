@@ -8,6 +8,7 @@ import {
   bodyTubes,
   barrelY,
   chargingBoxes,
+  handBoxes,
   magazineBoxes,
   magazineTubes,
   muzzleZ,
@@ -65,6 +66,17 @@ export interface WeaponModel {
   dispose(): void;
 }
 
+/** What a `WeaponModel` is for, which decides which part groups it is built from. */
+export interface WeaponModelOptions {
+  /**
+   * The first-person gloves. On for the viewmodel, where a weapon with no hands reads as a
+   * floating prop; off for a picture of the weapon alone, such as the loadout preview.
+   */
+  readonly hands: boolean;
+}
+
+const VIEWMODEL: WeaponModelOptions = { hands: true };
+
 /**
  * Build one weapon.
  *
@@ -76,7 +88,7 @@ export function buildWeaponModel(
   weaponId: string,
   anisotropy: number,
   camo: CamoId | null = null,
-  includeHands: boolean = true,
+  options: WeaponModelOptions = VIEWMODEL,
 ): WeaponModel {
   const spec = modelSpecFor(weaponId);
   const surfaces = sharedSurfaces(anisotropy, camo);
@@ -87,10 +99,10 @@ export function buildWeaponModel(
 
   const disposables: Array<{ dispose(): void }> = [];
 
-  const boxes = bodyBoxes(spec).filter(part => includeHands || part.surface !== 'glove');
-  const tubes = bodyTubes(spec).filter(part => includeHands || part.surface !== 'glove');
-
-  addMerged(root, boxes, tubes, surfaces, disposables, 'body');
+  // The hands are their own part group (see `handBoxes`), so a model without them is built
+  // from fewer groups rather than from a filtered one.
+  const boxes = options.hands ? [...bodyBoxes(spec), ...handBoxes(spec)] : bodyBoxes(spec);
+  addMerged(root, boxes, bodyTubes(spec), surfaces, disposables, 'body');
 
   const magazine = new THREE.Group();
   magazine.name = 'viewmodel:magazine';
@@ -371,14 +383,16 @@ function addOpticSurfaces(out: Map<SurfaceKey, THREE.MeshStandardMaterial>): voi
  *
  * `lens` and `reticle` are skipped for the same reason `WeaponSilhouette` skips them: they are
  * apertures rather than material, and a filled optic window at fifty metres is a black dot on
- * the one part of the weapon that should read as glass.
+ * the one part of the weapon that should read as glass. The first-person gloves are not skipped
+ * because they are never asked for — `handBoxes` is a part group the viewmodel alone reads, and
+ * a body that already has hands does not need a second pair floating beside them.
  */
 export function buildHeldWeaponGeometry(weaponId: string): THREE.BufferGeometry {
   const spec = modelSpecFor(weaponId);
   const parts: THREE.BufferGeometry[] = [];
 
   for (const part of [...bodyBoxes(spec), ...magazineBoxes(spec), ...chargingBoxes(spec)]) {
-      if (part.surface === 'lens' || part.surface === 'reticle' || part.surface === 'glove') continue;
+    if (part.surface === 'lens' || part.surface === 'reticle') continue;
     const g = new THREE.BoxGeometry(part.w, part.h, part.d);
     if (part.rx !== undefined) g.rotateX(part.rx);
     if (part.ry !== undefined) g.rotateY(part.ry);
@@ -388,7 +402,7 @@ export function buildHeldWeaponGeometry(weaponId: string): THREE.BufferGeometry 
   }
 
   for (const part of [...bodyTubes(spec), ...magazineTubes(spec)]) {
-      if (part.surface === 'lens' || part.surface === 'reticle' || part.surface === 'glove') continue;
+    if (part.surface === 'lens' || part.surface === 'reticle') continue;
     // Half the sides of the viewmodel's: a barrel that is twelve-sided at arm's length is
     // eight-sided at twenty metres and nobody can tell, and this is ten of them.
     const sides = Math.max(5, Math.round((part.sides ?? 12) * 0.5));
@@ -407,25 +421,35 @@ export function buildHeldWeaponGeometry(weaponId: string): THREE.BufferGeometry 
   return merged;
 }
 
-/**
- * Position of a weapon's trigger grip after the scale baked into `buildHeldWeaponGeometry`.
- * Third-person code attaches this point to the character's right-hand socket instead of
- * attaching the receiver centre, so every weapon class has the correct attachment rule.
- */
-export function heldWeaponGripAnchor(weaponId: string): THREE.Vector3 {
-  const spec = modelSpecFor(weaponId);
-  const anchor = triggerHandAnchor(spec);
-  return new THREE.Vector3(anchor.x, anchor.y, anchor.z).multiplyScalar(spec.scale);
+/** A held weapon's geometry and the two points a body holds it by, in the same space. */
+export interface HeldWeaponGeometry {
+  readonly geometry: THREE.BufferGeometry;
+  /**
+   * The trigger grip, after the scale baked into the geometry. Third-person code attaches
+   * this point to the character's right-hand socket instead of attaching the receiver centre,
+   * so every weapon class has the correct attachment rule.
+   */
+  readonly gripAnchor: THREE.Vector3;
+  /** The support palm, same space. The target for the animated left-arm constraint. */
+  readonly supportAnchor: THREE.Vector3;
 }
 
 /**
- * Position of the support palm after the scale baked into `buildHeldWeaponGeometry`.
- * `CharacterSkin` uses it as the target for the animated left-arm constraint.
+ * `buildHeldWeaponGeometry` plus the anchors that go with it.
+ *
+ * Returned together so that whoever puts the weapon in a hand receives one object built from
+ * one spec, rather than looking the geometry up by id in one place and the anchors up by id in
+ * another. Anchors come from `WeaponMeshParts` — the same datum the first-person gloves sit on.
  */
-export function heldWeaponSupportAnchor(weaponId: string): THREE.Vector3 {
+export function buildHeldWeapon(weaponId: string): HeldWeaponGeometry {
   const spec = modelSpecFor(weaponId);
-  const anchor = supportHandAnchor(spec);
-  return new THREE.Vector3(anchor.x, anchor.y, anchor.z).multiplyScalar(spec.scale);
+  const grip = triggerHandAnchor(spec);
+  const support = supportHandAnchor(spec);
+  return {
+    geometry: buildHeldWeaponGeometry(weaponId),
+    gripAnchor: new THREE.Vector3(grip.x, grip.y, grip.z).multiplyScalar(spec.scale),
+    supportAnchor: new THREE.Vector3(support.x, support.y, support.z).multiplyScalar(spec.scale),
+  };
 }
 
 /**

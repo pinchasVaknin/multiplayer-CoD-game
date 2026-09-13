@@ -21,12 +21,14 @@ import type { ColorblindMode } from '../../shared/meta/SaveData';
  *
  * ## What the three modes actually do
  *
- * The default red/green pairing is the worst possible choice for the two commonest forms of
- * colour blindness and the best possible choice for everybody else, which is why it is the
- * default and why the alternatives exist.
+ * The default pairing is blue against red: red for the enemy because that is what every
+ * shooter has taught, blue for the team because it is the hue that reads as "mine" from
+ * either seat and never competes with the amber objective ring. The alternatives exist
+ * because red is the one half of that pair the two commonest forms of colour blindness
+ * cannot rely on.
  *
- * - **Deuteranopia / protanopia** (red-green): friendly moves off green entirely and onto a
- *   strong cyan-blue; hostile moves off red and onto a bright amber-orange. Blue and orange
+ * - **Deuteranopia / protanopia** (red-green): friendly moves onto a stronger cyan-blue;
+ *   hostile moves off red and onto a bright amber-orange. Blue and orange
  *   is the classic safe pair — it separates on the blue-yellow axis, which both conditions
  *   leave intact — and it also separates by *lightness*, which survives even a total loss of
  *   colour vision.
@@ -60,7 +62,12 @@ export interface GameplayPalette {
 }
 
 const BASE: GameplayPalette = {
-  friendly: 0x6fd08c,
+  /**
+   * Blue, not green. Team-mates read as blue on the overhead nameplate, the minimap, the
+   * killfeed and the scoreboard alike — one hue, chosen here and nowhere else. `positive`
+   * below stays green: a capture completing or XP landing is good news, not a team.
+   */
+  friendly: 0x57a9ff,
   hostile: 0xe8604c,
   local: 0xe8eaee,
   neutral: 0xffb340,

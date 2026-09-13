@@ -1,12 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import type {
-  CharacterAnimationDefinition,
-  CharacterAnimationId,
-  CharacterDefinition,
-  CharacterId,
-  CharacterRigProfile,
-} from './CharacterCatalog';
+import type { CharacterAnimationId, CharacterDefinition } from './CharacterCatalog';
+import { importClip, validateSkin } from './CharacterAssetImport';
 
 /** Parsed, shared templates. They are immutable from the perspective of an avatar instance. */
 export interface CharacterAssetBundle {
@@ -24,14 +19,26 @@ export interface CharacterAssetRepository {
 /**
  * Browser implementation for GLB character assets.
  *
- * A promise cache is intentional: ten actors becoming visible in one frame still perform one
- * fetch and one parse. The parsed skin remains a template; every actor is cloned later by the
- * factory with `SkeletonUtils.clone`.
+ * Two caches, because the two kinds of file have two different lifetimes:
+ *
+ * - **A skin is fetched and parsed once per `characterId@version`.** The parsed scene is the
+ *   template every avatar of that character is cloned from, and it owns GPU resources.
+ * - **An animation file is fetched and parsed once per URL.** The catalog shares one animation
+ *   set across every Mixamo-rigged skin, so keying this on the skin would fetch and parse the
+ *   same eleven files for each of seven characters and hold seven copies of every clip. What
+ *   *is* per skin — the unit scale and the root lock against that skin's bind pose — is done
+ *   on a clone by `importClip`, and a clone of a clip is cheap where a parse of a GLB is not.
+ *
+ * Both are promise caches: ten actors becoming visible in one frame still perform one fetch
+ * and one parse. A failed request is evicted so the next `preload` can try again without
+ * discarding anything that succeeded.
  */
 export class GltfCharacterAssetRepository implements CharacterAssetRepository {
   private readonly loader = new GLTFLoader();
   /** `public/` URLs are not hashed, so a catalog version belongs in the cache identity. */
   private readonly bundles = new Map<string, Promise<CharacterAssetBundle>>();
+  /** Source clips per animation URL. The URL already carries the catalog version. */
+  private readonly animationSources = new Map<string, Promise<readonly THREE.AnimationClip[]>>();
   private readonly loadedSkins = new Set<THREE.Object3D>();
   private disposed = false;
 
@@ -56,6 +63,7 @@ export class GltfCharacterAssetRepository implements CharacterAssetRepository {
     if (this.disposed) return;
     this.disposed = true;
     this.bundles.clear();
+    this.animationSources.clear();
     for (const skin of this.loadedSkins) disposeTemplate(skin);
     this.loadedSkins.clear();
   }
@@ -64,195 +72,69 @@ export class GltfCharacterAssetRepository implements CharacterAssetRepository {
     const animationDefinitions = Object.values(definition.animations);
     const loaded = await Promise.allSettled([
       this.loader.loadAsync(definition.skinUrl),
-      ...animationDefinitions.map((animation) => this.loader.loadAsync(animation.url)),
+      ...animationDefinitions.map((animation) => this.animationSource(animation.url)),
     ]);
 
+    const [skinResult, ...sourceResults] = loaded;
     const rejected = loaded.find((result) => result.status === 'rejected');
     if (rejected !== undefined) {
-      // `Promise.all` would reject at the first failed request and orphan GLBs that happened to
-      // parse before it. Wait for every request, then release each successful transient scene.
-      for (const result of loaded) {
-        if (result.status === 'fulfilled') disposeTemplate(result.value.scene);
+      // `Promise.all` would reject at the first failed request and orphan a skin that happened
+      // to parse before it. Wait for every request, then release the skin if it did arrive; the
+      // animation sources that succeeded stay cached, since nothing about them failed.
+      if (skinResult !== undefined && skinResult.status === 'fulfilled') {
+        disposeTemplate(skinResult.value.scene);
       }
       throw rejected.reason;
     }
+    if (skinResult === undefined || skinResult.status !== 'fulfilled') {
+      throw new Error(`Character "${definition.id}" skin was not loaded.`);
+    }
 
-    const [skinGltf, ...animationGltfs] = loaded.map(fulfilledValue);
-    if (skinGltf === undefined) throw new Error(`Character "${definition.id}" skin was not loaded.`);
-
+    const skin = skinResult.value.scene;
     try {
       if (this.disposed) throw new Error('Character asset repository was disposed while assets were loading.');
-      const bindMotionPosition = validateSkin(skinGltf.scene, definition.rig, definition.id);
+      const bindMotionPosition = validateSkin(skin, definition.rig, definition.id);
 
       const clips = new Map<CharacterAnimationId, THREE.AnimationClip>();
       for (let index = 0; index < animationDefinitions.length; index++) {
         const animation = animationDefinitions[index];
-        const gltf = animationGltfs[index];
-        if (animation === undefined || gltf === undefined) {
+        const source = sourceResults[index];
+        if (animation === undefined || source === undefined || source.status !== 'fulfilled') {
           throw new Error(`Character "${definition.id}" animation manifest was not loaded completely.`);
         }
-        clips.set(animation.id, prepareClip(animation, gltf.animations, definition.rig, bindMotionPosition));
+        clips.set(animation.id, importClip(animation, source.value, definition.rig, bindMotionPosition));
       }
 
-      this.loadedSkins.add(skinGltf.scene);
-      return { definition, skinTemplate: skinGltf.scene, clips };
+      this.loadedSkins.add(skin);
+      return { definition, skinTemplate: skin, clips };
     } catch (error) {
       // A validation/manifest error happens after the skin itself was parsed. It is not part of
       // the repository cache yet, so release it here rather than waiting for a page refresh.
-      disposeTemplate(skinGltf.scene);
+      disposeTemplate(skin);
       throw error;
-    } finally {
-      // An animation-only GLB is only an import container. `prepareClip` clones the selected
-      // clip, so any transient scene/resources from it can be released whether validation
-      // succeeded or failed.
-      for (const gltf of animationGltfs) disposeTemplate(gltf.scene);
-    }
-  }
-}
-
-function fulfilledValue<T>(result: PromiseSettledResult<T>): T {
-  if (result.status === 'rejected') throw result.reason;
-  return result.value;
-}
-
-function validateSkin(
-  scene: THREE.Object3D,
-  rig: CharacterRigProfile,
-  characterId: CharacterId,
-): THREE.Vector3 {
-  const bones = new Set<string>();
-  let skinnedMeshes = 0;
-  scene.traverse((node) => {
-    const tagged = node as THREE.Object3D & { isBone?: boolean; isSkinnedMesh?: boolean };
-    if (tagged.isBone === true) bones.add(node.name);
-    if (tagged.isSkinnedMesh === true) skinnedMeshes++;
-  });
-
-  if (skinnedMeshes === 0) {
-    throw new Error(`Character "${characterId}" skin has no SkinnedMesh.`);
-  }
-  if (bones.size < rig.minimumBoneCount) {
-    throw new Error(
-      `Character "${characterId}" rig has ${bones.size} bones; ${rig.minimumBoneCount} are required for ${rig.id}.`,
-    );
-  }
-  for (const required of rig.requiredBones) {
-    if (!bones.has(required)) {
-      throw new Error(`Character "${characterId}" rig ${rig.id} is missing required bone "${required}".`);
-    }
-  }
-  const motionBone = scene.getObjectByName(rig.motionBone);
-  if (motionBone === undefined) {
-    throw new Error(`Character "${characterId}" rig ${rig.id} is missing motion bone "${rig.motionBone}".`);
-  }
-  return motionBone.position.clone();
-}
-
-function prepareClip(
-  definition: CharacterAnimationDefinition,
-  source: readonly THREE.AnimationClip[],
-  rig: CharacterRigProfile,
-  bindMotionPosition: THREE.Vector3,
-): THREE.AnimationClip {
-  const chosen = selectSourceClip(definition, source);
-  const clip = chosen.clone();
-  clip.name = definition.id;
-
-  const targetBones = new Set<string>();
-  for (const track of clip.tracks) targetBones.add(track.name.split('.')[0] ?? '');
-  for (const required of rig.requiredBones) {
-    if (!targetBones.has(required)) {
-      throw new Error(`Animation "${definition.id}" does not target required bone "${required}".`);
     }
   }
 
-  scaleBoneTranslations(clip, rig.animationTranslationScale ?? 1);
-  lockRootTranslation(clip, rig, bindMotionPosition, definition.id);
-  return clip;
-}
+  /**
+   * The clips inside one animation file, fetched and parsed once.
+   *
+   * An animation-only GLB is an import container: its scene is a throwaway skeleton that exists
+   * so the tracks have something to bind to at export time. Only the clips are kept, and the
+   * scene is released the moment they are out, so the cache holds no geometry or textures.
+   */
+  private animationSource(url: string): Promise<readonly THREE.AnimationClip[]> {
+    const existing = this.animationSources.get(url);
+    if (existing !== undefined) return existing;
 
-/**
- * A skin may use a different local unit from the reviewed animation export. Convert the cloned
- * position tracks at the asset boundary, before they reach a mixer or a shared template.
- */
-function scaleBoneTranslations(clip: THREE.AnimationClip, scale: number): void {
-  if (!Number.isFinite(scale) || scale <= 0) {
-    throw new Error(`Character rig declares invalid animation translation scale ${scale}.`);
-  }
-  if (scale === 1) return;
-
-  for (const track of clip.tracks) {
-    if (!track.name.endsWith('.position')) continue;
-    const valueSize = track.getValueSize();
-    if (valueSize !== 3) {
-      throw new Error(`Animation position track "${track.name}" is not a Vector3 track.`);
-    }
-    for (let offset = 0; offset < track.values.length; offset += valueSize) {
-      track.values[offset] = (track.values[offset] ?? 0) * scale;
-      track.values[offset + 1] = (track.values[offset + 1] ?? 0) * scale;
-      track.values[offset + 2] = (track.values[offset + 2] ?? 0) * scale;
-    }
-  }
-}
-
-function selectSourceClip(
-  definition: CharacterAnimationDefinition,
-  source: readonly THREE.AnimationClip[],
-): THREE.AnimationClip {
-  let clip: THREE.AnimationClip | undefined;
-  const selector = definition.selector;
-  if (selector.kind === 'name') {
-    clip = source.find((candidate) => candidate.name === selector.name);
-    if (clip === undefined) {
-      throw new Error(
-        `Animation "${definition.id}" expected a clip named "${selector.name}", but it was not found.`,
-      );
-    }
-  } else {
-    clip = source.at(-1);
-    if (clip === undefined) throw new Error(`Animation "${definition.id}" contains no clips.`);
-    if (Math.abs(clip.duration - selector.expectedDuration) > 0.05) {
-      throw new Error(
-        `Animation "${definition.id}" expected a ${selector.expectedDuration}s legacy clip, got ${clip.duration}s. ` +
-          'Update the manifest or re-export one named semantic clip.',
-      );
-    }
-  }
-  return clip;
-}
-
-/**
- * Imported Mixamo clips carry translation on the hips. It is motion authored for another
- * controller, not permission to move this actor's replicated pose. The configured components
- * are planar for this rig: its local Z becomes world vertical through the Armature rotation and
- * must remain live so crouches and deaths can reach the floor. Lock configured components to
- * the skin's bind pose rather than to the source clip's first frame: the supplied action GLBs
- * have slightly different rest translations.
- */
-function lockRootTranslation(
-  clip: THREE.AnimationClip,
-  rig: CharacterRigProfile,
-  bindMotionPosition: THREE.Vector3,
-  animationId: CharacterAnimationId,
-): void {
-  const trackName = `${rig.motionBone}.position`;
-  const track = clip.tracks.find((candidate) => candidate.name === trackName);
-  if (track === undefined) {
-    throw new Error(`Animation "${animationId}" is missing required root-motion track "${trackName}".`);
-  }
-  const valueSize = track.getValueSize();
-  if (valueSize !== 3) {
-    throw new Error(`Animation "${animationId}" root-motion track "${trackName}" is not a Vector3 track.`);
-  }
-
-  const bind = [bindMotionPosition.x, bindMotionPosition.y, bindMotionPosition.z];
-  for (let offset = 0; offset < track.values.length; offset += valueSize) {
-    for (const axis of rig.lockedRootTranslationAxes) {
-      if (axis < 0 || axis >= valueSize) {
-        throw new Error(`Character rig "${rig.id}" declares invalid locked root-translation axis ${axis}.`);
-      }
-      track.values[offset + axis] = bind[axis] ?? 0;
-    }
+    const task = this.loader.loadAsync(url).then((gltf) => {
+      disposeTemplate(gltf.scene);
+      return gltf.animations;
+    });
+    this.animationSources.set(url, task);
+    void task.catch(() => {
+      if (this.animationSources.get(url) === task) this.animationSources.delete(url);
+    });
+    return task;
   }
 }
 

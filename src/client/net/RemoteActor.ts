@@ -81,8 +81,14 @@ export class RemoteActor implements RenderableActor {
 
   constructor(
     readonly entityId: number,
-    /** Presentation reads the live Match config; the snapshot remains the authority for HP. */
-    private readonly healthMax: () => number = () => 100,
+    /**
+     * Presentation reads the live Match config; the snapshot remains the authority for HP.
+     *
+     * Required, with no default. A `() => 100` fallback here would be a client-side copy of a
+     * gameplay number — the thing the config rule forbids — and it would be the copy that
+     * silently disagreed the day the config moved.
+     */
+    private readonly healthMax: () => number,
   ) {}
 
   get participating(): boolean {

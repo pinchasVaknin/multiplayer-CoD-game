@@ -16,6 +16,7 @@ import { Loop } from './engine/FrameLoop';
 import { ChopperCamera } from './streaks/ChopperCamera';
 import { makeSnapshot, type PlayerSnapshot } from '../shared/player/PlayerState';
 import { DEG2RAD } from '../shared/core/MathUtil';
+import { Rng } from '../shared/core/Rng';
 import { LocalBotTransport, type ICommandQueue } from '../shared/net/Transport';
 import { isServerConfigured, multiplayerJoinOptions } from './net/JoinOptions';
 import { handshake, HandshakeError, type HandshakeOptions } from './net/Handshake';
@@ -77,7 +78,7 @@ import {
   characterDefinition,
   DEFAULT_CHARACTER_ID,
 } from './characters/CharacterCatalog';
-import { RandomBotCharacterSelector } from './characters/RandomBotCharacterSelector';
+import { RandomCharacterSelector } from './characters/RandomCharacterSelector';
 import { GameScreens } from './GameScreens';
 import { applyEquippedLoadout, asModeId } from './GameLoadout';
 import type { ResolvedLoadout } from '../shared/meta/Loadouts';
@@ -179,6 +180,9 @@ function netMatchResult(net: SummaryInfo): MatchResult {
   };
 }
 
+/** Keys the skin deck's RNG apart from every other seeded stream in the client. */
+const CHARACTER_DECK_SALT = 0x5c1a_9e77;
+
 export class Game {
   readonly bus: GameBus = createGameBus();
   readonly movementConfig: MovementConfig = cloneMovementConfig(DEFAULT_MOVEMENT_CONFIG);
@@ -224,6 +228,8 @@ export class Game {
   private readonly textures: ProceduralTextures;
   /** Parsed GLB templates survive MatchWorld teardown and are shared by every mode. */
   private readonly characterAssets = new CharacterAssetService();
+  /** Worlds built this session. Moves the skin deck between matches — see `buildWorld`. */
+  private worldsBuilt = 0;
   private readonly viewmodel: ViewmodelLayer;
   private readonly cameraRig: CameraRig;
   private readonly audio = new ProceduralAudio();
@@ -1454,9 +1460,15 @@ export class Game {
   private buildWorld(): void {
     if (this.world !== null) return;
     const modeEntry = this.modeEntry();
-    // One nondeterministic cosmetic deck per Match. It remains outside shared/simulation code:
-    // gameplay never depends on the skin a client happened to draw.
-    const botCharacterSelector = new RandomBotCharacterSelector();
+    // One cosmetic skin deck per Match, outside shared/simulation code: gameplay never depends
+    // on the skin a client happened to draw. Seeded rather than `Math.random` (S2), from the
+    // two counters that move between matches — the lifetime count in the save and the
+    // per-session build count — so consecutive matches deal different decks and any one of
+    // them can be dealt again from the same save.
+    this.worldsBuilt++;
+    const characterSelector = new RandomCharacterSelector(
+      new Rng(CHARACTER_DECK_SALT ^ (this.profile.save.profile.matchesPlayed << 16) ^ this.worldsBuilt),
+    );
     this.world = new MatchWorld({
       bus: this.bus,
       scene: this.scene,
@@ -1464,7 +1476,7 @@ export class Game {
       textures: this.textures,
       characterAvatarProvider: (actor) =>
         this.characterAssets.avatarProvider(
-          characterDefinition(botCharacterSelector.characterIdFor(actor.entityId)),
+          characterDefinition(characterSelector.characterIdFor(actor.entityId)),
         ),
       viewmodel: this.viewmodel,
       cameraRig: this.cameraRig,

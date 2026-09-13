@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { TeamRelation } from '../../shared/ui/TeamColour';
 import { ACTOR_INDICATOR_LAYER } from '../engine/Renderer';
 import type { ActorAvatar, ActorIndicatorAnchor } from '../characters/ActorAvatar';
+import { cssHex, palette, type GameplayPalette } from '../ui/Palette';
 
 const MARKER_ANCHORS = [
   'leftUpperArm',
@@ -20,44 +21,78 @@ const LABEL_CLEARANCE = 0.38;
 const MARKER_SURFACE_OFFSET = 0.045;
 const HEALTH_SMOOTHING = 16;
 
-const NAME_COLOURS: Readonly<Record<TeamRelation, string>> = {
-  FRIENDLY: '#57a9ff',
-  HOSTILE: '#ff3d4f',
-  NEUTRAL: '#d7dce5',
-};
+/** Canvas fill styles for one relation, derived from the live palette and nothing else. */
+interface RelationColours {
+  readonly name: string;
+  readonly health: string;
+}
 
-const HEALTH_COLOURS: Readonly<Record<TeamRelation, string>> = {
-  FRIENDLY: '#ffffff',
-  HOSTILE: '#ff7b84',
-  NEUTRAL: '#e6eaf0',
-};
+/**
+ * The colours the label paints with, as a function of the palette.
+ *
+ * Taken from `ui/Palette` rather than written here, for the reason `Palette.ts` gives at
+ * length: a colourblind mode is a palette swap, and it reaches a surface only if that surface
+ * asked the palette. The old `BotMesh` body tint did; the first cut of this file did not, so
+ * under deuteranopia the minimap dot went amber while the body in front of the player kept
+ * glowing a red the player could not see. NEUTRAL cannot occur for an actor — every body is on
+ * side A or B — but `TeamRelation` has three values and the table is complete so the type
+ * system, not a runtime branch, guarantees a colour.
+ */
+function relationColours(p: GameplayPalette): Readonly<Record<TeamRelation, RelationColours>> {
+  return {
+    FRIENDLY: { name: cssHex(p.friendly), health: cssHex(p.local) },
+    HOSTILE: { name: cssHex(p.hostile), health: cssHex(p.hostile) },
+    NEUTRAL: { name: cssHex(p.neutral), health: cssHex(p.local) },
+  };
+}
 
-/** Shared red emissive surface for the four hostile-only points on every visible body. */
+/**
+ * Shared surfaces and colours for every indicator the renderer draws.
+ *
+ * One material for the four hostile-only points on every body, and one colour table for every
+ * label. Both follow the palette: `paletteSerial` moves when it changes, and an indicator that
+ * sees a serial other than the one it last painted with redraws its canvas on its next update.
+ * The repaint is therefore lazy and per-indicator, and nobody has to walk the roster.
+ */
 export interface ActorIndicatorAssets {
   readonly markerGeometry: THREE.SphereGeometry;
   readonly markerMaterial: THREE.MeshStandardMaterial;
+  readonly colours: Readonly<Record<TeamRelation, RelationColours>>;
+  /** Bumped on every palette change. Compared, never interpreted. */
+  readonly paletteSerial: number;
   dispose(): void;
 }
 
 export function buildActorIndicatorAssets(): ActorIndicatorAssets {
   const markerGeometry = new THREE.SphereGeometry(0.078, 10, 8);
   const markerMaterial = new THREE.MeshStandardMaterial({
-    color: 0xff2838,
-    emissive: 0xff0018,
     emissiveIntensity: 3.2,
     roughness: 0.28,
     metalness: 0.08,
     toneMapped: false,
   });
 
-  return {
+  const assets = {
     markerGeometry,
     markerMaterial,
+    colours: relationColours(palette.current),
+    paletteSerial: 0,
     dispose(): void {
+      unsubscribe();
       markerGeometry.dispose();
       markerMaterial.dispose();
     },
   };
+
+  // Called once immediately, which is what paints the material in the first place.
+  const unsubscribe = palette.onChange((p) => {
+    markerMaterial.color.setHex(p.hostile);
+    markerMaterial.emissive.setHex(p.hostile);
+    assets.colours = relationColours(p);
+    assets.paletteSerial++;
+  });
+
+  return assets;
 }
 
 export interface ActorIndicatorState {
@@ -91,9 +126,13 @@ export class ActorIndicator {
   private paintedHealth = -1;
   private paintedName = '';
   private paintedRelation: TeamRelation | null = null;
+  private paintedPaletteSerial = -1;
   private wasVisible = false;
 
-  constructor(entityId: number, assets: ActorIndicatorAssets) {
+  constructor(
+    entityId: number,
+    private readonly assets: ActorIndicatorAssets,
+  ) {
     this.group.name = `actor-indicator:${entityId}`;
 
     this.labelCanvas = document.createElement('canvas');
@@ -179,11 +218,13 @@ export class ActorIndicator {
     if (
       name !== this.paintedName ||
       state.relation !== this.paintedRelation ||
+      this.assets.paletteSerial !== this.paintedPaletteSerial ||
       Math.abs(this.shownHealth - this.paintedHealth) > 1e-3
     ) {
       this.drawLabel(name, state.relation, this.shownHealth);
       this.paintedName = name;
       this.paintedRelation = state.relation;
+      this.paintedPaletteSerial = this.assets.paletteSerial;
       this.paintedHealth = this.shownHealth;
     }
   }
@@ -203,11 +244,12 @@ export class ActorIndicator {
 
   private drawLabel(name: string, relation: TeamRelation, health: number): void {
     const ctx = this.labelContext;
+    const colours = this.assets.colours[relation];
     ctx.clearRect(0, 0, LABEL_WIDTH, LABEL_HEIGHT);
 
     ctx.fillStyle = 'rgba(4, 7, 12, 0.82)';
     ctx.fillRect(8, 8, LABEL_WIDTH - 16, LABEL_HEIGHT - 16);
-    ctx.strokeStyle = NAME_COLOURS[relation];
+    ctx.strokeStyle = colours.name;
     ctx.globalAlpha = 0.8;
     ctx.lineWidth = 3;
     ctx.strokeRect(9.5, 9.5, LABEL_WIDTH - 19, LABEL_HEIGHT - 19);
@@ -216,7 +258,7 @@ export class ActorIndicator {
     const family = 'ui-sans-serif, system-ui, Segoe UI, Roboto, Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = NAME_COLOURS[relation];
+    ctx.fillStyle = colours.name;
     ctx.font = `800 38px ${family}`;
     ctx.fillText(name, LABEL_WIDTH * 0.5, 49, LABEL_WIDTH - 42);
 
@@ -231,7 +273,7 @@ export class ActorIndicator {
 
     ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
     ctx.fillRect(barX, barY, barWidth, barHeight);
-    ctx.fillStyle = HEALTH_COLOURS[relation];
+    ctx.fillStyle = colours.health;
     // Deliberately continuous: the four vertical lines below are only a quick-read grid.
     ctx.fillRect(innerX, innerY, innerWidth * clamp01(health), innerHeight);
     ctx.strokeStyle = 'rgba(232, 238, 248, 0.86)';

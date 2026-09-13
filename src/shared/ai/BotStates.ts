@@ -83,13 +83,25 @@ export function isFiringState(state: BotState): boolean {
   );
 }
 
-/** States in which the bot is following a path to somewhere specific. */
+/**
+ * States in which the bot is following a path to somewhere specific.
+ *
+ * OBJECTIVE is a travelling state. `tryObjective` paths to the flag or the bomb and says "the
+ * existing travel machinery does the rest" — but the look branch in `BotBrain.steer` is keyed
+ * on this predicate, and OBJECTIVE was missing from it. A bot walking to an objective with no
+ * target in mind therefore kept whatever yaw it last aimed at and side-stepped the whole way
+ * there, which is the "bots strafe to the flag" report. Facing the path here fixes the body,
+ * the hitbox rig, the spectator camera and `Mantle.detectMantle` at once, because all four
+ * read `sim.yaw`; a render-side override would have fixed only the first of them, and only
+ * for a local bot.
+ */
 export function isTravellingState(state: BotState): boolean {
   return (
     state === 'PATROL' ||
     state === 'INVESTIGATE' ||
     state === 'SEEK_COVER' ||
     state === 'FLANK' ||
-    state === 'PUSH'
+    state === 'PUSH' ||
+    state === 'OBJECTIVE'
   );
 }

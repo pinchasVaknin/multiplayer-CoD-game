@@ -10,6 +10,24 @@ export type ActorIndicatorAnchor =
   | 'rightKnee';
 
 /**
+ * A third-person weapon, ready to be put in a hand.
+ *
+ * Built by the weapon module and handed over whole, so an avatar never resolves anything by
+ * weapon id itself: the geometry, the material and the two grip points arrive together and
+ * cannot disagree about which weapon they describe. Both anchors are in the geometry's own
+ * space, with the model scale already baked in — the same space the vertices are in.
+ */
+export interface HeldWeaponAsset {
+  readonly weaponId: string;
+  readonly geometry: THREE.BufferGeometry;
+  readonly material: THREE.Material;
+  /** The trigger grip. This is the point that sits at the hand socket. */
+  readonly gripAnchor: THREE.Vector3;
+  /** The support palm. This is where the other hand is pulled to. */
+  readonly supportAnchor: THREE.Vector3;
+}
+
+/**
  * The narrow scene-object contract consumed by `BotRenderer`.
  *
  * `BotMesh` implements it as the procedural fallback; `CharacterAvatar` implements it for a
@@ -19,7 +37,8 @@ export interface ActorAvatar {
   readonly group: THREE.Group;
   readonly isDying: boolean;
 
-  setWeapon(weaponId: string | null, geometry: THREE.BufferGeometry | null, material: THREE.Material): void;
+  /** Put this in the body's hands, or empty them. Idempotent for an unchanged weapon id. */
+  setWeapon(weapon: HeldWeaponAsset | null): void;
   setVisible(on: boolean): void;
   /**
    * Write an animated, world-space landmark to `target`.
