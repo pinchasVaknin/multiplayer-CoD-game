@@ -22,6 +22,9 @@
  * a question somebody has to answer out loud rather than one that can be skipped by accident.
  * That is the whole mechanism, and it is the same one `check-boundaries` uses: a rule a human
  * has to remember is a rule that will be broken.
+ *
+ * Since M13 Phase B the scoreboard row (`ReplicatedScoreRow`, carried whole by
+ * `MsgS.Scoreboard`) is pinned the same way, under the same table's "scores" row.
  */
 
 import { readFileSync } from 'node:fs';
@@ -71,49 +74,90 @@ const ALLOWED = {
   flinchAngle: 'the direction the hit came from — a gameplay fact',
 };
 
+/**
+ * The scoreboard row, pinned the same way (M13 Phase B).
+ *
+ * `MsgS.Scoreboard` carries the server's rows whole, twenty-four of them at most, to every
+ * seat — a second serialised record beside the snapshot, and the §4.15 row it sits in is
+ * "objective, scores, round state". Every field is a tally the server made; nothing here is a
+ * colour, a highlight or a sort order, which are the client's.
+ */
+const SCORE_ROW = 'src/shared/combat/ScoreSystem.ts';
+const ALLOWED_SCORE_ROW = {
+  entityId: 'identity — the row is keyed by it',
+  displayName: 'identity; the board draws the name the server holds',
+  team: '§4.15 scores — which side the tally counts toward',
+  kills: '§4.15 scores',
+  deaths: '§4.15 scores',
+  assists: '§4.15 scores',
+  score: '§4.15 scores — the mode-defined points',
+  streak: '§4.15 scores — consecutive kills, the killstreak economy reads it',
+  bestStreak: '§4.15 scores',
+  shotsFired: '§4.15 scores — the accuracy column, counted on the server since round 5 B5',
+  shotsHit: '§4.15 scores — the other half of the accuracy column',
+  damageDealt: '§4.15 scores',
+  headshots: '§4.15 scores',
+  captures: '§4.15 objective — Domination',
+  defends: '§4.15 objective — Domination',
+  plants: '§4.15 objective — Search & Destroy',
+  defuses: '§4.15 objective — Search & Destroy',
+  tags: '§4.15 objective — Kill Confirmed',
+};
+
 function fail(lines) {
   console.error('cosmetic audit FAILED (§8.25):');
   for (const line of lines) console.error(`  - ${line}`);
   process.exit(1);
 }
 
-const src = readFileSync(SNAPSHOT, 'utf8');
-const start = src.indexOf('export interface EntitySnapshot {');
-if (start < 0) {
-  fail([`could not find EntitySnapshot in ${SNAPSHOT} — this check has stopped checking`]);
-}
-const end = src.indexOf('\n}', start);
-const body = src.slice(start, end);
-
-// `name: type;` at one level of indentation. Comments and blank lines fall out naturally.
-const found = [...body.matchAll(/^\s{2}([a-zA-Z_][a-zA-Z0-9_]*)\s*:/gm)].map((m) => m[1]);
-
-const problems = [];
-for (const field of found) {
-  if (!(field in ALLOWED)) {
-    problems.push(
-      `EntitySnapshot.${field} is serialised into every snapshot and is not in the §4.15 ` +
-        'allowlist. If it is gameplay state, add it to scripts/check-cosmetics.mjs with the ' +
-        'row of §4.15 it belongs to. If it is presentation, it must be driven by a replicated ' +
-        'event instead — see the table at the top of that file.',
-    );
+/** The fields declared on one interface in one file, pinned against one allowlist. */
+function auditInterface(file, name, allowed, describe) {
+  const src = readFileSync(file, 'utf8');
+  const start = src.indexOf(`export interface ${name} {`);
+  if (start < 0) {
+    fail([`could not find ${name} in ${file} — this check has stopped checking`]);
   }
+  const end = src.indexOf('\n}', start);
+  const body = src.slice(start, end);
+
+  // `name: type;` at one level of indentation, `readonly` or not. Comments and blank lines
+  // fall out naturally.
+  const found = [...body.matchAll(/^\s{2}(?:readonly\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\??\s*:/gm)].map(
+    (m) => m[1],
+  );
+
+  const problems = [];
+  for (const field of found) {
+    if (!(field in allowed)) {
+      problems.push(
+        `${name}.${field} is serialised ${describe} and is not in the §4.15 ` +
+          'allowlist. If it is gameplay state, add it to scripts/check-cosmetics.mjs with the ' +
+          'row of §4.15 it belongs to. If it is presentation, it must be driven by a replicated ' +
+          'event instead — see the table at the top of that file.',
+      );
+    }
+  }
+
+  // The reverse direction: an allowlist entry with no field is a rule guarding nothing, which is
+  // how this check quietly stops covering the thing it was written for.
+  for (const field of Object.keys(allowed)) {
+    if (!found.includes(field)) {
+      problems.push(
+        `the allowlist names ${name}.${field}, which no longer exists. Remove it, so the ` +
+          'list keeps describing the code rather than its history.',
+      );
+    }
+  }
+  return { found, problems };
 }
 
-// The reverse direction: an allowlist entry with no field is a rule guarding nothing, which is
-// how this check quietly stops covering the thing it was written for.
-for (const field of Object.keys(ALLOWED)) {
-  if (!found.includes(field)) {
-    problems.push(
-      `the allowlist names EntitySnapshot.${field}, which no longer exists. Remove it, so the ` +
-        'list keeps describing the code rather than its history.',
-    );
-  }
-}
+const snapshot = auditInterface(SNAPSHOT, 'EntitySnapshot', ALLOWED, 'into every snapshot');
+const scoreRow = auditInterface(SCORE_ROW, 'ReplicatedScoreRow', ALLOWED_SCORE_ROW, 'into every scoreboard');
+const problems = [...snapshot.problems, ...scoreRow.problems];
 
 if (problems.length > 0) fail(problems);
 
 console.log(
-  `cosmetic audit ok — ${found.length} snapshot fields, all §4.15 gameplay state ` +
-    '(no decal, tracer, particle or viewmodel).',
+  `cosmetic audit ok — ${snapshot.found.length} snapshot fields and ${scoreRow.found.length} ` +
+    'scoreboard-row fields, all §4.15 gameplay state (no decal, tracer, particle or viewmodel).',
 );

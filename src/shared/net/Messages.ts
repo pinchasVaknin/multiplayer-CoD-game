@@ -51,6 +51,7 @@ import {
   type ObjectiveState,
 } from './Skirmish';
 import type { BombInfo, TagInfo } from '../modes/GameMode';
+import type { ReplicatedScoreRow } from '../combat/ScoreSystem';
 import { ByteReader, ByteWriter } from './Wire';
 
 /**
@@ -548,7 +549,8 @@ export function writeSummary(w: ByteWriter, info: SummaryInfo): Uint8Array {
   for (let i = 0; i < Math.min(info.xp.length, MAX_XP_LINES); i++) {
     const line = info.xp[i];
     if (line === undefined) continue;
-    w.str(line.label);
+    w.u8v(line.source);
+    w.u16(Math.min(0xffff, line.count));
     w.i32(line.amount);
   }
   return w.bytes();
@@ -692,6 +694,55 @@ export function writeCheats(w: ByteWriter, outcome: number, mask: number): Uint8
   w.u8v(outcome & 0xff);
   w.u8v(mask & 0xff);
   return w.bytes();
+}
+
+/**
+ * The scoreboard, whole (M13 Phase B, bug 4.3). See `MsgS.Scoreboard`.
+ *
+ * `serial` is `ScoreSystem.serial` on the server at the moment of sending, so a client can
+ * refuse a frame older than the one it holds. Rows past `MAX_SCORE_ROWS` are dropped rather
+ * than overflowing the frame; a match seats ten and the bound is twenty-four.
+ */
+export function writeScoreboard(
+  w: ByteWriter,
+  serial: number,
+  rows: readonly ReplicatedScoreRow[],
+): Uint8Array {
+  head(w, MsgS.Scoreboard);
+  w.u32(serial >>> 0);
+  const n = Math.min(rows.length, MAX_SCORE_ROWS);
+  w.u8v(n);
+  for (let i = 0; i < n; i++) {
+    const row = rows[i];
+    if (row === undefined) continue;
+    w.u8v(row.entityId);
+    w.str(row.displayName);
+    w.u8v(row.team === 'B' ? 1 : 0);
+    w.u16(clampU16(row.kills));
+    w.u16(clampU16(row.deaths));
+    w.u16(clampU16(row.assists));
+    w.i32(row.score);
+    w.u8v(Math.min(255, row.streak));
+    w.u8v(Math.min(255, row.bestStreak));
+    w.u16(clampU16(row.shotsFired));
+    w.u16(clampU16(row.shotsHit));
+    // Whole points: a shotgun deals fractional damage per pellet and the column is a total.
+    w.u16(clampU16(Math.round(row.damageDealt)));
+    w.u8v(Math.min(255, row.headshots));
+    w.u8v(Math.min(255, row.captures));
+    w.u8v(Math.min(255, row.defends));
+    w.u8v(Math.min(255, row.plants));
+    w.u8v(Math.min(255, row.defuses));
+    w.u8v(Math.min(255, row.tags));
+  }
+  return w.bytes();
+}
+
+/** The most rows one board carries. Ten seats plus the bots they replaced, with headroom. */
+export const MAX_SCORE_ROWS = 24;
+
+function clampU16(v: number): number {
+  return Math.max(0, Math.min(0xffff, v));
 }
 
 /**
@@ -1096,9 +1147,18 @@ export interface SummaryRow {
   readonly isBot: boolean;
 }
 
-/** The XP breakdown the M6 bar animates. Awarded by the instance, persisted by the client. */
+/**
+ * One row of the XP breakdown the M6 bar animates (v17, M13 Phase B).
+ *
+ * Awarded by the instance from the recipient's own `MatchLedger`, persisted by the client. The
+ * row is named by its **index into `XP_SOURCES`** rather than by a label: both sides compile the
+ * table, so the client rebuilds a full `XpLine` — id, label, kind — from one byte, and a label
+ * on the wire would be a second spelling of a string the table already owns. `count` is what the
+ * panel draws as `x7`; `amount` is the server's arithmetic, sent rather than re-derived.
+ */
 export interface SummaryXpLine {
-  readonly label: string;
+  readonly source: number;
+  readonly count: number;
   readonly amount: number;
 }
 
@@ -1184,6 +1244,7 @@ export type Decoded =
   | { kind: 'cheatRequest'; code: string }
   | { kind: 'cheats'; outcome: number; mask: number }
   | { kind: 'bomb'; bomb: BombInfo }
+  | { kind: 'scoreboard'; serial: number; rows: readonly ReplicatedScoreRow[] }
   | { kind: 'bad' };
 
 const BAD: Decoded = { kind: 'bad' };
@@ -1290,6 +1351,38 @@ export function decodeHeader(r: ByteReader): Decoded {
       const mask = r.u8v();
       return r.overran ? BAD : { kind: 'cheats', outcome, mask };
     }
+    case MsgS.Scoreboard: {
+      const serial = r.u32();
+      const n = r.u8v();
+      if (r.overran || n > MAX_SCORE_ROWS) return BAD;
+      const rows: ReplicatedScoreRow[] = [];
+      for (let i = 0; i < n; i++) {
+        const entityId = r.u8v();
+        const displayName = r.str();
+        const team = r.u8v() === 1 ? 'B' : 'A';
+        rows.push({
+          entityId,
+          displayName,
+          team,
+          kills: r.u16(),
+          deaths: r.u16(),
+          assists: r.u16(),
+          score: r.i32(),
+          streak: r.u8v(),
+          bestStreak: r.u8v(),
+          shotsFired: r.u16(),
+          shotsHit: r.u16(),
+          damageDealt: r.u16(),
+          headshots: r.u8v(),
+          captures: r.u8v(),
+          defends: r.u8v(),
+          plants: r.u8v(),
+          defuses: r.u8v(),
+          tags: r.u8v(),
+        });
+      }
+      return r.overran ? BAD : { kind: 'scoreboard', serial, rows };
+    }
     case MsgS.Vote: {
       const phase = r.u8v();
       const phaseEndsTick = r.i32();
@@ -1354,7 +1447,7 @@ export function decodeHeader(r: ByteReader): Decoded {
       const xpCount = r.u8v();
       if (r.overran || xpCount > MAX_XP_LINES) return BAD;
       const xp: SummaryXpLine[] = [];
-      for (let i = 0; i < xpCount; i++) xp.push({ label: r.str(), amount: r.i32() });
+      for (let i = 0; i < xpCount; i++) xp.push({ source: r.u8v(), count: r.u16(), amount: r.i32() });
       if (r.overran) return BAD;
       return {
         kind: 'summary',

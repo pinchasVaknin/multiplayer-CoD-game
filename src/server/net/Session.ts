@@ -1,4 +1,5 @@
 import { nowMs } from '../../shared/core/Clock';
+import type { ReplicatedScoreRow } from '../../shared/combat/ScoreSystem';
 import type { MutableInputCommand } from '../../shared/core/InputCommand';
 import { DT } from '../../shared/core/Loop';
 import { logger } from '../../shared/core/Log';
@@ -13,6 +14,7 @@ import {
   writePong,
   writeTags,
   writeStreaks,
+  writeScoreboard,
   writeProjectiles,
   writeStateHash,
   writePrepare,
@@ -700,6 +702,11 @@ export class Session {
 
   sendStreaks(view: StreakView): void {
     this.send(writeStreaks(this.out, view));
+  }
+
+  /** The board, whole (M13 Phase B). See `MatchInstance.sendScoreboard` for when. */
+  sendScoreboard(serial: number, rows: readonly ReplicatedScoreRow[]): void {
+    this.send(writeScoreboard(this.out, serial, rows));
   }
 
   sendProjectiles(projectiles: readonly ProjectileState[], smoke: readonly SmokeState[]): void {

@@ -419,6 +419,9 @@ function reportReplicatedScore(log: ReturnType<typeof logger>): number {
         (row.localCopyTracks ? '  (this mode derives its score from the rows)' : ''),
     );
   }
+  for (const row of audit.replica) {
+    log.info(`  replica ${padEnd(row.step, 14)} ${row.rows} row(s) — ${row.detail}`);
+  }
   for (const problem of audit.problems) log.error(`  ${problem}`);
   if (audit.problems.length > 0) {
     log.error(`REPLICATED SCORE AUDIT FAILED: ${audit.problems.length} problem(s).`);
@@ -426,7 +429,8 @@ function reportReplicatedScore(log: ReturnType<typeof logger>): number {
   }
   log.info(
     `replicated score: ${audit.rows.length} mode(s), ${audit.kills} kill(s) replayed each; ` +
-      'MatchFlow.teamScore carries the server\'s number on every one.',
+      'MatchFlow.teamScore carries the server\'s number on every one; the row replica follows ' +
+      `the board through ${audit.replica.length} step(s).`,
   );
   return 0;
 }
@@ -475,6 +479,13 @@ function reportMatchXp(log: ReturnType<typeof logger>): number {
         `${row.total} XP over ${row.lines} line(s): ${row.breakdown.join(', ')}`,
     );
   }
+  for (const row of audit.agreement) {
+    log.info(
+      `  ${padEnd(row.shape, 7)} solo   ${row.solo.join(', ')}` +
+        (row.excluded.length > 0 ? `  (save-only, not compared: ${row.excluded.join(', ')})` : ''),
+    );
+    log.info(`  ${padEnd('', 7)} server ${row.server.join(', ')}  ${row.agrees ? 'AGREE' : 'DISAGREE'}`);
+  }
   for (const problem of audit.problems) log.error(`  ${problem}`);
   if (audit.problems.length > 0) {
     log.error(`MATCH XP AUDIT FAILED: ${audit.problems.length} problem(s).`);
@@ -482,7 +493,8 @@ function reportMatchXp(log: ReturnType<typeof logger>): number {
   }
   log.info(
     `match XP: ${audit.rows.length} shape(s) of a match nobody scored in; every one pays and ` +
-      'every one has rows to draw.',
+      `every one has rows to draw. ${audit.agreement.length} fight(s) priced identically by the ` +
+      'solo progression and the server ledger.',
   );
   return 0;
 }

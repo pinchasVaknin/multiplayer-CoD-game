@@ -1,14 +1,18 @@
 import { nowMs } from '../../shared/core/Clock';
 import { DT } from '../../shared/core/Loop';
 import { logger } from '../../shared/core/Log';
+import { compareRows } from '../../shared/combat/ScoreSystem';
 import type { SummaryInfo, SummaryRow, SummaryXpLine } from '../../shared/net/Messages';
 import { InstanceState, type MatchId } from '../../shared/net/Skirmish';
 import { findMap, findMode } from '../../shared/modes/ModeRegistry';
-import { matchMinutes, xpSource } from '../../shared/meta/XpRules';
+import { isMvp, wonBy } from '../../shared/modes/MatchOutcome';
+import { MatchLedger } from '../../shared/meta/MatchLedger';
+import { xpSourceIndex } from '../../shared/meta/XpRules';
 import type { BotDifficulty } from '../../shared/ai/DifficultyTiers';
 import { ServerMatch } from '../Match';
 import type { MapBakery } from '../MapBakery';
-import { MatchInstance, type MatchInstanceDeps, type UnseatCause } from './MatchInstance';
+import type { Session } from '../net/Session';
+import { MatchInstance, type MatchInstanceDeps, type Seat, type UnseatCause } from './MatchInstance';
 
 const log = logger('live');
 
@@ -226,12 +230,17 @@ export class LiveMatch extends MatchInstance {
   }
 
   /**
-   * Build the end-of-match summary, once (§6.9).
+   * Build the end-of-match summary's common half, once (§6.9).
    *
    * *"XP and challenge progress are awarded by the instance from authoritative events and
    * delivered with the summary, **before teardown**."* Before teardown is not a nicety: the
    * scoreboard rows live in `ScoreSystem`, which `ServerMatch.dispose` releases, so a summary
    * built after `destroy()` would be built from nothing and would report a match of zeroes.
+   *
+   * The rows are the board as it stands — the same set every client has been replicated all
+   * match (M13 Phase B) — so there is no filtering left to do here: a bot replaced before the
+   * first shot lost its row when it lost its seat. The XP is *not* here; it is per recipient,
+   * see `buildSummaryFor`.
    */
   buildSummary(): SummaryInfo {
     const existing = this.summary;
@@ -240,24 +249,6 @@ export class LiveMatch extends MatchInstance {
     const outcome = this.match.outcome();
     const rows: SummaryRow[] = [];
     for (const row of this.match.score.rows) {
-      /**
-       * A blank row for a body that is no longer in the match is not a result (M13 Phase A).
-       *
-       * `ScoreSystem` never removes a row (that is bug 4.3, Phase B's), and every live match
-       * spawns its full authored roster before anybody migrates in — so each human seated
-       * takes a bot's place and leaves that bot's `0/0/0` row behind. The summary carried them,
-       * and a Free-for-All summary that turns rows into *places* then told a player in an
-       * eight-body match they came 11th, ranked under three bots that never fired a shot.
-       *
-       * Only the blank *and* absent rows are dropped. A leaver's record stays, as
-       * `removePlayer` intends, and so does a replaced bot that had actually played. Phase B's
-       * replicated scoreboard replaces this rule with rows that follow seats.
-       */
-      const blank = row.kills === 0 && row.deaths === 0 && row.score === 0;
-      const present =
-        this.hasSeatOnEntity(row.entityId) ||
-        this.match.bots.roster.some((c) => c.entityId === row.entityId);
-      if (blank && !present) continue;
       rows.push({
         entityId: row.entityId,
         displayName: row.displayName,
@@ -272,7 +263,7 @@ export class LiveMatch extends MatchInstance {
         isBot: !this.hasSeatOnEntity(row.entityId),
       });
     }
-    rows.sort((a, b) => b.score - a.score);
+    rows.sort(compareRows);
 
     const built: SummaryInfo = {
       matchId: this.id,
@@ -284,11 +275,47 @@ export class LiveMatch extends MatchInstance {
       scoreA: outcome?.scoreA ?? 0,
       scoreB: outcome?.scoreB ?? 0,
       rows,
-      xp: buildXpLines(outcome?.winner ?? 'DRAW', rows, this.match.tickCount * DT),
+      // The common half carries no XP. A recipient's lines are theirs alone.
+      xp: [],
       endsTick: this.summaryEndsTick,
     };
     this.summary = built;
     return built;
+  }
+
+  /**
+   * The summary as one seat receives it (M13 Phase B, bug 4.2).
+   *
+   * The common half plus this seat's own XP: the lines its `MatchLedger` counted, with the win
+   * and the MVP decided for *this* entity — `wonBy` over the result, which in Free-for-All names
+   * one individual, and `isMvp` over the final rows, ties to nobody. Before this every seat was
+   * sent one list: `MATCH COMPLETE`, a `WIN BONUS` to everybody and a `TOP OPERATOR` to everybody,
+   * and nothing for a kill.
+   *
+   * `seconds` is the match's length rather than this seat's stay — B6's decision, kept: a player
+   * who dropped and returned is not docked the minutes before the drop.
+   */
+  buildSummaryFor(seat: Seat): SummaryInfo {
+    const common = this.buildSummary();
+    const entityId = seat.player.entityId;
+    const ledger = this.ledgers.get(entityId);
+    const row = common.rows.find((r) => r.entityId === entityId);
+    const won =
+      row !== undefined &&
+      wonBy(
+        { winner: common.winner as 'A' | 'B' | 'DRAW', winnerEntityId: common.winnerEntityId },
+        row.team,
+        entityId,
+      );
+    const mvp = isMvp(common.rows, entityId);
+    const seconds = this.match.tickCount * DT;
+    const lines = ledger === undefined ? [] : ledger.lines(won, mvp, seconds);
+    const xp: SummaryXpLine[] = lines.map((line) => ({
+      source: xpSourceIndex(line.id),
+      count: line.count,
+      amount: Math.round(line.xp),
+    }));
+    return { ...common, xp };
   }
 
   get summaryAlreadySent(): boolean {
@@ -304,6 +331,41 @@ export class LiveMatch extends MatchInstance {
       if (seat.player.entityId === entityId) return true;
     }
     return false;
+  }
+
+  /**
+   * One XP ledger per human who has ever been seated, keyed by entity (M13 Phase B, bug 4.2).
+   *
+   * Created when a seat is first granted and kept for the match rather than for the seat: a
+   * return inside the grace reclaims the same entity and finds its ledger waiting, and a
+   * return after it — a new entity — has the ledger re-keyed beside the score row it follows
+   * (`adoptRowAndLedger`). Subscribed *after* `MatchFlow`, which `ServerMatch`'s constructor
+   * subscribed first, so the streak the ledger reads off a row includes the kill being counted.
+   */
+  private readonly ledgers = new Map<number, MatchLedger>();
+
+  /**
+   * Whose row a lost connection's token opens (M13 Phase B, bug 4.3).
+   *
+   * `ReconnectRegistry` holds a seat for `RECONNECT_GRACE_MS` and forgets it on claim, expired
+   * or not. This holds the *row* for the match: a token recorded when a seat is lost, so a
+   * player who comes back after the grace — seated fresh, as a new entity, possibly on the other
+   * side — adopts the row with their kills on it rather than standing beside it. Keyed by the
+   * hex form for the reason the registry is.
+   */
+  private readonly rowOwners = new Map<string, number>();
+
+  /** The row and the ledger of `fromEntityId` become `toEntityId`'s. See `ScoreSystem.adopt`. */
+  private adoptRowAndLedger(fromEntityId: number, toEntityId: number, team: 'A' | 'B'): void {
+    const adopted = this.match.score.adopt(fromEntityId, toEntityId, team);
+    if (adopted === undefined) return;
+    const ledger = this.ledgers.get(fromEntityId);
+    if (ledger !== undefined && fromEntityId !== toEntityId) {
+      this.ledgers.delete(fromEntityId);
+      ledger.adopt(toEntityId);
+      this.ledgers.set(toEntityId, ledger);
+    }
+    log.info(`entity ${fromEntityId}'s row and ledger now belong to entity ${toEntityId}.`);
   }
 
   /** Mark this instance unusable after its step threw (§4.18). Its players go back. */
@@ -342,13 +404,36 @@ export class LiveMatch extends MatchInstance {
    * exactly that about every seat.
    */
   override seat(
-    session: Parameters<MatchInstance['seat']>[0],
+    session: Session,
     loadout: Parameters<MatchInstance['seat']>[1],
     reclaim?: Parameters<MatchInstance['seat']>[2],
+    previousToken?: Uint8Array | null,
   ) {
     const player = super.seat(session, loadout, reclaim);
     if (player === null) return null;
     this.everSeated = true;
+    /**
+     * A returning player's row and ledger follow them (M13 Phase B, bug 4.3).
+     *
+     * Inside the grace `reclaim` gave them their old entity back and the row is already theirs.
+     * Past it they are a new entity, and the token they presented — expired to the registry,
+     * but still the token this instance recorded when their seat was lost — names the row.
+     */
+    const previous = tokenKey(previousToken);
+    const owned = previous === null ? undefined : this.rowOwners.get(previous);
+    if (previous !== null && owned !== undefined) {
+      this.rowOwners.delete(previous);
+      // Inside the grace `reclaim` already put them back on this entity; nothing to move.
+      if (owned !== player.entityId) this.adoptRowAndLedger(owned, player.entityId, player.team);
+    }
+    // The row was registered by `addPlayer`; the ledger is created beside it, once, and every
+    // later seat on this entity (a reclaim) finds it. An adopted ledger is already keyed here.
+    if (!this.ledgers.has(player.entityId)) {
+      this.ledgers.set(
+        player.entityId,
+        new MatchLedger({ bus: this.match.bus, score: this.match.score, entityId: player.entityId }),
+      );
+    }
     if (!this.match.removeBotForSeat(player.team)) {
       // Not an error: a mode may have fewer bots than seats, and a match filled entirely with
       // humans has none left to displace. Worth saying, because it is also what a bot-fill
@@ -382,65 +467,39 @@ export class LiveMatch extends MatchInstance {
     super.releaseEntity(entityId, cause);
   }
 
+  /**
+   * A seat was lost: remember whose row its token opens (M13 Phase B, bug 4.3).
+   *
+   * Only a **lost** connection, for the reason `Server.holdSeatForReturn` gives — a `Bye` is
+   * the player saying they are done, and a migration is the match ending. Recorded before
+   * `unseat` destroys the seat, while the entity is still known.
+   */
+  override unseat(playerId: number, cause: UnseatCause = 'disconnected'): void {
+    const seat = this.seatOf(playerId);
+    if (seat !== null && cause === 'disconnected') {
+      const key = tokenKey(seat.session.reconnectToken);
+      if (key !== null) this.rowOwners.set(key, seat.player.entityId);
+    }
+    super.unseat(playerId, cause);
+  }
+
   override dispose(): void {
     this.ready.clear();
     this.timedOut.clear();
     this.summary = null;
+    for (const ledger of this.ledgers.values()) ledger.dispose();
+    this.ledgers.clear();
+    this.rowOwners.clear();
     super.dispose();
   }
 }
 
-/**
- * The XP breakdown the M6 bar animates.
- *
- * Computed from the authoritative scoreboard rather than accumulated during the match, which
- * is the difference between a number the server can defend and a counter that drifts. The
- * client persists the total to its own `localStorage` save (§6.9) — there is no server-side
- * database and there will not be one.
- *
- * ## The two rows that are not this file's to price (playtest round 5, B6)
- *
- * `MATCH COMPLETE` was the literal `500` here, and B6 asked for exactly that rule to exist in
- * `shared/meta/XpRules` — where the file comment says *"the whole award table is here and
- * nothing downstream hardcodes a value"*. It was hardcoded downstream, so the rule had two
- * definitions and only one of them was in the table. Both it and the new `TIME PLAYED` term now
- * read their number from `XP_SOURCES`, which is what stops a match paying one amount in
- * single-player and another on a server.
- *
- * `seconds` is the match's own length — `ServerMatch.tickCount * DT`, which is the quantity
- * `ServerMatchResult.simSeconds` rounds — and not how long any one player was seated. That is
- * the decision B6 asked to be made explicitly: the award is for the match, so a player who
- * reconnects cannot lose the minutes before their drop, because those minutes were never
- * counted per player in the first place. A player who left and did not come back is paid
- * nothing, because they are not here to be sent a summary.
- *
- * The two rows below are **not** derived from the table, and that is deliberate rather than an
- * oversight: they disagree with `win` and `mvp` in both name and value, they are awarded to
- * every player in the match rather than to the ones who earned them, and reconciling that is a
- * change to the networked economy rather than to B6. See PLAN.md, "Found while here".
- */
-function buildXpLines(
-  winner: string,
-  rows: readonly SummaryRow[],
-  seconds: number,
-): SummaryXpLine[] {
-  const complete = xpSource('matchComplete');
-  const time = xpSource('matchTime');
-  const minutes = matchMinutes(seconds);
-
-  const lines: SummaryXpLine[] = [];
-  lines.push({ label: complete.label.toUpperCase(), amount: complete.value });
-  // Dropped rather than shown as zero for a match under a minute, which is what the client's
-  // own `buildLines` does with a count of zero.
-  if (minutes > 0) {
-    lines.push({ label: time.label.toUpperCase(), amount: minutes * time.value });
-  }
-  if (winner !== 'DRAW') lines.push({ label: 'WIN BONUS', amount: 250 });
-  const best = rows[0];
-  if (best !== undefined && best.kills > 0) {
-    lines.push({ label: 'TOP OPERATOR', amount: 100 });
-  }
-  return lines;
+/** A token as a map key, in the hex form `ReconnectRegistry` keys by, or null for none. */
+function tokenKey(token: Uint8Array | null | undefined): string | null {
+  if (token == null || token.length === 0) return null;
+  let out = '';
+  for (const b of token) out += b.toString(16).padStart(2, '0');
+  return out;
 }
 
 function buildDeps(options: LiveMatchOptions): MatchInstanceDeps {

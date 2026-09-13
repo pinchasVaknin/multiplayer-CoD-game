@@ -73,7 +73,13 @@ import type { Match } from './ClientMatch';
 import { isHostile } from '../shared/combat/Hostility';
 import type { MatchResult } from '../shared/modes/GameMode';
 import { wonBy } from '../shared/modes/MatchOutcome';
-import { matchFloorLine, type XpLine, type XpLines, type XpReport } from '../shared/meta/XpRules';
+import {
+  matchFloorLine,
+  xpSourceAt,
+  type XpLine,
+  type XpLines,
+  type XpReport,
+} from '../shared/meta/XpRules';
 import { MatchWorld } from './MatchWorld';
 import { CharacterAssetService } from './characters/CharacterAssetService';
 import {
@@ -1657,15 +1663,16 @@ export class Game {
    * unlocks, and it affects only them.
    */
   private bankServerXp(net: SummaryInfo, won: boolean): XpReport {
-    const decoded: XpLine[] = net.xp.map((line) => ({
-      // The server's lines are already the human-readable breakdown; they carry no source id
-      // because the id space is a client-side progression concept the server has no view of.
-      id: 'match',
-      label: line.label,
-      count: 1,
-      xp: line.amount,
-      kind: 'flat' as const,
-    }));
+    const decoded: XpLine[] = [];
+    for (const line of net.xp) {
+      // The row is named by its index into `XP_SOURCES` (M13 Phase B): id, label and kind come
+      // from the table this client compiled, count and amount from the server's ledger. A byte
+      // outside the table is a server one build ahead; the row is dropped rather than drawn as
+      // something it is not.
+      const source = xpSourceAt(line.source);
+      if (source === undefined) continue;
+      decoded.push({ id: source.id, label: source.label, count: line.count, xp: line.amount, kind: source.kind });
+    }
     /**
      * The floor, on this path too (playtest round 5, B6).
      *

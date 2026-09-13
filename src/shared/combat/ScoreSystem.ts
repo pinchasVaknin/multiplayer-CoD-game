@@ -31,9 +31,15 @@ export type ScoreTeam = 'A' | 'B';
 export type ObjectiveStat = 'captures' | 'defends' | 'plants' | 'defuses' | 'tags';
 
 export interface PlayerScore {
-  readonly entityId: number;
+  /**
+   * Which body this row is about. Written by `ScoreSystem.adopt` alone (M13 Phase B): a player
+   * who returns after the reconnect grace is seated as a new entity, and their old row follows
+   * them rather than standing on the board beside a fresh one.
+   */
+  entityId: number;
   readonly displayName: string;
-  readonly team: ScoreTeam;
+  /** Mutable for the same one reason: an adopted row moves to the side its owner was re-seated on. */
+  team: ScoreTeam;
   /**
    * True for the human at this keyboard. The scoreboard highlights their row.
    *
@@ -137,6 +143,28 @@ export class ScoreSystem {
    */
   records = true;
 
+  /**
+   * Moves on every change to the row set or to any row (M13 Phase B).
+   *
+   * The dedicated server sends the board to a client whenever this differs from what that
+   * client was last sent, so it is the one fact the replication decides on. Compared, never
+   * interpreted; a `u32` on the wire so an old frame arriving after a newer one under jitter
+   * cannot move a client's board backwards.
+   */
+  serial = 1;
+
+  /**
+   * Whether this instance counts for itself (M13 Phase B).
+   *
+   * True everywhere it has ever been — single-player and the dedicated server — and false on
+   * a **networked client**, whose rows are the server's, delivered whole by `applyReplicated`.
+   * A replica that also subscribed to the bus would add each replicated shot and hit on top
+   * of the copy the next frame overwrites, and the board would flicker between two answers.
+   * The subscriptions are simply not made; `recordKill` and friends are only ever reached from
+   * a mode, and a replicated client runs no mode.
+   */
+  readonly authoritative: boolean;
+
   private readonly rowsById = new Map<number, PlayerScore>();
   /** Flat array as well as a map: the scoreboard sorts this every time it opens. */
   private readonly all: PlayerScore[] = [];
@@ -156,8 +184,9 @@ export class ScoreSystem {
    * `identity` is optional so every M1-M8 call site keeps working: absent, it is the
    * single-player seat and `isLocal` means exactly what it has always meant.
    */
-  constructor(bus: GameBus, identity: LocalIdentity = new LocalIdentity()) {
+  constructor(bus: GameBus, identity: LocalIdentity = new LocalIdentity(), authoritative = true) {
     this.identity = identity;
+    this.authoritative = authoritative;
     for (let i = 0; i < DAMAGE_LEDGER_SIZE; i++) {
       this.ledger.push({ sourceId: -1, targetId: -1, tick: -1 });
     }
@@ -173,6 +202,9 @@ export class ScoreSystem {
       }),
     );
 
+    // A replica counts nothing for itself. See `authoritative`.
+    if (!authoritative) return;
+
     /**
      * Both halves of the accuracy column come off this one event (round 5, B5).
      *
@@ -186,6 +218,7 @@ export class ScoreSystem {
         if (row === undefined) return;
         row.shotsFired += shotsFrom(p);
         row.shotsHit += hitsFrom(p);
+        this.serial++;
       }),
     );
     this.unsubscribe.push(
@@ -195,6 +228,7 @@ export class ScoreSystem {
         // Damage only. A grenade, a knife and a killstreak's belt all arrive here under the
         // owner's id and none of them sent a round, so none of them touch the shot counters.
         row.damageDealt += p.amount;
+        this.serial++;
         const slot = this.ledger[this.ledgerHead];
         if (slot !== undefined) {
           slot.sourceId = p.sourceId;
@@ -245,7 +279,121 @@ export class ScoreSystem {
     };
     this.rowsById.set(entityId, row);
     this.all.push(row);
+    this.serial++;
     return row;
+  }
+
+  /**
+   * Take a row off the board (M13 Phase B, bug 4.3).
+   *
+   * Rows were never removed, which is why a bot replaced by a human before the first shot
+   * stayed on every summary at `0/0/0`, and why a Free-for-All player could come eleventh in
+   * an eight-body match. The one caller is the server taking a bot off the roster to seat a
+   * human; a **leaver's** row is deliberately not removed — `ServerMatch.removePlayer` keeps it
+   * for the match, so the kills they earned stay on the board and a return can adopt them.
+   */
+  remove(entityId: number): void {
+    const row = this.rowsById.get(entityId);
+    if (row === undefined) return;
+    this.rowsById.delete(entityId);
+    const at = this.all.indexOf(row);
+    if (at >= 0) this.all.splice(at, 1);
+    this.serial++;
+  }
+
+  /**
+   * Re-key a leaver's row onto the entity they came back as (M13 Phase B, bug 4.3).
+   *
+   * Inside the reconnect grace a returning player reclaims their old entity id and the row
+   * needs nothing. Past it they are seated fresh — a new id, possibly the other side — and
+   * without this the board carried two rows with one name: the old one with the kills,
+   * attributed to nobody, and a new one at zero. The kills follow the person.
+   *
+   * The row keeps its counters and its name; the id and the side become the new seat's.
+   * Team totals are left alone — they were credited when the kills happened, and TDM is
+   * decided on them, so moving a leaver's kills to the other side's total would rewrite a
+   * match still being played.
+   */
+  adopt(fromEntityId: number, toEntityId: number, team: ScoreTeam): PlayerScore | undefined {
+    const row = this.rowsById.get(fromEntityId);
+    if (row === undefined || fromEntityId === toEntityId) return row;
+    // The fresh seat has already registered a row on the new id — `addPlayer` does — and it is
+    // blank by construction. A row on that id that is *not* blank is somebody else's record,
+    // and that one is kept.
+    const standing = this.rowsById.get(toEntityId);
+    if (standing !== undefined) {
+      const blank = standing.kills === 0 && standing.deaths === 0 && standing.score === 0 &&
+        standing.shotsFired === 0 && standing.damageDealt === 0;
+      if (!blank) return standing;
+      this.remove(toEntityId);
+    }
+    this.rowsById.delete(fromEntityId);
+    row.entityId = toEntityId;
+    row.team = team;
+    row.isLocal = this.identity.is(toEntityId);
+    this.rowsById.set(toEntityId, row);
+    this.serial++;
+    return row;
+  }
+
+  /**
+   * Make this board the server's (M13 Phase B, bug 4.3).
+   *
+   * The replicated set *is* the authority: a row it carries is upserted, a row it does not is
+   * removed. Rows are updated in place rather than replaced, so a `Scoreboard` that caches the
+   * row object it bound a slot to keeps its cache, and only the cells whose text changed are
+   * rewritten. `records` is honoured — the arena replicates an empty set and keeps none.
+   */
+  applyReplicated(rows: readonly ReplicatedScoreRow[]): void {
+    if (!this.records) return;
+    let changed = false;
+    for (const r of rows) {
+      let row = this.rowsById.get(r.entityId);
+      if (row === undefined) {
+        row = this.register(r.entityId, r.displayName, r.team);
+        if (row === undefined) continue;
+        changed = true;
+      }
+      if (row.team !== r.team) {
+        row.team = r.team;
+        changed = true;
+      }
+      if (
+        row.kills !== r.kills || row.deaths !== r.deaths || row.assists !== r.assists ||
+        row.score !== r.score || row.streak !== r.streak || row.bestStreak !== r.bestStreak ||
+        row.shotsFired !== r.shotsFired || row.shotsHit !== r.shotsHit ||
+        row.damageDealt !== r.damageDealt || row.headshots !== r.headshots ||
+        row.captures !== r.captures || row.defends !== r.defends || row.plants !== r.plants ||
+        row.defuses !== r.defuses || row.tags !== r.tags
+      ) {
+        row.kills = r.kills;
+        row.deaths = r.deaths;
+        row.assists = r.assists;
+        row.score = r.score;
+        row.streak = r.streak;
+        row.bestStreak = r.bestStreak;
+        row.shotsFired = r.shotsFired;
+        row.shotsHit = r.shotsHit;
+        row.damageDealt = r.damageDealt;
+        row.headshots = r.headshots;
+        row.captures = r.captures;
+        row.defends = r.defends;
+        row.plants = r.plants;
+        row.defuses = r.defuses;
+        row.tags = r.tags;
+        changed = true;
+      }
+    }
+    // Anything the server no longer lists is gone: a bot that gave its seat to a human.
+    for (let i = this.all.length - 1; i >= 0; i--) {
+      const row = this.all[i];
+      if (row === undefined) continue;
+      if (rows.some((r) => r.entityId === row.entityId)) continue;
+      this.rowsById.delete(row.entityId);
+      this.all.splice(i, 1);
+      changed = true;
+    }
+    if (changed) this.serial++;
   }
 
   get rows(): readonly PlayerScore[] {
@@ -277,6 +425,7 @@ export class ScoreSystem {
       this.creditAssists(victimId, killerId, victim.team);
     }
 
+    this.serial++;
     const killer = this.rowsById.get(killerId);
     if (killer === undefined || killerId === victimId) return;
     // A teammate's death is not a kill. Friendly fire is off in M4 so this cannot happen
@@ -331,6 +480,7 @@ export class ScoreSystem {
     if (row === undefined) return;
     row[stat]++;
     row.score += points;
+    this.serial++;
   }
 
   addTeamScore(team: ScoreTeam, amount: number): void {
@@ -355,6 +505,7 @@ export class ScoreSystem {
   /** Zero the per-round figures but keep the match ones. */
   resetRound(): void {
     for (const row of this.all) row.streak = 0;
+    this.serial++;
   }
 
   /** Zero everything. A fresh match on the same roster. */
@@ -378,6 +529,7 @@ export class ScoreSystem {
     }
     this.totals.A = makeTotals();
     this.totals.B = makeTotals();
+    this.serial++;
   }
 
   clear(): void {
@@ -385,6 +537,7 @@ export class ScoreSystem {
     this.all.length = 0;
     this.totals.A = makeTotals();
     this.totals.B = makeTotals();
+    this.serial++;
   }
 
   dispose(): void {
@@ -392,6 +545,31 @@ export class ScoreSystem {
     this.unsubscribe.length = 0;
     this.clear();
   }
+}
+
+/**
+ * One row as the wire carries it (M13 Phase B). Every column the modes' `getScoreboardColumns`
+ * can read — see `PlayerScore` for what each means — and nothing a client decides for itself.
+ */
+export interface ReplicatedScoreRow {
+  readonly entityId: number;
+  readonly displayName: string;
+  readonly team: ScoreTeam;
+  readonly kills: number;
+  readonly deaths: number;
+  readonly assists: number;
+  readonly score: number;
+  readonly streak: number;
+  readonly bestStreak: number;
+  readonly shotsFired: number;
+  readonly shotsHit: number;
+  readonly damageDealt: number;
+  readonly headshots: number;
+  readonly captures: number;
+  readonly defends: number;
+  readonly plants: number;
+  readonly defuses: number;
+  readonly tags: number;
 }
 
 /**

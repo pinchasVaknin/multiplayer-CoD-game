@@ -562,7 +562,9 @@ export class Match {
     deps.scene.add(this.botRenderer.group);
 
     // ---- the mode ---------------------------------------------------------
-    this.score = new ScoreSystem(deps.bus, this.identity);
+    // A networked client's board is the server's, delivered whole; it counts nothing for
+    // itself (M13 Phase B). See `ScoreSystem.authoritative`.
+    this.score = new ScoreSystem(deps.bus, this.identity, deps.networked !== true);
     // See `ScoreSystem.freeForAll`. The replicated path records kills here too, so a client
     // that dropped same-side kills showed a personal counter that stalled while the server's
     // ladder moved — which is the FFA scoreboard the playtest reported as "not working".

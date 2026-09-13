@@ -38,6 +38,7 @@ import {
 import { bombStateCode } from '../../shared/net/Messages';
 import { phaseAt } from '../../shared/net/Messages';
 import { personalOutcome } from '../../shared/modes/MatchOutcome';
+import { xpSourceAt } from '../../shared/meta/XpRules';
 import { RESPAWN_SECONDS } from '../../shared/ai/BotDirector';
 import {
   // `debugOverlayVisible` is deliberately absent: it reads only the front-end screen and the
@@ -53,6 +54,7 @@ import {
   type HudSurfaceState,
 } from '../../shared/ui/HudSurfaces';
 import { OBJ_TEAM_A, OBJ_TEAM_B, type ObjectiveState } from '../../shared/net/Skirmish';
+import type { ReplicatedScoreRow } from '../../shared/combat/ScoreSystem';
 import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
 
 /**
@@ -551,6 +553,20 @@ export interface HeadlessClientReport {
   readonly scoreOnReturn: { readonly a: number; readonly b: number } | null;
   /** The seat this client came back to, or null if it never came back. */
   readonly seatAfterReturn: SeatSnapshot | null;
+  /**
+   * The scoreboard as replicated (M13 Phase B, bug 4.3).
+   *
+   * `scoreboardFrames` counts boards received; `scoreboardRows` is the last one received **in a
+   * live match**, whole — the harness compares it with the server's final rows, which is the
+   * invariant *rows on every client === rows on the server*. Live rather than last, because the
+   * return migration lands this client in the arena, whose board is empty by design (F7), and a
+   * comparison against that would be a comparison against the wrong instance. `boardOnReturn`
+   * is the first board received after a re-dial: how many rows it carried, and the kills on this
+   * client's own row, which is the half of 4.3 where a returning client read zeros for everybody.
+   */
+  readonly scoreboardFrames: number;
+  readonly scoreboardRows: readonly ReplicatedScoreRow[];
+  readonly boardOnReturn: { readonly rows: number; readonly ownKills: number; readonly ownRow: boolean } | null;
   /** §7 divergence, counted only over frames **after** a return. Denominator included. */
   readonly hashSamplesAfterReturn: number;
   readonly hashMismatchesAfterReturn: number;
@@ -784,6 +800,11 @@ export class HeadlessClient {
    */
   private reconnects = 0;
   private awaitingResync = false;
+  private scoreboardFrames = 0;
+  private scoreboardRows: readonly ReplicatedScoreRow[] = [];
+  private boardOnReturn: { rows: number; ownKills: number; ownRow: boolean } | null = null;
+  /** Set by `reconnect`, cleared by the first board that arrives afterwards. */
+  private awaitingBoard = false;
   private reconnectAtMs = 0;
   private resyncMs = -1;
   private returned = false;
@@ -881,7 +902,11 @@ export class HeadlessClient {
         onSummary: (info) => {
           this.summaries++;
           this.summaryAtMs = nowMs();
-          this.summaryXp = info.xp.map((line) => `${line.label} ${line.amount}`);
+          this.summaryXp = info.xp.map((line) => {
+            const source = xpSourceAt(line.source);
+            const name = source === undefined ? `?${line.source}` : source.label.toUpperCase();
+            return line.count > 1 ? `${name} x${line.count} ${line.amount}` : `${name} ${line.amount}`;
+          });
           this.summaryXpTotal = info.xp.reduce((sum, line) => sum + line.amount, 0);
           // The browser's own arithmetic, over the wire's rows and this seat — which is still
           // the live match's seat: the summary lands before the hold, and the hold before the
@@ -1004,6 +1029,19 @@ export class HeadlessClient {
           this.hashMismatches++;
           if (this.returned) this.hashMismatchesAfterReturn++;
           if (this.firstMismatchTick < 0) this.firstMismatchTick = tick;
+        },
+        onScoreboard: (rows) => {
+          this.scoreboardFrames++;
+          if (!isArenaInstance(this.net.matchId)) this.scoreboardRows = rows;
+          if (this.awaitingBoard && !isArenaInstance(this.net.matchId)) {
+            this.awaitingBoard = false;
+            const own = rows.find((r) => r.entityId === this.net.entityId);
+            this.boardOnReturn = {
+              rows: rows.length,
+              ownKills: own?.kills ?? 0,
+              ownRow: own !== undefined,
+            };
+          }
         },
         onStreaks: (view) => {
           this.streakFrames++;
@@ -1541,6 +1579,7 @@ export class HeadlessClient {
     // Cleared with `seatAfterReturn` below and for the same reason: a leftover answer is a
     // cycle that closes on its predecessor's numbers and reports them again, green.
     this.scoreOnReturn = null;
+    this.boardOnReturn = null;
     this.seatBeforeDrop = {
       entityId: this.net.entityId,
       matchId: this.net.matchId,
@@ -1580,6 +1619,7 @@ export class HeadlessClient {
     this.reconnects++;
     this.reconnectAtMs = nowMs();
     this.awaitingResync = true;
+    this.awaitingBoard = true;
     await this.link.open();
     this.net.connect();
   }
@@ -1706,6 +1746,9 @@ export class HeadlessClient {
       resyncMs: this.resyncMs,
       seatBeforeDrop: this.seatBeforeDrop,
       scoreOnReturn: this.scoreOnReturn,
+      scoreboardFrames: this.scoreboardFrames,
+      scoreboardRows: this.scoreboardRows,
+      boardOnReturn: this.boardOnReturn,
       seatAfterReturn: this.seatAfterReturn,
       hashSamplesAfterReturn: this.hashSamplesAfterReturn,
       hashMismatchesAfterReturn: this.hashMismatchesAfterReturn,

@@ -42,6 +42,7 @@ import { SentryGun } from '../../shared/streaks/SentryGun';
 import { STREAK_DEFS, type StreakId } from '../../shared/streaks/StreakDefs';
 import { Uav } from '../../shared/streaks/Uav';
 import { EFlag, makeEntitySnapshot, weaponIndexOf, type EntitySnapshot } from '../../shared/net/Snapshot';
+import type { ReplicatedScoreRow } from '../../shared/combat/ScoreSystem';
 import type { LoadoutSlot } from '../../shared/meta/Loadouts';
 import type { ReclaimedSeat, ServerMatch } from '../Match';
 import type { NetPlayer } from '../NetPlayer';
@@ -97,6 +98,11 @@ export interface MatchInstanceDeps {
  */
 export type UnseatCause = 'disconnected' | 'migrated';
 
+/** Ticks between two boards to one seat when the board keeps changing: four a second. */
+const SCOREBOARD_MIN_TICKS = 15;
+/** Ticks after which a seat is sent the board again regardless: two seconds. */
+const SCOREBOARD_KEEPALIVE_TICKS = 120;
+
 /** What the router needs to know about a seat without reaching into the simulation. */
 export interface Seat {
   readonly session: Session;
@@ -151,6 +157,10 @@ export abstract class MatchInstance {
   private readonly smokeScratch: SmokeState[] = [];
   /** Whether the last projectile frame was empty. See `sendProjectiles`. */
   private projectilesWereEmpty = false;
+  /** Per seat: the board serial last sent and the tick it went out. See `sendScoreboard`. */
+  private readonly boardSent = new Map<number, { serial: number; tick: number }>();
+  /** Reused per send. Nothing in the per-tick send path allocates (S4.7). */
+  private readonly boardScratch: ReplicatedScoreRow[] = [];
   /** Scratch for the §7 hash. Nothing on the per-tick send path allocates (S4.7). */
   private readonly hashScratch = makeModeStateScratch();
   private entityCount = 0;
@@ -235,8 +245,17 @@ export abstract class MatchInstance {
    * F8). It changes nothing else about seating — the encoder is fresh, the acks are reset and
    * the next snapshot is a full one, all of which a reconnect needs anyway and all of which a
    * first join already got.
+   *
+   * `previousToken` is the reconnect token a returning player presented **after** the grace
+   * (M13 Phase B): no seat to reclaim, but `LiveMatch` still knows whose row it opens. The
+   * arena ignores it — it records no rows.
    */
-  seat(session: Session, loadout: LoadoutSlot | null, reclaim?: ReclaimedSeat | null): NetPlayer | null {
+  seat(
+    session: Session,
+    loadout: LoadoutSlot | null,
+    reclaim?: ReclaimedSeat | null,
+    _previousToken?: Uint8Array | null,
+  ): NetPlayer | null {
     // The grants are the session's, so they follow this player across every migration and die
     // with the connection rather than with the seat (playtest round 4, F14).
     const player = this.match.addPlayer(session.displayName, session.cheats, loadout, reclaim);
@@ -248,6 +267,9 @@ export abstract class MatchInstance {
     // belonged to the instance this player just left.
     session.ackedSnapshot = 0;
     session.lastSnapshotId = 0;
+    // The board too: a fresh seat has seen none of it, so the next send is the whole set,
+    // whatever the serial (M13 Phase B).
+    this.boardSent.set(session.playerId, { serial: -1, tick: -1 });
     return player;
   }
 
@@ -281,6 +303,7 @@ export abstract class MatchInstance {
      */
     seat.session.cheats.clear();
     this.seats.delete(playerId);
+    this.boardSent.delete(playerId);
   }
 
   /**
@@ -340,6 +363,7 @@ export abstract class MatchInstance {
       this.sendBomb();
       this.sendStreaks();
       this.sendProjectiles();
+      this.sendScoreboard(absoluteTick);
       /**
        * Last, deliberately (§7).
        *
@@ -459,6 +483,47 @@ export abstract class MatchInstance {
 
     for (const seat of this.seats.values()) {
       if (!seat.session.closed) seat.session.sendObjectives(this.objectiveScratch);
+    }
+  }
+
+  /**
+   * The scoreboard, as state (M13 Phase B, bug 4.3). See `MsgS.Scoreboard`.
+   *
+   * Per seat, three rules and nothing else:
+   *
+   *  - **Changed.** Sent when `ScoreSystem.serial` differs from the one this seat last received.
+   *    A fresh seat starts at -1, so its first snapshot tick carries the whole board — which is
+   *    the other half of 4.3, a returning client reading zeros for everybody.
+   *  - **Rate-limited.** No sooner than `SCOREBOARD_MIN_TICKS` after the last send to that
+   *    seat. Every trigger pull moves the serial, and a firefight would otherwise send a
+   *    ~300-byte board twenty times a second.
+   *  - **Resent anyway** every `SCOREBOARD_KEEPALIVE_TICKS`, changed or not. There is no ack on
+   *    this channel; a frame lost under `--net bad` is corrected within two seconds instead of
+   *    at the next change, which between fights may be a long way off.
+   *
+   * The rows are built once per send from the live rows and shared by every seat; the
+   * per-seat part is only the decision.
+   */
+  private sendScoreboard(tickIndex: number): void {
+    const score = this.match.score;
+    let built = false;
+    for (const seat of this.seats.values()) {
+      const { session } = seat;
+      if (session.closed) continue;
+      const sent = this.boardSent.get(session.playerId);
+      if (sent === undefined) continue;
+      const changed = sent.serial !== score.serial;
+      const since = tickIndex - sent.tick;
+      const due = sent.tick < 0 || since >= SCOREBOARD_KEEPALIVE_TICKS;
+      if (!due && !(changed && since >= SCOREBOARD_MIN_TICKS)) continue;
+      if (!built) {
+        this.boardScratch.length = 0;
+        for (const row of score.rows) this.boardScratch.push(row);
+        built = true;
+      }
+      session.sendScoreboard(score.serial, this.boardScratch);
+      sent.serial = score.serial;
+      sent.tick = tickIndex;
     }
   }
 

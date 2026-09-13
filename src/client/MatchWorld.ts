@@ -513,12 +513,20 @@ export class MatchWorld {
       };
 
       /**
-       * The killfeed and the scoreboard resolve ids to names, and on a networked client the
-       * only place those names exist is the snapshot. See `NetSession.directory`.
+       * The killfeed resolves ids to names, and on a networked client the only place those
+       * names exist is the snapshot. See `NetSession.directory`.
        */
       this.match.flow.setKillfeedDirectory(net.directory());
-      net.onRosterEntry = (entityId, name, team) => {
-        this.match.score.register(entityId, name, team);
+      /**
+       * The scoreboard is the server's (M13 Phase B, bug 4.3).
+       *
+       * It used to be registered from the snapshot's bodies and counted from replicated events,
+       * which is how a player who joined or returned mid-match read zeros for everybody. The
+       * row set on the wire *is* the board: `applyReplicated` upserts what it carries and removes
+       * what it does not.
+       */
+      net.onScoreboard = (rows) => {
+        this.match.score.applyReplicated(rows);
       };
 
       /**

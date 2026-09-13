@@ -2,9 +2,10 @@ import type { CamoId } from '../meta/Camos';
 import type { ChallengeId } from '../meta/Challenges';
 import { ScoreSystem } from '../combat/ScoreSystem';
 import { DamageSystem } from '../combat/DamageSystem';
-import { createGameBus } from '../core/Events';
+import { createGameBus, EV, type GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
 import { ChallengeTracker } from '../meta/ChallengeTracker';
+import { MatchLedger } from '../meta/MatchLedger';
 import { MatchProgression } from '../meta/MatchProgression';
 import type { ProgressionStore } from '../meta/ProgressionStore';
 import {
@@ -16,7 +17,7 @@ import {
   type WeaponSaveData,
 } from '../meta/SaveData';
 import { levelForXp } from '../meta/Levels';
-import { matchMinutes, xpSource } from '../meta/XpRules';
+import { LONGSHOT_METRES, matchMinutes, xpSource, type XpLine } from '../meta/XpRules';
 import { DEFAULT_MOVEMENT_CONFIG } from '../player/MovementConfig';
 import { PlayerController } from '../player/PlayerController';
 import { DEFAULT_VIEWMODEL_CONFIG } from '../weapons/ViewmodelConfig';
@@ -62,6 +63,18 @@ import { CollisionWorld } from '../world/CollisionWorld';
  * Pure: a throwaway world, bus, score, tracker and store per row, no clock, no wire, no DOM, and
  * nobody fires. One run is a fact rather than a sample, which is what puts it beside
  * `auditAccuracy` and `auditReplicatedScore` at the top of a harness run.
+ *
+ * ## The second half: one fight, two ledgers (M13 Phase B, bug 4.2)
+ *
+ * A dedicated server now keeps a `MatchLedger` per seat and pays what it counted, where it used
+ * to pay a flat list to everybody. The claim that makes that safe is that the ledger is the
+ * *same counting* single-player has done since M6 — and a claim about two runtimes agreeing is
+ * exactly the kind this project has learned to measure rather than argue. So `playFight` runs
+ * one scripted fight — a longshot headshot, a damaged victim somebody else finishes, a death —
+ * through a solo `MatchProgression` keyed to entity 0 and through a server-shaped `MatchLedger`
+ * keyed to entity 7, and asserts every row the server can price comes out identical: same
+ * source, same count, same XP. The two rows only a save can price — challenges and weapon
+ * levels — are excluded by name, and the exclusion is printed.
  */
 
 /** The single-player entity id, which is what `MatchProgression` attributes everything to. */
@@ -144,9 +157,138 @@ export interface MatchXpRow {
   readonly breakdown: readonly string[];
 }
 
+/** The second half's row: the same fight, counted twice (M13 Phase B). */
+export interface LedgerAgreementRow {
+  readonly shape: string;
+  /** Every priced line, `label x count = xp`, from the solo progression. */
+  readonly solo: readonly string[];
+  /** The same, from the server-shaped ledger. */
+  readonly server: readonly string[];
+  /** Rows only a save can price, dropped from the comparison. */
+  readonly excluded: readonly string[];
+  readonly agrees: boolean;
+}
+
 export interface MatchXpAudit {
   readonly rows: readonly MatchXpRow[];
+  readonly agreement: readonly LedgerAgreementRow[];
   readonly problems: string[];
+}
+
+/** The seat the server-shaped ledger follows. Any id but 0 would do; 7 is not a bot's. */
+const SERVER_SEAT = 7;
+
+/** Rows a save prices. The server cannot, so they are not compared. */
+const SAVE_ONLY = new Set<string>(['challenge', 'weaponLevel']);
+
+/**
+ * One scripted fight, on a bus, against a score, for `me`.
+ *
+ * The kill is recorded the way a match records it — `MatchFlow` subscribes to `entity.killed`
+ * before any ledger does and the mode calls `ScoreSystem.recordKill` from inside it — so the
+ * subscription below is made **before** the ledger under test is constructed, and the streak
+ * the ledger reads off the row includes the kill being counted.
+ *
+ * What happens: `me` damages `V1` from beyond `LONGSHOT_METRES` and kills them with a headshot;
+ * `me` damages `V2`, and a teammate `B` finishes them — an assist; then `V2` kills `me`, which
+ * ends the streak at one. Kills, headshots, longshots, assists, best streak: one of each.
+ */
+function scriptFight(bus: GameBus, score: ScoreSystem, me: number): void {
+  const V1 = 200;
+  const V2 = 201;
+  const B = 100;
+  score.register(me, 'ME', 'A');
+  score.register(B, 'B0', 'A');
+  score.register(V1, 'V1', 'B');
+  score.register(V2, 'V2', 'B');
+  bus.on(EV.EntityKilled, (p) => score.recordKill(p.sourceId, p.targetId, p.zone === 'head', 100));
+}
+
+function fight(bus: GameBus, me: number): void {
+  const V1 = 200;
+  const V2 = 201;
+  const B = 100;
+  const damage = (sourceId: number, targetId: number, distance: number, zone: 'head' | 'torso', lethal: boolean) =>
+    bus.emit(EV.DamageDealt, {
+      sourceId, targetId, weaponId: 'ar_carbine', zone, amount: lethal ? 100 : 40,
+      x: 0, y: 0, z: 0, distance, falloffLoss: 0, penetrationLoss: 0, lethal,
+    });
+  const kill = (sourceId: number, targetId: number, zone: 'head' | 'torso') =>
+    bus.emit(EV.EntityKilled, { targetId, sourceId, weaponId: 'ar_carbine', zone, killerHealth: 100 });
+
+  damage(me, V1, LONGSHOT_METRES + 4, 'head', true);
+  kill(me, V1, 'head');
+  damage(me, V2, 12, 'torso', false);
+  damage(B, V2, 8, 'torso', true);
+  kill(B, V2, 'torso');
+  damage(V2, me, 10, 'torso', true);
+  kill(V2, me, 'torso');
+}
+
+function describeLines(lines: readonly XpLine[]): string[] {
+  return lines.map((l) => `${l.label} x${l.count} = ${Math.round(l.xp)}`);
+}
+
+/**
+ * The fight through both ledgers, `seconds` long, closed out as a win by the MVP.
+ *
+ * Won and MVP on both sides so the two flat rows are in the comparison rather than absent from
+ * it; a comparison of lists that both omit a row cannot tell whether the row is priced alike.
+ */
+function playFight(shape: string, seconds: number): LedgerAgreementRow {
+  const ticks = Math.round(seconds / DT);
+
+  // ---- solo: the client's arrangement, entity 0, a store and a tracker ----------------------
+  const soloBus = createGameBus();
+  const soloScore = new ScoreSystem(soloBus);
+  const store = new ScratchStore();
+  const tracker = new ChallengeTracker(store);
+  tracker.reset();
+  scriptFight(soloBus, soloScore, PLAYER);
+  const progression = new MatchProgression({ bus: soloBus, profile: store, score: soloScore, tracker });
+  {
+    const damage = new DamageSystem(soloBus);
+    const set = new ColliderSet(2);
+    set.add({ x: 0, y: -1, z: 0 }, { x: FLOOR_HALF * 2, y: 2, z: FLOOR_HALF * 2 }, 0, 0, 0, 'floor');
+    const world = new CollisionWorld(
+      set,
+      { min: { x: -FLOOR_HALF, y: -8, z: -FLOOR_HALF }, max: { x: FLOOR_HALF, y: 24, z: FLOOR_HALF } },
+      8,
+    );
+    world.configure(DEFAULT_MOVEMENT_CONFIG.maxSlopeDeg, DEFAULT_MOVEMENT_CONFIG.collisionSkin);
+    const player = new PlayerController({ ...DEFAULT_MOVEMENT_CONFIG }, world, soloBus);
+    player.spawn(0, 0.2, 0, 0);
+    const weapons = new WeaponSystem(
+      requireWeapon('ar_carbine'), null, world, damage, soloBus,
+      DEFAULT_VIEWMODEL_CONFIG, DEFAULT_MOVEMENT_CONFIG.walkSpeed, PLAYER,
+    );
+    for (let t = 0; t < ticks; t++) progression.sample(player.sim, weapons, t);
+  }
+  fight(soloBus, PLAYER);
+  const soloReport = progression.finish(true, true);
+  progression.dispose();
+  soloScore.dispose();
+
+  // ---- server: a ledger keyed to a seat, nothing sampled, the match's own length ---------
+  const serverBus = createGameBus();
+  const serverScore = new ScoreSystem(serverBus);
+  scriptFight(serverBus, serverScore, SERVER_SEAT);
+  const ledger = new MatchLedger({ bus: serverBus, score: serverScore, entityId: SERVER_SEAT });
+  fight(serverBus, SERVER_SEAT);
+  const serverLines = ledger.lines(true, true, seconds);
+  ledger.dispose();
+  serverScore.dispose();
+
+  const excluded = soloReport.lines.filter((l) => SAVE_ONLY.has(l.id));
+  const solo = describeLines(soloReport.lines.filter((l) => !SAVE_ONLY.has(l.id)));
+  const server = describeLines(serverLines.filter((l) => !SAVE_ONLY.has(l.id)));
+  return {
+    shape,
+    solo,
+    server,
+    excluded: describeLines(excluded),
+    agrees: solo.length === server.length && solo.every((line, i) => line === server[i]),
+  };
 }
 
 /**
@@ -217,6 +359,24 @@ export function auditMatchXp(): MatchXpAudit {
     playNothing('short', 30),
     playNothing('played', 10 * 60),
   ];
+  const agreement: LedgerAgreementRow[] = [playFight('fight', 4 * 60)];
+
+  for (const row of agreement) {
+    if (!row.agrees) {
+      problems.push(
+        `${row.shape}: the solo progression and the server ledger priced the same fight ` +
+          `differently — solo [${row.solo.join(', ')}] against server [${row.server.join(', ')}]. ` +
+          'A dedicated server pays what the client would have paid, or it pays a different game.',
+      );
+    }
+    // The fight is scripted to earn one of each; a ledger that priced none of them is not
+    // counting, and two ledgers agreeing on nothing is not agreement.
+    for (const wanted of ['Kills x1', 'Headshots x1', 'Assists x1', 'Longshots x1', 'Best streak x1', 'Match win x1', 'MVP x1']) {
+      if (!row.server.some((line) => line.startsWith(wanted))) {
+        problems.push(`${row.shape}: the server ledger has no "${wanted}" row for a fight that earned one.`);
+      }
+    }
+  }
 
   const floor = xpSource('matchComplete').value;
 
@@ -280,5 +440,5 @@ export function auditMatchXp(): MatchXpAudit {
     );
   }
 
-  return { rows, problems };
+  return { rows, agreement, problems };
 }

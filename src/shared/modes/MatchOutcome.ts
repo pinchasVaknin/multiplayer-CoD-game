@@ -43,13 +43,16 @@ export interface PlaceableRow extends Rankable {
   readonly entityId: number;
 }
 
+/** The two facts a result carries about who won. `MatchResult` has them; so does the server's. */
+export type WinnerFacts = Pick<MatchResult, 'winner' | 'winnerEntityId'>;
+
 /**
  * Whether the player seated on `team` as `entityId` won `result`.
  *
  * The one comparison that used to be written four times. Where the mode named an individual,
  * only that individual won; otherwise the side decides, as it always has.
  */
-export function wonBy(result: MatchResult, team: ScoreTeam, entityId: number): boolean {
+export function wonBy(result: WinnerFacts, team: ScoreTeam, entityId: number): boolean {
   if (result.winner === 'DRAW') return false;
   if (result.winnerEntityId !== undefined) return result.winnerEntityId === entityId;
   return result.winner === team;
@@ -92,6 +95,24 @@ export function placeOf(rows: readonly PlaceableRow[], entityId: number, winnerI
     if (compareRows(row, mine) < 0) above++;
   }
   return above + 1;
+}
+
+/**
+ * Whether `entityId` is the match's MVP: the top score on the board, with ties going to nobody
+ * (M13 Phase B, lifted from `MatchMeta`).
+ *
+ * An XP rule rather than a scoreboard fact, and one rule: the client decided it for the local
+ * player and the server now decides it per seat, and two MVPs is not what the word means.
+ */
+export function isMvp(rows: readonly PlaceableRow[], entityId: number): boolean {
+  let mine: PlaceableRow | undefined;
+  for (const row of rows) if (row.entityId === entityId) mine = row;
+  if (mine === undefined || mine.score <= 0) return false;
+  for (const row of rows) {
+    if (row === mine) continue;
+    if (row.score >= mine.score) return false;
+  }
+  return true;
 }
 
 /** `1ST`, `2ND`, `3RD`, `4TH` ... `11TH`, `12TH`, `13TH`, `21ST`. */

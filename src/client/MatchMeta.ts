@@ -8,6 +8,7 @@ import type { EquipmentSystem, EquipmentInventory } from '../shared/equipment/Eq
 import { ChallengeTracker } from '../shared/meta/ChallengeTracker';
 import type { ResolvedLoadout } from '../shared/meta/Loadouts';
 import { MatchProgression } from '../shared/meta/MatchProgression';
+import { isMvp } from '../shared/modes/MatchOutcome';
 import type { Profile } from './meta/Profile';
 import type { XpReport } from '../shared/meta/XpRules';
 import { FieldUpgradeRuntime } from '../shared/perks/FieldUpgrade';
@@ -203,14 +204,8 @@ export class MatchMeta {
         : (entityId) => (entityId === me ? state.flashResistMult : 1);
   }
 
+  /** The one MVP rule, shared with the server's per-seat summary (M13 Phase B). */
   private isMvp(): boolean {
-    const rows = this.deps.score.rows;
-    const mine = this.deps.score.row(this.deps.localId);
-    if (mine === undefined || mine.score <= 0) return false;
-    for (const row of rows) {
-      if (row === mine) continue;
-      if (row.score >= mine.score) return false;
-    }
-    return true;
+    return isMvp(this.deps.score.rows, this.deps.localId);
   }
 }

@@ -8,6 +8,7 @@ import type { InputCommand } from '../../shared/core/InputCommand';
 import { logger } from '../../shared/core/Log';
 import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
 import type { NetLoadout, ObjectiveState } from '../../shared/net/Skirmish';
+import type { ReplicatedScoreRow } from '../../shared/combat/ScoreSystem';
 import type { BombInfo, TagInfo } from '../../shared/modes/GameMode';
 import type { ProjectileState, SmokeState, StreakView } from '../../shared/net/Skirmish';
 import { NetClient, type SkirmishSink, type NetClientState } from '../../shared/net/NetClient';
@@ -184,6 +185,8 @@ export class NetSession {
   onTags: ((tags: readonly TagInfo[]) => void) | null = null;
   onBomb: ((info: BombInfo) => void) | null = null;
   onStreaks: ((view: StreakView) => void) | null = null;
+  /** The board, whole, whenever the server sends it (M13 Phase B). See `MsgS.Scoreboard`. */
+  onScoreboard: ((rows: readonly ReplicatedScoreRow[]) => void) | null = null;
   onProjectiles:
     | ((projectiles: readonly ProjectileState[], smoke: readonly SmokeState[]) => void)
     | null = null;
@@ -254,6 +257,10 @@ export class NetSession {
         onStreaks: (view) => {
           this.onStreaks?.(view);
           deps.skirmish?.onStreaks?.(view);
+        },
+        onScoreboard: (rows) => {
+          this.onScoreboard?.(rows);
+          deps.skirmish?.onScoreboard?.(rows);
         },
         onStateHash: (tick, hash) => {
           /*
@@ -424,12 +431,6 @@ export class NetSession {
     return this.deps.welcome;
   }
 
-  /**
-   * Called for every body the snapshot knows about, so the caller can put them on the
-   * scoreboard. Expected to be idempotent — see `registerRoster`.
-   */
-  onRosterEntry: ((entityId: number, name: string, team: 'A' | 'B') => void) | null = null;
-
   get connected(): boolean {
     return this.client.state === 'joined';
   }
@@ -476,9 +477,9 @@ export class NetSession {
     this.onTags = null;
     this.onBomb = null;
     this.onStreaks = null;
+    this.onScoreboard = null;
     this.onProjectiles = null;
     this.onLocalState = null;
-    this.onRosterEntry = null;
     this.actors.clear();
     this.renderable.length = 0;
   }
@@ -577,9 +578,6 @@ export class NetSession {
     }
 
     this.syncActors();
-    // After the actors, so a body that first appeared in this snapshot is on the scoreboard
-    // on the same frame it becomes visible.
-    if (this.onRosterEntry !== null) this.registerRoster(this.onRosterEntry);
     return steps;
   }
 
@@ -647,21 +645,6 @@ export class NetSession {
     };
   }
 
-  /**
-   * Push every known body onto the scoreboard.
-   *
-   * Called once per frame; `ScoreSystem.register` is idempotent, so this is a cheap way to
-   * pick up bodies as they first appear in a snapshot without a join/leave message type the
-   * protocol does not have. Kills and deaths accumulate from the replicated events, which
-   * reach `ScoreSystem` through the same bus subscriptions a local match uses (S3).
-   */
-  registerRoster(register: (entityId: number, name: string, team: 'A' | 'B') => void): void {
-    register(this.deps.identity.entityId, this.deps.displayName, this.deps.welcome.team);
-    for (const actor of this.actors.values()) {
-      if (actor.displayName === '') continue;
-      register(actor.entityId, actor.displayName, actor.team);
-    }
-  }
 }
 
 /**

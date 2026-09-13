@@ -1,4 +1,5 @@
 import { nowMs } from '../core/Clock';
+import type { ReplicatedScoreRow } from '../combat/ScoreSystem';
 import { Btn, copyCommand, type InputCommand, type MutableInputCommand } from '../core/InputCommand';
 import { DT } from '../core/Loop';
 import { logger } from '../core/Log';
@@ -168,6 +169,14 @@ export interface SkirmishSink {
    * narrow, and narrowing in the client is what a UAV must never depend on.
    */
   readonly onStreaks?: ((view: StreakView) => void) | undefined;
+  /**
+   * The scoreboard, whole (M13 Phase B, bug 4.3).
+   *
+   * The server's row set, which is the client's board from now on — see `MsgS.Scoreboard`.
+   * Frames older than the newest one seen are dropped inside `NetClient`, so a listener only
+   * ever sees the board move forward.
+   */
+  readonly onScoreboard?: ((rows: readonly ReplicatedScoreRow[]) => void) | undefined;
   /** Grenades in flight and smoke on the ground (M11 Gate B, §8.24). Broadcast, not filtered. */
   /** The §7 mode-state hash for `tick`. Compare against your own; see `ModeStateHash`. */
   readonly onStateHash?: ((tick: number, hash: number) => void) | undefined;
@@ -388,6 +397,12 @@ export class NetClient {
    * enforced where the untrusted bytes arrive rather than remembered at each reader.
    */
   cheatMask = 0;
+
+  /**
+   * The newest scoreboard serial applied (M13 Phase B). Per instance — reset with the seat,
+   * because each instance's `ScoreSystem` counts its own serial from one.
+   */
+  private scoreboardSerial = 0;
 
   /** Set when this client's own entity reports a new spawn serial. */
   private respawned = false;
@@ -671,6 +686,13 @@ export class NetClient {
       case 'streaks':
         this.deps.skirmish?.onStreaks?.(msg.view);
         return;
+      case 'scoreboard':
+        // Jitter reorders frames. A board is a set of counters that only ever grow, so an
+        // older frame applied after a newer one would move every column backwards for a tick.
+        if (msg.serial < this.scoreboardSerial) return;
+        this.scoreboardSerial = msg.serial;
+        this.deps.skirmish?.onScoreboard?.(msg.rows);
+        return;
       case 'projectiles':
         this.deps.skirmish?.onProjectiles?.(msg.projectiles, msg.smoke);
         return;
@@ -777,6 +799,8 @@ export class NetClient {
      * this list rather than beside a test for which one happened.
      */
     this.cheatMask = 0;
+    // The board belongs to the instance too: the next one's serials start over.
+    this.scoreboardSerial = 0;
     for (const cmd of this.pending) blankInto(cmd);
 
     /**

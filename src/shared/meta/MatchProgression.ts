@@ -1,65 +1,33 @@
 import { PLAYER_ENTITY_ID } from '../combat/DamageSystem';
-import type { HitZone } from '../combat/HitboxRig';
 import type { ScoreSystem } from '../combat/ScoreSystem';
-import { hitsFrom, shotsFrom } from '../combat/ShotAccounting';
 import { EV, type GameBus } from '../core/Events';
-import { DT } from '../core/Loop';
 import type { PlayerSim } from '../player/PlayerState';
-import type { WeaponClass } from '../weapons/WeaponDefs';
 import { WEAPON_DEFS } from '../weapons/WeaponDefs';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
 import type { CamoId } from './Camos';
 import { ChallengeTracker } from './ChallengeTracker';
-import {
-  MULTIKILL_WINDOW,
-  SLIDE_KILL_GRACE,
-  type KillFact,
-  type MatchFact,
-} from './Challenges';
+import type { MatchFact } from './Challenges';
 import { levelForXp } from './Levels';
+import { MatchLedger } from './MatchLedger';
 import type { ProgressionStore } from './ProgressionStore';
 import { weaponLevelForXp } from './Unlocks';
-import {
-  matchFloorLine,
-  matchMinutes,
-  LONGSHOT_METRES,
-  WEAPON_XP_FRACTION,
-  xpSource,
-  XP_SOURCES,
-  type XpLine,
-  type XpLines,
-  type XpReport,
-  type XpSourceId,
-} from './XpRules';
+import type { XpLine, XpReport } from './XpRules';
 
 /**
  * One match's worth of progression, accumulated in memory and banked once at the end.
  *
- * This is the only thing in `meta/` that touches the EventBus, and everything it does is
- * counting. That is the shape acceptance criterion 9 requires: the sim path gains six
- * subscriptions that increment integers and one per-tick `sample` that writes eight
- * fields, and **nothing here writes to storage, allocates per event, or can change what a
- * match does**. The profile is touched exactly once, from `finish`.
- *
- * The interesting work is `buildKillFact`. "Kills after sliding" and "one-magazine
- * multikills" are questions no single system can answer — the stance is in `PlayerSim`,
- * the magazine is in `Weapon`, the range is in the `damage.dealt` that preceded the kill,
- * and the streak is in `ScoreSystem` — so the fact is assembled here, once, and thirty
- * challenge predicates are tested against it.
+ * The counting is `MatchLedger` (M13 Phase B) — the same ledger a dedicated server keeps per
+ * seat — composed here for the local player, with the two things only a client has: a
+ * `ChallengeTracker` fed every described kill, and a `ProgressionStore` the whole match is
+ * folded into exactly once, from `finish`. Nothing here writes to storage before that,
+ * allocates per event, or can change what a match does.
  *
  * **Subscription order is load-bearing.** `MatchFlow` subscribes to `entity.killed` in
- * `Match`'s constructor and this class subscribes after it, so by the time the handler
- * below runs, the mode has already called `ScoreSystem.recordKill` and the streak read out
- * of the score row is the streak *including* this kill. `EventBus` dispatches in
- * subscription order, and that is what keeps the streak a single tally rather than a
- * private copy that could drift.
+ * `Match`'s constructor and the ledger subscribes after it, so by the time its handler runs
+ * the mode has already called `ScoreSystem.recordKill` and the streak read out of the score
+ * row is the streak *including* this kill. `EventBus` dispatches in subscription order, and
+ * that is what keeps the streak a single tally rather than a private copy that could drift.
  */
-
-/** Blast profiles carry their own weapon ids; a kill from one is an equipment kill. */
-const EQUIPMENT_WEAPON_PREFIX = 'eq_';
-
-/** Kills remembered for the multikill window. Nothing in this game exceeds four. */
-const KILL_RING = 8;
 
 export interface MatchProgressionDeps {
   readonly bus: GameBus;
@@ -68,67 +36,15 @@ export interface MatchProgressionDeps {
   readonly tracker: ChallengeTracker;
 }
 
-/** Per-weapon deltas, accumulated for the match and folded into the save at the end. */
-interface WeaponTally {
-  kills: number;
-  headshots: number;
-  longshots: number;
-  multikills: number;
-  shotsFired: number;
-  shotsHit: number;
-  longestShot: number;
-  timeUsed: number;
-  xp: number;
-}
-
-function makeTally(): WeaponTally {
-  return {
-    kills: 0,
-    headshots: 0,
-    longshots: 0,
-    multikills: 0,
-    shotsFired: 0,
-    shotsHit: 0,
-    longestShot: 0,
-    timeUsed: 0,
-    xp: 0,
-  };
-}
-
 const evXp = { total: 0, xpBefore: 0, xpAfter: 0 };
 const evLevel = { level: 1, prestige: 0, unlockCount: 0 };
 const evChallenge = { id: '', name: '', xp: 0, camo: null as string | null };
 const evCamo = { camoId: '', name: '' };
 
 export class MatchProgression {
-  /** Per-source counts, keyed by XP source. Read by the summary. */
-  private readonly counts = new Map<XpSourceId, number>();
-  private readonly weaponTallies = new Map<string, WeaponTally>();
-  private readonly unsubscribe: Array<() => void> = [];
-  private readonly killTicks: number[] = new Array<number>(KILL_RING).fill(-99999);
-  private killRingHead = 0;
-
+  private readonly ledger: MatchLedger;
   private readonly deps: MatchProgressionDeps;
 
-  // ---- context sampled once per tick, so a kill can be described ------------
-  private heldWeaponId = '';
-  private heldWeaponClass: WeaponClass = 'AR';
-  private adsFraction = 0;
-  private sliding = false;
-  private airborne = false;
-  private sinceSlide = 999;
-  private tick = 0;
-
-  // ---- kill context --------------------------------------------------------
-  /** Range of the most recent damage the local player dealt, metres. */
-  private lastDamageDistance = 0;
-  private lastDamageTarget = -1;
-  private killsThisMag = 0;
-  private lastKilledBy = -1;
-
-  private objectives = 0;
-  /** Ticks this progression has been sampled through. See `sample`. */
-  private ticksPlayed = 0;
   /**
    * What `finish` produced, so a second call answers the same thing rather than zeroes.
    *
@@ -138,94 +54,32 @@ export class MatchProgression {
 
   constructor(deps: MatchProgressionDeps) {
     this.deps = deps;
-    const bus = deps.bus;
-
-    this.unsubscribe.push(
-      bus.on(EV.WeaponFired, (p) => {
-        if (p.sourceId !== PLAYER_ENTITY_ID) return;
-        const tally = this.tally(p.weaponId);
-        // This was already the right definition when `ScoreSystem` had the wrong one (round 5,
-        // B5). It reads through `ShotAccounting` now so there is one of it rather than two that
-        // happen to match.
-        tally.shotsFired += shotsFrom(p);
-        tally.shotsHit += hitsFrom(p);
-      }),
-      bus.on(EV.DamageDealt, (p) => {
-        if (p.sourceId !== PLAYER_ENTITY_ID) return;
-        this.lastDamageDistance = p.distance;
-        this.lastDamageTarget = p.targetId;
-        const tally = this.tally(p.weaponId);
-        if (p.distance > tally.longestShot) tally.longestShot = p.distance;
-      }),
-      bus.on(EV.EntityKilled, (p) => this.onKilled(p.sourceId, p.targetId, p.weaponId, p.zone)),
-      bus.on(EV.EquipmentFlashed, (p) => {
-        if (p.sourceId !== PLAYER_ENTITY_ID || p.targetId === PLAYER_ENTITY_ID) return;
-        deps.tracker.onFlash();
-      }),
-      bus.on(EV.WeaponReloadFinished, (p) => {
-        if (p.sourceId === PLAYER_ENTITY_ID) this.killsThisMag = 0;
-      }),
-      bus.on(EV.WeaponSwapped, (p) => {
-        if (p.sourceId === PLAYER_ENTITY_ID) this.killsThisMag = 0;
-      }),
-      bus.on(EV.PlayerSpawned, (p) => {
-        if (p.entityId === PLAYER_ENTITY_ID) this.killsThisMag = 0;
-      }),
-    );
+    this.ledger = new MatchLedger({
+      bus: deps.bus,
+      score: deps.score,
+      entityId: PLAYER_ENTITY_ID,
+      onKill: (fact) => deps.tracker.onKill(fact),
+      onFlash: () => deps.tracker.onFlash(),
+    });
   }
 
-  /**
-   * One sim tick of context.
-   *
-   * Eight field writes and one `Map.get`, both on keys that already exist after the first
-   * tick — allocation free in the steady state, which is what S4.7 asks of anything on
-   * this path.
-   */
+  /** One sim tick of context. See `MatchLedger.sample`. */
   sample(sim: PlayerSim, weapons: WeaponSystem, tickIndex: number): void {
-    this.tick = tickIndex;
-    const def = weapons.definition;
-    this.heldWeaponId = def.id;
-    this.heldWeaponClass = def.class;
-    this.adsFraction = weapons.weapon.adsFraction;
-    this.sliding = sim.slideActive;
-    this.airborne = !sim.grounded && !sim.slideActive;
-    this.sinceSlide = sim.slideActive ? 0 : Math.min(999, this.sinceSlide + DT);
-    this.tally(def.id).timeUsed += DT;
-    /**
-     * How long this match has run, for `matchTime` (round 5, B6).
-     *
-     * **Ticks, converted once**, and not `+= DT` like the per-weapon line above it. `DT` is
-     * `1/60`, which no float can hold, so a sum of thirty-six thousand of them lands at
-     * 599.999999999783 — and `matchMinutes` floors, so a ten-minute match paid for nine. The
-     * audit caught it because it prints the minutes it asked for beside the minutes it got.
-     * An integer count multiplied at the end has no drift to accumulate.
-     *
-     * It is the *match's* length and not the player's stay: a returning player therefore cannot
-     * lose the minutes before their drop, because those minutes were never counted against them
-     * in the first place. See `finish` for the other half of that decision.
-     */
-    this.ticksPlayed++;
+    this.ledger.sample(sim, weapons, tickIndex);
   }
 
-  /**
-   * An objective was scored (S6.1's 200/objective).
-   *
-   * No mode in this build emits one — TDM has none and S9 defers the modes that do — so
-   * the only callers are the XP simulator and the verification script. The path is real
-   * and measured rather than speculative, and M7's Domination should call it from
-   * `onCapture`. See PLAN.md, "problems found in the brief".
-   */
+  /** An objective was scored by hand. See `MatchLedger.noteObjective`. */
   noteObjective(count = 1): void {
-    this.objectives += count;
+    this.ledger.noteObjective(count);
   }
 
   /** Live totals, for the F1 read-out. */
   get liveXp(): number {
-    return this.totalFrom(this.buildLines(false, false, 0));
+    return this.totalFrom(this.ledger.lines(false, false, this.ledger.secondsPlayed));
   }
 
   get killCount(): number {
-    return this.counts.get('kill') ?? 0;
+    return this.ledger.killCount;
   }
 
   /**
@@ -252,18 +106,11 @@ export class MatchProgression {
       score: row?.score ?? 0,
       bestStreak,
     };
-    this.counts.set('assist', row?.assists ?? 0);
-    if (this.objectives > 0) this.counts.set('objective', this.objectives);
     this.deps.tracker.onMatchEnd(fact);
 
     // Weapon levels are banked before the XP lines are built for the same reason: a
     // weapon that levelled up on the last kill of the match should say so.
     const weaponLevelUps = this.applyWeaponTallies();
-    this.counts.set('weaponLevel', weaponLevelUps.length);
-    // The challenge row counts *challenges*, not XP: its total is the sum of what each one
-    // awarded, which `buildLines` reads separately. Storing the XP here instead printed
-    // "Challenges x100" for a single 100 XP completion.
-    this.counts.set('challenge', this.deps.tracker.awardsThisMatch.length);
 
     /**
      * The floor, and the completion condition is where this method is called from (round 5, B6).
@@ -273,9 +120,13 @@ export class MatchProgression {
      * client that left never reaches a path that pays it. The condition is the call site, which
      * is why there is no "did they complete it" flag here to get out of step with a reconnect.
      */
-    this.counts.set('matchTime', matchMinutes(this.ticksPlayed * DT));
-
-    const lines = this.buildLines(won, isMvp, bestStreak);
+    const lines = this.ledger.lines(won, isMvp, this.ledger.secondsPlayed, {
+      // The challenge row counts *challenges*, not XP: its total is the sum of what each one
+      // awarded. Storing the XP as the count printed "Challenges x100" for a single completion.
+      challenges: this.deps.tracker.awardsThisMatch.length,
+      challengeXp: this.deps.tracker.xpThisMatch,
+      weaponLevels: weaponLevelUps.length,
+    });
     const total = this.totalFrom(lines);
 
     const xpBefore = profile.xp;
@@ -301,97 +152,15 @@ export class MatchProgression {
   }
 
   dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+    this.ledger.dispose();
   }
 
   // -- internals --------------------------------------------------------------
 
-  private onKilled(sourceId: number, targetId: number, weaponId: string, zone: HitZone): void {
-    if (targetId === PLAYER_ENTITY_ID) {
-      // Remember who did it, so PAYBACK can be a real challenge rather than a flavour text.
-      this.lastKilledBy = sourceId;
-      this.killsThisMag = 0;
-      return;
-    }
-    if (sourceId !== PLAYER_ENTITY_ID) return;
-
-    const fact = this.buildKillFact(targetId, weaponId, zone);
-    this.bump('kill', 1);
-    if (fact.headshot) this.bump('headshot', 1);
-    if (fact.distance >= LONGSHOT_METRES) this.bump('longshot', 1);
-
-    const tally = this.tally(fact.weaponId);
-    tally.kills++;
-    if (fact.headshot) tally.headshots++;
-    if (fact.distance >= LONGSHOT_METRES) tally.longshots++;
-    if (fact.killsThisMag === 2) tally.multikills++;
-
-    // Per-weapon XP is a fraction of what this kill paid the account, so a weapon can
-    // never level from something the player was not rewarded for.
-    const killXp =
-      xpSource('kill').value +
-      (fact.headshot ? xpSource('headshot').value : 0) +
-      (fact.distance >= LONGSHOT_METRES ? xpSource('longshot').value : 0);
-    tally.xp += killXp * WEAPON_XP_FRACTION;
-
-    this.deps.tracker.onKill(fact);
-  }
-
-  private buildKillFact(targetId: number, weaponId: string, zone: HitZone): KillFact {
-    const equipment = weaponId.startsWith(EQUIPMENT_WEAPON_PREFIX);
-    // A grenade kill is attributed to the grenade, not to whatever was in your hands.
-    const resolvedId = equipment ? weaponId : this.heldWeaponId || weaponId;
-    const def = WEAPON_DEFS[resolvedId];
-
-    if (!equipment) this.killsThisMag++;
-    this.killTicks[this.killRingHead] = this.tick;
-    this.killRingHead = (this.killRingHead + 1) % KILL_RING;
-
-    const windowTicks = MULTIKILL_WINDOW / DT;
-    let killsInWindow = 0;
-    for (const t of this.killTicks) {
-      if (this.tick - t <= windowTicks) killsInWindow++;
-    }
-
-    const distance = this.lastDamageTarget === targetId ? this.lastDamageDistance : 0;
-    const streak = this.deps.score.row(PLAYER_ENTITY_ID)?.streak ?? 0;
-
-    return {
-      weaponId: resolvedId,
-      weaponClass: equipment ? 'LAUNCHER' : (def?.class ?? this.heldWeaponClass),
-      zone,
-      headshot: zone === 'head',
-      distance,
-      ads: this.adsFraction > 0.5,
-      // A kill in the beat after a slide still reads as a slide kill to the player, which
-      // is what the challenge is about — the shot is fired before the stance has settled.
-      sliding: this.sliding || this.sinceSlide <= SLIDE_KILL_GRACE,
-      airborne: this.airborne,
-      equipment,
-      killsThisMag: equipment ? 0 : this.killsThisMag,
-      killsInWindow,
-      streak,
-      revenge: targetId === this.lastKilledBy,
-    };
-  }
-
-  private bump(id: XpSourceId, by: number): void {
-    this.counts.set(id, (this.counts.get(id) ?? 0) + by);
-  }
-
-  private tally(weaponId: string): WeaponTally {
-    const existing = this.weaponTallies.get(weaponId);
-    if (existing !== undefined) return existing;
-    const fresh = makeTally();
-    this.weaponTallies.set(weaponId, fresh);
-    return fresh;
-  }
-
   /** Fold the per-weapon deltas into the save. Returns weapons that gained a level. */
   private applyWeaponTallies(): string[] {
     const levelled: string[] = [];
-    for (const [id, tally] of this.weaponTallies) {
+    for (const [id, tally] of this.ledger.weaponTallies) {
       // Grenades have a `WeaponDef`-shaped damage profile but are not weapons anybody
       // levels; they have no entry in the registry and must not create one.
       if (WEAPON_DEFS[id] === undefined) continue;
@@ -412,30 +181,6 @@ export class MatchProgression {
     this.deps.tracker.refreshAbsolute();
     this.deps.profile.refreshUnlocks();
     return levelled;
-  }
-
-  private buildLines(won: boolean, isMvp: boolean, bestStreak: number): XpLines {
-    const out: XpLine[] = [];
-    for (const source of XP_SOURCES) {
-      // The floor is the head of the list rather than one more row the loop might drop, and
-      // that is what makes `XpLines` non-empty without the renderer having to check.
-      if (source.id === 'matchComplete') continue;
-      let count = this.counts.get(source.id) ?? 0;
-      if (source.id === 'win') count = won ? 1 : 0;
-      if (source.id === 'mvp') count = isMvp ? 1 : 0;
-      if (source.id === 'streak') count = bestStreak;
-      if (count <= 0) continue;
-      // A challenge carries its own award, so the row's total is the sum of what completed
-      // rather than `count x value` — the one source in the table whose XP is data.
-      const xp =
-        source.id === 'challenge'
-          ? this.deps.tracker.xpThisMatch
-          : source.kind === 'flat'
-            ? source.value
-            : count * source.value;
-      out.push({ id: source.id, label: source.label, count, xp, kind: source.kind });
-    }
-    return [matchFloorLine(), ...out];
   }
 
   private totalFrom(lines: readonly XpLine[]): number {

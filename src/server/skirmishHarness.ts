@@ -15,6 +15,8 @@ import { isArenaInstance, votePhaseName, type NetLoadout } from '../shared/net/S
 import { STREAK_DEFS, type StreakId } from '../shared/streaks/StreakDefs';
 import type { StreakEconomyReport } from '../shared/streaks/StreakLedger';
 import type { SentryTally } from '../shared/streaks/SentryGun';
+import type { ReplicatedScoreRow } from '../shared/combat/ScoreSystem';
+import { InstanceState } from '../shared/net/Skirmish';
 import type { LifeStockReport } from '../shared/equipment/LifeStockAudit';
 import { loadConfig, usesShortenedTimings, type ServerConfig } from './Config';
 import { HeadlessClient, type HeadlessClientReport, type SeatSnapshot } from './debug/HeadlessClient';
@@ -477,6 +479,21 @@ interface ReturnCycle {
   readonly serverAtDrop: TeamScores | null;
   readonly serverAtReturn: TeamScores | null;
   readonly sawTheScore: boolean;
+  /**
+   * The board the returning client was handed (M13 Phase B, bug 4.3).
+   *
+   * Rows it carried against the rows the instance held at the return, and the kills on the
+   * client's own row against the row it left with. `sawTheBoard` is the assertion: a returning
+   * client's first board has its own row on it with at least the kills it left with — which is
+   * the "returning player sees zeros for everybody" half of 4.3, measured on the client rather
+   * than inferred from the server.
+   */
+  readonly boardRowsOnReturn: number;
+  readonly serverRowsAtReturn: number;
+  readonly boardOwnKillsOnReturn: number;
+  readonly sawTheBoard: boolean;
+  /** Rows on the instance carrying this client's name at the return. Two is bug 4.3. */
+  readonly rowsWithMyName: number;
 }
 
 /** What one named client was told. Keyed by name because a cycle records the name, not the report. */
@@ -566,14 +583,28 @@ function closeReturnCycle(
     before.entityId === after.entityId &&
     before.matchId === after.matchId &&
     before.team === after.team;
+  /**
+   * The row came back — on **whichever entity** the client returned as (M13 Phase B).
+   *
+   * Inside the grace the entity is the same and this is F8's assertion unchanged. Past it the
+   * client is a new entity and the row is *adopted* onto it, so the same inequality holds on a
+   * different id: nothing on the row went backwards, and it is on the seat the player now holds.
+   */
   const keptScore =
     scoreBefore !== null &&
     scoreAfter !== null &&
-    scoreAfter.entityId === scoreBefore.entityId &&
     scoreAfter.kills >= scoreBefore.kills &&
     scoreAfter.deaths >= scoreBefore.deaths &&
     scoreAfter.score >= scoreBefore.score &&
     scoreAfter.shotsFired >= scoreBefore.shotsFired;
+  const board = report.boardOnReturn;
+  const serverRowsAtReturn = instance === null ? -1 : instance.match.score.rows.length;
+  const sawTheBoard =
+    board !== null && board.ownRow && scoreBefore !== null && board.ownKills >= scoreBefore.kills;
+  const rowsWithMyName =
+    instance === null
+      ? -1
+      : instance.match.score.rows.filter((r) => r.displayName === report.name).length;
   return {
     client: report.name,
     entityBefore: before?.entityId ?? -1,
@@ -591,6 +622,11 @@ function closeReturnCycle(
     serverAtDrop: teamAtDrop,
     serverAtReturn: teamAtReturn,
     sawTheScore,
+    boardRowsOnReturn: board?.rows ?? -1,
+    serverRowsAtReturn,
+    boardOwnKillsOnReturn: board?.ownKills ?? -1,
+    sawTheBoard,
+    rowsWithMyName,
   };
 }
 
@@ -681,6 +717,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let observedSentries: SentryTally | null = null;
   /** Which mode the live match was, for the assertions that only hold in one of them. */
   let observedModeId = '';
+  /** The live match's rows once it had ended — frozen, so the last sample is the fact (M13 B). */
+  let observedFinalRows: readonly ReplicatedScoreRow[] | null = null;
   /** When the streak wallet was last topped up, and how many times. See the grant below. */
   let grantedAtMs = 0;
   let grants = 0;
@@ -904,6 +942,18 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       }
     }
 
+    /**
+     * The final board, off the server, during the hold (M13 Phase B, bug 4.3).
+     *
+     * `ENDED` rather than `RUNNING`: the rows stop moving at the win condition and the instance
+     * lives on through the summary hold, so every sample in that window reads the same frozen
+     * set. Copied rather than referenced, because the instance is destroyed before the report.
+     */
+    const ended = server.instances[1];
+    if (ended !== undefined && ended.state === InstanceState.ENDED) {
+      observedFinalRows = ended.match.score.rows.map((r) => ({ ...r }));
+    }
+
     // The other half of the `--abandon` probe: how long the server took to release the slot.
     if (abandonedAtMs > 0 && abandonedFreedMs === 0 && server.liveMatch === null) {
       abandonedFreedMs = nowMs();
@@ -982,6 +1032,7 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     blockedDamage: observedBlockedDamage,
     sentries: observedSentries,
     liveModeId: observedModeId,
+    finalRows: observedFinalRows,
     grants,
     returnCycles,
   });
@@ -1179,6 +1230,8 @@ interface FlowReportInput {
   readonly sentries: SentryTally | null;
   /** The live match's mode id, or empty when none was observed running. */
   readonly liveModeId: string;
+  /** The live match's rows at its end, or null when no match ended (M13 Phase B). */
+  readonly finalRows: readonly ReplicatedScoreRow[] | null;
   /** How many times `--grant-streak` topped the wallets up. Zero without the flag. */
   readonly grants: number;
   /**
@@ -1654,6 +1707,7 @@ function reportFlow(input: FlowReportInput): number {
   }
 
   problems.push(...reportHostility(input));
+  problems.push(...reportScoreboard(input));
 
   /**
    * Reconnect and join-in-progress (playtest round 4, F8).
@@ -1738,10 +1792,33 @@ function reportFlow(input: FlowReportInput): number {
           'back — a returning player was given a new entity, in a new instance, or on a new side (F8)',
       );
     }
-    if (!graceExpired && keptScore < cycles.length) {
+    /**
+     * The row comes back in **both** cases now (M13 Phase B, bug 4.3).
+     *
+     * Inside the grace it always did — same entity, same row. Past it the returning player is a
+     * new entity and used to open a second row with the same name while the first stood there
+     * with their kills, attributed to nobody. The row is adopted onto the new seat instead, so
+     * the assertion is the same inequality on whichever entity they came back as — and a second
+     * row with their name on the instance is the old bug, counted.
+     */
+    if (keptScore < cycles.length) {
       problems.push(
         `${cycles.length - keptScore} of ${cycles.length} reconnect(s) lost their scoreboard ` +
-          'row — the kills they earned are on the board without them (F8)',
+          'row — the kills they earned are on the board without them (F8, 4.3)',
+      );
+    }
+    const duplicated = cycles.filter((c) => c.rowsWithMyName > 1).length;
+    if (duplicated > 0) {
+      problems.push(
+        `${duplicated} of ${cycles.length} reconnect(s) left two rows with the returning ` +
+          "player's name on the instance — the old row was not adopted (4.3)",
+      );
+    }
+    const sawBoard = cycles.filter((c) => c.sawTheBoard).length;
+    if (sawBoard < cycles.length) {
+      problems.push(
+        `${cycles.length - sawBoard} of ${cycles.length} returning client(s) did not receive a ` +
+          'board with their own row and their own kills on it (4.3)',
       );
     }
     if (resynced < cycles.length) {
@@ -1808,7 +1885,10 @@ function reportFlow(input: FlowReportInput): number {
           `${c.keptScore ? '' : '  SCORE LOST'}` +
           `; team ${describeTeamScores(c.serverAtDrop)} at drop -> rendered ` +
           `${describeTeamScores(c.renderedOnReturn)} -> ${describeTeamScores(c.serverAtReturn)} ` +
-          `on the instance${c.sawTheScore ? '' : '  TEAM SCORE LOST'}`,
+          `on the instance${c.sawTheScore ? '' : '  TEAM SCORE LOST'}` +
+          `; board on return ${c.boardRowsOnReturn} row(s) against ${c.serverRowsAtReturn} on the ` +
+          `instance, own kills ${c.boardOwnKillsOnReturn}${c.sawTheBoard ? '' : '  BOARD LOST'}` +
+          `, ${c.rowsWithMyName} row(s) with my name${c.rowsWithMyName > 1 ? '  DUPLICATE ROW' : ''}`,
       );
     }
   } else if (opts.dropReturn === 0) {
@@ -2025,6 +2105,70 @@ function harnessConfig(opts: HarnessOptions): ServerConfig {
 }
 
 /**
+ * The scoreboard as state, measured (M13 Phase B, bug 4.3).
+ *
+ * The invariant is *rows on every client === rows on the server*, and it is asserted where it
+ * can be exact: at the **end**, when the server's rows have stopped moving and every client has
+ * had the summary hold to receive its last board. Same ids, same kills, deaths, assists and
+ * score per id, per client; the count of rows compared is printed beside the mismatches so a
+ * comparison of two empty sets cannot read as agreement.
+ *
+ * Also counted: how many boards each client received at all, because a client that agrees with
+ * the server having received nothing is a client whose replica was never written.
+ */
+function reportScoreboard(input: FlowReportInput): string[] {
+  const problems: string[] = [];
+  const { reports, finalRows } = input;
+  const frames = reports.map((r) => r.scoreboardFrames);
+  if (finalRows === null) {
+    log.warn('scoreboard: NOT SAMPLED — no match ended in this run, so the final rows were never read.');
+    return problems;
+  }
+  let compared = 0;
+  let mismatched = 0;
+  const detail: string[] = [];
+  for (const r of reports) {
+    if (r.summaries === 0) continue;
+    const mine = new Map(r.scoreboardRows.map((row) => [row.entityId, row]));
+    let bad = 0;
+    for (const s of finalRows) {
+      compared++;
+      const m = mine.get(s.entityId);
+      if (
+        m === undefined || m.kills !== s.kills || m.deaths !== s.deaths || m.assists !== s.assists ||
+        m.score !== s.score || m.displayName !== s.displayName || m.team !== s.team
+      ) {
+        bad++;
+      }
+    }
+    // Rows the client holds that the server does not are the other half of "absent is removed".
+    for (const m of r.scoreboardRows) {
+      if (!finalRows.some((s) => s.entityId === m.entityId)) {
+        compared++;
+        bad++;
+      }
+    }
+    mismatched += bad;
+    detail.push(`${r.name} ${r.scoreboardRows.length} row(s) over ${r.scoreboardFrames} board(s), ${bad} off`);
+    if (r.scoreboardFrames === 0) {
+      problems.push(`${r.name} received no scoreboard at all — the replica was never written (4.3)`);
+    }
+  }
+  log.info(
+    `scoreboard: server ended with ${finalRows.length} row(s); ${compared} row(s) compared across ` +
+      `${detail.length} client(s), ${mismatched} mismatch(es) (must be 0); ` +
+      `boards received ${frames.join('/')}; ${detail.join('; ')}`,
+  );
+  if (mismatched > 0) {
+    problems.push(`${mismatched} of ${compared} scoreboard row(s) on clients disagree with the server's final rows (4.3)`);
+  }
+  if (compared === 0) {
+    log.warn('scoreboard: 0 rows compared — the invariant was NOT EXERCISED.');
+  }
+  return problems;
+}
+
+/**
  * One hostility predicate, measured (M13 Phase A).
  *
  * Two facts, both taken off the server while the live match ran and both printed with their
@@ -2037,9 +2181,10 @@ function harnessConfig(opts: HarnessOptions): ServerConfig {
  *   that the number moved off zero. Asserted only with `--wallet-streak sentry` on an FFA run,
  *   because that is the run that arranges a sentry; without it the tally is a report.
  * - **The summary names one winner.** Over the wire `winnerEntityId` is the individual FFA
- *   crowned, and each client's headline is `personalOutcome` over the summary's rows: at most
- *   one client says VICTORY, everybody else says a place, and every client names the same
- *   winner. Before this every client on the winner's substrate side said VICTORY (bug 4.4).
+ *   crowned, and each client's headline is `personalOutcome` over the summary's rows: in FFA
+ *   at most one client says VICTORY and everybody else says a place; in every mode every
+ *   client names the same winner. Before this every client on the winner's substrate side said
+ *   VICTORY (bug 4.4).
  *
  * A red control was run on the tree before the predicate landed and read `kills > 0,
  * killsOnOwnSubstrate === 0`, which is what makes the second line a probe rather than a guard.
@@ -2089,8 +2234,11 @@ function reportHostility(input: FlowReportInput): string[] {
     if (winners.size !== 1) {
       problems.push(`the summary named ${winners.size} different winners across clients: ${[...winners].join(', ')}`);
     }
-    if (victors.length > 1) {
-      problems.push(`${victors.length} clients read VICTORY from one summary (bug 4.4)`);
+    // Only where the mode crowns an individual: two team-mates on the winning side of a TDM
+    // both read VICTORY, correctly. Phase A asserted this unconditionally and was saved by
+    // seating luck until the first run that put two clients on the winning team.
+    if (ffa && victors.length > 1) {
+      problems.push(`${victors.length} clients read VICTORY from one FFA summary (bug 4.4)`);
     }
     if (ffa) {
       const drawn = held.every((r) => r.summaryOutcome === 'DRAW');

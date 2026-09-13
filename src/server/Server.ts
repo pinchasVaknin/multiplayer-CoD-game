@@ -340,7 +340,10 @@ export class Server {
     const joinInProgress = live !== null && live.state === InstanceState.RUNNING;
     const destination: MatchInstance = joinInProgress && live !== null ? live : this.warmup;
 
-    const player = destination.seat(session, session.loadout);
+    // The claim goes in with the seat even though it opened nothing (M13 Phase B): past the
+    // grace it is still the token the live match recorded against this player's row, and the
+    // row follows them. The arena ignores it.
+    const player = destination.seat(session, session.loadout, null, claim);
     if (player === null) {
       /**
        * The live match refused, so fall back to the arena rather than the connection.
@@ -436,10 +439,12 @@ export class Server {
       return { seat: null, notice: 'That match has finished — you are in the arena.' };
     }
 
-    const player = live.seat(session, held.loadout ?? session.loadout, {
-      entityId: held.entityId,
-      team: held.team,
-    });
+    const player = live.seat(
+      session,
+      held.loadout ?? session.loadout,
+      { entityId: held.entityId, team: held.team },
+      claim,
+    );
     if (player === null) {
       return { seat: null, notice: 'Your seat could not be restored — back to the arena.' };
     }
@@ -1149,9 +1154,9 @@ export class Server {
   private finishLive(instance: LiveMatch, tickIndex: number): void {
     if (!instance.summaryAlreadySent) {
       const summary = instance.buildSummary();
-      // Per-session encode, for the reason `Session.sendPrepare` documents at length: one
-      // shared writer hands out several views of the same buffer.
-      for (const seat of instance.sessions) seat.session.sendSummary(summary);
+      // Per seat, not broadcast (M13 Phase B, bug 4.2): the rows are everybody's, the XP lines
+      // are the recipient's own ledger with the win and the MVP decided for that entity.
+      for (const seat of instance.sessions) seat.session.sendSummary(instance.buildSummaryFor(seat));
       /**
        * Start the arena's background build now, with the summary (playtest round 5, F13).
        *

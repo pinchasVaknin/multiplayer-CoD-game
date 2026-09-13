@@ -17,6 +17,16 @@
 /**
  * Bump on any layout change to any message in this file.
  *
+ * v17 (M13 Phase B, bug 4.3): the **scoreboard is state** — `MsgS.Scoreboard`, the whole row
+ * set, sent to a seat when it is seated and whenever the set has changed since that seat last
+ * saw it, rate-limited and with a periodic full resend under loss.
+ *
+ * A client's board was built out of replicated events, so a player who joined or returned
+ * mid-match read zeros for everybody and a player who returned after the grace stood beside
+ * their own old row. The set on the wire *is* the authority: a row it carries is upserted, a
+ * row it does not is removed. Every column the modes can draw rides it, so the accuracy and
+ * damage figures a client used to derive from `FiredEvent` are the server's too.
+ *
  * v16 (M13 Phase A, bug 4.4): `MsgS.Summary` carries the **winning entity** beside the winning
  * side.
  *
@@ -123,7 +133,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'
@@ -276,6 +286,16 @@ export const MsgS = {
    * without waiting for a snapshot tick it may not receive while paused.
    */
   Cheats: 145,
+  /**
+   * The scoreboard, as state (M13 Phase B, bug 4.3).
+   *
+   * The full row set with a serial. Not delta-encoded: the set is bounded at `MAX_SCORE_ROWS`
+   * rows of ~30 bytes, which is smaller than one full snapshot, and a delta scheme needs the ack
+   * ring the snapshot has — so instead the server sends it only when it has changed since this
+   * seat last received it, no more than four times a second, and once every two seconds
+   * regardless so a frame lost under `--net bad` is corrected without an ack.
+   */
+  Scoreboard: 146,
 } as const;
 
 export type MsgCId = (typeof MsgC)[keyof typeof MsgC];

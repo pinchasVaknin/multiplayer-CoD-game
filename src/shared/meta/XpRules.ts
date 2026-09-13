@@ -112,6 +112,22 @@ export function xpSource(id: XpSourceId): XpSource {
 }
 
 /**
+ * A source as its index in `XP_SOURCES`, and back (M13 Phase B).
+ *
+ * The wire names an XP row by this byte rather than by a label: both runtimes compile the
+ * table in the same order, so the index is identity, and a label would be a second spelling of
+ * a string the table already owns. Same reasoning as `streakKindIndex`.
+ */
+export function xpSourceIndex(id: XpSourceId): number {
+  const at = XP_SOURCES.findIndex((s) => s.id === id);
+  return at < 0 ? 0 : at;
+}
+
+export function xpSourceAt(index: number): XpSource | undefined {
+  return XP_SOURCES[index];
+}
+
+/**
  * `challenge` is the one row whose value is not fixed: a challenge carries its own XP
  * award, so the tally accumulates the awarded totals and the row's `value` of 1 makes the
  * multiplication a no-op. Recorded here rather than special-cased at the call site.

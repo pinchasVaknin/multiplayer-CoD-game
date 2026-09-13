@@ -13510,6 +13510,112 @@ built in `modes/MatchOutcome` — and `mvp` is `rows[0].entityId === recipient`.
 half: the same event sequence through a server ledger and a solo ledger must produce the same
 lines. Size **M–L** for the pair; the scoreboard first, because the XP lines want its rows.
 
+## Phase B — done (session of 2026-09-14): the board is state, and the XP is the seat's own
+
+Built to the brief above and to Phase A's hand-off. Two facts moved to the server; each one's
+readers were found by the grep the standing lesson names; the reconnect harness ran red before
+the adoption landed and green after; the numbers are under "Measured".
+
+### Bug 4.3 — the scoreboard as replicated state
+
+- **`MsgS.Scoreboard` (protocol v17).** The whole row set with `ScoreSystem.serial`, every
+  column the modes can draw (`ReplicatedScoreRow`, pinned in `check-cosmetics` under §4.15's
+  "scores" row beside the snapshot's fields). **Not delta-encoded**, and that is a departure from
+  the plan's "like the snapshot", stated: the set is bounded at 24 rows of ~30 bytes, which is
+  smaller than one full snapshot, and a delta scheme needs the ack ring the snapshot has. Instead
+  `MatchInstance.sendScoreboard` sends a seat the board when the serial differs from the one that
+  seat last received, no more than four times a second, and every two seconds regardless — so a
+  frame lost under `--net bad` is corrected without an ack. A fresh seat starts at serial −1 and
+  gets the whole board on its first snapshot tick, which is the "returning client reads zeros for
+  everybody" half of 4.3. Measured: ~500 boards per client over a 150 s match, i.e. the rate
+  limit, not the snapshot cadence.
+- **The set is the authority.** `ScoreSystem.applyReplicated` upserts what the wire carries and
+  removes what it does not, in place — the row object a `Scoreboard` slot bound stays the object
+  it updates. A networked `ScoreSystem` is constructed `authoritative: false` and makes none of
+  its bus subscriptions, and `MatchFlow`'s replicated branch no longer records kills at zero
+  points: a replica that also counted for itself would hold two answers and flicker between
+  them. `NetSession.onRosterEntry` — the per-frame registration from snapshot bodies — is gone.
+- **Rows follow seats.** `ServerMatch.removeBotForSeat` removes the replaced bot's row
+  (`ScoreSystem.remove`); a leaver's row is kept, as `removePlayer` always intended. Phase A's
+  blank-row stopgap in `LiveMatch.buildSummary` is retired — the summary rows are the board.
+- **A return adopts its row.** Inside the grace nothing changed: the same entity, the same row.
+  Past it, `LiveMatch.rowOwners` maps the reconnect token a lost seat carried to that seat's
+  entity, and a join-in-progress presenting an expired claim (`Server.onJoin` now passes the
+  claim into `seat`) has the old row re-keyed onto the new entity by `ScoreSystem.adopt` —
+  counters and name kept, id and side the new seat's, team totals untouched because they were
+  credited when the kills happened. `adopt` replaces the blank row `addPlayer` just registered
+  and keeps any non-blank one. F8's post-grace semantics are unchanged: the seat is *not*
+  reclaimed, the player is told, and the harness still asserts both.
+
+### Bug 4.2 — XP per seat, from the seat's own ledger
+
+- **`shared/meta/MatchLedger`** is the counting half of `MatchProgression`, lifted out and keyed
+  to any entity: the six subscriptions, the per-tick sample, the described `KillFact`, the
+  per-weapon tallies, and `lines(won, isMvp, seconds, extras)`. `MatchProgression` composes one
+  for entity 0 with the two things only a client has — the challenge tracker (fed through
+  `onKill` / `onFlash`) and the profile — and banks as before. One counting, two runtimes.
+- **`LiveMatch` keeps one ledger per human ever seated**, created with the seat, kept for the
+  match (a reclaim finds it; a post-grace adoption re-keys it beside the row), disposed with the
+  instance — `npm run leak` stays at 29 → 29 subscriptions. `buildSummaryFor(seat)` is the common
+  summary plus that seat's lines, with `won` from `wonBy` (Phase A's reader; `WinnerFacts` so the
+  server's result fits) and `mvp` from `isMvp` — lifted from `MatchMeta` into `MatchOutcome`,
+  strict top score, ties to nobody, and the client now calls the same function. `Server` sends
+  the summary per seat. The old `buildXpLines` — WIN BONUS and TOP OPERATOR to everybody — is
+  gone.
+- **The wire names a row by its `XP_SOURCES` index** (`SummaryXpLine { source, count, amount }`)
+  rather than by a label: both sides compile the table, the client rebuilds a full `XpLine`
+  from one byte, and the summary panel can draw `x7`. A byte outside the table is dropped rather
+  than drawn as something it is not.
+- **Objectives pay now, in both runtimes.** `noteObjective` had no caller since M6, so
+  Domination's 200 per capture was a row in the table nothing ever produced. `lines` reads the
+  seat's five objective columns off its score row — the same row the modes credit through
+  `recordObjective` — beside assists and the best streak, which it always read there.
+- **`MatchXpAudit`'s second half.** One scripted fight — a longshot headshot, a damaged victim a
+  team-mate finishes, a death — through a solo `MatchProgression` (entity 0, sampled for four
+  minutes) and through a server-shaped `MatchLedger` (entity 7, nothing sampled, the match's
+  length passed in). Nine rows, identical: `Match complete 500, Time played x4 100, Kills x1 100,
+  Headshots x1 25, Assists x1 50, Longshots x1 30, Match win x1 500, MVP x1 300, Best streak x1
+  25`. The solo side also completed a challenge (100 XP); it is excluded by id and printed as
+  such. `ReplicatedScoreAudit` grew a replica half for the same reason — `applyReplicated` has
+  one caller, in the browser, which no harness runs: a board of four, six replicated kills that
+  must not move a row, a board of three with one row gone and one row's kills up, applied in
+  place.
+
+### The instrument
+
+`skirmishHarness` samples the live match's rows once it is `ENDED` — frozen, through the hold —
+and compares every client's last board received *in the live match* (the arena's board is empty
+by design, F7, and the first version of this compared against it and read 30 mismatches out of
+30) against them: same ids, same kills, deaths, assists, score, name, side, per client, counted.
+Each return cycle records the first board the returning client was handed — rows against the
+instance's, kills on its own row against the row it left with — and counts rows carrying its
+name on the instance; `keptScore` is asserted in **both** grace cases now, on whichever entity
+the player came back as. `HeadlessClient` reads `MsgS.Scoreboard` and derives its XP labels from
+the table.
+
+One Phase A assertion was wrong and this phase's `--net bad` run found it: "at most one VICTORY
+per summary" is a Free-for-All rule, and two team-mates on the winning side of a TDM both read
+VICTORY correctly. Scoped to FFA.
+
+### Found while here, not fixed
+
+- **A sentry's kills are credited to nobody.** `SentryGun` fires as its own entity (900+) so it
+  can be shot down and never shoots itself; the chopper and the mortar fire as their owner.
+  `ScoreSystem.recordKill` finds no row for 900 and the kill is on the feed and nowhere else — the
+  FFA run's 13 sentry kills moved no row and paid no XP. A design question rather than a bug in
+  this phase's scope (decision 8 below).
+- `MatchHud.ts:282` and `:347` still compare `entityId === 0` (Phase A's finding).
+- The skirmish harness's *"background build: the return to the arena was NOT EXERCISED"* line
+  still prints on runs where every client migrated back (Phase A's finding).
+
+### Human playtest, when Phase B is closed
+
+Seen in the pane against a local dedicated server (below): the live board with the server's
+rows, and the summary. What needs a display: the board's rows *not* jumping between two answers
+during a firefight (the flicker a self-counting replica would have shown); a friend dropping past
+thirty seconds and returning to find their own name once, with their kills; and the XP panel
+drawing `Kills x7` rather than one flat line.
+
 ## Phase C — the body: the hitbox against the animation, then the markers
 
 ### C1 — measure before deciding (S)
@@ -13689,6 +13795,7 @@ viewmodel already owns rather than a new one.
 | 5 | Which of the new clips exist — slide, throw, reload, melee, flinch, more deaths? | Run `animation-manifest` over `incoming/` first; the answer sizes Phase D and decides whether v13 is needed |
 | 6 | Scoreboard rows: keep a departed player's row for the match, or drop it at unseat? | Keep it for the match, keyed by reconnect token; drop only when the match ends |
 | 7 | Free-for-All spectating: `SpectatorTarget.isWatchable` shows a dead player same-side bodies only, which in FFA is half the lobby. Anyone, or leave it? | Anyone — there are no team-mates to protect, and the reference games spectate the killer. One `isHostile`-shaped change in `shared/modes/SpectatorTarget.ts` plus its harness invariant ("never an enemy") rewritten for FFA |
+| 8 | A sentry's kills: credited to its owner (as the chopper's and the mortar's are), or to nobody (as today)? | The owner. `SentryGun` fires as its own entity so it can be shot down; the credit is a second question. `ScoreSystem.recordKill` could resolve a streak entity to its owner through `StreakSystem`, or the sentry's `DamageRequest.sourceId` could be the owner with the rig excluded from its own trace by id. The first keeps "who shot" honest on the feed; the human picks |
 
 ## Measured, this session
 
@@ -13740,6 +13847,49 @@ Every skirmish line below is `MATCH_ROUND_SECONDS=150 npm run skirmish -- --vote
   **15TH** — fits at all six viewports (content 753×644 at 1366; 343×717 at 375). **`npm run
   check`** green; 330 files, 19 snapshot fields.
 
+### Phase B (2026-09-14)
+
+Every skirmish line is at `MATCH_ROUND_SECONDS=150`, three clients, one cycle, Foundry —
+**timings shortened** on the round so the summary is reached; structural results only.
+
+- **The board, TDM, two in-grace returns** (`--vote 0 --drop-return 2`): server ended with 10
+  rows; **30 rows compared across 3 clients, 0 mismatches**; boards received 521 / 528 / 528
+  over the match (≈3.5 Hz — the rate limit, not the 20 Hz snapshot cadence). Return:
+  `e1 0k/1d → e1 0k/1d`, board on return 10 rows against 10 on the instance, one row with the
+  client's name. XP per seat: OP2 on the winning side `MATCH COMPLETE 500, TIME PLAYED x2 50,
+  MATCH WIN 500` = 1050; OP1 and OP3 `550`. Nobody was paid a `TOP OPERATOR`.
+- **Past the grace** (`--drop-return 1 --drop-hold 40000`): `OP1 (player 1) came back for entity
+  1 after the grace had expired — they join as a new player` … `entity 1's row and ledger now
+  belong to entity 4`. Cycle: `e1 0k/1d → e4 0k/1d`, **seat lost (as required), told, joined the
+  running match, 1 row with my name, board on return 10/10**. 30 rows, 0 mismatches. PASSED.
+- **Red control** (the adoption call disabled): server ended with **11** rows; `e1 0k/1d → e4
+  0k/0d SCORE LOST`, **2 rows with my name — DUPLICATE ROW**. FLOW CHECK FAILED on both lines;
+  the replica still agreed with the server (33/33), as it should. Restored.
+- **Loss on every link** (`--net bad`, +100 ms ±30 ms, 2 % loss, one in-grace return): 30 rows,
+  0 mismatches; boards received 481 / 494 / 494 (the keepalive filling in behind the drops);
+  resync 217 ms. This run is what found the Phase A assertion that two team-mates cannot both
+  read VICTORY.
+- **FFA with sentries** (`--vote 3 --wallet-streak sentry`): **8 rows, no stopgap** — the
+  replaced bots' rows are gone at replacement; places **6TH / 7TH / 8TH of 8**, winner `PENNANT`
+  on every client; sentries 3 placed, 79/216 (36.6 %), 13 kills, **7 on own side**. 24 rows, 0
+  mismatches. PASSED.
+- **`MatchXpAudit`, second half:** nine rows identical between the solo progression and the
+  server ledger (`Match complete 500, Time played x4 100, Kills x1 100, Headshots x1 25, Assists
+  x1 50, Longshots x1 30, Match win x1 500, MVP x1 300, Best streak x1 25`); one save-only row
+  (`Challenges x1 100`) excluded and printed. `ReplicatedScoreAudit` replica half: 4 rows → 4
+  rows after six replicated kills (OP1 still `3k/9sh`) → 3 rows, `BOT-B removed, OP1 7k, row
+  object kept`.
+- **The browser, against a local dedicated server** (`?server=127.0.0.1:8181`, the pane's rAF
+  suspended, the game's own hidden-tab pump armed): joined the live match with **10 rows** in a
+  replica constructed `authoritative: false`; mid-match the Tab board read the server's rows —
+  `VULTURE A 1/2/100 acc 5/9 dmg 170` drawn as `56%` — with the local row flagged; at the end the
+  summary read `DEFEAT · Time limit · 12 — 25` over 10 rows and the XP panel `Match complete
+  +500, Time played x2 +50, +550 XP`, decoded from the table by index.
+- **Determinism:** `npm run harness` (TDM ×5) and FFA headless (seed 7 ×3) **bit-identical to
+  the Phase A tree** — no headless match seats a human, so nothing here reaches the sim.
+  `npm run leak`: 29 → 29 subscriptions over 100 cycles, heap +0.69 MiB. `npm run check` green:
+  19 snapshot fields and 18 scoreboard-row fields pinned.
+
 ## Needs a browser
 
 The Browser pane in this session ran with `requestAnimationFrame` suspended; everything above
@@ -13756,24 +13906,25 @@ the announcer saying "victory" to exactly one player at the end of a networked F
 summary screen *was* seen — `/probes/layout.html?show=summary/ffa` — and reads **15TH · ALLY-003
 WINS · KILL LIMIT · 30 — 27** over one sixteen-row ladder headed OPERATORS.
 
-## How to start — the Phase B brief
+**From Phase B:** the live board and the summary *were* seen in the pane against a local
+dedicated server (Measured, above). What needs a display and a second human: the board holding
+still during a firefight rather than flickering between a counted and a replicated answer; a
+friend dropping past thirty seconds and coming back to one row with their name and their kills
+on it; and `Kills x7` on the XP panel after a match where you actually killed seven.
 
-Phase A is built and at its gate (see "Phase A — done" above); the human closes it. The next
-fresh session takes this file and the brief below.
+## How to start — the Phase C1 brief
 
-> **M13 Phase B — the scoreboard and the XP award become replicated facts.** Read PLAN.md
-> "Milestone 13", Phase B, and "Phase A — done" for the tree you inherit (`isHostile`,
-> `MatchOutcome.wonBy`, `SummaryInfo.winnerEntityId`, the blank-row stopgap in
-> `LiveMatch.buildSummary`, the `--wallet-streak` harness flag). Scoreboard first: a
-> `scoreboard` message — the full row set, delta-compressed, on every seat assignment and on
-> change — that *is* the authority: a row absent from it is removed; on the server a row outlives
-> its seat for the match and is keyed by the reconnect token, so a post-grace return adopts it.
-> Retire the summary's own `rows` and the blank-row stopgap in favour of those rows. Then XP: one
-> `MatchProgression` per seated human on the server; `SummaryInfo` unicast per recipient with
-> `xp` from that ledger, `win` from `wonBy`, `mvp` from the top row; `shared/debug/MatchXpAudit`
-> grows the second half (the same events through a server ledger and a solo ledger produce the
-> same lines). Gate: `npm run check`; `npm run skirmish -- --drop-return 1 --drop-hold 40000`
-> (past the grace) with the invariant *rows on every client === rows on the server*, counted and
-> printed; `--vote 3 --wallet-streak sentry` still green with places of 8; a 0-kill client's XP
-> lines differ from the top human's. Record the numbers under "Measured" in this section. STOP
-> at the gate.
+Phases A and B are built and at their gates (see the two "done" sections above); the human
+closes them. The next fresh session takes this file and the brief below.
+
+> **M13 Phase C1 — measure the body before deciding on it.** Read PLAN.md "Milestone 13",
+> Phase C (C1 first), and the two "done" sections for the tree you inherit. Build a browser probe
+> in the shape of the M13 planning session's verification — drive `game.loop.frame` by hand,
+> place the camera with `__operator.sim()`, sample `mixamorigHead` and `mixamorigSpine1` world Y
+> through each crouch and slide clip — producing one table: **clip × (visual head Y, rig head Y,
+> delta)**, plus crouch-walk against crouch-idle. Stop `BotMesh` scaling to `heightScale` (it is
+> a placeholder). Add the stand → crouch transition as `crouchToStand` at `timeScale = -1` and
+> look at it. Do not change the rig: C2 decides that from the table, and the human picks the
+> slide (decision 2). Gate: `npm run check`; the table recorded under "Measured" with the
+> numbers `HUMANOID_RIG` predicts beside them (1.08 m crouched, 0.54 m sliding); `npm run
+> hashes` unchanged. STOP at the gate.

@@ -635,22 +635,16 @@ export class MatchFlow {
             friendly: killer !== undefined && killer.team === victim.team,
           };
           mode.onKill(ev);
-        } else {
-          /**
-           * Kills, deaths and streaks on a replicated client (M10, playtest round 2).
-           *
-           * The *team* score is replicated in the snapshot header and is the number the HUD
-           * banner and the win condition use. The per-player columns are not on the wire, and
-           * without this the scoreboard showed the right roster with every K/D at zero —
-           * which looks like the scoreboard is broken and is really nobody counting.
-           *
-           * Zero points, deliberately: what a kill is *worth* is a mode decision, the mode is
-           * not running here, and inventing a number would put a per-player score column on
-           * screen that disagrees with the server's. Kills, deaths, assists and streaks are
-           * facts about the kill itself and are the same in both runtimes.
-           */
-          this.deps.score.recordKill(p.sourceId, p.targetId, p.zone === 'head', 0);
         }
+        /**
+         * On a replicated client the kill is **not** recorded here (M13 Phase B, bug 4.3).
+         *
+         * It was, at zero points, from M10 until M13: the per-player columns were not on the
+         * wire and this was the only way a networked board showed anything. They are now —
+         * `MsgS.Scoreboard` carries the server's rows whole — and a client that also counted
+         * kills for itself would hold two answers and flicker between them. Only the feed is
+         * the client's.
+         */
 
         this.killfeed.push(p.sourceId, p.targetId, p.weaponId, p.zone, this.tick);
       }),

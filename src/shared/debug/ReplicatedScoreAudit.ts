@@ -1,5 +1,6 @@
 import { EV, createGameBus } from '../core/Events';
-import { ScoreSystem } from '../combat/ScoreSystem';
+import { LocalIdentity } from '../combat/LocalIdentity';
+import { ScoreSystem, type ReplicatedScoreRow as WireScoreRow } from '../combat/ScoreSystem';
 import { MatchFlow } from '../modes/MatchFlow';
 import { MAPS, MODES, modesForMap } from '../modes/ModeRegistry';
 
@@ -35,6 +36,16 @@ import { MAPS, MODES, modesForMap } from '../modes/ModeRegistry';
  * Pure: a throwaway bus, score and mode per row, nothing subscribed that outlives the call, no
  * clock and no wire. One run is a fact rather than a sample, which is what puts it beside
  * `auditModeBriefs` and `auditRosterDeal` at the top of a harness run rather than inside one.
+ *
+ * ## The rows too (M13 Phase B, bug 4.3)
+ *
+ * Since Phase B a networked client's rows are the server's, delivered whole by
+ * `MsgS.Scoreboard` and applied by `ScoreSystem.applyReplicated`. That path has exactly one
+ * caller — `MatchWorld`, in the browser — which no harness runs, and a shared method with one
+ * caller the harness never invokes is the shape round 5's B7 found broken. So `auditReplica`
+ * drives the replica directly: a board arrives, a smaller board arrives (a row removed), the
+ * replicated kill events that used to build the board arrive — and the rows must be the last
+ * board's, no more and no less, with the row objects the board bound still the same objects.
  */
 
 /** Kills replayed per mode. Enough that a tally which counts anything is visibly non-zero. */
@@ -57,10 +68,100 @@ export interface ReplicatedScoreRow {
   readonly localCopyTracks: boolean;
 }
 
+export interface ReplicaRow {
+  readonly step: string;
+  readonly rows: number;
+  readonly detail: string;
+}
+
 export interface ReplicatedScoreAudit {
   readonly rows: readonly ReplicatedScoreRow[];
+  readonly replica: readonly ReplicaRow[];
   readonly problems: string[];
   readonly kills: number;
+}
+
+function wireRow(entityId: number, name: string, team: 'A' | 'B', kills: number, deaths: number): WireScoreRow {
+  return {
+    entityId, displayName: name, team, kills, deaths, assists: 0, score: kills * 100, streak: 0,
+    bestStreak: kills, shotsFired: kills * 3, shotsHit: kills, damageDealt: kills * 100,
+    headshots: 0, captures: 0, defends: 0, plants: 0, defuses: 0, tags: 0,
+  };
+}
+
+/**
+ * The replica half, driven the way the browser drives it (M13 Phase B).
+ *
+ * Three boards and a burst of events, asserted after each:
+ *
+ *  1. A full board of four lands on an empty replica: four rows, the local one flagged.
+ *  2. The replicated kill events that used to build the board land: the rows must not move,
+ *     because a replica counts nothing for itself — that is `authoritative: false`.
+ *  3. A board of three lands, one row gone and one row's kills up: three rows, the kills
+ *     applied **in place** — the object the first board created is the object the third
+ *     updated, which is what lets `Scoreboard` keep the slot it bound.
+ */
+function auditReplica(problems: string[]): ReplicaRow[] {
+  const out: ReplicaRow[] = [];
+  const bus = createGameBus();
+  const identity = new LocalIdentity();
+  identity.adopt(2);
+  const score = new ScoreSystem(bus, identity, false);
+
+  const first = [
+    wireRow(1, 'OP1', 'A', 3, 1),
+    wireRow(2, 'OP2', 'B', 1, 4),
+    wireRow(100, 'BOT-A', 'A', 5, 2),
+    wireRow(101, 'BOT-B', 'B', 0, 0),
+  ];
+  score.applyReplicated(first);
+  const mine = score.row(2);
+  out.push({ step: 'full board', rows: score.rows.length, detail: `local row ${mine?.isLocal === true ? 'flagged' : 'NOT flagged'}` });
+  if (score.rows.length !== 4) problems.push(`replica: a board of 4 produced ${score.rows.length} row(s)`);
+  if (mine?.isLocal !== true) problems.push('replica: the local seat\'s row is not flagged isLocal');
+
+  // The events a networked client still receives, and used to count. It must not any more.
+  for (let i = 0; i < 6; i++) {
+    bus.emit(EV.DamageDealt, {
+      sourceId: 1, targetId: 101, amount: 100, zone: 'torso', lethal: true, weaponId: 'm4',
+      x: 0, y: 0, z: 0, distance: 12, falloffLoss: 0, penetrationLoss: 0,
+    });
+    bus.emit(EV.WeaponFired, {
+      weaponId: 'm4', sourceId: 1, x: 0, y: 0, z: 0, dx: 0, dy: 0, dz: -1, endX: 0, endY: 0, endZ: 0,
+      distance: 12, shotIndex: i, spreadDeg: 0, tracer: false, hitTarget: true, ammoInMag: 20,
+      pellets: 1, pelletsHit: 1, minimapPing: true,
+    });
+  }
+  const op1 = score.row(1);
+  out.push({ step: 'events', rows: score.rows.length, detail: `OP1 ${op1?.kills}k/${op1?.shotsFired}sh after 6 replicated kills` });
+  if (op1 === undefined || op1.kills !== 3 || op1.shotsFired !== 9 || op1.damageDealt !== 300) {
+    problems.push(
+      `replica: replicated events moved a row the server owns — OP1 reads ` +
+        `${op1?.kills}k/${op1?.shotsFired}sh/${op1?.damageDealt}dmg against the board's 3k/9sh/300dmg`,
+    );
+  }
+
+  const second = [
+    wireRow(1, 'OP1', 'A', 7, 1),
+    wireRow(2, 'OP2', 'B', 1, 4),
+    wireRow(100, 'BOT-A', 'A', 5, 2),
+  ];
+  score.applyReplicated(second);
+  const op1After = score.row(1);
+  out.push({
+    step: 'smaller board',
+    rows: score.rows.length,
+    detail: `BOT-B ${score.row(101) === undefined ? 'removed' : 'STILL THERE'}, OP1 ${op1After?.kills}k, ` +
+      `row object ${op1After === op1 ? 'kept' : 'REPLACED'}`,
+  });
+  if (score.rows.length !== 3 || score.row(101) !== undefined) {
+    problems.push(`replica: a row absent from the board was not removed (${score.rows.length} rows, BOT-B ${score.row(101) === undefined ? 'gone' : 'present'})`);
+  }
+  if (op1After?.kills !== 7) problems.push(`replica: OP1's kills read ${op1After?.kills} after a board saying 7`);
+  if (op1After !== op1) problems.push('replica: a row was replaced rather than updated in place — the board\'s bound slot would be orphaned');
+
+  score.dispose();
+  return out;
 }
 
 /**
@@ -195,5 +296,6 @@ export function auditReplicatedScore(): ReplicatedScoreAudit {
     score.dispose();
   }
 
-  return { rows, problems, kills: KILLS };
+  const replica = auditReplica(problems);
+  return { rows, replica, problems, kills: KILLS };
 }
