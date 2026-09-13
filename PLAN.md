@@ -13267,3 +13267,333 @@ raw, +0.90 kB gzip** for the gait, the held-weapon builder and the body rework.
   vertical. Adding the flag to `RenderableActor` to special-case a jump would be widening a
   shared interface to reach a case nobody reported; it is written here instead so the next
   report about it lands on a known decision rather than an oversight.
+
+
+---
+
+# Milestone 13 — proposed: bodies that read, and one answer to "is this an enemy"
+
+Planned in the session of 2026-09-13, from the human's own list: the enemy markers, the crouch,
+an animation library, six bugs from the multiplayer playtest and three feature requests. The
+mechanism behind every bug was read in the tree before it was written down here; the ones that
+turned out to be one mechanism wearing three reports are grouped that way. **No product code was
+written for this section.** The review that preceded it — commit `8309b86` — is summarised first,
+because it is the tree a fresh session inherits.
+
+## The tree a new session inherits (what changed since round 5)
+
+- **Bodies are skinned GLBs.** `client/characters/` is the pipeline (`docs/CHARACTER-ASSETS.md`
+  has the ownership diagram): a catalogue of seven skins, an app-lifetime asset service, a
+  match-scoped provider per actor, `SkeletonUtils.clone` per body, a mixer per body, and a
+  CCD constraint that puts the left palm on the weapon's support grip. The procedural `BotMesh`
+  is the fallback while a template loads. Animations are eleven Mixamo clips, one file each,
+  fetched once per URL and prepared per skin.
+- **The rig identity of round 5 is loosened one step further.** The GLB avatar ignores
+  `heightScale` entirely and plays a crouch clip instead (`CharacterAvatar.update`). The hitbox rig still scales uniformly. That gap
+  is Phase C, and it is measured before it is decided.
+- **IFF is a separate layer, not a body tint.** `ActorIndicator` draws a nameplate, a continuous
+  segmented health bar and — today — four emissive spheres on hostile arms and knees. Every
+  colour comes from `ui/Palette` and repaints on a palette serial; friendly is blue in the base
+  palette as of `8309b86`, chosen there so the nameplate, the minimap and the killfeed agree.
+- **Bots face where they walk because the simulation says so.** `OBJECTIVE` is a travelling
+  state in `isTravellingState`; the render-side yaw override that briefly stood in for that is
+  gone, and the reason it had to go is recorded on the predicate: the hitbox rig, the spectator
+  camera and `Mantle.detectMantle` all read `sim.yaw`, and a `RemoteActor` never saw the
+  override at all.
+- **Skins are dealt from a seeded `Rng`** (`RandomCharacterSelector`), keyed by the save's
+  lifetime match count and the session's build count. Client-local: two clients do not agree on
+  a bot's skin. The end state is a server-chosen `characterId` in the snapshot (Phase B's shape,
+  not its scope).
+
+## Phase A — one hostility predicate
+
+Three of the six reported bugs are one defect. "Is `b` an enemy of `a`" is answered in five
+places, and only some of them know the mode is Free-for-All:
+
+| Site | Knows FFA? |
+|---|---|
+| `shared/ai/Perception.ts:239` | yes — `freeForAll` |
+| `shared/ai/SpawnSelector.ts:425` | yes |
+| `shared/combat/ScoreSystem.ts:285` | yes |
+| `shared/combat/DamageSystem.ts:267` | via `friendlyFire = true`, set by `Match` and `ClientMatch` for FFA |
+| `shared/streaks/SentryGun.ts:224` | **no** — `c.team === this.team` |
+| `shared/streaks/Uav.ts:60` | **no** |
+| `shared/streaks/ChopperGunner.ts` and `Game.draw`'s hot/cold split | **no** — cold is "the gunner's side", which in FFA is half the lobby |
+
+That is the sentry that will not fire at half the room, the UAV that does not show them, and
+the Chopper that draws them near-black (the "black hit indicator" report is the thermal pass
+drawing a same-substrate body cold). `FreeForAll.ts` keeps the two-team substrate on purpose and
+says so at length; the substrate is fine, the predicate is scattered.
+
+**Do:** one function, `isHostile(viewerTeam, subjectTeam, freeForAll)` beside `relationTo` in
+`shared/ui/TeamColour.ts` or its own `shared/combat/Hostility.ts`, and every site above calls it.
+`freeForAll` reaches the streaks through `StreakSystem` the way it reaches `BotDirector`. The
+gunship pass in FFA is handed *both* body groups as hot and nothing as cold.
+
+**Also in this phase, because it is the same predicate on the client:**
+- **Bug 4.4** — `MatchResult.winner` is a `ScoreTeam`, so in FFA everybody on the winner's
+  substrate side reads VICTORY. Add `winnerEntityId?: number` to `MatchResult` (set by
+  `FreeForAll.checkWinCondition`, which already knows the leader), carry it in `SummaryInfo`,
+  and let `EndOfMatch`/`XpSummary` decide VICTORY / 2ND / 3RD per recipient when it is present.
+  `Scoreboard` and `HudBanner` in FFA: one ladder sorted by score, no columns, no team totals.
+- **Bug 4.1** — the body, the nameplate, the minimap and the Chopper are already
+  viewer-relative. The one absolute site left is `client/streaks/StreakMeshes.ts:39` — the
+  sentry body coloured by `team === 'A'`. Route it through `relationTo`. **Verify the report
+  still reproduces before spending more than that:** the description ("friends red, enemies
+  grey") predates `8309b86` and may be the thermal pass in FFA, which is the row above.
+
+**Gate:** `npm run skirmish` with `--vote` targeting FFA and the wallet cheat `MO951357` typed
+by a headless client (it already types cheats and counts streak entities) so it can afford and
+place a sentry — sentry kills against same-substrate players **> 0** (today 0 by construction); the FFA summary names one winner and
+everybody else a place; `grep -rn "=== 'A'" src/client` returns only `BotRenderer.groupFor`,
+`Game.draw`'s enemy-group choice and the debug panels. Size **S–M**.
+
+## Phase B — the scoreboard and the XP award become replicated facts
+
+Two more reports, one shape — the one `scripts/check-authority.mjs` exists for: a fact the
+server owns, read off a local copy.
+
+**Bug 4.3, the duplicate row.** A client's scoreboard is built *only* from replicated events
+(`Messages.ts:139` says so), rows are keyed by `entityId` and never removed
+(`ScoreSystem.register`). So: a return inside `RECONNECT_GRACE_MS` (30 s) reclaims the same
+entity and there is one row — the skirmish harness's reconnect case proves exactly this. A return
+*after* the grace seats a new entity: a second row with the same name, the old one still
+standing with its kills. And in either case the returning client itself sees zeros for everyone,
+because it was not there for the events. Both halves of the report are true.
+
+**Do:** the scoreboard becomes state. A `scoreboard` message — the full row set, sent on every
+seat assignment and on change, delta-compressed like the snapshot — and the set *is* the
+authority: a row absent from it is removed. On the server, a row outlives its seat for the match
+and is keyed by the reconnect token as well as the entity, so a post-grace return **adopts** the
+row rather than opening a second one. One line in `check-cosmetics.mjs`'s allowlist for the new
+message, with the §4.15 row it sits in ("scores"). Extend `skirmishHarness --reconnect` with the
+after-grace case; the invariant is *rows on every client === rows on the server*, counted.
+
+**Bug 4.2, the XP award.** `LiveMatch.buildXpLines` builds **one** list for the whole match and
+`SummaryInfo.xp` broadcasts it: WIN BONUS and TOP OPERATOR go to every player, and there is no
+kills, assists, objective or streak line at all — the dedicated server pays nothing for a kill.
+The function's own comment says as much ("awarded to every player in the match rather than to
+the ones who earned them") and defers it to a networked-economy change. This is that change.
+
+**Do:** `shared/meta/MatchProgression` is already the event-driven ledger the single-player
+summary uses, keyed to `PLAYER_ENTITY_ID`. Instantiate one per seated human on the server keyed
+to that seat's `entityId`, and make `SummaryInfo` per recipient (unicast) with `xp` from the
+recipient's own ledger; `win` is `row.team === winner` (or `entityId === winnerEntityId` in
+FFA), `mvp` is `rows[0].entityId === recipient`. `shared/debug/MatchXpAudit` grows a second
+half: the same event sequence through a server ledger and a solo ledger must produce the same
+lines. Size **M–L** for the pair; the scoreboard first, because the XP lines want its rows.
+
+## Phase C — the body: the hitbox against the animation, then the markers
+
+### C1 — measure before deciding (S)
+
+`crouchHeight` 1.1 over `standHeight` 1.8 is a `heightScale` of **0.61**; `slideHeight` 0.55
+is **0.31** (`MovementConfig.ts:148`). `HUMANOID_RIG`'s head box tops out at 1.77 m standing, so
+the rig's head is at **~1.08 m crouched and ~0.54 m sliding**. The Mixamo crouch clips are a
+half-squat; their head is plausibly at 1.2–1.3 m, and the slide uses those same clips. If so, a
+round aimed at a crouching body's visible head passes over the rig, and a sliding body is drawn
+about twice as tall as it can be hit. That is a claim, not a number, and the number comes first:
+
+- A browser probe in the shape of this session's verification (drive `game.loop.frame`, place
+  the camera with `__operator.sim()`, sample `mixamorigHead` and `mixamorigSpine1` world Y
+  through each crouch/slide clip) producing one table: **clip × (visual head Y, rig head Y,
+  delta)**, plus the same for crouch-walk against crouch-idle — which answers the "crouch-walk
+  looks taller" question directly.
+- The procedural `BotMesh` still squashes to `heightScale` (`BotMesh.apply`). It is on screen
+  for the second or two before a template lands. Stop scaling it; it is a placeholder.
+- Stand → crouch has no authored transition and cross-fades in 0.14 s; crouch → stand plays
+  `crouchToStand`. `AnimationAction.timeScale = -1` on the same clip gives the missing half for
+  nothing. This may be the whole of the "the body shrinks" report; do it in C1 and look.
+
+### C2 — decide from the table (M, `shared/`)
+
+- **Delta over ~0.10 m:** replace the uniform `heightScale` with a **crouch `RigLayout`** —
+  `buildLayout(id, boxes)` already exists — whose boxes sit where the pose puts them (head
+  forward and down, torso pitched), and a **slide layout** if a slide clip arrives in Phase D.
+  This is simulation code: both runtimes change together, `npm run hashes` must still agree,
+  and `scripts/hit-sweep.sh` is run before and after against a crouching target so the hit rate
+  is a measured move rather than a hope. `RigHistory` (lag compensation) gets a layout id per
+  frame — the same widening M12 sized for the riot shield.
+- **Delta under 0.10 m:** leave the rig, and let the delta be the recorded reason.
+- **Slide with no clip:** either the slide layout above with a crouch clip, or `slideHeight`
+  raised toward what the clip shows. The first is right; the second is cheap; the human picks.
+
+### C3 — the markers become shoulder pads (S–M)
+
+The four emissive spheres read as a rash — geometry floating at the centre of a bone, the same
+from every angle, on the knees. The reference the human supplied is Call of Duty Mobile's enemy
+dress: **two small flat red pads on the outer upper arm, flush with the sleeve, lit, with a soft
+halo**, and red goggles. Small, on the body, equipment rather than a marker.
+
+The one structural change: `ActorAvatar.getIndicatorAnchor` returns a **point**; a pad on a
+surface needs a **frame**. So:
+
+1. `getIndicatorFrame(anchor, position, quaternion)` on `ActorAvatar`. `CharacterSkin` answers
+   with the world transform of `mixamorigLeftArm` / `RightArm`; `BotMesh` with its arm box's
+   frame. The renderer still learns no bone names.
+2. Calibration lives in `CharacterIndicatorProfile` — per shoulder: `bone`, `offset` in bone-local
+   centimetres (the deltoid surface is ~6–7 cm out from the joint), `rotation`. Apex's ×10 units
+   ride the same mechanism that already scales `palmOffset`. One Mixamo calibration serves six
+   skins.
+3. The pad: a 5 × 3 × 0.8 cm rounded box, `MeshStandardMaterial`, `emissive = palette.hostile`
+   at intensity ~1.5 (the spheres run 3.2), `toneMapped: false`; behind it an **additive sprite**
+   of ~8 cm radius at alpha ~0.3 in the same colour. There is no bloom pass, and the sprite is
+   what makes the reference's glow for one draw call.
+4. `MARKER_ANCHORS` becomes `['leftShoulder', 'rightShoulder']`. The knee anchors leave the
+   profile, the skin and `BotMesh`.
+5. **Pixel arithmetic, stated so nobody is surprised:** at 90° and 1920 px a 5 cm pad is
+   **~5 px at 10 m, ~2 px at 25 m, ~1 px at 50 m**. The pads are a close-to-mid tell; at range
+   the nameplate (1.28 m wide, ~25 px at 50 m) is the tell, which is also how the reference
+   works. A screen-space floor — `scale = max(1, minPx / pxPerMetre(distance))` — is one line
+   if the human wants the pads to hold ~4 px; start without it.
+6. **Goggles** — an emissive lens in front of `mixamorigHead` at eye height — are a second
+   step and per-skin calibration (seven helmets). Only after the pads are accepted.
+
+**If the pads read badly**, in order of distance from the reference: pads plus a thin strap
+line on `mixamorigSpine1` (front readability while aiming); goggles alone; a thin emissive band
+around the helmet (360°, per-skin); a rim light on the head only; a full inverted-hull outline
+(declined by the human for now — kept last). Every one of them is a catalogue entry and one
+geometry on top of the same frame mechanism, so switching is not a redesign.
+
+**Gate for C3:** the probe from this session — screenshots at 5/10/25 m in `off` and
+`deuteranopia`; the pad must not cut the sleeve in idle, run and crouch on both sides; hostile
+pixel count around the silhouette per distance, recorded.
+
+## Phase D — the animation library
+
+The human has more clips to add and wants the folder to explain itself, overlapping clips to
+vary, and the catalogue to stay explicit ("files in `public/` are deliberately not discovered at
+runtime" is a rule, and it stays).
+
+**Folder:**
+
+```
+public/models/bots/animations/
+  locomotion/stand/    locomotion/crouch/    locomotion/slide/
+  transitions/         deaths/               hits/            actions/
+  incoming/            ← dropped here, never loaded
+  README.md            ← what each folder means and which slot each file fills
+```
+
+**Catalogue:** `CharacterAnimationId` becomes a **slot** holding
+`readonly CharacterAnimationDefinition[]` — variants — and `AnimationSelector` keeps returning a
+slot, which is why it never had to know about files.
+
+**Variants are dealt deterministically, never with `Math.random`:**
+- **Deaths:** the simulation already picks `deathVariant` with
+  `deathVariantFor(entityId, deathSerial, DEATH_VARIANTS)` and replicates it; the GLB path
+  ignores it today. `clips[deathVariant % clips.length]` and every client and the server agree
+  for free. `DEATH_VARIANTS` stays 4 in `shared/`; the client maps.
+- **Idle / walk variants:** the same hash on `(entityId, spawnSerial)` — fixed for a life.
+- **Flinches:** on `(entityId, flinchSerial)`.
+- One `variantFor(slot, entityId, serial, count)` in `client/characters/` for all three.
+
+**Tools, in the project's own idiom (a rule a human has to remember is a rule that will be
+broken):**
+- `scripts/animation-manifest.mjs` — reads each GLB's JSON chunk **in Node, without three**:
+  clip names, duration from the sampler input accessor's `max`, targeted bones. Run over
+  `incoming/` to decide slots from a table rather than from the file name.
+- `scripts/check-animations.mjs` in the gate as `check:animations` — every catalogue URL exists;
+  every file outside `incoming/` is in the catalogue; every slot the selector can return is
+  non-empty.
+- **Export contract enforced on the new files:** one named semantic clip per file and the
+  `name` selector. `LegacyClipSelector` (last clip + expected duration) remains for the eleven
+  old files until they are re-exported, and the check reports how many are left.
+
+**New slots are not free:** `reload`, `throw` and `melee` need triggers in
+`ActorAnimationInput`. `reloading` and `firing` exist; `throwing` and `melee` do not, and each is
+a snapshot flag — an `EFlag` bit, which M12 already found full, and a line in `check-cosmetics`.
+Do the library with the slots the inputs already support; take the new bits together with M12's
+v13 widening, once.
+
+Size **S** for the manifest and the check, **M** for slots and variants.
+
+## Phase E — the summary screen and the main menu
+
+- **Bug 4.6, text overlap on the end-of-match screen.** `EndOfMatch` composes the result, the
+  personal line, `XpSummary` (whose `.xp__flourish` lists challenges and unlocks after the rows
+  finish) and the same `Scoreboard` the match uses. The flourish grows after layout and lands on
+  the board. Put it in flow (flex column, no absolute), give the board its own scrolling region,
+  and add the case to `scripts/layout-probe.mjs` — max rows, max challenge and unlock lines, six
+  viewports — which is the instrument that already exists for exactly this class. Confirm against
+  the human's `image_c323c1.jpg` first. **S.**
+- **The main menu.** `Settings` already has tabs (`CONTROLS | BINDINGS | AUDIO | VIDEO`,
+  `Settings.ts:56`). The key card (`op-keys`, `Menus.ts:197`) moves under BINDINGS; *Reset
+  progress* (`Menus.ts:274`) moves to a new `DATA` tab behind a two-step confirmation; the menu
+  is four buttons. `npm run layout` covers the menu and must stay green. **S.**
+
+## Content backlog — already scoped in Milestone 12
+
+Minigun, flamethrower, riot shield (F16) and the grenade animation (F17) are sized, ordered and
+decided above under M12; nothing in this milestone changes those answers, and one thing helps:
+`handBoxes` is now a separate part group, so F17's second hand entering the frame is a part the
+viewmodel already owns rather than a new one.
+
+## Dependency order
+
+1. **Phase A** — three bugs, one predicate, a harness that already exists. Half a day.
+2. **Phase B** — scoreboard first, then XP; both "a fact moved to the server".
+3. **Phase C1** — the measurement. Cheap, and it decides C2.
+4. **Phase C3** — the pads. Independent of C2; depends only on the frame API.
+5. **Phase C2** — if the table says so.
+6. **Phase D** — after C, because the slide slot and any transition slot depend on C1's answer.
+7. **Phase E** — any time; nothing depends on it.
+8. **M12's content**, in M12's order.
+
+## What each phase breaks
+
+| Phase | What it puts at risk |
+|---|---|
+| A | Bot behaviour in FFA: perception and spawn already treat everyone as hostile; a predicate that disagrees with them in one site changes who shoots whom. The FFA skirmish is the watch |
+| B | The wire: a new message type and a per-recipient summary. `check-cosmetics` is the audit; `--leak` must stay flat with rows outliving seats |
+| C2 | Hit registration for crouched and sliding bodies, in both directions. `hit-sweep.sh` before and after, and `npm run hashes` |
+| C3 | Nothing in gameplay. The readability of an enemy at 25 m+ rests on the nameplate |
+| D | `DEATH_VARIANTS` and the catalogue disagreeing on how many deaths exist — the check is what catches it |
+| E | Layout at six viewports; the probe is the gate |
+
+## Decisions waiting on the human
+
+| # | Decision | Recommendation |
+|---|---|---|
+| 1 | Does bug 4.1 still reproduce after `8309b86`? | Check in a two-client match on team B before Phase A spends on it |
+| 2 | Slide: a layout with a crouch clip, or raise `slideHeight`? | The layout, if a slide clip exists among the new files; otherwise raise the height and record the number |
+| 3 | Pads: screen-space minimum size? | Start without; add the one line if 25 m reads badly |
+| 4 | Goggles after the pads? | Yes, once the pads are accepted — per-skin work |
+| 5 | Which of the new clips exist — slide, throw, reload, melee, flinch, more deaths? | Run `animation-manifest` over `incoming/` first; the answer sizes Phase D and decides whether v13 is needed |
+| 6 | Scoreboard rows: keep a departed player's row for the match, or drop it at unseat? | Keep it for the match, keyed by reconnect token; drop only when the match ends |
+
+## Measured, this session
+
+- **OBJECTIVE facing, live match, 1 800 ticks:** bots in `OBJECTIVE` with no known target face
+  their velocity at a **median of 0°, p90 24°** (path turns), max 132°. With a target: median
+  46° — aiming while moving, by design. Before the fix the same bots kept their last aim.
+- **DOM headless, seed 7, two matches:** before 197–159 / 201–137; after **201–142 / 201–124**,
+  both on the score limit.
+- **Animation fetches:** six additional skins loaded with **zero** re-fetches of the eleven
+  animation files (was 66 requests).
+- **Pixel arithmetic for the pads** (90°, 1920 px): 5 cm = 5.0 / 2.0 / 1.0 px at 10 / 25 / 50 m;
+  the 1.28 m nameplate = 25 px at 50 m.
+- **Rig heights, from the constants:** head top 1.77 m standing → 1.08 m at `heightScale` 0.61
+  (crouch) → 0.54 m at 0.31 (slide). The visual head in the crouch clips is **not measured** —
+  that is C1's first job.
+
+## Needs a browser
+
+The Browser pane in this session ran with `requestAnimationFrame` suspended; everything above
+was driven by stepping `game.loop.frame` by hand and posting canvas captures to a local sink.
+What that cannot show, and a human on a real display must: the cross-fade between locomotion
+clips; the support hand tracking the weapon during a run; whether the blue nameplate and the
+red pads (once built) read as *equipment* rather than *markers* at play speed; and the crouch
+transition once `timeScale = -1` is in.
+
+## How to start — the Phase A brief
+
+A fresh session. Hand it this file and the brief below; it has everything it needs.
+
+> **M13 Phase A — one hostility predicate.** Read PLAN.md "Milestone 13", Phase A. Add
+> `isHostile` beside `relationTo` and route the seven sites through it, including the gunship's
+> hot/cold split in `Game.draw` (FFA: both groups hot). Add `winnerEntityId` to `MatchResult`
+> and `SummaryInfo`; make `EndOfMatch`, `XpSummary`, `Scoreboard` and `HudBanner` FFA-aware.
+> Route `StreakMeshes` through `relationTo`. Gate: `npm run check`; `npm run skirmish` with
+> `--vote` on FFA and a headless client that buys a sentry with `MO951357`, sentry kills against
+> same-substrate players > 0; the FFA summary names one winner. Record the numbers under "Measured" in this section. STOP at the gate.
