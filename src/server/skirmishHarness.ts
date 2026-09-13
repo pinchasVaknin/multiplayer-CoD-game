@@ -12,8 +12,9 @@ import {
 } from '../shared/cheats/Cheats';
 import { CLIENT_TIMEOUT_MS, RECONNECT_GRACE_MS } from '../shared/net/Protocol';
 import { isArenaInstance, votePhaseName, type NetLoadout } from '../shared/net/Skirmish';
-import type { StreakId } from '../shared/streaks/StreakDefs';
+import { STREAK_DEFS, type StreakId } from '../shared/streaks/StreakDefs';
 import type { StreakEconomyReport } from '../shared/streaks/StreakLedger';
+import type { SentryTally } from '../shared/streaks/SentryGun';
 import type { LifeStockReport } from '../shared/equipment/LifeStockAudit';
 import { loadConfig, usesShortenedTimings, type ServerConfig } from './Config';
 import { HeadlessClient, type HeadlessClientReport, type SeatSnapshot } from './debug/HeadlessClient';
@@ -48,6 +49,8 @@ const log = logger('skirmish');
  *   npm run skirmish -- --cheats            # F14: RED CONTROL — the server must refuse
  *   npm run skirmish -- --cheats --cheats-on   # ...and, with the flag, must honour them
  *   npm run skirmish -- --cheats --cheats-on --cheats-early  # type it in the ARENA (F14 fix)
+ *   MATCH_ROUND_SECONDS=150 npm run skirmish -- --vote 3 --wallet-streak sentry --cycles 1
+ *                                          # M13 A: FFA, every client buys a sentry
  * ```
  *
  * ## Loopback proves the flow, not the netcode
@@ -174,6 +177,22 @@ interface HarnessOptions {
    * which is exactly why F14's own green run was green about a bug that was already in it.
    */
   readonly cheatsEarly: boolean;
+  /**
+   * Field this streak on every client and type the wallet code once seated (M13 Phase A).
+   *
+   * The Free-for-All hostility gate. A sentry compared `c.team` to its own and so, in FFA,
+   * would not fire at the half of the lobby sharing its owner's substrate side; the fix is
+   * one predicate, and the measurement is a sentry that has actually killed somebody on its
+   * own side. Waiting for a headless client to earn eight kills would make that a test that
+   * sometimes runs, so every client fields `[id, null, null]` and types `MO951357` — thirty
+   * kills of purchasing power, the same door `--cheats`' third seat uses — and buys the
+   * cheapest thing it can afford, which is now the only thing it has.
+   *
+   * Distinct from `--grant-streak`, which pays wallets in from the server every fifteen
+   * seconds: this is a *client* typing a code, so the purchase crosses the wire the way a
+   * player's does. Refused beside `--cheats`, whose per-seat script it would overwrite.
+   */
+  readonly walletStreak: StreakId | null;
 }
 
 /**
@@ -242,7 +261,8 @@ const LIGHTWEIGHT_CLASS: NetLoadout = {
  *
  * Index 3 and beyond are `undefined`, and that is the control seat.
  */
-const CHEAT_SCRIPT: readonly (string | undefined)[] = ['SPEC[]1', 'SPEC[]2', 'MO951357'];
+const WALLET_CODE = 'MO951357';
+const CHEAT_SCRIPT: readonly (string | undefined)[] = ['SPEC[]1', 'SPEC[]2', WALLET_CODE];
 
 /**
  * The clearing arithmetic, proved against the real functions on every run (F14's second fix).
@@ -320,6 +340,11 @@ async function main(): Promise<number> {
   installClock(nodeClock);
   const opts = parseArgs(process.argv.slice(2));
   installServerLogging(opts.json ? 'json' : 'text', 'info');
+
+  if (opts.walletStreak !== null && opts.cheats) {
+    log.error('--wallet-streak types the wallet on every seat and --cheats scripts the seats; pick one.');
+    return 1;
+  }
 
   const cfg = harnessConfig(opts);
   if (usesShortenedTimings(cfg)) {
@@ -587,8 +612,9 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
       loadout: streakHarnessClass(opts, i),
       throwEveryTicks: opts.throwEveryTicks,
       // F14. See `HarnessOptions.cheats` for why the codes differ per client and why the
-      // fourth client onwards is deliberately handed nothing.
-      cheatCode: opts.cheats ? CHEAT_SCRIPT[i] : undefined,
+      // fourth client onwards is deliberately handed nothing. `--wallet-streak` types the
+      // wallet on every seat instead (M13 Phase A); the two are refused together.
+      cheatCode: opts.walletStreak !== null ? WALLET_CODE : opts.cheats ? CHEAT_SCRIPT[i] : undefined,
       cheatInArena: opts.cheatsEarly,
       /**
        * A deliberate tie on the first two clients, then a spread.
@@ -651,6 +677,10 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
   let observedStock: LifeStockReport | null = null;
   /** Damage the door refused because the target could not be hurt (round 4, F14). */
   let observedBlockedDamage = 0;
+  /** Every sentry the live match placed, sampled while it runs (M13 Phase A). */
+  let observedSentries: SentryTally | null = null;
+  /** Which mode the live match was, for the assertions that only hold in one of them. */
+  let observedModeId = '';
   /** When the streak wallet was last topped up, and how many times. See the grant below. */
   let grantedAtMs = 0;
   let grants = 0;
@@ -735,6 +765,10 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
        * that reached a god-mode body and was refused.
        */
       observedBlockedDamage = running.match.damage.blockedByInvulnerable;
+      // The sentry tally, for the same reason and at the same instant (M13 Phase A): the
+      // report is folded out of the running match and reads as a clean zero once it is gone.
+      observedSentries = running.match.streaks.sentryReport();
+      observedModeId = running.modeId;
 
       /**
        * Put a streak in every seated player's hand, once per match (§8.22).
@@ -946,6 +980,8 @@ async function runFlow(server: Server, opts: HarnessOptions, cfg: ServerConfig):
     economy: observedEconomy,
     stock: observedStock,
     blockedDamage: observedBlockedDamage,
+    sentries: observedSentries,
+    liveModeId: observedModeId,
     grants,
     returnCycles,
   });
@@ -1134,6 +1170,15 @@ interface FlowReportInput {
    * symptoms are both absences, and this is the line that produced them.
    */
   readonly blockedDamage: number;
+  /**
+   * Every sentry the live match placed (M13 Phase A).
+   *
+   * Sampled off the server while the match was running, like the three above. The FFA gate
+   * is `killsOnOwnSubstrate > 0`, a counter that was zero by construction before `isHostile`.
+   */
+  readonly sentries: SentryTally | null;
+  /** The live match's mode id, or empty when none was observed running. */
+  readonly liveModeId: string;
   /** How many times `--grant-streak` topped the wallets up. Zero without the flag. */
   readonly grants: number;
   /**
@@ -1206,6 +1251,10 @@ function reportFlow(input: FlowReportInput): number {
     // summary arrived, so a run that never ended a match says nothing rather than says zero.
     if (r.summaries > 0) {
       log.info(`  ${r.name} XP: ${r.summaryXpTotal} over ${r.summaryXp.length} row(s) — ${r.summaryXp.join(', ')}`);
+      log.info(
+        `  ${r.name} summary: ${r.summaryOutcome} — winner ${r.summaryWinner}; ` +
+          `${r.summaryRows.length} row(s): ${r.summaryRows.join(', ')}`,
+      );
     }
     for (const notice of r.notices) log.info(`  notice: ${notice}`);
   }
@@ -1604,6 +1653,8 @@ function reportFlow(input: FlowReportInput): number {
     );
   }
 
+  problems.push(...reportHostility(input));
+
   /**
    * Reconnect and join-in-progress (playtest round 4, F8).
    *
@@ -1968,8 +2019,90 @@ function harnessConfig(opts: HarnessOptions): ServerConfig {
     metricsSeconds: 0,
     // F14. `--cheats` on its own leaves this at the shipped default of off, which is what makes
     // the plain run the red control rather than a second thing to remember to arrange.
-    cheatsEnabled: opts.cheatsOn || base.cheatsEnabled,
+    // `--wallet-streak` is a purchase, not a probe of the refusal, so it turns cheats on itself.
+    cheatsEnabled: opts.cheatsOn || opts.walletStreak !== null || base.cheatsEnabled,
   };
+}
+
+/**
+ * One hostility predicate, measured (M13 Phase A).
+ *
+ * Two facts, both taken off the server while the live match ran and both printed with their
+ * denominators, because every number here is zero in a run where nobody placed a sentry:
+ *
+ * - **A sentry shoots the whole lobby in Free-for-All.** `killsOnOwnSubstrate` counts sentry
+ *   kills on bodies that share the sentry's substrate side. In a team mode that is a team-kill
+ *   and must be 0; in FFA it was 0 *by construction* — `SentryGun.acquire` skipped its own
+ *   side and had never been told the mode — and the fix is one predicate, so the assertion is
+ *   that the number moved off zero. Asserted only with `--wallet-streak sentry` on an FFA run,
+ *   because that is the run that arranges a sentry; without it the tally is a report.
+ * - **The summary names one winner.** Over the wire `winnerEntityId` is the individual FFA
+ *   crowned, and each client's headline is `personalOutcome` over the summary's rows: at most
+ *   one client says VICTORY, everybody else says a place, and every client names the same
+ *   winner. Before this every client on the winner's substrate side said VICTORY (bug 4.4).
+ *
+ * A red control was run on the tree before the predicate landed and read `kills > 0,
+ * killsOnOwnSubstrate === 0`, which is what makes the second line a probe rather than a guard.
+ */
+function reportHostility(input: FlowReportInput): string[] {
+  const problems: string[] = [];
+  const { opts, reports, sentries, liveModeId } = input;
+  const ffa = liveModeId === 'FFA';
+
+  if (sentries === null) {
+    log.warn('sentries: NOT SAMPLED — no live match was observed running in this run.');
+  } else {
+    const rate = sentries.shotsFired > 0 ? ((sentries.shotsHit / sentries.shotsFired) * 100).toFixed(1) : '—';
+    log.info(
+      `sentries (${liveModeId || 'no mode'}): ${sentries.placed} placed, ` +
+        `${sentries.shotsHit}/${sentries.shotsFired} (${rate}%), ${sentries.kills} kill(s), ` +
+        `${sentries.killsOnOwnSubstrate} on the sentry's own substrate side` +
+        (ffa ? ' (FFA: must be > 0 once any kill has landed)' : ' (team mode: must be 0)'),
+    );
+    if (!ffa && sentries.killsOnOwnSubstrate > 0) {
+      problems.push(`${sentries.killsOnOwnSubstrate} sentry team-kill(s) in ${liveModeId}`);
+    }
+    if (opts.walletStreak === 'sentry') {
+      if (sentries.placed === 0) {
+        problems.push('--wallet-streak sentry placed no sentry — the purchase never crossed the wire');
+      } else if (ffa && sentries.kills === 0) {
+        log.warn('sentries: no kill landed at all, so the FFA hostility gate was NOT EXERCISED — run longer.');
+      } else if (ffa && sentries.killsOnOwnSubstrate === 0) {
+        problems.push(
+          `${sentries.kills} FFA sentry kill(s) and none on the sentry's own substrate side — ` +
+            '`SentryGun.acquire` is still skipping its own side (M13 Phase A)',
+        );
+      }
+    }
+  }
+
+  const held = reports.filter((r) => r.summaries > 0);
+  if (held.length > 0) {
+    const winners = new Set(held.map((r) => r.summaryWinner));
+    const victors = held.filter((r) => r.summaryOutcome === 'VICTORY');
+    const placed = held.filter((r) => /^\d+(ST|ND|RD|TH)$/.test(r.summaryOutcome));
+    log.info(
+      `summary outcomes (${liveModeId || 'no mode'}): ` +
+        held.map((r) => `${r.name} ${r.summaryOutcome}`).join(', ') +
+        ` — winner named ${[...winners].join(' / ')}`,
+    );
+    if (winners.size !== 1) {
+      problems.push(`the summary named ${winners.size} different winners across clients: ${[...winners].join(', ')}`);
+    }
+    if (victors.length > 1) {
+      problems.push(`${victors.length} clients read VICTORY from one summary (bug 4.4)`);
+    }
+    if (ffa) {
+      const drawn = held.every((r) => r.summaryOutcome === 'DRAW');
+      if (!drawn && victors.length + placed.length !== held.length) {
+        problems.push(
+          `FFA summary: ${held.length} client(s), ${victors.length} VICTORY, ${placed.length} placed — ` +
+            'everybody but the winner must read a place (M13 Phase A)',
+        );
+      }
+    }
+  }
+  return problems;
 }
 
 /**
@@ -2105,9 +2238,23 @@ function streakHarnessClass(opts: HarnessOptions, index: number): NetLoadout {
    * still equips Ghost and reports a clean pass — a probe that cannot go red, which is the exact
    * trap the standing lesson names. It was caught by running it.
    */
-  if (opts.noPerks) return { ...LIGHTWEIGHT_CLASS, perks: [null, null, null] };
-  if (opts.ghost && index === 1) return GHOST_CLASS;
-  return LIGHTWEIGHT_CLASS;
+  const base = opts.noPerks
+    ? { ...LIGHTWEIGHT_CLASS, perks: [null, null, null] as NetLoadout['perks'] }
+    : opts.ghost && index === 1
+      ? GHOST_CLASS
+      : LIGHTWEIGHT_CLASS;
+  /**
+   * The streak slot follows the flag (M13 Phase A).
+   *
+   * A client buys only what its class equips — `pricesFor` filters the offers by
+   * `equippedStreaks`, and `Server.onStreakRequest` refuses anything else — so a wallet paid
+   * in for a chopper against a class holding a UAV bought UAVs. That was the shape of every
+   * `--grant-streak chopper` run before this: the grant landed, the purchase was a UAV, and
+   * `--drop-gunner` waited for a chopper that could not be called in. Now the granted or
+   * wallet-bought streak is the one in the slot.
+   */
+  const fielded = opts.walletStreak ?? streakIdArg(opts.grantStreak);
+  return fielded === null ? base : { ...base, streaks: [fielded, null, null] };
 }
 
 /**
@@ -2291,7 +2438,18 @@ function parseArgs(argv: readonly string[]): HarnessOptions {
     cheats: argv.includes('--cheats'),
     cheatsOn: argv.includes('--cheats-on'),
     cheatsEarly: argv.includes('--cheats-early'),
+    walletStreak: streakIdArg(get('--wallet-streak')),
   };
+}
+
+/** A `StreakId` off the command line, or null. An id not in the table is a typo, not a run. */
+function streakIdArg(raw: string | null): StreakId | null {
+  if (raw === null) return null;
+  const def = STREAK_DEFS.find((d) => d.id === raw);
+  if (def === undefined) {
+    throw new Error(`unknown streak "${raw}"; one of ${STREAK_DEFS.map((d) => d.id).join(', ')}`);
+  }
+  return def.id;
 }
 
 function sleep(ms: number): Promise<void> {

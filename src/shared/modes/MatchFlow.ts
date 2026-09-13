@@ -1,10 +1,12 @@
 import type { Combatant } from '../ai/Combatant';
+import { PLAYER_ENTITY_ID } from '../combat/DamageSystem';
 import { Killfeed, type CombatantDirectory } from '../combat/Killfeed';
 import { LocalIdentity } from '../combat/LocalIdentity';
 import type { ScoreSystem, ScoreTeam } from '../combat/ScoreSystem';
 import { EV, type AnnouncerCue, type GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
 import type { GameMode, KillEvent, MatchResult, RoundResult } from './GameMode';
+import { wonBy } from './MatchOutcome';
 
 /**
  * Match flow: rounds, the clock, and who is allowed to come back (brief S6.2).
@@ -291,7 +293,10 @@ export class MatchFlow {
    *
    * The winner is derived from the replicated score rather than replicated on its own: the
    * two cannot disagree, because they are the same number, and a `winner` byte on the wire
-   * would be a second fact to keep in step with the first.
+   * would be a second fact to keep in step with the first. The winning *individual*, where the
+   * mode crowns one, comes from the mode's own scan of the replicated rows (M13 Phase A) — the
+   * summary that carries the server's answer lands after this, and the announcer has already
+   * spoken by then.
    */
   private adoptReplicatedEnd(scoreA: number, scoreB: number): void {
     if (this.outcome !== null) return;
@@ -299,6 +304,7 @@ export class MatchFlow {
     this.endMatch({
       kind: 'match',
       winner,
+      winnerEntityId: winner === 'DRAW' ? undefined : this.deps.mode.individualWinner(),
       reason: 'Match over',
       scoreA,
       scoreB,
@@ -539,7 +545,9 @@ export class MatchFlow {
     this.phaseTicks = 0;
     this.outcome = result;
 
-    const localWon = result.winner === this.deps.localTeam;
+    // Side and entity, through the one reader of `winnerEntityId` (M13 Phase A): in
+    // Free-for-All only the winning entity hears "victory", not everybody on their side.
+    const localWon = wonBy(result, this.deps.localTeam, this.deps.identity?.entityId ?? PLAYER_ENTITY_ID);
     evMatchEnded.winner = result.winner;
     evMatchEnded.reason = result.reason;
     evMatchEnded.scoreA = result.scoreA;

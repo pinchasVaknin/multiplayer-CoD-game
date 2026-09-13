@@ -70,7 +70,9 @@ import {
   type CheatCode,
 } from '../shared/cheats/Cheats';
 import type { Match } from './ClientMatch';
+import { isHostile } from '../shared/combat/Hostility';
 import type { MatchResult } from '../shared/modes/GameMode';
+import { wonBy } from '../shared/modes/MatchOutcome';
 import { matchFloorLine, type XpLine, type XpLines, type XpReport } from '../shared/meta/XpRules';
 import { MatchWorld } from './MatchWorld';
 import { CharacterAssetService } from './characters/CharacterAssetService';
@@ -172,6 +174,7 @@ function netMatchResult(net: SummaryInfo): MatchResult {
   return {
     kind: 'match',
     winner: net.winner as MatchResult['winner'],
+    winnerEntityId: net.winnerEntityId,
     reason: net.reason,
     scoreA: net.scoreA,
     scoreB: net.scoreB,
@@ -182,6 +185,10 @@ function netMatchResult(net: SummaryInfo): MatchResult {
 
 /** Keys the skin deck's RNG apart from every other seeded stream in the client. */
 const CHARACTER_DECK_SALT = 0x5c1a_9e77;
+
+/** The gunship pass's two body lists, reused per frame so the takeover allocates nothing. */
+const gunshipHot: THREE.Object3D[] = [];
+const gunshipCold: THREE.Object3D[] = [];
 
 export class Game {
   readonly bus: GameBus = createGameBus();
@@ -983,8 +990,10 @@ export class Game {
         // going to change, and the profile is written exactly once (S6.6). `bankProgression`
         // is idempotent, so a harness that re-enters SUMMARY cannot double-count.
         const banks = findMode(this.selection.modeId).banksProgress;
-        // "Did I win" is the server's team assignment, not the single-player constant.
-        const won = result.winner === match.localTeam;
+        // "Did I win" is the server's seat — side and entity — not the single-player constant,
+        // and it is `wonBy` rather than a side comparison because in Free-for-All only one
+        // entity won (M13 Phase A, bug 4.4).
+        const won = wonBy(result, match.localTeam, match.localId);
         /**
          * The server's XP, when there is a server (§6.9).
          *
@@ -2504,15 +2513,19 @@ export class Game {
       // From the side the *server* assigned, not the single-player constant: a networked gunner
       // on team B had the thermal pass draw their own side hot and the enemy cold — the optic
       // reading exactly backwards, in the one streak whose entire value is telling friend from
-      // foe.
-      const friendly = match.localTeam;
-      const enemyTeam = friendly === 'A' ? 'B' : 'A';
-      this.renderer.renderGunship(
-        this.scene,
-        takeover,
-        match.botRenderer.groupFor(enemyTeam),
-        match.botRenderer.groupFor(friendly),
-      );
+      // foe. And through `isHostile` rather than "the other side" (M13 Phase A): in
+      // Free-for-All both substrate groups are hot and nothing is cold, where the pass used to
+      // draw the half of the lobby sharing the gunner's side near-black — the reported "black
+      // hit indicator". The gunner's own body is never in either group (see `NetSession
+      // .syncActors`), so hot-everything is exactly right there.
+      const viewer = match.viewer;
+      gunshipHot.length = 0;
+      gunshipCold.length = 0;
+      for (const team of ['A', 'B'] as const) {
+        const group = match.botRenderer.groupFor(team);
+        (isHostile(viewer.team, team, viewer.freeForAll) ? gunshipHot : gunshipCold).push(group);
+      }
+      this.renderer.renderGunship(this.scene, takeover, gunshipHot, gunshipCold);
     } else {
       this.renderer.render(this.scene, cam, this.viewmodel);
     }

@@ -1,6 +1,7 @@
 import { nowMs } from '../core/Clock';
 import { EV, type GameBus } from '../core/Events';
 import { clamp01, lerp } from '../core/MathUtil';
+import { isHostile } from './Hostility';
 import type { Health } from '../player/Health';
 import type { WeaponDef } from '../weapons/WeaponDefs';
 import type { HitboxRig, HitZone } from './HitboxRig';
@@ -180,15 +181,20 @@ export class DamageSystem {
   readonly list: Damageable[] = [];
 
   /**
-   * Whether a round may hurt a teammate (M4).
+   * Whether this match has teams at all (M4, renamed M13 Phase A).
    *
-   * Off in TDM, which is the CoD default for a core playlist and the only setting that
-   * makes a team score mean anything: with it on, ten bots in a corridor spend the match
-   * killing each other. It lives here because this is the one door damage goes through, and
-   * `Ballistics` reads it to skip friendly rigs during target selection so the round passes
-   * *through* a teammate rather than stopping harmlessly in one.
+   * Was `friendlyFire`, and the rename is the whole change: nothing ever set it for any reason
+   * other than Free-for-All, so it was the FFA flag under a name that suggested a ruleset that
+   * does not exist. A round may never hurt a teammate — off in TDM, which is the CoD default
+   * for a core playlist and the only setting that makes a team score mean anything: with it
+   * on, ten bots in a corridor spend the match killing each other. What this decides is whether
+   * anybody *is* a teammate, and the answer goes through `isHostile` like every other site's.
+   *
+   * It lives here because this is the one door damage goes through, and `Ballistics` reads it
+   * to skip friendly rigs during target selection so the round passes *through* a teammate
+   * rather than stopping harmlessly in one.
    */
-  friendlyFire = false;
+  freeForAll = false;
 
   /**
    * Whether a hit on a **combatant** leaves their health alone (M11 §6.3; playtest round 4, F7).
@@ -264,12 +270,19 @@ export class DamageSystem {
       this.blockedByInvulnerable++;
       return 0;
     }
-    if (!this.friendlyFire && req.sourceId !== req.targetId) {
+    if (req.sourceId !== req.targetId) {
       // The gate for every damage source, not just ballistics — which filters friendly
       // rigs out of target selection, so this is the one that will still be here when
-      // grenades and killstreaks arrive with their own way of asking.
+      // grenades and killstreaks arrive with their own way of asking. A source or target
+      // on no side at all — a range dummy — is never a teammate.
       const source = this.entities.get(req.sourceId);
-      if (source !== undefined && source.team !== undefined && source.team === target.team) return 0;
+      if (
+        source?.team !== undefined &&
+        target.team !== undefined &&
+        !isHostile(source.team, target.team, this.freeForAll)
+      ) {
+        return 0;
+      }
     }
 
     const def = req.weapon;

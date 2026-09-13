@@ -610,18 +610,19 @@ export class Match {
     this.bots.freeForAll = deps.mode.freeForAll === true;
     // There is no such thing as a teammate in FFA, so the friendly-fire gate at the damage
     // door has to come off or half the lobby is unkillable by the other half.
-    if (deps.mode.freeForAll === true) this.damage.friendlyFire = true;
+    this.damage.freeForAll = deps.mode.freeForAll === true;
     /**
      * The waiting room's two rules, from the one fact (playtest round 4, F7).
      *
      * The same pair `ServerMatch` sets from `variant`, and set here for the same reason
-     * `friendlyFire` is set in both runtimes: they are one fact about the match, and a client
+     * `damage.freeForAll` is set in both runtimes: they are one fact about the match, and a client
      * whose copy disagreed with the server's would be a client predicting a different game.
      *
      * Over the network neither is load-bearing today — the server resolves every shot at a
      * person and owns every row — and both are still set, because "the client happens not to
-     * reach this path" is the reasoning that left `friendlyFire` unset on the server for four
-     * milestones. `combatantsInvulnerable` does reach one path here: the debug self-damage.
+     * reach this path" is the reasoning that left the damage door's FFA flag (then called
+     * `friendlyFire`) unset on the server for four milestones. `combatantsInvulnerable` does
+     * reach one path here: the debug self-damage.
      */
     if (deps.warmupArena === true) {
       this.damage.combatantsInvulnerable = true;
@@ -779,6 +780,8 @@ export class Match {
       tiers: deps.tiers,
       localTeam: this.localTeam,
       localId: this.identity.entityId,
+      // The same fact `bots.freeForAll` carries, from the same registry flag (M13 Phase A).
+      freeForAll: deps.mode.freeForAll === true,
       seed: deps.seed,
       // The server resolves every blast in a networked match (S4.15). This system stays for
       // the prediction and the drawing of the player's own throw.
@@ -850,9 +853,16 @@ export class Match {
         rng: new Rng(deps.seed ^ 0x5bd1_e995),
         tiers: deps.tiers,
         roster: this.bots.roster,
+        // The same fact `bots.freeForAll` carries, from the same registry flag (M13 Phase A).
+        freeForAll: deps.mode.freeForAll === true,
       },
     });
-    this.streakRenderer = new StreakRenderer(this.streaks);
+    this.streakRenderer = new StreakRenderer(
+      this.streaks,
+      // The same relation every other surface paints by, and the same "is this me" (M13 A).
+      () => this.viewer,
+      (id) => this.identity.is(id),
+    );
     deps.scene.add(this.streakRenderer.group);
     // Care packages are contestable in every mode, so they ride the second provider slot
     // rather than the mode's (see `BotDirector.streakObjectives`).

@@ -76,6 +76,8 @@ export interface MatchEquipmentDeps {
   readonly seed: number;
   /** False on a networked client: predict and draw, resolve nothing. See `EquipmentDeps`. */
   readonly authoritative?: boolean;
+  /** Whether this match has teams. See `EquipmentDeps.freeForAll` (M13 Phase A). */
+  readonly freeForAll: boolean;
 }
 
 /** How long the concussion takes to clear. Short, per S6.4. */
@@ -148,6 +150,7 @@ export class MatchEquipment {
        * server was applying the authoritative copy of the same damage.
        */
       authoritative: deps.authoritative !== false,
+      freeForAll: deps.freeForAll,
     });
     this.thrower = new ThrowController(this.system, deps.cfg);
     this.botThrower = new BotThrower(this.system, deps.world, deps.cfg);
@@ -179,7 +182,7 @@ export class MatchEquipment {
     this.elapsed += DT;
 
     this.thrower.step(cmd, sim, this.deps.localId, this.inventory, this.deps.localTeam, playerAlive);
-    this.system.simulate(sim.x, sim.y + sim.eyeHeight, sim.z, this.deps.localTeam);
+    this.system.simulate(sim.x, sim.y + sim.eyeHeight, sim.z, this.deps.localTeam, this.deps.localId);
     this.stepBotThrows();
     this.stepFlash();
     this.stepConcussion();

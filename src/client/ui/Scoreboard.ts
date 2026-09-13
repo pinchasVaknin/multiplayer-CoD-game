@@ -1,4 +1,4 @@
-import type { PlayerScore, ScoreSystem, ScoreTeam } from '../../shared/combat/ScoreSystem';
+import { compareRows, type PlayerScore, type ScoreSystem, type ScoreTeam } from '../../shared/combat/ScoreSystem';
 import type { ColumnDef } from '../../shared/modes/GameMode';
 import {
   relationClass,
@@ -38,6 +38,17 @@ export class Scoreboard {
   private readonly teamHeads: Record<ScoreTeam, HTMLElement>;
   private readonly bodies: Record<ScoreTeam, HTMLElement>;
   private readonly rows: Record<ScoreTeam, Row[]> = { A: [], B: [] };
+  /**
+   * Every row slot on the board, in one list, for the Free-for-All ladder (M13 Phase A).
+   *
+   * FFA has no sides to split by, and a board that split its eight operators into two columns
+   * of four under ALLIES and AXIS was telling the player their team was winning a mode with
+   * no teams. So in FFA the second block is hidden, its row elements are moved under the
+   * first, and this list — A's rows then B's, the same order the DOM ends up in — is filled
+   * from one sort of the whole roster. The slots are the same preallocated elements; nothing
+   * is built or destroyed on a mode change.
+   */
+  private readonly ladder: Row[] = [];
   private readonly title: HTMLElement;
   /** The two team blocks and the grid holding them, so `setViewer` can reorder and recolour. */
   private readonly grid: HTMLElement;
@@ -115,6 +126,7 @@ export class Scoreboard {
     }
     this.grid = grid;
     this.blocks = { A: blockA, B: blockB };
+    this.ladder.push(...this.rows.A, ...this.rows.B);
     this.applyViewer();
   }
 
@@ -135,23 +147,38 @@ export class Scoreboard {
   }
 
   /**
-   * The one writer of everything relative on this board: block colour, block order, heading.
+   * The one writer of everything relative on this board: block colour, block order, heading,
+   * and — in Free-for-All — whether there are two blocks at all.
    *
    * Order is DOM order — `appendChild` on an element already in the grid moves it — so the
    * viewer's own side is always the left-hand block. That is half of what B12 reports: a
    * team-B player was reading their score on the right, in red, under a heading that told them
    * they were the Axis.
+   *
+   * In FFA there is one block, uncoloured, holding every row slot: the second block's rows are
+   * moved under the first and the second block is hidden. The move is reversed for the next
+   * team match, because the summary's board outlives every match it shows.
    */
   private applyViewer(): void {
+    const ffa = this.viewer.freeForAll;
     for (const team of teamsInViewOrder(this.viewer)) {
       const relation = relationTo(this.viewer, team);
       const block = this.blocks[team];
-      block.className = `sb__team sb__team--${relationClass(relation)}`;
+      block.className = ffa ? 'sb__team' : `sb__team sb__team--${relationClass(relation)}`;
       // Re-appending in view order re-sorts the grid without rebuilding either block.
       this.grid.appendChild(block);
       const label = this.teamLabels[team];
-      if (label !== undefined) label.textContent = teamLabel(relation);
+      if (label !== undefined) label.textContent = this.labelFor(team);
     }
+    // One ladder or two columns: the row elements go where the mode says, the objects stay put.
+    const ladderHome = this.bodies.A;
+    for (const row of this.rows.B) (ffa ? ladderHome : this.bodies.B).appendChild(row.el);
+    this.blocks.B.hidden = ffa;
+  }
+
+  /** The name column's heading: relative in a team mode, and not a side at all in FFA. */
+  private labelFor(team: ScoreTeam): string {
+    return this.viewer.freeForAll ? 'OPERATORS' : teamLabel(relationTo(this.viewer, team));
   }
 
   get isOpen(): boolean {
@@ -190,7 +217,7 @@ export class Scoreboard {
       head.style.gridTemplateColumns = template;
       const label = document.createElement('span');
       label.className = 'sb__col sb__col--name';
-      label.textContent = teamLabel(relationTo(this.viewer, team));
+      label.textContent = this.labelFor(team);
       this.teamLabels[team] = label;
       head.appendChild(label);
       for (const column of columns) {
@@ -238,45 +265,54 @@ export class Scoreboard {
 
   /** Fill the board once. Also used by the end-of-match summary. */
   refresh(score: ScoreSystem): void {
+    if (this.viewer.freeForAll) {
+      // One ladder, everybody on it, sorted once.
+      this.sortBuffer.length = 0;
+      for (const row of score.rows) this.sortBuffer.push(row);
+      this.sortBuffer.sort(compareRows);
+      this.fill(this.ladder, this.sortBuffer);
+      return;
+    }
     for (const team of ['A', 'B'] as const) {
       this.sortBuffer.length = 0;
       for (const row of score.rows) {
         if (row.team === team) this.sortBuffer.push(row);
       }
-      // Score, then kills, then fewest deaths. The CoD ordering, and stable enough that a
-      // row does not jump while the player is reading it.
-      this.sortBuffer.sort(
-        (a, b) => b.score - a.score || b.kills - a.kills || a.deaths - b.deaths,
-      );
+      // Score, then kills, then fewest deaths — `compareRows`, shared with the summary's
+      // place so the two cannot disagree.
+      this.sortBuffer.sort(compareRows);
+      this.fill(this.rows[team], this.sortBuffer);
+    }
+  }
 
-      const rows = this.rows[team];
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        if (row === undefined) continue;
-        const data = this.sortBuffer[i];
-        if (data === undefined) {
-          if (!row.el.hidden) row.el.hidden = true;
-          row.bound = null;
-          continue;
-        }
-        if (row.el.hidden) row.el.hidden = false;
-        if (row.bound !== data) {
-          row.bound = data;
-          row.el.classList.toggle('sb__row--local', data.isLocal);
-        }
-        if (data.displayName !== row.lastName) {
-          row.lastName = data.displayName;
-          row.name.textContent = data.displayName;
-        }
-        for (let c = 0; c < this.columns.length; c++) {
-          const column = this.columns[c];
-          const cell = row.cells[c];
-          if (column === undefined || cell === undefined) continue;
-          const text = column.value(data);
-          if (text === row.last[c]) continue;
-          row.last[c] = text;
-          cell.textContent = text;
-        }
+  /** Bind sorted data to a run of row slots; slots past the data are hidden. */
+  private fill(rows: readonly Row[], sorted: readonly PlayerScore[]): void {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (row === undefined) continue;
+      const data = sorted[i];
+      if (data === undefined) {
+        if (!row.el.hidden) row.el.hidden = true;
+        row.bound = null;
+        continue;
+      }
+      if (row.el.hidden) row.el.hidden = false;
+      if (row.bound !== data) {
+        row.bound = data;
+        row.el.classList.toggle('sb__row--local', data.isLocal);
+      }
+      if (data.displayName !== row.lastName) {
+        row.lastName = data.displayName;
+        row.name.textContent = data.displayName;
+      }
+      for (let c = 0; c < this.columns.length; c++) {
+        const column = this.columns[c];
+        const cell = row.cells[c];
+        if (column === undefined || cell === undefined) continue;
+        const text = column.value(data);
+        if (text === row.last[c]) continue;
+        row.last[c] = text;
+        cell.textContent = text;
       }
     }
   }

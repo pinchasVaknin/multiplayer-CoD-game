@@ -55,6 +55,16 @@ export interface RoundResult {
 export interface MatchResult {
   readonly kind: 'match';
   readonly winner: ScoreTeam | 'DRAW';
+  /**
+   * The individual who won, where the mode crowns one (M13 Phase A, bug 4.4).
+   *
+   * Free-for-All decides on a single row and had to report that row's substrate *side* as
+   * `winner`, because the summary and `MatchFlow` are written against a `ScoreTeam` — so
+   * everybody who shared the winner's side read VICTORY. This is the fact the mode actually
+   * decided; `winner` stays the side for the surfaces that still want one. Absent in every
+   * team mode and on a draw, and `personalOutcome` in `modes/MatchOutcome` is the one reader.
+   */
+  readonly winnerEntityId?: number;
   readonly reason: string;
   readonly scoreA: number;
   readonly scoreB: number;
@@ -241,6 +251,21 @@ export abstract class GameMode {
 
   /** The team score the banner shows. Kills in TDM, captures in Domination. */
   abstract teamScore(team: ScoreTeam): number;
+
+  /**
+   * The individual this mode would crown on the rows it can see, or undefined where the mode
+   * crowns a side (M13 Phase A, bug 4.4).
+   *
+   * For the one caller that has to *reconstruct* a result rather than receive one:
+   * `MatchFlow.adoptReplicatedEnd`, on a networked client, which is told the match is over by
+   * the snapshot header — two side scores — before the summary carrying `winnerEntityId` lands.
+   * The announcer cue fires from that reconstruction, and by side it congratulated everybody
+   * on the FFA winner's substrate side. Free-for-All answers with the same scan
+   * `checkWinCondition` decides on, over the client's replicated rows.
+   */
+  individualWinner(): number | undefined {
+    return undefined;
+  }
 
   /**
    * The mode's objective zones, in a fixed order, or empty (M11 Gate B, §6.8).

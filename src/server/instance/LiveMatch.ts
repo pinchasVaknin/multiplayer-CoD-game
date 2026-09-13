@@ -240,6 +240,24 @@ export class LiveMatch extends MatchInstance {
     const outcome = this.match.outcome();
     const rows: SummaryRow[] = [];
     for (const row of this.match.score.rows) {
+      /**
+       * A blank row for a body that is no longer in the match is not a result (M13 Phase A).
+       *
+       * `ScoreSystem` never removes a row (that is bug 4.3, Phase B's), and every live match
+       * spawns its full authored roster before anybody migrates in — so each human seated
+       * takes a bot's place and leaves that bot's `0/0/0` row behind. The summary carried them,
+       * and a Free-for-All summary that turns rows into *places* then told a player in an
+       * eight-body match they came 11th, ranked under three bots that never fired a shot.
+       *
+       * Only the blank *and* absent rows are dropped. A leaver's record stays, as
+       * `removePlayer` intends, and so does a replaced bot that had actually played. Phase B's
+       * replicated scoreboard replaces this rule with rows that follow seats.
+       */
+      const blank = row.kills === 0 && row.deaths === 0 && row.score === 0;
+      const present =
+        this.hasSeatOnEntity(row.entityId) ||
+        this.match.bots.roster.some((c) => c.entityId === row.entityId);
+      if (blank && !present) continue;
       rows.push({
         entityId: row.entityId,
         displayName: row.displayName,
@@ -261,6 +279,7 @@ export class LiveMatch extends MatchInstance {
       mapId: this.mapId,
       modeId: this.modeId,
       winner: outcome?.winner ?? 'DRAW',
+      winnerEntityId: outcome?.winnerEntityId,
       reason: outcome?.reason ?? 'Match ended',
       scoreA: outcome?.scoreA ?? 0,
       scoreB: outcome?.scoreB ?? 0,

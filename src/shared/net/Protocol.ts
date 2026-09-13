@@ -17,6 +17,13 @@
 /**
  * Bump on any layout change to any message in this file.
  *
+ * v16 (M13 Phase A, bug 4.4): `MsgS.Summary` carries the **winning entity** beside the winning
+ * side.
+ *
+ * Free-for-All decides on one row and could only report that row's substrate side, so every
+ * client on the winner's side — half the lobby — read VICTORY. Two bytes, `-1` where no
+ * individual won, and the summary screen decides VICTORY or a place per recipient from it.
+ *
  * v15 (M11 Gate B, playtest round 5, F9): `KilledEvent` carries the killer's **remaining health
  * at the instant of the kill**.
  *
@@ -116,7 +123,7 @@
  * grew an instance id and a migration tick — a client that cannot tell which instance a
  * snapshot describes will apply a live match's world to its warmup arena.
  */
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 /** Four bytes at the head of every frame. Cheap rejection of anything not ours. */
 export const MAGIC = 0x4f50_5231; // 'OPR1'

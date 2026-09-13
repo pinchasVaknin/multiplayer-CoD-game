@@ -37,7 +37,7 @@ import {
   type PerceptionConfig,
   type TierTable,
 } from '../shared/ai/DifficultyTiers';
-import { DamageSystem } from '../shared/combat/DamageSystem';
+import { DamageSystem, PLAYER_ENTITY_ID } from '../shared/combat/DamageSystem';
 import { ScoreSystem } from '../shared/combat/ScoreSystem';
 import { createGameBus, EV, type GameBus } from '../shared/core/Events';
 import { DT } from '../shared/core/Loop';
@@ -179,6 +179,8 @@ export interface ServerMatchResult {
   readonly mapId: string;
   readonly modeId: string;
   readonly winner: string;
+  /** The individual who won, where the mode crowns one. See `MatchResult.winnerEntityId`. */
+  readonly winnerEntityId: number | undefined;
   readonly reason: string;
   readonly scoreA: number;
   readonly scoreB: number;
@@ -343,18 +345,19 @@ export class ServerMatch {
      * Free-for-All, read off the registry rather than compared against the id.
      *
      * That is what `ClientMatch` does, and it is the difference between one fact and two.
-     * `friendlyFire` went with it since M7 on the client and was never set here: FFA keeps the
-     * two-team substrate internally, so half the roster was hostile, hunted by the AI, and
-     * **immune** — `DamageSystem.apply` returned 0 for every shot at them and `Ballistics`
-     * skipped their rigs entirely, so rounds passed straight through.
+     * The damage door's flag (then `friendlyFire`, now `freeForAll`) went with it since M7 on
+     * the client and was never set here: FFA keeps the two-team substrate internally, so half
+     * the roster was hostile, hunted by the AI, and **immune** — `DamageSystem.apply` returned
+     * 0 for every shot at them and `Ballistics` skipped their rigs entirely, so rounds passed
+     * straight through.
      */
     this.bots.freeForAll = this.modeEntry.freeForAll === true;
-    if (this.modeEntry.freeForAll === true) this.damage.friendlyFire = true;
+    this.damage.freeForAll = this.modeEntry.freeForAll === true;
     /**
      * The waiting room takes no health and keeps no record (§6.3, playtest round 4, F7).
      *
      * One fact — this match is the permanent arena — and both consequences are set from it
-     * here, beside `friendlyFire`, for the reason that one is set here: *"the two facts are the
+     * here, beside `damage.freeForAll`, for the reason that one is set here: *"the two facts are the
      * same fact and setting one without the other is what produced a mode where you could shoot
      * someone but not score them"*. `ClientMatch` sets the identical pair from `warmupArena`.
      *
@@ -483,6 +486,8 @@ export class ServerMatch {
         rng: new Rng(options.seed ^ 0x5bd1_e995),
         tiers: this.tiers,
         roster: this.bots.roster,
+        // The same fact `bots.freeForAll` carries, from the same registry flag (M13 Phase A).
+        freeForAll: this.modeEntry.freeForAll === true,
       },
     });
     // Care packages are contestable in every mode, so they ride the second provider slot rather
@@ -508,6 +513,8 @@ export class ServerMatch {
       damage: this.damage,
       roster: this.bots.roster,
       cfg: this.equipmentConfig,
+      // The same fact `bots.freeForAll` carries, from the same registry flag (M13 Phase A).
+      freeForAll: this.modeEntry.freeForAll === true,
     });
     this.botThrower = new BotThrower(this.equipment, this.world, this.equipmentConfig);
     this.equipmentRng = new Rng(options.seed ^ 0x1b87_3593);
@@ -688,7 +695,7 @@ export class ServerMatch {
      * authoritative one for ever.
      */
     this.stepThrowers();
-    this.equipment.simulate(0, 0, 0, PLAYER_TEAM, false);
+    this.equipment.simulate(0, 0, 0, PLAYER_TEAM, PLAYER_ENTITY_ID, false);
     this.stepBotThrows();
     // Streaks tick after the bots that may have just shot one down, and before the flow that
     // may declare the match over and end them all. The same order `ClientMatch` uses.
@@ -1441,6 +1448,7 @@ export class ServerMatch {
       mapId: this.mapEntry.id,
       modeId: this.modeEntry.id,
       winner: r.winner,
+      winnerEntityId: r.winnerEntityId,
       reason: r.reason,
       scoreA: r.scoreA,
       scoreB: r.scoreB,

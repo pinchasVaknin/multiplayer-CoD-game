@@ -1,3 +1,4 @@
+import { isHostile } from '../combat/Hostility';
 import { DEG2RAD } from '../core/MathUtil';
 import type { Rng } from '../core/Rng';
 import type { NavGrid } from '../world/Navmesh';
@@ -422,7 +423,7 @@ export class SpawnSelector {
       const dist = Math.hypot(dx, dz);
 
       // FFA scores against everybody: seven hostiles rather than one hostile team.
-      if (!this.freeForAll && other.team === team) {
+      if (!isHostile(team, other.team, this.freeForAll)) {
         if (dist < measuredFriendly) measuredFriendly = dist;
         continue;
       }

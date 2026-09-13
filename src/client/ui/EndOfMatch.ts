@@ -1,5 +1,6 @@
 import { accuracy, killDeath, type PlayerScore, type ScoreSystem, type ScoreTeam } from '../../shared/combat/ScoreSystem';
-import type { ColumnDef } from '../../shared/modes/GameMode';
+import type { ColumnDef, MatchResult } from '../../shared/modes/GameMode';
+import { personalOutcome } from '../../shared/modes/MatchOutcome';
 import { Scoreboard } from './Scoreboard';
 import type { ViewerContext } from '../../shared/ui/TeamColour';
 
@@ -179,19 +180,29 @@ export class EndOfMatch {
     this.board.setViewer(viewer);
   }
 
-  show(
-    winner: ScoreTeam | 'DRAW',
-    localTeam: ScoreTeam,
-    reason: string,
-    scoreA: number,
-    scoreB: number,
-    score: ScoreSystem,
-  ): void {
-    const won = winner === localTeam;
-    this.outcome.textContent = winner === 'DRAW' ? 'DRAW' : won ? 'VICTORY' : 'DEFEAT';
-    this.outcome.classList.toggle('eom__outcome--win', winner !== 'DRAW' && won);
-    this.outcome.classList.toggle('eom__outcome--loss', winner !== 'DRAW' && !won);
-    this.detail.textContent = `${reason} · ${scoreA} — ${scoreB}`;
+  /**
+   * The headline and the detail line, per recipient (M13 Phase A, bug 4.4).
+   *
+   * `personalOutcome` decides what this seat reads — VICTORY, DEFEAT, DRAW, or in a mode that
+   * crowned one individual, that individual's VICTORY and everybody else's place. The seat is
+   * a side *and* an entity, because in Free-for-All the side is substrate and three of every
+   * four players on the winner's side did not win.
+   *
+   * The detail line names the winner where there is one to name: in a team mode the two team
+   * scores say who won, and in Free-for-All `scoreA — scoreB` are the leader's and the
+   * runner-up's kills, which say nothing about *who* unless the leader is named.
+   */
+  show(result: MatchResult, localTeam: ScoreTeam, localId: number, score: ScoreSystem): void {
+    const outcome = personalOutcome(result, localTeam, localId, score.rows);
+    this.outcome.textContent = outcome.label;
+    this.outcome.classList.toggle('eom__outcome--win', outcome.kind === 'WIN');
+    this.outcome.classList.toggle('eom__outcome--loss', outcome.kind === 'LOSS');
+    const winnerName =
+      result.winnerEntityId === undefined ? '' : nameOf(score.rows, result.winnerEntityId);
+    this.detail.textContent =
+      winnerName === ''
+        ? `${result.reason} · ${result.scoreA} — ${result.scoreB}`
+        : `${winnerName} wins · ${result.reason} · ${result.scoreA} — ${result.scoreB}`;
 
     this.paintPersonal(score);
     this.board.refresh(score);
@@ -242,4 +253,12 @@ function findLocal(rows: readonly PlayerScore[]): PlayerScore | undefined {
     if (row.isLocal) return row;
   }
   return undefined;
+}
+
+/** A row's callsign, or empty for an entity the board has no row for. */
+function nameOf(rows: readonly PlayerScore[], entityId: number): string {
+  for (const row of rows) {
+    if (row.entityId === entityId) return row.displayName;
+  }
+  return '';
 }

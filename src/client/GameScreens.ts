@@ -180,13 +180,12 @@ export class GameScreens {
     this.summary.setViewer(match.viewer);
     this.summary.setColumns(match.mode.getScoreboardColumns(), match.mode.name, mapName);
     this.summary.show(
-      result.winner,
-      // The side the server put this client on, so a team-B player is not congratulated for
-      // losing — the same constant-standing-in-for-an-assignment bug as the alive counter.
+      result,
+      // The seat the server put this client in — side *and* entity — so a team-B player is not
+      // congratulated for losing (the same constant-standing-in-for-an-assignment bug as the
+      // alive counter), and an FFA player on the winner's substrate side is not either (4.4).
       match.localTeam,
-      result.reason,
-      result.scoreA,
-      result.scoreB,
+      match.localId,
       match.score,
     );
     this.summary.xpSlot.hidden = report === null;

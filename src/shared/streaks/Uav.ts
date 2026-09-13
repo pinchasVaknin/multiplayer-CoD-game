@@ -1,3 +1,4 @@
+import { isHostile } from '../combat/Hostility';
 import { DT } from '../core/Loop';
 import { TAU } from '../core/MathUtil';
 import { Killstreak } from './KillstreakBase';
@@ -56,8 +57,13 @@ export class Uav extends Killstreak {
 
     // Record anything the beam crossed this tick. The beam is a bearing from the map centre,
     // so "crossed" is the angular interval [previous, current] containing the contact.
+    //
+    // "Enemy" is `isHostile`'s answer — in Free-for-All, everybody but the owner, who is
+    // skipped by id because the substrate cannot tell them apart from a same-side opponent
+    // (M13 Phase A). Before that a UAV in FFA showed half the lobby.
     for (const c of this.ctx.roster) {
-      if (c.team === this.ownerTeam || !c.participating) continue;
+      if (!c.participating || c.entityId === this.ownerId) continue;
+      if (!isHostile(this.ownerTeam, c.team, this.ctx.freeForAll)) continue;
       // Ghost (M6). The contact is never recorded, so nothing downstream has to filter.
       if (!this.ctx.visibleToUav(c.entityId)) continue;
       const bearing = normalise(Math.atan2(c.pz, c.px));

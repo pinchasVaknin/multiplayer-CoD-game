@@ -13348,6 +13348,130 @@ place a sentry — sentry kills against same-substrate players **> 0** (today 0 
 everybody else a place; `grep -rn "=== 'A'" src/client` returns only `BotRenderer.groupFor`,
 `Game.draw`'s enemy-group choice and the debug panels. Size **S–M**.
 
+## Phase A — done (session of 2026-09-13/14): one predicate, ten sites, and a place instead of a side
+
+Built to the brief above. Three departures from it, each stated where it happened; the gate ran
+red on the tree before the fix and green after, and every number is below under "Measured".
+
+### The predicate, and where it lives
+
+`shared/combat/Hostility.ts` — `isHostile(viewerTeam, subjectTeam, freeForAll)`. In `combat/`
+rather than beside `relationTo` in `ui/`, because `ai/`, `streaks/` and `equipment/` are
+simulation and `combat/` is the layer they already sit on (`Damageable.team` says the same about
+the direction of that dependency). `relationTo` is now that function plus the `NEUTRAL` answer,
+so there is still one test; the `readability` probe over `(viewer, subject)` is unchanged and
+still 12 pairs, 0 violations.
+
+**It decides sides, not identity.** In Free-for-All everybody is hostile — the viewer's own
+substrate side included, and therefore the viewer — because the substrate cannot tell the two
+apart. Every caller skips the self case by entity id, which four already did and which the
+sentry, the UAV and the danger arrow had to learn: a sentry with the predicate alone shoots
+its owner.
+
+### The sites — seven in the table, ten in the tree
+
+| Site | What changed |
+|---|---|
+| `Perception`, `SpawnSelector`, `ScoreSystem` (kill and assist) | the `!ffa && same` guard became the call; truth table identical, and the TDM harness proves it (below) |
+| `DamageSystem` | **`friendlyFire` is renamed `freeForAll`.** Nothing had ever set it for any other reason; it was the FFA flag wearing the name of a ruleset that does not exist. `Ballistics.nearestTarget`, which read it to pass rounds through teammates, goes through the same call |
+| `SentryGun.acquire` | `isHostile` plus an owner skip; `StreakContext.freeForAll` is a required field both roots supply |
+| `Uav.onTick` | same pair |
+| `Game.draw` | the gunship pass takes **lists** — `renderGunship(scene, cam, hot[], cold[])` — and the groups are dealt by `isHostile` over `match.viewer`. FFA: both groups hot, nothing cold. The gunner's own body is never in either group (`NetSession.syncActors`), so that is exactly right |
+| `EquipmentSystem.stepTrigger` | **not in the table.** A claymore compared `c.team === p.team` and would not fire on the half of an FFA lobby sharing its owner's side — the sentry bug wearing a different body. `EquipmentDeps.freeForAll`, required, both roots and `AccuracyAudit` |
+| `EquipmentSystem.noteThreat` | **not in the table.** The danger arrow stayed down for that half's grenades. Needed a `localId` on `simulate` so the player's own grenade is not a threat to them once the side test says everything is |
+| `BotThrower.isSafe` | **not in the table.** A bot would not throw where a same-side body stood. Reads `system.freeForAll` |
+
+The table's seventh row (`ChopperGunner.ts`) needed nothing: the gun's target selection is
+`Ballistics.nearestTarget`, which `damage.freeForAll` already let through in FFA; only the render
+pass was wrong. The three extra sites came from the audit the brief asked for, widened —
+`grep -rn "\.team === \|\.team !== " src/shared` — and were done here because they are the same
+defect and each was three lines. What that grep still returns and why it is left: `MatchFlow:631`
+sets `KillEvent.friendly` by side, read only by TDM and Domination, so FFA never sees it;
+`SpectatorTarget.isWatchable` lets a dead player spectate same-side bodies only, which in FFA is
+half the lobby — a design question (decision 7 below), not a bug report.
+
+### Bug 4.4 — a winner is an entity, and everybody else has a place
+
+- `MatchResult.winnerEntityId?` and `SummaryInfo.winnerEntityId?` (**protocol v16**, an `i16`,
+  `-1` absent). `FreeForAll.checkWinCondition` sets it from the row it already decided on.
+- `shared/modes/MatchOutcome.ts` — `wonBy`, `personalOutcome`, `placeOf`, `ordinal`. **The one
+  reader.** The four places that compared `winner === localTeam` — `EndOfMatch.show`,
+  `MatchFlow.endMatch` (the announcer cue), `Game`'s `won` (the WIN BONUS line and the profile's
+  win tally) and the layout probe — all ask it.
+- A fifth reader was found on the way: `MatchFlow.adoptReplicatedEnd`, which *reconstructs* the
+  result on a networked client from the two side scores before the summary lands, and announces
+  from it. `GameMode.individualWinner()` (FFA: the same kills scan `checkWinCondition` uses, over
+  the client's replicated rows) feeds it. The summary screen itself uses the server's answer.
+- **Places.** `personalOutcome` ranks the reader on the ladder with `compareRows` — lifted out of
+  `Scoreboard.refresh` into `ScoreSystem` so the board and the place cannot disagree — with the
+  winner pinned to first whatever the ladder says (the mode decides on kills, the ladder ranks on
+  score first, and in single-player a headshot is half a kill in points). Ties share an ordinal:
+  two players at 0/5/0 both read **7TH**, which is what competition ranking means and what the
+  final run produced.
+- **The board.** In FFA `Scoreboard` hides its second block, moves that block's row slots under
+  the first, heads the one column `OPERATORS` with no side colour, and fills it from one sort;
+  the move is reversed on the next team match because the summary's board outlives every match
+  it shows (checked on one instance: FFA show → team show leaves 8 + 8 under ALLIES / AXIS).
+  `EndOfMatch`'s detail line names the winner where there is one — `PENNANT wins · Kill limit
+  · 11 — 8`. `HudBanner` needed nothing: it has drawn leader / you in FFA since Gate B.
+- **A summary row that never played.** The first green run placed the three clients **11TH, 9TH
+  and 9TH in an eight-body match.** `ScoreSystem` never removes a row (4.3), every live match
+  spawns its full roster before anybody migrates in, and each human seated leaves the replaced
+  bot's `0/0/0` row behind — eleven rows on the wire, and a place counted over them.
+  `LiveMatch.buildSummary` now drops a row that is blank *and* whose body is neither seated nor
+  on the roster; a leaver's record stays, as `removePlayer` intends. **Phase B replaces this rule
+  with rows that follow seats** — it is the one place the stopgap lives, and it says so.
+
+### Bug 4.1
+
+The human tested a two-window match from team B before this session: team-mates read as
+team-mates. The one absolute site left was the sentry body, and it is a `TeamRelation` now:
+`SentryMesh` takes the relation, paints from the palette (friendly or hostile at half
+brightness — under the base palette within a few units of the two hex literals it replaces) and
+repaints on a palette change; `StreakRenderer` decides the relation from `viewer` and the owner
+id, so your own sentry is friendly in FFA too. Both `grep -rn "=== 'A'" src/client` and the
+palette rule are satisfied; the audit's actual residue is `BotRenderer.groupFor`, the debug
+panels, `HudBanner`'s two slot picks, `ClientMatch`'s S&D alive count, `MatchObjectives`' capture
+count and the layout probe's fixture names — every one a "which side is the other side" in a
+mode that has two, none a hostility test.
+
+### The instrument
+
+`npm run skirmish -- --wallet-streak <id>`: every client fields `[id, null, null]` and types
+`MO951357` once seated in the live match — a purchase that crosses the wire the way a player's
+does, with `cheatsEnabled` implied and `--cheats` refused beside it. The server folds every
+sentry, live and retired, into `StreakSystem.sentryReport()` (`SentryTally`: placed, shots, hits,
+kills, **`killsOnOwnSubstrate`**); the harness samples it while the match runs, prints it, and
+under `--wallet-streak sentry` on FFA fails on `killsOnOwnSubstrate === 0` once any kill has
+landed, and on any team mode fails on it being anything but 0. Each headless client records what
+its summary said to *it* — `personalOutcome` over the wire's rows with its live seat — and the
+harness requires one named winner across clients, at most one VICTORY, and a place for everybody
+else in FFA.
+
+One latent gap fixed on the way: `streakHarnessClass` now fields the granted or wallet-bought
+streak. Since the wallet pivot (`0a2038a`, 2026-09-01) `--grant-streak chopper` had credited a
+wallet against a class that could only buy a UAV, so `--drop-gunner` waited for a chopper nobody
+could call in.
+
+### Found while here, not fixed
+
+- `MatchHud.ts:282` and `:347` compare `entityId === 0` — the single-player constant, in the
+  friendly-chevron loop and the gunfire-ping filter. Over the network the local player is entity
+  1 or above, so in FFA their own shots ping their own minimap. Identity, not hostility;
+  `MatchHudDeps` has no `localId` to route it through. Two lines once it does.
+- The skirmish harness prints *"background build: the return to the arena was NOT EXERCISED —
+  no match ended in this run"* on runs where three summaries arrived and three clients migrated
+  back. The F13 line keys on something other than the summaries; stale, and worth one look.
+- Every headless client's XP line reads `WIN BONUS 250, TOP OPERATOR 100` at 0 kills — Phase B's
+  4.2, visible in every run.
+
+### Human playtest, when Phase A is closed
+
+None of this can be seen headless: the thermal pass in a networked FFA (everybody orange, nobody
+near-black — the "black hit indicator"); the sentry body's tint from a team-B seat and from an
+FFA seat; a claymore triggering on a same-side body in FFA; the danger arrow for a same-side
+grenade; and the announcer at the end of a networked FFA saying "victory" to one player.
+
 ## Phase B — the scoreboard and the XP award become replicated facts
 
 Two more reports, one shape — the one `scripts/check-authority.mjs` exists for: a fact the
@@ -13363,7 +13487,10 @@ because it was not there for the events. Both halves of the report are true.
 
 **Do:** the scoreboard becomes state. A `scoreboard` message — the full row set, sent on every
 seat assignment and on change, delta-compressed like the snapshot — and the set *is* the
-authority: a row absent from it is removed. On the server, a row outlives its seat for the match
+authority: a row absent from it is removed. Phase A left one stopgap for this to retire:
+`LiveMatch.buildSummary` drops a row that is blank and whose body is neither seated nor on the
+roster, because the summary's rows were placing FFA players 11th in an eight-body match. With
+rows that follow seats, the summary carries the same rows and the rule goes. On the server, a row outlives its seat for the match
 and is keyed by the reconnect token as well as the entity, so a post-grace return **adopts** the
 row rather than opening a second one. One line in `check-cosmetics.mjs`'s allowlist for the new
 message, with the §4.15 row it sits in ("scores"). Extend `skirmishHarness --reconnect` with the
@@ -13378,8 +13505,8 @@ the ones who earned them") and defers it to a networked-economy change. This is 
 **Do:** `shared/meta/MatchProgression` is already the event-driven ledger the single-player
 summary uses, keyed to `PLAYER_ENTITY_ID`. Instantiate one per seated human on the server keyed
 to that seat's `entityId`, and make `SummaryInfo` per recipient (unicast) with `xp` from the
-recipient's own ledger; `win` is `row.team === winner` (or `entityId === winnerEntityId` in
-FFA), `mvp` is `rows[0].entityId === recipient`. `shared/debug/MatchXpAudit` grows a second
+recipient's own ledger; `win` is `wonBy(result, row.team, entityId)` — the one reader Phase A
+built in `modes/MatchOutcome` — and `mvp` is `rows[0].entityId === recipient`. `shared/debug/MatchXpAudit` grows a second
 half: the same event sequence through a server ledger and a solo ledger must produce the same
 lines. Size **M–L** for the pair; the scoreboard first, because the XP lines want its rows.
 
@@ -13555,12 +13682,13 @@ viewmodel already owns rather than a new one.
 
 | # | Decision | Recommendation |
 |---|---|---|
-| 1 | Does bug 4.1 still reproduce after `8309b86`? | Check in a two-client match on team B before Phase A spends on it |
+| 1 | ~~Does bug 4.1 still reproduce after `8309b86`?~~ **Answered by the human (2026-09-13): no.** A two-window match from team B read correctly; Phase A spent only the sentry-body line on it | — |
 | 2 | Slide: a layout with a crouch clip, or raise `slideHeight`? | The layout, if a slide clip exists among the new files; otherwise raise the height and record the number |
 | 3 | Pads: screen-space minimum size? | Start without; add the one line if 25 m reads badly |
 | 4 | Goggles after the pads? | Yes, once the pads are accepted — per-skin work |
 | 5 | Which of the new clips exist — slide, throw, reload, melee, flinch, more deaths? | Run `animation-manifest` over `incoming/` first; the answer sizes Phase D and decides whether v13 is needed |
 | 6 | Scoreboard rows: keep a departed player's row for the match, or drop it at unseat? | Keep it for the match, keyed by reconnect token; drop only when the match ends |
+| 7 | Free-for-All spectating: `SpectatorTarget.isWatchable` shows a dead player same-side bodies only, which in FFA is half the lobby. Anyone, or leave it? | Anyone — there are no team-mates to protect, and the reference games spectate the killer. One `isHostile`-shaped change in `shared/modes/SpectatorTarget.ts` plus its harness invariant ("never an enemy") rewritten for FFA |
 
 ## Measured, this session
 
@@ -13577,6 +13705,41 @@ viewmodel already owns rather than a new one.
   (crouch) → 0.54 m at 0.31 (slide). The visual head in the crouch clips is **not measured** —
   that is C1's first job.
 
+### Phase A (2026-09-13/14)
+
+Every skirmish line below is `MATCH_ROUND_SECONDS=150 npm run skirmish -- --vote 3
+--wallet-streak sentry --cycles 1` — three clients, one cycle, Foundry, shipped 40/10/10 cycle,
+**timings shortened** on the round so the summary is reached; structural results only.
+
+- **Red control** (the tree with `SentryGun.acquire` ignoring the mode and `FreeForAll` naming
+  no entity): sentries **3 placed, 32/123 (26.0 %), 5 kills, 0 on the sentry's own side**;
+  summary `OP1 DEFEAT, OP2 VICTORY, OP3 DEFEAT — winner named B`. **FLOW CHECK FAILED** on both
+  lines — the probe is red on the defect.
+- **Green, first run:** 3 placed, 58/208 (27.9 %), 7 kills, **3 on own side**; places **11TH /
+  9TH / 9TH over 11 rows** in an eight-body match — the blank-row finding above.
+- **Green, after the summary drops blank absent rows:** 3 placed, 41/166 (24.7 %), 7 kills, 3
+  on own side; **6TH / 7TH / 8TH of 8**, winner `PENNANT` on every client.
+- **Final tree** (the equipment sites in): 3 placed, 58/162 (35.8 %), 9 kills, **2 on own
+  side**; **7TH / 6TH / 7TH of 8** (OP1 and OP3 tied at 0/5/0), winner `PENNANT` on every
+  client. FLOW CHECK PASSED.
+- **TDM control** (`--vote 0`, same flags): 4 placed, 8/40 (20.0 %), 0 kills, **0 on own side**;
+  `DEFEAT / VICTORY / DEFEAT` by seat, winner named `B`, 10 rows. PASSED.
+- **Determinism, team modes:** `npm run harness` (TDM, 5 matches, seeds 1–5) on the clean tree
+  and on this one — every per-match line identical (75–66 / 16 582 t, 75–66 / 17 659 t, 62–75 /
+  19 485 t, 44–75 / 14 935 t, 75–63 / 18 612 t) and every metric event identical but `pid`, wall
+  ms and heap. The four rewritten guards are the same truth table.
+- **Determinism, FFA, three runs** (`main.js --mode FFA --matches 3 --seed 7 --asap`): clean
+  **30–24 / 19 486 t, 30–23 / 20 542 t, 30–26 / 23 274 t**; everything in but the equipment
+  predicate pinned to the old rule — **identical to clean**; final tree **30–19 / 17 793 t,
+  30–28 / 20 622 t, 30–28 / 28 551 t**. The move is the claymore trigger and the bot's throw
+  safety alone: in those three matches **44** bot throws had a same-side body inside 0.7 × the
+  safe radius of the landing spot that the old rule refused. Bots never place a sentry, so the
+  sentry half moves nothing headless.
+- **Readability:** 12 `(viewer, subject)` pairs, 0 violations. **Layout:** a new `summary/ffa`
+  surface — sixteen rows in one ladder, the local player on the winner's substrate side, headline
+  **15TH** — fits at all six viewports (content 753×644 at 1366; 343×717 at 375). **`npm run
+  check`** green; 330 files, 19 snapshot fields.
+
 ## Needs a browser
 
 The Browser pane in this session ran with `requestAnimationFrame` suspended; everything above
@@ -13586,14 +13749,31 @@ clips; the support hand tracking the weapon during a run; whether the blue namep
 red pads (once built) read as *equipment* rather than *markers* at play speed; and the crouch
 transition once `timeScale = -1` is in.
 
-## How to start — the Phase A brief
+**From Phase A**, the same split: the thermal pass in a networked FFA (everybody orange, nobody
+near-black); the sentry body's tint from a team-B seat and from an FFA seat, own sentry blue;
+a claymore triggering on a same-side body in FFA; the danger arrow for a same-side grenade; and
+the announcer saying "victory" to exactly one player at the end of a networked FFA. The FFA
+summary screen *was* seen — `/probes/layout.html?show=summary/ffa` — and reads **15TH · ALLY-003
+WINS · KILL LIMIT · 30 — 27** over one sixteen-row ladder headed OPERATORS.
 
-A fresh session. Hand it this file and the brief below; it has everything it needs.
+## How to start — the Phase B brief
 
-> **M13 Phase A — one hostility predicate.** Read PLAN.md "Milestone 13", Phase A. Add
-> `isHostile` beside `relationTo` and route the seven sites through it, including the gunship's
-> hot/cold split in `Game.draw` (FFA: both groups hot). Add `winnerEntityId` to `MatchResult`
-> and `SummaryInfo`; make `EndOfMatch`, `XpSummary`, `Scoreboard` and `HudBanner` FFA-aware.
-> Route `StreakMeshes` through `relationTo`. Gate: `npm run check`; `npm run skirmish` with
-> `--vote` on FFA and a headless client that buys a sentry with `MO951357`, sentry kills against
-> same-substrate players > 0; the FFA summary names one winner. Record the numbers under "Measured" in this section. STOP at the gate.
+Phase A is built and at its gate (see "Phase A — done" above); the human closes it. The next
+fresh session takes this file and the brief below.
+
+> **M13 Phase B — the scoreboard and the XP award become replicated facts.** Read PLAN.md
+> "Milestone 13", Phase B, and "Phase A — done" for the tree you inherit (`isHostile`,
+> `MatchOutcome.wonBy`, `SummaryInfo.winnerEntityId`, the blank-row stopgap in
+> `LiveMatch.buildSummary`, the `--wallet-streak` harness flag). Scoreboard first: a
+> `scoreboard` message — the full row set, delta-compressed, on every seat assignment and on
+> change — that *is* the authority: a row absent from it is removed; on the server a row outlives
+> its seat for the match and is keyed by the reconnect token, so a post-grace return adopts it.
+> Retire the summary's own `rows` and the blank-row stopgap in favour of those rows. Then XP: one
+> `MatchProgression` per seated human on the server; `SummaryInfo` unicast per recipient with
+> `xp` from that ledger, `win` from `wonBy`, `mvp` from the top row; `shared/debug/MatchXpAudit`
+> grows the second half (the same events through a server ledger and a solo ledger produce the
+> same lines). Gate: `npm run check`; `npm run skirmish -- --drop-return 1 --drop-hold 40000`
+> (past the grace) with the invariant *rows on every client === rows on the server*, counted and
+> printed; `--vote 3 --wallet-streak sentry` still green with places of 8; a 0-kill client's XP
+> lines differ from the top human's. Record the numbers under "Measured" in this section. STOP
+> at the gate.

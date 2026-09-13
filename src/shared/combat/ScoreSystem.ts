@@ -1,4 +1,5 @@
 import { EV, type GameBus } from '../core/Events';
+import { isHostile } from './Hostility';
 import { LocalIdentity } from './LocalIdentity';
 import { hitsFrom, shotsFrom } from './ShotAccounting';
 
@@ -114,7 +115,7 @@ export class ScoreSystem {
    * were credited to nobody, so the ladder crawled and the 30-kill limit was effectively
    * unreachable inside the clock.
    *
-   * Set beside `DamageSystem.friendlyFire`, from the same registry flag, in both runtimes —
+   * Set beside `DamageSystem.freeForAll`, from the same registry flag, in both runtimes —
    * the two facts are the same fact ("there are no teammates here") and setting one without
    * the other is what produced a mode where you could shoot someone but not score them.
    */
@@ -282,7 +283,7 @@ export class ScoreSystem {
     // through ballistics, but the score has to be right for whatever comes next.
     //
     // Unless there are no teammates: in FFA the side is substrate rather than allegiance.
-    if (!this.freeForAll && victim !== undefined && victim.team === killer.team) return;
+    if (victim !== undefined && !isHostile(killer.team, victim.team, this.freeForAll)) return;
     killer.kills++;
     killer.score += points;
     killer.streak++;
@@ -311,7 +312,7 @@ export class ScoreSystem {
       const row = this.rowsById.get(id);
       if (row === undefined) continue;
       // Same rule as the kill itself: in FFA the victim's "side" is not a side.
-      if (!this.freeForAll && row.team === victimTeam) continue;
+      if (!isHostile(row.team, victimTeam, this.freeForAll)) continue;
       row.assists++;
     }
   }
@@ -407,4 +408,24 @@ export function accuracy(row: PlayerScore): number {
 /** Kill/death ratio. Deaths of zero reads as the kill count, which is what CoD shows. */
 export function killDeath(row: PlayerScore): number {
   return row.deaths === 0 ? row.kills : row.kills / row.deaths;
+}
+
+/** What a ladder ranks by. Structural, so the wire's summary rows rank the same way. */
+export interface Rankable {
+  readonly score: number;
+  readonly kills: number;
+  readonly deaths: number;
+}
+
+/**
+ * The board's order: score, then kills, then fewest deaths (M13 Phase A, lifted from
+ * `Scoreboard.refresh`).
+ *
+ * The CoD ordering, and stable enough that a row does not jump while the player is reading
+ * it. One copy, because the Free-for-All summary now turns the same order into a *place* —
+ * "2ND", "3RD" — and a place computed by a second comparator would be a place the board can
+ * contradict.
+ */
+export function compareRows(a: Rankable, b: Rankable): number {
+  return b.score - a.score || b.kills - a.kills || a.deaths - b.deaths;
 }

@@ -11,7 +11,7 @@ import { ChopperGunner } from './ChopperGunner';
 import { CounterUav } from './CounterUav';
 import { Killstreak, type StreakContext } from './KillstreakBase';
 import { MortarStrike } from './MortarStrike';
-import { SentryGun } from './SentryGun';
+import { makeSentryTally, SentryGun, type SentryTally } from './SentryGun';
 import {
   STREAK_COOLDOWN_SECONDS,
   STREAK_DEFS,
@@ -135,6 +135,8 @@ export class StreakSystem implements ObjectiveProvider {
   private readonly deps: StreakSystemDeps;
   private readonly ctx: StreakContext;
   private readonly unsubscribe: Array<() => void> = [];
+  /** Every sentry that has left the world, folded. The live ones are added on read. */
+  private readonly retiredSentries: SentryTally = makeSentryTally();
   private nextInstanceId = 1;
   private nextEntityIdCounter = STREAK_ENTITY_BASE;
 
@@ -488,6 +490,19 @@ export class StreakSystem implements ObjectiveProvider {
     return this.ledger.report();
   }
 
+  /**
+   * Every sentry this match has placed, live and retired (M13 Phase A).
+   *
+   * Folded at `retire` so a sentry that expired or was shot down is still counted — the
+   * harness samples this while the match is running, and a report that only walked `active`
+   * would lose each sentry's kills ninety seconds after it placed them. Allocates; a debug read.
+   */
+  sentryReport(): SentryTally {
+    const out = { ...this.retiredSentries };
+    for (const s of this.active) if (s instanceof SentryGun) s.tallyInto(out);
+    return out;
+  }
+
   dispose(): void {
     this.endAll();
     for (const off of this.unsubscribe) off();
@@ -516,6 +531,7 @@ export class StreakSystem implements ObjectiveProvider {
    */
   private retire(index: number, streak: Killstreak): void {
     this.active.splice(index, 1);
+    if (streak instanceof SentryGun) streak.tallyInto(this.retiredSentries);
     if (streak.def.effectEnds === 'expiry') {
       this.ledger.armCooldown(streak.ownerId, streak.def.id, this.lastTick + COOLDOWN_TICKS);
     }

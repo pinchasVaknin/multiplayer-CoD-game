@@ -3,6 +3,7 @@ import { CombatBehaviour } from '../ai/CombatBehaviour';
 import { BotBlackboard } from '../ai/BotBlackboard';
 import type { TierConfig } from '../ai/DifficultyTiers';
 import { buildLayout, HitboxRig, type RigLayout } from '../combat/HitboxRig';
+import { isHostile } from '../combat/Hostility';
 import { makeDamageRequest, type Damageable, type DamageRequest } from '../combat/DamageSystem';
 import { Ballistics, makeShotTrace, type ShotTrace } from '../weapons/Ballistics';
 import { EV } from '../core/Events';
@@ -17,6 +18,26 @@ import { simCos, simSin } from '../core/SimMath';
 
 /** Module-level scratch. The sim path allocates nothing (S4.7). */
 const scratchRay: RayHit = makeRayHit();
+
+/**
+ * Every sentry a match has placed, folded into one row (M13 Phase A).
+ *
+ * The skirmish harness's Free-for-All gate: `killsOnOwnSubstrate` was **0 by construction**
+ * before `acquire` went through `isHostile`, so a run that reports it above zero has watched a
+ * sentry shoot somebody on its owner's substrate side — which is the whole of the fix, measured.
+ * `StreakSystem.sentryReport` builds it from the live sentries plus the ones it has retired.
+ */
+export interface SentryTally {
+  placed: number;
+  shotsFired: number;
+  shotsHit: number;
+  kills: number;
+  killsOnOwnSubstrate: number;
+}
+
+export function makeSentryTally(): SentryTally {
+  return { placed: 0, shotsFired: 0, shotsHit: 0, kills: 0, killsOnOwnSubstrate: 0 };
+}
 
 /**
  * Sentry Gun (brief S6.1): placeable, auto-targets, destructible, 90 s.
@@ -63,6 +84,15 @@ export class SentryGun extends Killstreak implements Damageable {
   shotsFired = 0;
   shotsHit = 0;
   kills = 0;
+  /**
+   * Of `kills`, the ones on a body that shares this sentry's substrate side (M13 Phase A).
+   *
+   * Zero by construction in every team mode, and zero by the bug in Free-for-All until
+   * `acquire` went through `isHostile`: the sentry would not fire at the half of the lobby on
+   * its owner's side. The skirmish harness's FFA gate reads this, which is why it is a counter
+   * rather than a log line.
+   */
+  killsOnOwnSubstrate = 0;
 
   /** Who it is shooting at, for the debug panel. -1 when idle. */
   targetId = -1;
@@ -200,6 +230,15 @@ export class SentryGun extends Killstreak implements Damageable {
     this.ctx.damage.unregister(this.entityId);
   }
 
+  /** Add this sentry's counters to a tally. See `SentryTally`. */
+  tallyInto(tally: SentryTally): void {
+    tally.placed++;
+    tally.shotsFired += this.shotsFired;
+    tally.shotsHit += this.shotsHit;
+    tally.kills += this.kills;
+    tally.killsOnOwnSubstrate += this.killsOnOwnSubstrate;
+  }
+
   override describe(): string {
     const hitRate = this.shotsFired > 0 ? ((this.shotsHit / this.shotsFired) * 100).toFixed(1) : '—';
     const state = this.destroyed ? 'DESTROYED' : this.targetId >= 0 ? `-> #${this.targetId}` : 'scanning';
@@ -213,6 +252,10 @@ export class SentryGun extends Killstreak implements Damageable {
    *
    * Cold-Blooded (M6) is applied first, so a protected target is never even considered — the
    * sentry does not track it, does not turn toward it, and does not report it as a target.
+   *
+   * "Enemy" is `isHostile`'s answer, which in Free-for-All is everybody — so the owner is
+   * skipped by id first, because in FFA the substrate cannot tell them from an opponent who
+   * happens to share their side (M13 Phase A).
    */
   private acquire(): Combatant | undefined {
     const cfg = this.ctx.cfg;
@@ -221,7 +264,8 @@ export class SentryGun extends Killstreak implements Damageable {
     let bestD = Infinity;
 
     for (const c of this.ctx.roster) {
-      if (!c.participating || c.team === this.team) continue;
+      if (!c.participating || c.entityId === this.ownerId) continue;
+      if (!isHostile(this.team, c.team, this.ctx.freeForAll)) continue;
       if (!this.ctx.targetable(c.entityId)) continue;
 
       const tx = c.px;
@@ -265,7 +309,16 @@ export class SentryGun extends Killstreak implements Damageable {
 
     this.ctx.present.tracer(this.x, eyeY, this.z, this.trace.endX, this.trace.endY, this.trace.endZ);
     if (this.trace.hitTarget) this.shotsHit++;
-    if (this.trace.lethal) this.kills++;
+    if (this.trace.lethal) {
+      this.kills++;
+      if (this.rosterTeamOf(this.trace.targetId) === this.team) this.killsOnOwnSubstrate++;
+    }
+  }
+
+  /** The substrate side of a roster member, or undefined for anything else a round can stop in. */
+  private rosterTeamOf(entityId: number): 'A' | 'B' | undefined {
+    for (const c of this.ctx.roster) if (c.entityId === entityId) return c.team;
+    return undefined;
   }
 
   private applyPose(): void {

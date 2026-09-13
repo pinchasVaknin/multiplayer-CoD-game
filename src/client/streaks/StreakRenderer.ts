@@ -4,6 +4,12 @@ import { SentryGun } from '../../shared/streaks/SentryGun';
 import type { StreakSystem } from '../../shared/streaks/StreakSystem';
 import { STREAK_DEFS } from '../../shared/streaks/StreakDefs';
 import { OBJ_TEAM_B, type StreakEntityState } from '../../shared/net/Skirmish';
+import {
+  relationTo,
+  relationToSelf,
+  type TeamRelation,
+  type ViewerContext,
+} from '../../shared/ui/TeamColour';
 import { CarePackageMesh, SentryMesh } from './StreakMeshes';
 
 /**
@@ -28,7 +34,17 @@ export class StreakRenderer {
   private readonly packages = new Map<number, CarePackageMesh>();
   private readonly present = new Set<number>();
 
-  constructor(private readonly streaks: StreakSystem) {
+  /**
+   * `viewer` and `isLocal` are the two halves of "what is this sentry to me" (M13 Phase A):
+   * the side it is on is a relation to the viewer's seat, and in Free-for-All — where every
+   * side is hostile — the owner's id is the only thing that says it is *yours*. Read at mesh
+   * creation, not construction: a networked seat arrives after this object exists.
+   */
+  constructor(
+    private readonly streaks: StreakSystem,
+    private readonly viewer: () => ViewerContext,
+    private readonly isLocal: (entityId: number) => boolean,
+  ) {
     this.group.name = 'streaks';
   }
 
@@ -44,7 +60,7 @@ export class StreakRenderer {
           streak.y,
           streak.z,
           streak.restYaw,
-          streak.team,
+          this.relationOf(streak.ownerId, streak.team),
           streak.turretYaw,
           streak.turretPitch,
         );
@@ -81,7 +97,7 @@ export class StreakRenderer {
           // The mesh takes a rest yaw once, at construction, and is aimed every frame after.
           // The turret's current bearing is the best available answer on the frame it appears.
           e.yaw,
-          e.team === OBJ_TEAM_B ? 'B' : 'A',
+          this.relationOf(e.ownerId, e.team === OBJ_TEAM_B ? 'B' : 'A'),
           e.yaw,
           e.pitch,
         );
@@ -93,20 +109,25 @@ export class StreakRenderer {
     this.sweep();
   }
 
+  /** What a sentry is to this viewer. Yours is friendly in every mode, FFA included. */
+  private relationOf(ownerId: number, team: 'A' | 'B'): TeamRelation {
+    return this.isLocal(ownerId) ? relationToSelf() : relationTo(this.viewer(), team);
+  }
+
   private syncSentry(
     instanceId: number,
     x: number,
     y: number,
     z: number,
     restYaw: number,
-    team: 'A' | 'B',
+    relation: TeamRelation,
     turretYaw: number,
     turretPitch: number,
   ): void {
     this.present.add(instanceId);
     let mesh = this.sentries.get(instanceId);
     if (mesh === undefined) {
-      mesh = new SentryMesh(x, y, z, restYaw, team);
+      mesh = new SentryMesh(x, y, z, restYaw, relation);
       this.sentries.set(instanceId, mesh);
       this.group.add(mesh.group);
     }

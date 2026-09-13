@@ -1,4 +1,5 @@
 import type { Combatant } from '../ai/Combatant';
+import { isHostile } from '../combat/Hostility';
 import type { BotTier, TierConfig } from '../ai/DifficultyTiers';
 import { BOT_TIERS } from '../ai/DifficultyTiers';
 import { DT } from '../core/Loop';
@@ -271,7 +272,9 @@ export class BotThrower {
     for (const c of roster) {
       if (c === self) continue;
       if (!c.participating) continue;
-      if (c.team !== self.team) continue;
+      // Only a teammate makes a landing spot unsafe. In Free-for-All nobody is one, so a bot
+      // throws at whoever is there — half the lobby used to be spared by its substrate side.
+      if (isHostile(self.team, c.team, this.system.freeForAll)) continue;
       if (Math.hypot(x - c.px, y - (c.py + 1), z - c.pz) < safeRadius * 0.7) return false;
     }
     return true;

@@ -1,4 +1,5 @@
 import type { DamageRequest, DamageSystem } from '../combat/DamageSystem';
+import { isHostile } from '../combat/Hostility';
 import { makeRigHit, type HitZone, type RigHit } from '../combat/HitboxRig';
 import { EV, type GameBus } from '../core/Events';
 import type { CollisionWorld } from '../world/CollisionWorld';
@@ -286,10 +287,12 @@ export class Ballistics {
     excludeId: number,
   ): number {
     const list = this.damage.list;
-    // With friendly fire off a round passes *through* a teammate rather than stopping
-    // harmlessly in one, so the filter belongs in target selection and not only in
-    // `DamageSystem.apply`. Resolved once per pass, not once per candidate.
-    const friendlyTeam = this.damage.friendlyFire ? undefined : this.damage.get(excludeId)?.team;
+    // A round passes *through* a teammate rather than stopping harmlessly in one, so the
+    // filter belongs in target selection and not only in `DamageSystem.apply`. The shooter's
+    // side is resolved once per pass, not once per candidate; a shooter on no side (a sentry
+    // is on one, a range dummy never fires) skips nobody.
+    const shooterTeam = this.damage.get(excludeId)?.team;
+    const freeForAll = this.damage.freeForAll;
     let bestT = maxT;
     let bestId = -1;
     for (let i = 0; i < list.length; i++) {
@@ -297,7 +300,13 @@ export class Ballistics {
       if (entity === undefined) continue;
       if (entity.entityId === excludeId) continue;
       if (!entity.health.alive) continue;
-      if (friendlyTeam !== undefined && entity.team === friendlyTeam) continue;
+      if (
+        shooterTeam !== undefined &&
+        entity.team !== undefined &&
+        !isHostile(shooterTeam, entity.team, freeForAll)
+      ) {
+        continue;
+      }
       this.lastRigTests++;
       if (!entity.rig.raycast(ox, oy, oz, dx, dy, dz, bestT, this.rigHit)) continue;
       if (this.rigHit.t >= bestT) continue;

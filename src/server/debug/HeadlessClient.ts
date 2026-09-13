@@ -37,6 +37,7 @@ import {
 } from '../../shared/modes/SpectatorTarget';
 import { bombStateCode } from '../../shared/net/Messages';
 import { phaseAt } from '../../shared/net/Messages';
+import { personalOutcome } from '../../shared/modes/MatchOutcome';
 import { RESPAWN_SECONDS } from '../../shared/ai/BotDirector';
 import {
   // `debugOverlayVisible` is deliberately absent: it reads only the front-end screen and the
@@ -520,6 +521,19 @@ export interface HeadlessClientReport {
    */
   readonly summaryXp: readonly string[];
   readonly summaryXpTotal: number;
+  /**
+   * What the last summary said to *this* seat (M13 Phase A, bug 4.4).
+   *
+   * `summaryOutcome` is the headline the browser would draw — `personalOutcome` over the
+   * summary's own rows, with the entity id this client held in the live match — and
+   * `summaryWinner` is who the summary named, by callsign, or the winning side where no
+   * individual won. The FFA gate reads both: one client may say VICTORY, the rest say a place,
+   * and the winner's name is the same string on every client.
+   */
+  readonly summaryOutcome: string;
+  readonly summaryWinner: string;
+  /** The summary's ladder as this client received it, `NAME k/d/score` in wire order. */
+  readonly summaryRows: readonly string[];
   readonly droppedOnSummary: boolean;
   readonly notices: readonly string[];
   /** Vote phases this client cast a vote in. */
@@ -608,6 +622,9 @@ export class HeadlessClient {
   private summaryAtMs = 0;
   private summaryXp: readonly string[] = [];
   private summaryXpTotal = 0;
+  private summaryOutcome = '';
+  private summaryWinner = '';
+  private summaryRows: readonly string[] = [];
   private summarySaidSeconds = 0;
   private summaryHoldMs = -1;
   private awaitingReturn = false;
@@ -866,6 +883,31 @@ export class HeadlessClient {
           this.summaryAtMs = nowMs();
           this.summaryXp = info.xp.map((line) => `${line.label} ${line.amount}`);
           this.summaryXpTotal = info.xp.reduce((sum, line) => sum + line.amount, 0);
+          // The browser's own arithmetic, over the wire's rows and this seat — which is still
+          // the live match's seat: the summary lands before the hold, and the hold before the
+          // return migration that would reassign the id.
+          this.summaryOutcome = personalOutcome(
+            {
+              kind: 'match',
+              winner: info.winner as 'A' | 'B' | 'DRAW',
+              winnerEntityId: info.winnerEntityId,
+              reason: info.reason,
+              scoreA: info.scoreA,
+              scoreB: info.scoreB,
+              roundsA: 0,
+              roundsB: 0,
+            },
+            this.net.team,
+            this.net.entityId,
+            info.rows,
+          ).label;
+          this.summaryWinner =
+            info.winnerEntityId === undefined
+              ? info.winner
+              : (info.rows.find((r) => r.entityId === info.winnerEntityId)?.displayName ?? `#${info.winnerEntityId}`);
+          this.summaryRows = info.rows.map(
+            (r) => `${r.displayName}${r.entityId === this.net.entityId ? '*' : ''} ${r.kills}/${r.deaths}/${r.score}`,
+          );
           // What the screen is told to show for this hold, from the deadline the server sent
           // and the tick this client believes it is on — the browser's own arithmetic.
           this.summarySaidSeconds = Math.max(0, (info.endsTick - this.net.stats.clientTick) * DT);
@@ -1654,6 +1696,9 @@ export class HeadlessClient {
       summarySaidSeconds: this.summarySaidSeconds,
       summaryXp: this.summaryXp,
       summaryXpTotal: this.summaryXpTotal,
+      summaryOutcome: this.summaryOutcome,
+      summaryWinner: this.summaryWinner,
+      summaryRows: this.summaryRows,
       droppedOnSummary: this.droppedOnSummary,
       notices: [...this.notices],
       votesCast: this.votesCast,

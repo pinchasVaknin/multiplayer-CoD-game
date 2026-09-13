@@ -440,10 +440,48 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
   {
     name: 'summary',
     show: () => {
-      summary.show('B', 'A', 'SCORE LIMIT', 68, 75, boardScore);
+      summary.show(
+        { kind: 'match', winner: 'B', reason: 'SCORE LIMIT', scoreA: 68, scoreB: 75, roundsA: 0, roundsB: 1 },
+        'A',
+        1,
+        boardScore,
+      );
       return summary.element;
     },
     hide: () => summary.hide(),
+  },
+  /**
+   * The Free-for-All summary (M13 Phase A, bug 4.4).
+   *
+   * One ladder of sixteen rather than two columns of eight — the tallest board this screen
+   * can be handed — and the case the bug was about: the winner is entity 3, on the local
+   * player's own substrate side, so the headline must be a place and not VICTORY.
+   */
+  {
+    name: 'summary/ffa',
+    show: () => {
+      summary.setViewer({ team: 'A', freeForAll: true });
+      summary.show(
+        {
+          kind: 'match',
+          winner: 'A',
+          winnerEntityId: 3,
+          reason: 'KILL LIMIT',
+          scoreA: 30,
+          scoreB: 27,
+          roundsA: 1,
+          roundsB: 0,
+        },
+        'A',
+        1,
+        boardScore,
+      );
+      return summary.element;
+    },
+    hide: () => {
+      summary.hide();
+      summary.setViewer({ team: 'A', freeForAll: false });
+    },
   },
   {
     name: 'create-a-class',

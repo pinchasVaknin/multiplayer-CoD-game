@@ -252,9 +252,11 @@ export class Renderer {
    *
    * **The IFF split is the post-M8 change.** M7 drew every body hot, so the gunner could not
    * tell their own team from the enemy and the streak was as likely to wipe the friendly
-   * half of the map as the hostile one. Two groups rather than a per-object test keeps this
-   * a render pass that knows nothing about teams: it is handed the cold ones and the hot
-   * ones and draws them differently.
+   * half of the map as the hostile one. Groups rather than a per-object test keeps this a
+   * render pass that knows nothing about teams: it is handed the cold ones and the hot ones
+   * and draws them differently. Each side is a *list* of groups (M13 Phase A) because
+   * Free-for-All has no cold side at all — both substrate groups are hot and the list is
+   * empty — and a pass that took exactly one of each could only draw half the lobby cold.
    *
    * ## Why the sky is the *renderer's* clear colour and not `scene.background` (round 2)
    *
@@ -279,8 +281,8 @@ export class Renderer {
   renderGunship(
     scene: THREE.Scene,
     camera: THREE.Camera,
-    hot: THREE.Object3D | null,
-    cold: THREE.Object3D | null,
+    hot: readonly THREE.Object3D[],
+    cold: readonly THREE.Object3D[],
   ): void {
     const previousOverride = scene.overrideMaterial;
     const previousBackground = scene.background;
@@ -291,10 +293,10 @@ export class Renderer {
     // Bodies are hidden for the world pass and drawn by the two that follow. Without this
     // they would be shaded as terrain first and then overdrawn, which costs a pass and — on
     // a body exactly coplanar with the floor it stands on — flickers between the two.
-    const hotWasVisible = hot?.visible ?? false;
-    const coldWasVisible = cold?.visible ?? false;
-    if (hot !== null) hot.visible = false;
-    if (cold !== null) cold.visible = false;
+    const bodiesWereVisible = new Map<THREE.Object3D, boolean>();
+    for (const group of hot) bodiesWereVisible.set(group, group.visible);
+    for (const group of cold) bodiesWereVisible.set(group, group.visible);
+    for (const group of bodiesWereVisible.keys()) group.visible = false;
 
     scene.overrideMaterial = this.gunshipWorld();
     // Fog and a sky colour are lighting cues, and the optic has neither. The optic's own
@@ -309,8 +311,7 @@ export class Renderer {
     this.three.render(scene, camera);
     scene.overrideMaterial = previousOverride;
 
-    if (hot !== null) hot.visible = hotWasVisible;
-    if (cold !== null) cold.visible = coldWasVisible;
+    for (const [group, visible] of bodiesWereVisible) group.visible = visible;
 
     this.drawBodies(scene, camera, cold, hot, this.gunshipCold(), previousOverride);
     this.drawBodies(scene, camera, hot, cold, this.gunshipHot(), previousOverride);
@@ -321,36 +322,39 @@ export class Renderer {
   }
 
   /**
-   * Draw one body group with an override material, with everything else hidden.
+   * Draw one set of body groups with an override material, with everything else hidden.
    *
-   * `exclude` is the *other* body group, which has to be hidden explicitly because it is a
-   * sibling under the same top-level node — hiding by scene child alone would draw both.
+   * `exclude` is the *other* set, which has to be hidden explicitly because its groups are
+   * siblings under the same top-level node — hiding by scene child alone would draw both.
    */
   private drawBodies(
     scene: THREE.Scene,
     camera: THREE.Camera,
-    subject: THREE.Object3D | null,
-    exclude: THREE.Object3D | null,
+    subjects: readonly THREE.Object3D[],
+    exclude: readonly THREE.Object3D[],
     material: THREE.Material,
     restoreOverride: THREE.Material | null,
   ): void {
-    if (subject === null || !subject.visible) return;
+    if (!subjects.some((s) => s.visible)) return;
 
     const wasVisible = new Map<THREE.Object3D, boolean>();
     for (const child of scene.children) {
       wasVisible.set(child, child.visible);
-      // The subject may be nested (a team group under the roster node), so the test is
+      // A subject may be nested (a team group under the roster node), so the test is
       // ancestry rather than identity.
-      child.visible = child === subject || isAncestorOf(child, subject);
+      child.visible = subjects.some((s) => child === s || isAncestorOf(child, s));
     }
-    const excludeWas = exclude?.visible ?? false;
-    if (exclude !== null) exclude.visible = false;
+    const excludeWas = new Map<THREE.Object3D, boolean>();
+    for (const group of exclude) {
+      excludeWas.set(group, group.visible);
+      group.visible = false;
+    }
 
     scene.overrideMaterial = material;
     this.three.render(scene, camera);
     scene.overrideMaterial = restoreOverride;
 
-    if (exclude !== null) exclude.visible = excludeWas;
+    for (const [group, visible] of excludeWas) group.visible = visible;
     for (const [child, visible] of wasVisible) child.visible = visible;
   }
 

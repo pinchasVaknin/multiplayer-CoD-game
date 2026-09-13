@@ -1,3 +1,4 @@
+import { isHostile } from '../combat/Hostility';
 import { DEG2RAD } from '../core/MathUtil';
 import type { Rng } from '../core/Rng';
 import type { CollisionWorld } from '../world/CollisionWorld';
@@ -236,7 +237,7 @@ export class Perception {
 
     for (const other of roster) {
       if (other === self) continue;
-      if (!this.freeForAll && other.team === self.team) continue;
+      if (!isHostile(self.team, other.team, this.freeForAll)) continue;
       if (!other.participating || !other.health.alive) continue;
 
       const dx = other.px - eyeX;

@@ -195,7 +195,7 @@ function fireShape(
   weapons.reseed(0x51e5_0b0a);
 
   const equipment = frag
-    ? new EquipmentSystem({ bus, world, damage, roster: posts, cfg: DEFAULT_EQUIPMENT_CONFIG })
+    ? new EquipmentSystem({ bus, world, damage, roster: posts, cfg: DEFAULT_EQUIPMENT_CONFIG, freeForAll: false })
     : null;
 
   const eyeY = player.sim.y + player.sim.eyeHeight;
@@ -228,7 +228,7 @@ function fireShape(
     player.step(cmd as InputCommand);
     weapons.step(cmd as InputCommand, player.sim);
     weapons.takeViewResidual(residual);
-    equipment?.simulate(player.sim.x, player.sim.y, player.sim.z, 'A', false);
+    equipment?.simulate(player.sim.x, player.sim.y, player.sim.z, 'A', SHOOTER_ID, false);
   }
 
   offFired();

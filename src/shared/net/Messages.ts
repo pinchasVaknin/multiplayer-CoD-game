@@ -526,6 +526,8 @@ export function writeSummary(w: ByteWriter, info: SummaryInfo): Uint8Array {
   w.str(info.mapId);
   w.str(info.modeId);
   w.str(info.winner);
+  // -1 for "no individual won". Entity ids on the wire are 1..99, so the sign is the flag.
+  w.i16(info.winnerEntityId ?? NO_WINNER_ENTITY);
   w.str(info.reason);
   w.u16(info.scoreA);
   w.u16(info.scoreB);
@@ -554,6 +556,8 @@ export function writeSummary(w: ByteWriter, info: SummaryInfo): Uint8Array {
 
 const MAX_SUMMARY_ROWS = 24;
 const MAX_XP_LINES = 12;
+/** `SummaryInfo.winnerEntityId` absent, on the wire. */
+const NO_WINNER_ENTITY = -1;
 
 /**
  * Objective state, one record per zone in the mode's own order (M11 Gate B, §6.8).
@@ -1103,6 +1107,14 @@ export interface SummaryInfo {
   readonly mapId: string;
   readonly modeId: string;
   readonly winner: string;
+  /**
+   * The individual who won, where the mode crowns one (v16, M13 Phase A).
+   *
+   * `MatchResult.winnerEntityId` on the wire: absent in team modes and on a draw, and the
+   * reason a Free-for-All summary can say VICTORY to one player and a place to the rest rather
+   * than VICTORY to everybody on the winner's substrate side.
+   */
+  readonly winnerEntityId?: number;
   readonly reason: string;
   readonly scoreA: number;
   readonly scoreB: number;
@@ -1312,6 +1324,7 @@ export function decodeHeader(r: ByteReader): Decoded {
       const mapId = r.str();
       const modeId = r.str();
       const winner = r.str();
+      const winnerEntity = r.i16();
       const reason = r.str();
       const scoreA = r.u16();
       const scoreB = r.u16();
@@ -1349,6 +1362,7 @@ export function decodeHeader(r: ByteReader): Decoded {
         mapId,
         modeId,
         winner,
+        winnerEntityId: winnerEntity === NO_WINNER_ENTITY ? undefined : winnerEntity,
         reason,
         scoreA,
         scoreB,

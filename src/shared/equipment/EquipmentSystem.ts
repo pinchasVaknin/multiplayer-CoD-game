@@ -1,5 +1,6 @@
 import type { BotTeam, Combatant } from '../ai/Combatant';
 import { makeDamageRequest, type DamageRequest, type DamageSystem } from '../combat/DamageSystem';
+import { isHostile } from '../combat/Hostility';
 import { EV, type GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
 import { DEG2RAD } from '../core/MathUtil';
@@ -87,6 +88,17 @@ export interface EquipmentDeps {
    * remembers not to invoke.
    */
   readonly authoritative?: boolean;
+  /**
+   * Whether this match has teams (M13 Phase A).
+   *
+   * Three tests in `equipment/` asked "is this one of mine" by comparing sides and had never
+   * been told the mode: a claymore would not trigger on the half of a Free-for-All lobby
+   * sharing its owner's substrate side, the danger arrow stayed down for that half's
+   * grenades, and a bot would not throw near them. The same fact `bots.freeForAll` and
+   * `StreakContext.freeForAll` carry, from the same registry flag, and every one of those
+   * tests now goes through `combat/Hostility.isHostile` with it.
+   */
+  readonly freeForAll: boolean;
 }
 
 export class EquipmentSystem {
@@ -110,6 +122,8 @@ export class EquipmentSystem {
   private readonly ray: RayHit = makeRayHit();
   /** See `EquipmentDeps.authoritative`. */
   private readonly authoritative: boolean;
+  /** See `EquipmentDeps.freeForAll`. Read by `BotThrower` for its throw-safety test too. */
+  readonly freeForAll: boolean;
 
   constructor(deps: EquipmentDeps) {
     this.bus = deps.bus;
@@ -118,6 +132,7 @@ export class EquipmentSystem {
     this.roster = deps.roster;
     this.cfg = deps.cfg;
     this.authoritative = deps.authoritative !== false;
+    this.freeForAll = deps.freeForAll;
     this.projectiles = new ProjectilePool(PROJECTILE_CAPACITY, equipmentDef('frag'));
     this.smoke = new SmokeField(SMOKE_CAPACITY, deps.cfg);
     this.flash = new FlashField(deps.bus, deps.cfg);
@@ -207,6 +222,8 @@ export class EquipmentSystem {
     localY: number,
     localZ: number,
     localTeam: BotTeam,
+    /** Which entity the threat report is about — so its own grenade is never a threat to it. */
+    localId: number,
     trackThreat = true,
   ): void {
     this.smoke.step();
@@ -275,7 +292,7 @@ export class EquipmentSystem {
         continue;
       }
 
-      if (trackThreat) this.noteThreat(p, localX, localY, localZ, localTeam);
+      if (trackThreat) this.noteThreat(p, localX, localY, localZ, localTeam, localId);
     }
   }
 
@@ -296,8 +313,9 @@ export class EquipmentSystem {
       if (!c.participating) continue;
       if (c.entityId === p.ownerId) continue;
       // Friendly fire is off, so a teammate walking past must not set it off either —
-      // otherwise the charge is a way to delete your own equipment.
-      if (c.team === p.team) continue;
+      // otherwise the charge is a way to delete your own equipment. In Free-for-All there
+      // are no teammates, and the owner is the one body already skipped above.
+      if (!this.armedAgainst(p, c.team)) continue;
 
       const dx = c.px - p.x;
       const dz = c.pz - p.z;
@@ -387,6 +405,17 @@ export class EquipmentSystem {
     this.bus.emit(EV.EquipmentExploded, evExploded);
   }
 
+  /**
+   * Whether a projectile is hostile to a body on `team` (M13 Phase A).
+   *
+   * `isHostile` over the projectile's side, with the one case the predicate has no side for:
+   * a projectile thrown on behalf of nobody (`'NONE'`) is armed against everybody, which is
+   * what the old `===` tests did for it by accident and what a world-owned charge should do.
+   */
+  private armedAgainst(p: Projectile, team: BotTeam): boolean {
+    return p.team === 'NONE' || isHostile(p.team, team, this.freeForAll);
+  }
+
   /** The grenade-indicator input (S6.3): nearest live enemy lethal within the radius. */
   private noteThreat(
     p: Projectile,
@@ -394,9 +423,11 @@ export class EquipmentSystem {
     ly: number,
     lz: number,
     localTeam: BotTeam,
+    localId: number,
   ): void {
     if (p.def.damageProfile === null) return;
-    if (p.team === localTeam) return;
+    // Your own grenade is never a threat to you; in FFA everybody else's is (M13 Phase A).
+    if (p.ownerId === localId || !this.armedAgainst(p, localTeam)) return;
     const distance = Math.hypot(p.x - lx, p.y - ly, p.z - lz);
     if (distance > this.cfg.indicatorRadius) return;
     if (distance >= this.threat.distance) return;

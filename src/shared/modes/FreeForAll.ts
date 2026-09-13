@@ -155,21 +155,13 @@ export class FreeForAll extends GameMode {
   /**
    * First *individual* to the limit wins. Teams do not enter into it.
    *
-   * The `MatchResult` still has to name a `ScoreTeam`, because the summary screen and
-   * `MatchFlow` are written against one — so the winner's own side is reported, which is what
-   * makes "VICTORY" correct for the player when the player is the one who won.
+   * The `MatchResult` still names a `ScoreTeam`, because `MatchFlow` and the banner are written
+   * against one — the winner's own side. It also names the winner's **entity** (M13 Phase A,
+   * bug 4.4): the side alone made everybody on the winner's substrate side read VICTORY, and
+   * the entity is the fact this method actually decided.
    */
   override checkWinCondition(): MatchResult | RoundResult | null {
-    let leader = null as null | { team: ScoreTeam; kills: number };
-    let runnerUp = -1;
-    for (const row of this.deps.score.rows) {
-      if (leader === null || row.kills > leader.kills) {
-        if (leader !== null) runnerUp = leader.kills;
-        leader = { team: row.team, kills: row.kills };
-      } else if (row.kills > runnerUp) {
-        runnerUp = row.kills;
-      }
-    }
+    const { leader, runnerUp } = this.ladderTop();
     if (leader === null) return null;
 
     /**
@@ -182,14 +174,36 @@ export class FreeForAll extends GameMode {
      * `leader.kills >= 0` is true before anybody has fired.
      */
     if (this.config.scoreLimit > 0 && leader.kills >= this.config.scoreLimit) {
-      return this.result(leader.team, 'Kill limit', leader.kills, runnerUp);
+      return this.result(leader, 'Kill limit', leader.kills, runnerUp);
     }
     if (this.config.timeLimitSeconds > 0 && this.ticksLeft <= 0) {
       // A tie at the top is a draw, exactly as a tied team score is.
       const drawn = leader.kills === runnerUp;
-      return this.result(drawn ? 'DRAW' : leader.team, drawn ? 'Time — draw' : 'Time limit', leader.kills, runnerUp);
+      return this.result(drawn ? 'DRAW' : leader, drawn ? 'Time — draw' : 'Time limit', leader.kills, runnerUp);
     }
     return null;
+  }
+
+  /** The one the kills crown, for a client reconstructing the end. See `GameMode`. */
+  override individualWinner(): number | undefined {
+    const { leader, runnerUp } = this.ladderTop();
+    // A tie at the top is a draw, exactly as `checkWinCondition` says.
+    return leader === null || leader.kills === runnerUp ? undefined : leader.entityId;
+  }
+
+  /** The most kills on the board and the kills behind it. One scan, two callers. */
+  private ladderTop(): { leader: null | { team: ScoreTeam; entityId: number; kills: number }; runnerUp: number } {
+    let leader = null as null | { team: ScoreTeam; entityId: number; kills: number };
+    let runnerUp = -1;
+    for (const row of this.deps.score.rows) {
+      if (leader === null || row.kills > leader.kills) {
+        if (leader !== null) runnerUp = leader.kills;
+        leader = { team: row.team, entityId: row.entityId, kills: row.kills };
+      } else if (row.kills > runnerUp) {
+        runnerUp = row.kills;
+      }
+    }
+    return { leader, runnerUp };
   }
 
   /** No team columns: FFA's board is a straight ladder. */
@@ -231,10 +245,17 @@ export class FreeForAll extends GameMode {
     return best;
   }
 
-  private result(winner: ScoreTeam | 'DRAW', reason: string, a: number, b: number): MatchResult {
+  private result(
+    winner: { team: ScoreTeam; entityId: number } | 'DRAW',
+    reason: string,
+    a: number,
+    b: number,
+  ): MatchResult {
+    const side = winner === 'DRAW' ? 'DRAW' : winner.team;
     return {
-      kind: 'match', winner, reason, scoreA: a, scoreB: b,
-      roundsA: winner === 'A' ? 1 : 0, roundsB: winner === 'B' ? 1 : 0,
+      kind: 'match', winner: side, reason, scoreA: a, scoreB: b,
+      roundsA: side === 'A' ? 1 : 0, roundsB: side === 'B' ? 1 : 0,
+      winnerEntityId: winner === 'DRAW' ? undefined : winner.entityId,
     };
   }
 }

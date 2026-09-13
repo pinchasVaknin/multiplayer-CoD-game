@@ -1,3 +1,4 @@
+import { isHostile } from '../combat/Hostility';
 import type { ScoreTeam } from '../combat/ScoreSystem';
 
 /**
@@ -42,6 +43,11 @@ import type { ScoreTeam } from '../combat/ScoreSystem';
  * closed that seam in the minimap and the gunfire ping and left the killfeed inside it. Passing
  * `freeForAll` here closes it in the same place as everything else: with no teams, nobody is
  * friendly and the viewer's own line is the only one that is not hostile.
+ *
+ * M13 Phase A: the two-way half of this — "is that side an enemy of mine" — is
+ * `combat/Hostility.isHostile`, which the simulation's hostility sites call directly.
+ * `relationTo` is that predicate plus the third answer (`NEUTRAL`) the surfaces need. One test,
+ * two callers' worth of shape; nothing here decides hostility on its own.
  */
 export type TeamRelation = 'FRIENDLY' | 'HOSTILE' | 'NEUTRAL';
 
@@ -65,8 +71,7 @@ export interface ViewerContext {
  */
 export function relationTo(viewer: ViewerContext, subject: ScoreTeam | 'NONE'): TeamRelation {
   if (subject === 'NONE') return 'NEUTRAL';
-  if (viewer.freeForAll) return 'HOSTILE';
-  return subject === viewer.team ? 'FRIENDLY' : 'HOSTILE';
+  return isHostile(viewer.team, subject, viewer.freeForAll) ? 'HOSTILE' : 'FRIENDLY';
 }
 
 /**

@@ -55,6 +55,16 @@ export interface StreakContext {
   /** Bots *and* the player, the same array `ai/` and the modes use. */
   readonly roster: readonly Combatant[];
   /**
+   * Whether this match has teams (M13 Phase A).
+   *
+   * The streaks were the sites that had never been told: a sentry compared `c.team` against
+   * its own and a UAV against its owner's, so in Free-for-All each ignored the half of the
+   * lobby that shared its owner's substrate side. It reaches them the way it reaches
+   * `BotDirector` — set once by the composition root, from the mode registry — and every
+   * "is this an enemy" in `streaks/` goes through `combat/Hostility.isHostile` with it.
+   */
+  readonly freeForAll: boolean;
+  /**
    * Whether this entity may be targeted by a streak (M6's Cold-Blooded hook).
    *
    * A predicate rather than a set, for the same reason `BotDirector.silentFootsteps` is one:

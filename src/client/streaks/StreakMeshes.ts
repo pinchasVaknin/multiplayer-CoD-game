@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import type { BotTeam } from '../../shared/ai/Combatant';
+import type { TeamRelation } from '../../shared/ui/TeamColour';
+import { palette, type GameplayPalette } from '../ui/Palette';
 
 /**
  * The bodies killstreaks used to build for themselves (M9).
@@ -11,12 +12,30 @@ import type { BotTeam } from '../../shared/ai/Combatant';
  * longer know a scene exists.
  */
 
+/**
+ * The sentry body's tint, from the palette and the relation and nothing else (M13 Phase A).
+ *
+ * Was `team === 'A' ? 0x2f5d7c : 0x7c3a2f` — the last absolute team colour in `client/`, and
+ * the same defect B12 removed from three HUD surfaces: from a team-B seat your own sentry was
+ * the red one. It is a relation now, and the two hex literals are gone with it: the tint is
+ * the palette's friendly or hostile colour at half brightness, which under the base palette
+ * lands within a few units of the two values that were here (0x2b547f / 0x743026 against
+ * 0x2f5d7c / 0x7c3a2f) and under a colourblind palette moves with everything else.
+ *
+ * Half brightness because this is a painted turret, not a marker: the emissive points on a
+ * body are the IFF tell, and a sentry lit like one would read as a fifth marker.
+ */
+function sentryTint(p: GameplayPalette, relation: TeamRelation): number {
+  const base = relation === 'FRIENDLY' ? p.friendly : relation === 'HOSTILE' ? p.hostile : p.neutral;
+  return new THREE.Color(base).multiplyScalar(0.5).getHex();
+}
+
 export class SentryMesh {
   readonly group = new THREE.Group();
   private readonly yawNode = new THREE.Group();
   private readonly disposables: Array<{ dispose(): void }> = [];
 
-  constructor(x: number, y: number, z: number, restYaw: number, team: BotTeam) {
+  constructor(x: number, y: number, z: number, restYaw: number, relation: TeamRelation) {
     const legGeo = new THREE.CylinderGeometry(0.035, 0.05, 0.62, 6);
     const legMat = new THREE.MeshStandardMaterial({ color: 0x2b3038, roughness: 0.7, metalness: 0.35 });
     this.disposables.push(legGeo, legMat);
@@ -34,13 +53,13 @@ export class SentryMesh {
     this.group.add(this.yawNode);
 
     const bodyGeo = new THREE.BoxGeometry(0.3, 0.22, 0.34);
-    const bodyMat = new THREE.MeshStandardMaterial({
-      // Tinted to the owner's side so the player can tell theirs from an enemy's at a glance.
-      color: team === 'A' ? 0x2f5d7c : 0x7c3a2f,
-      roughness: 0.55,
-      metalness: 0.4,
-    });
+    // Tinted by what the sentry is *to the viewer* so the player can tell theirs from an
+    // enemy's at a glance, and repainted with the palette so a colourblind mode reaches it.
+    const bodyMat = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.4 });
     this.disposables.push(bodyGeo, bodyMat);
+    // Called once immediately, which is what paints the body in the first place.
+    const unsubscribe = palette.onChange((p) => bodyMat.color.setHex(sentryTint(p, relation)));
+    this.disposables.push({ dispose: unsubscribe });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
     body.castShadow = true;
     this.yawNode.add(body);
