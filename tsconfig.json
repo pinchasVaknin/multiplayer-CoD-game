@@ -18,5 +18,5 @@
    * the compiler honest in your editor, point it at `tsconfig.shared.json`.
    */
   "extends": "./tsconfig.client.json",
-  "include": ["src", "scripts", "vite.config.ts"]
+  "include": ["src", "scripts", "vite.config.ts", "vitest.config.ts"]
 }

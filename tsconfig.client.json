@@ -11,5 +11,5 @@
    * runtime. `tsconfig.shared.json` is what proves shared/ stands on its own without the DOM;
    * this proves the client still agrees with it.
    */
-  "include": ["src/client", "src/shared", "vite.config.ts"]
+  "include": ["src/client", "src/shared", "vite.config.ts", "vitest.config.ts"]
 }

@@ -35,7 +35,7 @@
     "//layout": "Playtest round 5 P1. Every full-screen surface mounted at six viewports in a headless Chrome, asserting that nothing is off the top of a screen that cannot scroll and that nothing scrolls sideways. Needs a browser on the machine (CHROME_PATH overrides the search), which is why it is an instrument and not part of the gate: the deploy host runs check and has none.",
     "layout": "node scripts/layout-probe.mjs",
     "//check": "The gate. Boundaries first: a partition violation makes the type errors that follow meaningless noise, so it is the thing that speaks. Then the S8.25 cosmetic audit and the S6.2 unlock audit, both cheap, each catching a whole class of mistake that compiles.",
-    "check": "npm run check:boundaries && npm run check:cosmetics && npm run check:optics && npm run check:unlocks && npm run check:cheats && npm run check:authority && npm run check:flags && npm run check:animations && npm run check:plan && npm run typecheck",
+    "check": "npm run check:boundaries && npm run check:cosmetics && npm run check:optics && npm run check:unlocks && npm run check:cheats && npm run check:authority && npm run check:flags && npm run check:animations && npm run check:plan && npm run test && npm run typecheck",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "//typecheck": "Three targets, not one. shared/ compiles without the DOM lib, which is what makes a stray `document` a compile error instead of a crash in Node.",
     "typecheck": "npm run typecheck:shared && npm run typecheck:client && npm run typecheck:server",
@@ -58,7 +58,10 @@
     "//check:plan": "Deep clean, 2026-09-14. PLAN.md is the handover and had grown to 14,500 lines, 12,800 of them closed milestones. Holds the file to its archive: at most two top-level sections besides the title (the backlog and the milestone in progress), every index row on disk, every archive file indexed and opening with its provenance line. A closed milestone that was not archived fails the gate.",
     "check:plan": "node scripts/check-plan.mjs",
     "//animations": "M13 Phase D. What is inside every animation GLB — clip names, lengths, bones, the hips' height — read from the JSON chunk in Node. Run over incoming/ to decide a new file's slot from a table rather than from its name; animation-import.mjs then moves it into the slot folder as one named clip.",
-    "animations": "node scripts/animation-manifest.mjs"
+    "animations": "node scripts/animation-manifest.mjs",
+    "//test": "M14 Phase A. Unit tests of pure functions, co-located as X.test.ts beside X.ts and compiled by the partition they sit in — a shared/ test runs with no DOM lib and imports describe/it/expect from vitest explicitly. The harnesses stay the integration instruments; a test that goes red against the tree reports a finding, it does not get fixed in a harness.",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -72,6 +75,7 @@
     "@types/three": "^0.185.1",
     "@types/ws": "^8.18.1",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5"
+    "vite": "^8.1.5",
+    "vitest": "^5.0.0"
   }
 }
