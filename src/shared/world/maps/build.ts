@@ -1,4 +1,4 @@
-import type { Brush, MaterialKey, PropDef, PropShapeId } from './types';
+import type { Brush, MaterialKey, PropDef, PropShapeId, SpawnZone } from './types';
 import { simCos, simSin } from '../../core/SimMath';
 
 /**
@@ -273,5 +273,18 @@ export function rotateHalfProps(props: readonly PropDef[]): PropDef[] {
     shape: p.shape,
     position: { x: -p.position.x, y: p.position.y, z: -p.position.z },
     rotationY: p.rotationY + Math.PI,
+  }));
+}
+
+/**
+ * Team A's spawn half rotated 180 degrees about the origin and handed to team B, which is how
+ * every rotationally symmetric map gets its second half: author one side, mirror it.
+ */
+export function rotateHalfSpawns(a: readonly SpawnZone[]): SpawnZone[] {
+  return a.map((z) => ({
+    team: 'B',
+    position: { x: -z.position.x, y: z.position.y, z: -z.position.z },
+    facingYaw: z.facingYaw + Math.PI,
+    radius: z.radius,
   }));
 }

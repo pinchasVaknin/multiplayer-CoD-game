@@ -6,6 +6,7 @@ import {
   rampAlongZ,
   rotateHalf,
   rotateHalfProps,
+  rotateHalfSpawns,
 } from './build';
 import { deriveCoverPoints, emitCoverPoint } from './cover';
 import type { Brush, CoverPoint, LaneDef, MapDef, ObjectiveDef, PropDef, SpawnZone } from './types';
@@ -611,13 +612,7 @@ function spawnHalf(): SpawnZone[] {
 
 function spawns(): SpawnZone[] {
   const a = spawnHalf();
-  const b: SpawnZone[] = a.map((z) => ({
-    team: 'B',
-    position: { x: -z.position.x, y: z.position.y, z: -z.position.z },
-    facingYaw: z.facingYaw + Math.PI,
-    radius: z.radius,
-  }));
-  return [...a, ...b];
+  return [...a, ...rotateHalfSpawns(a)];
 }
 
 /**
