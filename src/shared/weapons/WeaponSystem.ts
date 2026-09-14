@@ -358,7 +358,9 @@ export class WeaponSystem {
     weapon.step(wi);
     this.inventory.stepIdle(weapon, this.idleInput);
     this.recoil.step(def);
-    // Hold-breath is Shift (S6.1), which is the sprint bit — see HOLD_BREATH_BIT.
+    // Hold-breath (S6.1) rides Btn.Sprint — Shift, as the brief asks — rather than a bit of its
+    // own, because the two can never be live at once: a scoped sniper is not sprinting, and
+    // PlayerController already refuses to sprint while aimed.
     this.scope.step(def, weapon.adsFraction, isDown(buttons, Btn.Sprint));
 
     // Releasing the trigger restarts the pattern; so does finishing a reload. Both are

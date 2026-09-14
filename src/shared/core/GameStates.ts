@@ -14,16 +14,6 @@ export type GameStateId =
   | 'PAUSED'
   | 'SUMMARY';
 
-export const GAME_STATES: readonly GameStateId[] = [
-  'BOOT',
-  'MENU',
-  'LOADOUT',
-  'SETTINGS',
-  'MATCH',
-  'PAUSED',
-  'SUMMARY',
-];
-
 /**
  * BOOT -> MENU -> MATCH -> SUMMARY, with LOADOUT and SETTINGS hanging off the menu, plus
  * the back-edges that a real front end needs. M1 only ever walked
@@ -75,6 +65,3 @@ export function isLegalGameTransition(from: GameStateId, to: GameStateId): boole
   return LEGAL_TRANSITIONS[from].includes(to);
 }
 
-export function legalTargetsFrom(from: GameStateId): readonly GameStateId[] {
-  return LEGAL_TRANSITIONS[from];
-}

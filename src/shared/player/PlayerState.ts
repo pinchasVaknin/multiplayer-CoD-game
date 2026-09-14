@@ -481,7 +481,3 @@ export function loadPlayerSim(src: PlayerSimState, sim: PlayerSimState): void {
   sim.steppedUp = src.steppedUp;
 }
 
-/** Record to record. Same field set, so it is the same copy. */
-export function copyPlayerSimState(src: PlayerSimState, dst: PlayerSimState): void {
-  loadPlayerSim(src, dst);
-}

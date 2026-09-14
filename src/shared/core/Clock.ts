@@ -30,11 +30,6 @@ export function installClock(clock: Clock): void {
   installed = clock;
 }
 
-/** True once a runtime has installed a clock. */
-export function clockInstalled(): boolean {
-  return installed !== null;
-}
-
 /** Monotonic milliseconds. Throws if no runtime installed a clock. */
 export function nowMs(): number {
   if (installed === null) {

@@ -93,14 +93,6 @@ export const Btn = {
   Melee: 1 << 17,
 } as const;
 
-/**
- * Hold-breath (S6.1) rides `Btn.Sprint`, which is what the brief asks for: Shift.
- *
- * It is not a new bit because the two can never be live at once — a scoped sniper is not
- * sprinting, and `PlayerController` already refuses to sprint while aimed.
- */
-export const HOLD_BREATH_BIT = Btn.Sprint;
-
 export type ButtonBit = (typeof Btn)[keyof typeof Btn];
 
 export function isDown(buttons: number, bit: ButtonBit): boolean {

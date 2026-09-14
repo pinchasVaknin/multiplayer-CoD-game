@@ -32,10 +32,6 @@ export function isLegalStanceTransition(from: StanceId, to: StanceId): boolean {
   return from === to || LEGAL[from].includes(to);
 }
 
-export function legalStanceTargets(from: StanceId): readonly StanceId[] {
-  return LEGAL[from];
-}
-
 /**
  * The stances a body is drawn low in. A slide and a mantle have no authored clips of their
  * own and are drawn with the crouch loops (`AnimationSelector`), and since M13 C2 the hitbox
@@ -94,18 +90,3 @@ export function eyeHeightFor(cfg: MovementConfig, stance: StanceId): number {
   }
 }
 
-/** Horizontal speed cap for a stance, before sprint/ADS modifiers. */
-export function baseSpeedFor(cfg: MovementConfig, stance: StanceId): number {
-  switch (stance) {
-    case 'STAND':
-      return cfg.walkSpeed;
-    case 'CROUCH':
-      return cfg.crouchSpeed;
-    case 'SLIDE':
-      return cfg.slideStartSpeed;
-    case 'AIRBORNE':
-      return cfg.sprintSpeed;
-    case 'MANTLE':
-      return 0;
-  }
-}

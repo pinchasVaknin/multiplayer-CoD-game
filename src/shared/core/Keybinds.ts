@@ -130,18 +130,6 @@ export const ACTIONS: readonly ActionDef[] = [
   { id: 'scoreboard', label: 'Scoreboard', group: 'Interface', bit: Btn.Scoreboard, defaults: ['Tab'] },
 ];
 
-const ACTION_BY_ID = new Map<ActionId, ActionDef>(ACTIONS.map((a) => [a.id, a]));
-
-export function actionDef(id: ActionId): ActionDef {
-  const found = ACTION_BY_ID.get(id);
-  if (found === undefined) throw new Error(`Unknown action "${id}"`);
-  return found;
-}
-
-export function isActionId(value: string): value is ActionId {
-  return ACTION_BY_ID.has(value as ActionId);
-}
-
 /** How a binding is stored: action id to the physical inputs bound to it. */
 export type BindingMap = Partial<Record<ActionId, string[]>>;
 

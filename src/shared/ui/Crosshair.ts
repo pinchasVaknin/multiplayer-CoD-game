@@ -66,17 +66,6 @@ export function crosshairGapPx(spreadDeg: number, fovDeg: number, viewportHeight
 }
 
 /**
- * Whether the gap is at the floor rather than at what the cone asked for.
- *
- * The probe's assertion, and the only honest way to report the floor: a run that says "0 at the
- * floor" out of 0 weapons examined is a run that never looked, so the caller carries the
- * denominator. See `readability`.
- */
-export function crosshairAtFloor(spreadDeg: number, fovDeg: number, viewportHeight: number): boolean {
-  return crosshairGapPx(spreadDeg, fovDeg, viewportHeight) <= CROSSHAIR_MIN_GAP;
-}
-
-/**
  * Opacity of the reticle at a given ADS fraction.
  *
  * Hidden on ADS (S6.5): the sights are the aiming reference and an overlaid cross on top of

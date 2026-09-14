@@ -46,10 +46,6 @@ export function wrapAngle(a: number): number {
   return angleDelta(0, a);
 }
 
-export function sign(v: number): number {
-  return v < 0 ? -1 : v > 0 ? 1 : 0;
-}
-
 /**
  * Signed shortest angular distance from `from` to `to`, radians.
  *

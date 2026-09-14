@@ -79,13 +79,3 @@ export class LocalIdentity {
   }
 }
 
-/**
- * The identity a non-networked consumer gets by default.
- *
- * Deliberately a factory rather than a shared singleton: two matches in one process must not
- * be able to write each other's identity, and a module-level instance is exactly the kind of
- * state that survives a teardown and leaks into the next match.
- */
-export function localSinglePlayerIdentity(): LocalIdentity {
-  return new LocalIdentity();
-}
