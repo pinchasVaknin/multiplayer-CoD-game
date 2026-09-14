@@ -11,9 +11,30 @@
 
 /* Only the gap — see `.eom` in app.css. The scroll, the padding and the alignment are the
  * layer's since round 5's P1. */
-/* The layer's frame, not the layer: the frame is the flex column now (M15, A1). */
+/*
+ * The layer's frame, not the layer: the frame is the flex column now (M15, A1).
+ *
+ * On the HUD's ramp, not the frame's, until Phase B rebuilds this screen: fourteen rows and
+ * the stat panel are 931 frame pixels tall at 13 px, and would not fit at 18. The values are
+ * `tokens.css`'s `:root` ramp, restated so the pin is visible where it applies. Phase B
+ * deletes this block with the rows.
+ */
 .lo .op-frame {
   gap: var(--s-4);
+  --t-micro: 10px;
+  --t-small: 11px;
+  --t-body: 13px;
+  --t-lead: 16px;
+  --t-title: 22px;
+  --t-display: 40px;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-12: 48px;
 }
 
 .lo-head {

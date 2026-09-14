@@ -349,7 +349,7 @@ body.op-locked #viewport {
   border-bottom: 1px solid var(--c-line-hi);
   border-radius: 0;
   padding: var(--s-1) 0;
-  min-width: 220px;
+  min-width: 300px;
   font-size: var(--t-lead);
   font-weight: var(--w-heavy);
   text-align: right;
@@ -528,11 +528,11 @@ body.op-locked #viewport {
 .op-setup {
   grid-column: 1 / -1;
   justify-self: end;
-  width: 1000px;
+  width: 1380px;
   display: flex;
   flex-direction: column;
   gap: var(--s-6);
-  padding: var(--s-8) 36px;
+  padding: var(--s-8) 48px;
   background: rgba(12, 14, 17, 0.9);
   border: 1px solid var(--c-line);
   border-left: 2px solid var(--c-accent);
@@ -576,9 +576,10 @@ body.op-locked #viewport {
  */
 .op-pickers {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--s-6);
-  width: min(840px, 100%);
+  /* Three columns of ~370 at the frame's ramp (was 840 / 264 at the HUD's). */
+  width: min(1180px, 100%);
 }
 
 .op-picker {
@@ -783,9 +784,30 @@ body.op-locked #viewport {
  * layer does all three now; a screen that needs a tighter rhythm than the layer's still
  * says so, which is what this is.
  */
-/* The layer's frame, not the layer: the frame is the flex column now (M15, A1). */
+/*
+ * The layer's frame, not the layer: the frame is the flex column now (M15, A1).
+ *
+ * On the HUD's ramp, not the frame's, until Phase D rebuilds this screen: at the frame's ramp
+ * the sixteen-row Free-for-All board is taller than the frame, and a clipped summary is worse
+ * than a small one. The values are `tokens.css`'s `:root` ramp, restated so the pin is visible
+ * where it applies. Phase D deletes this block.
+ */
 .eom .op-frame {
   gap: var(--s-5);
+  --t-micro: 10px;
+  --t-small: 11px;
+  --t-body: 13px;
+  --t-lead: 16px;
+  --t-title: 22px;
+  --t-display: 40px;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-12: 48px;
 }
 
 .eom[hidden] {
@@ -879,7 +901,7 @@ body.op-locked #viewport {
 .op-actions--stack {
   flex-direction: column;
   gap: var(--s-3);
-  min-width: 240px;
+  min-width: 336px;
 }
 
 .op-actions--stack .op-btn {
@@ -896,7 +918,7 @@ body.op-locked #viewport {
 .op-code {
   display: flex;
   gap: var(--s-2);
-  width: 240px;
+  width: 336px;
   margin-top: var(--s-4);
 }
 
@@ -956,12 +978,12 @@ body.op-locked #viewport {
  */
 .op-screen--wide .op-tabs,
 .op-screen--wide .op-settings {
-  width: min(780px, 100%);
+  width: min(1080px, 100%);
 }
 
 /* The binding tab is three columns wide (M15, A4); the other four keep the narrow measure. */
 .op-screen--wide .op-settings--bindings {
-  width: min(1240px, 100%);
+  width: min(1560px, 100%);
 }
 
 .op-tabs {
@@ -1009,6 +1031,12 @@ body.op-locked #viewport {
   gap: var(--s-3);
 }
 
+/* A button in the settings column is as wide as its label, not as wide as the column: at the
+ * bindings tab's 1560 px, "Reset all bindings" stretched across the screen. */
+.op-settings > .op-btn {
+  align-self: flex-start;
+}
+
 .op-settings__columns {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1019,7 +1047,10 @@ body.op-locked #viewport {
 .op-settings__column {
   display: flex;
   flex-direction: column;
-  gap: var(--s-3);
+  /* One step tighter than the other tabs' rows: eight of these plus two headings have to
+   * stand in the frame under the title, the tabs and Back, and at the frame's ramp they did
+   * not at `--s-3` (1021 tall in a 1016 box). */
+  gap: var(--s-2);
 }
 
 .op-settings__group {
@@ -1052,7 +1083,7 @@ body.op-locked #viewport {
  */
 .op-setting {
   display: grid;
-  grid-template-columns: 1fr minmax(0, 220px) 64px;
+  grid-template-columns: 1fr minmax(0, 320px) 90px;
   align-items: center;
   gap: var(--s-3);
 }
@@ -1097,16 +1128,16 @@ body.op-locked #viewport {
 
 .op-setting__range::-webkit-slider-thumb {
   appearance: none;
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: var(--c-accent);
   cursor: pointer;
 }
 
 .op-setting__range::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   border: 0;
   border-radius: 50%;
   background: var(--c-accent);
@@ -1167,14 +1198,15 @@ body.op-locked #viewport {
 
 .op-bind {
   appearance: none;
-  min-width: 96px;
+  min-width: 132px;
   background: var(--c-surface);
   border: 1px solid var(--c-line-hi);
   border-radius: var(--radius);
   color: var(--c-text);
   font-family: var(--font-mono);
   font-size: var(--t-small);
-  padding: var(--s-2) var(--s-3);
+  /* A key cap, not a button: short and wide. See `.op-settings__column` for the height budget. */
+  padding: var(--s-1) var(--s-3);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
@@ -1238,7 +1270,7 @@ body.op-locked #viewport {
   letter-spacing: var(--track-label);
   text-transform: uppercase;
   padding: var(--s-2) var(--s-3);
-  min-width: 180px;
+  min-width: 250px;
 }
 
 .op-input:focus-visible {

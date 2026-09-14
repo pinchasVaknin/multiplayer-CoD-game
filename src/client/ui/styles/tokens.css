@@ -67,6 +67,48 @@
   --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 
+/*
+ * The frame's ramp (M15, A3 — the first thing a display showed).
+ *
+ * The ramp above was tuned for a HUD and a responsive front end: 13 px body text in *window*
+ * pixels, at whatever size the window was. Under the design frame (`ui/Frame.ts`) a token is
+ * a *frame* pixel, and a frame pixel on a 1366-wide laptop is 0.71 of a real one — so the
+ * same 13 px that was fine as a window value was 9 px on screen, and the first playtest of
+ * the frame read *"everything except the main menu is too small; it strains the eyes."* The
+ * main menu was fine only because A2 had sized its wordmark and buttons for the frame by
+ * hand.
+ *
+ * So the frame carries its own ramp. Custom properties inherit, and every front-end rule
+ * already resolves to a token, so redefining the tokens on `.op-frame` rescales every screen
+ * inside it and nothing outside — the HUD, the scoreboard overlay, the killfeed and the debug
+ * layer are not in a frame and keep the ramp above. Type is about 1.4x (13 → 18 body, 11 → 16
+ * small, 10 → 14 labels); spacing is 1.5x, a 6 px grid, so the air around the larger type
+ * grows with it. The fixed widths of frame content (`.op-settings`, `.op-pickers`, the pause
+ * stack, the sliders, the binding buttons) are scaled by hand in `app.css` where they stand.
+ *
+ * Two screens sit on the *old* ramp on purpose until their phase rebuilds them — the class
+ * editor (`.lo`, Phase B) and the summary (`.eom`, Phase D) — because at this ramp they do
+ * not fit the frame, and a clipped screen is worse than a small one. Each says so where it
+ * pins the old values.
+ */
+.op-frame {
+  --t-micro: 14px;
+  --t-small: 16px;
+  --t-body: 18px;
+  --t-lead: 22px;
+  --t-title: 30px;
+  --t-display: 56px;
+
+  --s-1: 6px;
+  --s-2: 12px;
+  --s-3: 18px;
+  --s-4: 24px;
+  --s-5: 30px;
+  --s-6: 36px;
+  --s-8: 48px;
+  --s-12: 72px;
+}
+
 /* Shared primitives ------------------------------------------------------ */
 
 .op-label {

@@ -863,6 +863,44 @@ whether the wordmark holds on it; the dolly's speed and sway; which lane reads b
 Foundry's CENTRE is the hall, Dunes' the covered street, Depot's the night yard — a
 `lanes[Math.floor(n / 2)]` today, a per-map choice if one of them is wrong.
 
+### Playtest report (2026-09-15), fixed the same day: the frame's ramp
+
+*"Everything except the main menu is too small — it strains the eyes."* Three screenshots at
+1920 wide: Settings, the Play Solo panel, Paused. Correct, and the frame is why. The type
+ramp in `tokens.css` — 10 / 11 / 13 / 16 / 22 / 40 — was tuned for a HUD and a responsive
+front end, in *window* pixels; under the frame a token is a *frame* pixel, and at 1920×1080 a
+13 px body and 10 px labels are the same numbers they always were, except that every screen
+now sits inside a 1920-wide layout designed to be read from further away, and on a
+1366-wide laptop the same tokens are 0.71 of that. The main menu escaped only because A2 had
+sized its wordmark (40) and its buttons (20) for the frame by hand.
+
+**The fix is a second ramp, scoped to the frame.** Custom properties inherit and every
+front-end rule already resolves to a token, so `.op-frame { --t-*, --s-* }` in `tokens.css`
+rescales every screen inside a frame and nothing outside — the HUD, the scoreboard overlay,
+the killfeed and the debug layer keep the ramp they had. Type ×1.4 (**14 / 16 / 18 / 22 / 30 /
+56**), spacing ×1.5 (a 6 px grid: 6 / 12 / 18 / 24 / 30 / 36 / 48 / 72). The fixed widths of
+frame content scaled where they stand: `.op-settings` 780 → 1080, the binding tab 1240 →
+1560, `.op-pickers` 840 → 1180 (three columns of ~370, `minmax(320px, 1fr)`), the Play Solo
+panel 1000 → 1380, the pause stack and the code row 240 → 336, the slider track 220 → 320 with
+a 90 px readout, the binding caps 96 → 132, inputs 180 → 250, the callsign 220 → 300, the
+range thumbs 12 → 16. **Two screens are pinned to the old ramp** with the values restated on
+their own frames — the editor (`.lo`, B rebuilds it; 931 tall at 13 px would not fit at 18)
+and the summary (`.eom`, D's; the sixteen-row FFA board) — each with a comment saying which
+phase deletes the pin.
+
+**Measured.** At 1920×1080 the settings title is 56 px, tabs 16, labels and buttons 18, help
+16, the settings column 1080 wide. `npm run layout` on the first run: BINDINGS **1021** tall
+in the 1016-px box — one violation, the frame clipping it. The binding rows went one step
+tighter (column gap `--s-2`, key caps padded `--s-1` vertically — a key cap, not a button):
+**871**, green. The probe now reads menu 1792 × 1004, unsupported 446 × 277, CONTROLS 1080 ×
+524, BINDINGS 1560 × 871, AUDIO 538, VIDEO 788, INFO 935, pause 626 × 723 — all green at
+eight viewports; `FAIL — 16 violations`, still only the editor's open row. "Reset all
+bindings" had stretched to the 1560 px column and is label-wide now. `npm run check` green.
+
+**Needs a browser:** whether 18 / 16 / 14 is enough at the distance the human plays from —
+it is a 40 % step and the smallest text is now 14 — or whether the ramp wants one more step
+(20 / 17 / 15), which the INFO tab's fourteen-row card would then need two columns for.
+
 ## Phase B — Create-a-Class: the stage, six boxes, the strips, the skins
 
 **B1, the stage.** Left half: the selected skin on a lit disc, `idleWeaponReady` looping,
