@@ -335,7 +335,8 @@ export class BotRenderer {
     this.group.removeFromParent();
     this.group.clear();
     // The bodies reference these and are already gone; the weapon material is the viewmodel's
-    // and belongs to `disposeWeaponSurfaces`, which the page teardown owns.
+    // and lives for the process in `WeaponMesh`'s shared caches; a page teardown, if one is ever
+    // built, releases it there.
     for (const weapon of this.weapons.values()) weapon.geometry.dispose();
     this.weapons.clear();
     this.indicatorAssets.dispose();

@@ -31,9 +31,10 @@ import { buildWeaponModel, type WeaponModel } from '../weapons/WeaponMesh';
  * should have allocated.
  *
  * Materials and textures are shared with the main renderer and are cached per *process*
- * (`WeaponMesh.sharedSurfaces`), which is safe across two contexts: three keeps its per-object
+ * (`WeaponMesh.sharedWeaponSurfaces`), which is safe across two contexts: three keeps its per-object
  * GPU state in a map on the renderer, so each uploads its own copy and neither disposes the
- * other's. `disposeWeaponSurfaces` is page teardown and has no callers.
+ * other's. Nothing releases the caches today; a page teardown, if one is ever built, disposes
+ * them in `WeaponMesh`, not per context.
  *
  * ## Lighting
  *

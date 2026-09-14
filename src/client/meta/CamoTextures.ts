@@ -47,12 +47,6 @@ export function camoTexture(id: CamoId, anisotropy: number): THREE.Texture {
   return texture;
 }
 
-/** Release every generated camo. Only a page teardown has business calling it. */
-export function disposeCamoTextures(): void {
-  for (const texture of cache.values()) texture.dispose();
-  cache.clear();
-}
-
 function makeCanvas(): CanvasRenderingContext2D {
   const canvas = document.createElement('canvas');
   canvas.width = TEX;

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Rng } from '../../shared/core/Rng';
-import { camoTexture, disposeCamoTextures } from '../meta/CamoTextures';
+import { camoTexture } from '../meta/CamoTextures';
 import type { CamoId } from '../../shared/meta/Camos';
 import {
   bodyBoxes,
@@ -129,7 +129,9 @@ export function buildWeaponModel(
     weaponId,
     dispose(): void {
       // Only the geometry is per model. The three materials and their textures are shared
-      // for the life of the process and are released by `disposeWeaponSurfaces`.
+      // for the life of the process in `cachedSurfaces` and `baseTextures` here and the camo cache in
+      // `meta/CamoTextures`. Nothing releases them today; a page teardown, if one is ever built,
+      // disposes those three caches, not the meshes.
       for (const d of disposables) d.dispose();
       root.clear();
     },
@@ -465,19 +467,6 @@ export function heldWeaponMaterial(anisotropy: number): THREE.Material {
   const material = sharedWeaponSurfaces(anisotropy).get('gunmetal');
   if (material === undefined) throw new Error('The shared weapon surfaces have no gunmetal.');
   return material;
-}
-
-/** Release the process-wide materials. Only the page teardown has any business calling it. */
-export function disposeWeaponSurfaces(): void {
-  for (const set of cachedSurfaces.values()) {
-    for (const material of set.values()) material.dispose();
-  }
-  cachedSurfaces.clear();
-  for (const texture of baseTextures.values()) texture.dispose();
-  baseTextures.clear();
-  // Camo textures are shared by every material that references them, so they are released
-  // by their own owner rather than by whichever material happened to hold one.
-  disposeCamoTextures();
 }
 
 /**

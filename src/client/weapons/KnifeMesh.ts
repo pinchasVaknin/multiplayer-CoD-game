@@ -189,7 +189,8 @@ export function buildKnifeModel(anisotropy: number): KnifeModel {
     arm,
     dispose(): void {
       // Geometry only. The materials and their textures are shared for the life of the
-      // process and are released by `disposeWeaponSurfaces`, exactly as a weapon's are.
+      // process, exactly as a weapon's are. Nothing releases them today; a page teardown, if one
+      // is ever built, disposes `WeaponMesh`'s shared caches, not this mesh.
       for (const d of disposables) d.dispose();
       root.clear();
       arm.clear();
