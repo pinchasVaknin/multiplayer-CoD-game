@@ -1,13 +1,19 @@
 import * as THREE from 'three';
 import type { ActorAnimationInput } from '../../shared/ai/BotVisualState';
 
-/** Semantic landmarks used by the client-only world identification layer. */
-export type ActorIndicatorAnchor =
-  | 'head'
-  | 'leftUpperArm'
-  | 'rightUpperArm'
-  | 'leftKnee'
-  | 'rightKnee';
+/**
+ * Semantic landmarks used by the client-only world identification layer.
+ *
+ * The head is a **point** (the nameplate hangs off it). A shoulder is a **frame** (M13 C3): a
+ * pad that lies flush on a sleeve needs a position *and* an orientation, so the shoulders are
+ * answered by `getIndicatorFrame`, and `getIndicatorAnchor` returns false for them. The knee
+ * anchors went with the emissive spheres they placed.
+ */
+export type ActorIndicatorAnchor = 'head' | 'leftShoulder' | 'rightShoulder';
+
+/** The anchors that are frames rather than points. */
+export const INDICATOR_FRAME_ANCHORS = ['leftShoulder', 'rightShoulder'] as const satisfies readonly ActorIndicatorAnchor[];
+export type ActorIndicatorFrameAnchor = (typeof INDICATOR_FRAME_ANCHORS)[number];
 
 /**
  * A third-person weapon, ready to be put in a hand.
@@ -48,6 +54,14 @@ export interface ActorAvatar {
    * about its bone names.
    */
   getIndicatorAnchor(anchor: ActorIndicatorAnchor, target: THREE.Vector3): boolean;
+  /**
+   * Write an animated, world-space **frame** — where a pad sits and which way it faces — for
+   * one of the frame anchors. The convention is the pad's: local +Z is the outward normal of
+   * the surface, +X runs along the limb toward its far end, +Y across it. `CharacterSkin`
+   * answers from a calibrated node under the upper-arm bone (`CharacterIndicatorProfile`);
+   * `BotMesh` from the outer face of its arm box. The renderer still learns no bone names.
+   */
+  getIndicatorFrame(anchor: ActorIndicatorFrameAnchor, position: THREE.Vector3, quaternion: THREE.Quaternion): boolean;
   beginDeath(dx: number, dz: number, variant: number, animation: ActorAnimationInput): void;
   endDeath(): void;
   flinch(dx: number, dz: number): void;

@@ -13290,7 +13290,9 @@ because it is the tree a fresh session inherits.
   fetched once per URL and prepared per skin.
 - **The rig identity of round 5 is loosened one step further.** The GLB avatar ignores
   `heightScale` entirely and plays a crouch clip instead (`CharacterAvatar.update`). The hitbox rig still scales uniformly. That gap
-  is Phase C, and it is measured before it is decided.
+  is Phase C, and it is measured before it is decided. *(Phase C, 2026-09-14: measured, and
+  closed — the rig wears one of four layouts chosen by the same rule that chooses the clip;
+  see "Phase C — done".)*
 - **IFF is a separate layer, not a body tint.** `ActorIndicator` draws a nameplate, a continuous
   segmented health bar and — today — four emissive spheres on hostile arms and knees. Every
   colour comes from `ui/Palette` and repaints on a palette serial; friendly is blue in the base
@@ -13692,6 +13694,174 @@ geometry on top of the same frame mechanism, so switching is not a redesign.
 `deuteranopia`; the pad must not cut the sleeve in idle, run and crouch on both sides; hostile
 pixel count around the silhouette per distance, recorded.
 
+## Phase C — done (session of 2026-09-14): three layouts for three poses, and pads instead of a rash
+
+Built to the brief above in two sessions on one day: C1 as the measurement alone, then C2 and C3
+from its table. The number came first, and it was not the number the plan guessed: the crouch
+*idle* was fine and everything that moves was not. The measurements are under "Measured".
+
+One detour, recorded so nobody wonders: C3 was first built as the inverted-hull outline (a
+stencil silhouette; it worked) on a misread brief. The human said no — the plan's C3 is the
+pads, and the outline stays where the plan keeps it, last on the fallback list — and it was
+taken out the same day. Nothing of it remains in the tree.
+
+### C1 — the instrument, and what it read
+
+`scripts/measure-crouch.mjs` is a Node script, not the browser probe the brief described: it
+parses a catalogued skin with the client's own `GLTFLoader` (a parser plugin declines every
+texture — `assignTexture` already treats a null as "no map"), wraps it in the real
+`CharacterSkin`, prepares each clip with the real `importClip` and plays it through an
+`AnimationMixer` frame by frame, reading the crown (`mixamorigHeadTop_End`), the skull base
+(`mixamorigHead`), the spine chain, the hips and — with `--pose` — the limb joints, in the actor
+frame with the feet at the origin. The game's TypeScript reaches it through Vite's
+`ssrLoadModule`, `layout-probe.mjs`'s trick, so `HUMANOID_RIG` and the catalogue are read live
+rather than copied. Under a second per run; the layouts below are its `--pose` table, and its
+comparison table is now against the layout the game wears, so re-running it after a clip
+changes says whether the layout still fits.
+
+What it read, Echo, shipped clips, crown height against the old uniform rig (0.611 crouched,
+0.306 sliding): **crouch idle 1.11 m vs 1.08 (+0.03 — a kneel, right knee on the floor);
+crouch walk 1.26 vs 1.08 (+0.18); crouch run 1.38 vs 1.08 (+0.30); any crouch loop drawn in a
+slide vs 0.54 (+0.57 to +0.84).** Standing: the aiming idle's crown is at **1.61 m against a
+rig head top of 1.77 (−0.16)** — the T-pose bind is 1.74, so `modelScale` was calibrated to the
+bind and the aiming pose is 13 cm lower. Five of the seven skins agree to the millimetre (a
+Mixamo clip's position tracks impose its skeleton's proportions on every bone); Apex is 6 cm
+taller everywhere, Sentry 3 cm. The `incoming/` crouch files are on a 69-bone skeleton with a
+`mixamorigNeck1` the skins lack: played on a skin the head lands 3.4–3.8 cm lower than
+authored, and `importClip` passes the four unbound tracks through to a bind warning per clip.
+`incoming/` also has two crouch depths — the "Aiming" family settles at 1.08 m, the "Pistol"
+family at 1.23 — and no slide clip.
+
+### C2 — one layout per drawn pose
+
+- **`HitboxRig` has no `heightScale`.** It has a `layout`, set from the stance and velocity by
+  `rigLayoutFor(stance, vx, vz)` on the tick the shot resolves, in all three runtimes' sites
+  (`Bot.advance`, `PlayerCombatant.syncRig`, `NetPlayer.step`) and on the client's mirror
+  (`RemoteActor`, from the replicated stance and the latest velocity — its rig is what the
+  hitbox overlay draws). Squared speeds against the thresholds, so no `Math.hypot` in the sim.
+- **Three low layouts, built from joints.** `HUMANOID_CROUCH_RIG` (the kneel),
+  `HUMANOID_CROUCH_WALK_RIG` and `HUMANOID_CROUCH_RUN_RIG` are `poseLayout(id, joints)`: the
+  measured joint positions of the clip, and a padded axis-aligned box per body segment —
+  head, neck, chest, abdomen, two per arm, two per leg, twelve boxes where the standing layout
+  has eight. The pads are chosen so a segment box around the *standing* joints reproduces the
+  standing box it replaces, so zone sizes are comparable. Yaw-only is the rig's own rule, so a
+  pitched torso is the bounding box of its segment; splitting the limbs keeps that cheap. The
+  standing layout is untouched: every hit-rate number in this file was taken against it.
+- **The selection rule is the animation selector's.** `isLowStance`, `LOCOMOTION_IDLE_SPEED`
+  (0.12) and `LOCOMOTION_RUN_SPEED` (5.4) moved to `shared/player/Stance.ts`;
+  `client/characters/AnimationSelector` imports them. A crouching body never reaches the run
+  speed; a **slide** does, so the slide wears the crouch-run layout while it is fast and the
+  crouch-walk layout once it has bled off — which is exactly the clip it is drawn with.
+  Decision 2 is therefore answered by the mechanism: no slide clip exists, and the slide wears
+  the layout of the clip it draws.
+- **Bots aim at the layout.** `RigLayout.aimY` is the chest box centre (1.26 standing; 0.765,
+  0.97 and 1.11 in the low layouts); `aimHeight` on all three combatants returns it, and the
+  harness shooter (`HeadlessClient.aimAtNearest`) aims at the target's layout rather than at a
+  standing 1.26. The sentry's one-box rig falls back to its torso box.
+- **Lag compensation stores the layout.** `RigHistory` holds four `Float32Array`s and one array
+  of `RigLayout` references; `RigSnapshot.layout` replaces `.scale`. A rewound shot is resolved
+  against the pose the body was drawn in on that tick.
+- **The wire is untouched.** `EntitySnapshot.heightScale` is still sent (capsule height over
+  stand height, from `capsuleScale` on `NetPlayer` and `Bot`) and still squashes the procedural
+  placeholder; it is redundant with `stance` since this phase and leaves with the v13 widening
+  rather than on a version bump of its own. `PlayerCombatant` lost the `MovementConfig` it only
+  read for the scale.
+
+### C3 — the pads
+
+Built to the six points above, in order.
+
+1. **A frame, not a point.** `ActorAvatar.getIndicatorFrame(anchor, position, quaternion)`
+   for the two frame anchors (`INDICATOR_FRAME_ANCHORS`); `getIndicatorAnchor` keeps the head
+   and answers false for a shoulder. The pad convention is the avatar's to satisfy: **+Z out of
+   the sleeve, +X down the arm, +Y across it.** `CharacterSkin` answers with the world frame of
+   a node it parents under each upper-arm bone (`padNode`, the palm marker's construction);
+   `BotMesh` with a static node on the outer face of each arm box, after the arms' baked pitch.
+   The renderer learns no bone names.
+2. **Calibration in the rig profile, measured.** `CharacterIndicatorProfile` carries
+   `leftShoulder` / `rightShoulder`, each `{ bone, offset, rotation }` in the bone's own units
+   (cm; Apex ×10 through the same override its `palmOffset` uses). The bone frame was measured
+   on Echo and Apex with the C1 script's loader: **+Y runs down the arm to the elbow, −Z is the
+   lateral surface of the deltoid** (world +Y in the T-pose), and the rotation that maps it onto
+   the pad convention is `[−π, 0, −π/2]`. The lateral distance was *probed in the running game*
+   — the skinned sleeve vertices under a 6 × 4 cm footprint at the pad, their height along the
+   pad normal, per skin, in idle, run and crouch (identical to a millimetre: the footprint is
+   rigid to the bone) — and set 3 mm above the highest of them. The plan's "one Mixamo
+   calibration serves six skins" is four: **Viper 7.9, Hazard 8.0, Pulse 8.1, Sentry 7.5 share
+   the 8 cm base; Echo needs 9.6 and Rhino 12.3** (bulkier sleeves — at 8 cm the pad was 1.3 cm
+   and 4 cm inside them) and get rig ids of their own (`withShoulderPads`); Apex is 8.7 in its
+   units. The deltoid is not "6–7 cm out" on these skins; the guess would have buried every pad.
+3. **The pad and its halo**, in `ActorIndicator`: a `RoundedBoxGeometry`,
+   `MeshStandardMaterial` with `emissive = palette.hostile`, `toneMapped: false`, half its
+   thickness out along +Z so its back face is on the sleeve; and behind it an **additive sprite**,
+   a radial canvas gradient tinted by the palette. One geometry and two materials are shared by
+   every body and repainted once in the palette callback; the halo is what makes the glow, since
+   there is no bloom pass. **Built first at the plan's numbers — 5 × 3 × 0.8 cm, emissive 1.5,
+   an 8 cm halo at alpha 0.3 — and read by the human on a real display as part of the skin at
+   1.5 m** (Pulse has red details of its own on that shoulder). Now **10 × 6 × 1 cm, emissive
+   3.0 (the spheres' figure), a 14 cm halo at alpha 0.55**, and the floor in point 5.
+4. `MARKER_ANCHORS = ['leftShoulder', 'rightShoulder']`. The knee anchors are gone from the
+   profile, the skin and `BotMesh`; so are the spheres.
+5. **The pixel arithmetic, measured** (2000-px buffer, 90°, one pad facing, same-frame
+   `readPixels` after the game's draw, hostile hue ±15° at s ≥ 0.45 / v ≥ 0.6, nameplates
+   hidden, background subtracted). At the plan's size: **24 px at 5 m, 6 px at 10 m, 1 px at
+   25 m** in `off`, 29 / 3 / 2 in `deuteranopia` — the plan's "~5 px across at 10 m, ~2 at 25",
+   and on a display that was nothing. So the plan's one line is in: `padFloorScale` grows the
+   pad's frame so its long side never covers less than **6 / 1080 of the frame height**
+   (`PAD_MIN_SCREEN_FRACTION`), from the camera's vertical FOV and the distance, so no buffer
+   size is needed; `ClientMatch` hands the player camera to `BotRenderer.update`, the thermal
+   optic hands none. With the bigger pad and the floor: **44 / 14 / 15 px** at 5 / 10 / 25 m in
+   `off` — a red dot on each shoulder at 25 m rather than nothing, with the nameplate still the
+   tell at range. (Deuteranopia's orange shares a hue with the hazard stripes, so its
+   background subtraction is not reliable at those bearings and is not quoted.)
+6. Goggles: not started; only after the pads are accepted.
+
+**The C1 leftovers, done here:** `BotMesh` no longer squashes to the wire's `heightScale` (a
+placeholder stands at its own height; the rig wears a layout, not a squash), and the **stand →
+crouch transition is `crouchToStand` played backwards** — `timeScale −1` from the last frame,
+finishing at 0 and handing to the crouch loop. One trap, recorded in the code: the cross-fade's
+time warp divides by the action's time scale and so flips a negative one, running the clip
+forward from its end to an instant finish; a reversed play fades without warping. Watched in the
+pane: 1.1 s from standing to the kneel, the pads riding the shoulders through it.
+
+### The instrument, and what it found
+
+`scripts/hit-sweep.sh` takes `CROUCH=1` (the strafing target holds crouch; `netHarness
+--crouch`, `HitTest` prints `target: crouch`), and **it now starts and stops its own server by
+PID and refuses a mode whose server did not report `listening`.** The first sweep of this
+session ran as the script was: `pkill -f "dist-server/serve"` from Git Bash never reaches a
+native `node.exe`, so the first server started — the HEAD worktree's, rewind on — held port 8120
+for forty minutes while every later server died with `EADDRINUSE`, and every later row, the
+"after" rows included, was measured against the old rig with rewind on. That is M10's *"the
+sweep script died partway on Windows"*, and it is why S8.6's with/without-rewind table was
+never completed. The rows under "Measured" are from the fixed script, with a server of its own
+per mode.
+
+### Found while here, not fixed
+
+- **The standing rig is 16 cm taller than the standing body.** `Idle_Aiming`'s crown is at
+  1.61 m; `HUMANOID_RIG`'s head box runs 1.52–1.77. Above the drawn head there is 15 cm of
+  head-zone hitbox, and the drawn skull base (1.42) sits in the neck box. A round that misses
+  over a standing head is a headshot. Left alone on purpose: every hit-rate and TTK figure in
+  this file was taken against it, and moving it is a balance change the human should make
+  knowingly — the same `poseLayout` from `Idle_Aiming`'s joints is one table away.
+- **`incoming/`'s `Neck1`**: Phase D's manifest should report a clip whose tracks target bones
+  the skins lack, and the export contract should say which skeleton.
+- **`EntitySnapshot.heightScale` is a pure function of `stance`** now; drop it at v13.
+- The determinism scenario (`hashRun`) runs one player and a weapon system against the map with
+  no hitbox rig, so `npm run hashes` cannot see a layout change; the fingerprint agreeing is
+  necessary and not sufficient for the rig.
+
+### Human playtest, when Phase C is closed
+
+On a real display: the pads at play speed — the first cut read as part of the skin at 1.5 m
+and was doubled with a floor; do the new ones read as *the enemy* at 5, 10 and 25 m, in `off`
+and `deuteranopia`, or are the strap line / goggles from the fallback list wanted; the halo's
+0.55 alpha in daylight maps;
+a crouch-walking enemy taking a chest hit where the chest is drawn; a slide being hittable at
+all; the reversed transition at play speed; and whether the standing "phantom head" above is
+felt as a headshot that should not have been.
+
 ## Phase D — the animation library
 
 The human has more clips to add and wants the folder to explain itself, overlapping clips to
@@ -13789,9 +13959,11 @@ viewmodel already owns rather than a new one.
 | # | Decision | Recommendation |
 |---|---|---|
 | 1 | ~~Does bug 4.1 still reproduce after `8309b86`?~~ **Answered by the human (2026-09-13): no.** A two-window match from team B read correctly; Phase A spent only the sentry-body line on it | — |
-| 2 | Slide: a layout with a crouch clip, or raise `slideHeight`? | The layout, if a slide clip exists among the new files; otherwise raise the height and record the number |
-| 3 | Pads: screen-space minimum size? | Start without; add the one line if 25 m reads badly |
-| 4 | Goggles after the pads? | Yes, once the pads are accepted — per-skin work |
+| 2 | ~~Slide: a layout with a crouch clip, or raise `slideHeight`?~~ **Answered by C2 (2026-09-14): the layout.** No slide clip exists; a slide draws the crouch loops and now wears their layouts (crouch-run while fast, crouch-walk once slow). `slideHeight` is untouched — it is the capsule, not the rig | — |
+| 9 | The standing rig: leave the 1.77 m head top over a 1.61 m drawn crown, or rebuild `HUMANOID_RIG` from `Idle_Aiming`'s joints as the low layouts were built? | Rebuild, in its own phase, with `hit-sweep.sh` and the TTK figures re-taken against it — it moves every balance number in this file, so not quietly |
+| 10 | Pads: 10 × 6 cm at emissive 3.0 with a 14 cm halo at alpha 0.55 — right on a daylight map, too much at night? | Playtest; each is one constant in `ActorIndicator` |
+| 3 | ~~Pads: screen-space minimum size?~~ **In, after the human's read (2026-09-14): 6 px of 1080** (`PAD_MIN_SCREEN_FRACTION`). Raise it if 25 m still reads as nothing | — |
+| 4 | Goggles after the pads? | Yes, once the pads are accepted — per-skin work, and the sleeve probe says the skins differ by centimetres |
 | 5 | Which of the new clips exist — slide, throw, reload, melee, flinch, more deaths? | Run `animation-manifest` over `incoming/` first; the answer sizes Phase D and decides whether v13 is needed |
 | 6 | Scoreboard rows: keep a departed player's row for the match, or drop it at unseat? | Keep it for the match, keyed by reconnect token; drop only when the match ends |
 | 7 | Free-for-All spectating: `SpectatorTarget.isWatchable` shows a dead player same-side bodies only, which in FFA is half the lobby. Anyone, or leave it? | Anyone — there are no team-mates to protect, and the reference games spectate the killer. One `isHostile`-shaped change in `shared/modes/SpectatorTarget.ts` plus its harness invariant ("never an enemy") rewritten for FFA |
@@ -13890,6 +14062,91 @@ Every skirmish line is at `MATCH_ROUND_SECONDS=150`, three clients, one cycle, F
   `npm run leak`: 29 → 29 subscriptions over 100 cycles, heap +0.69 MiB. `npm run check` green:
   19 snapshot fields and 18 scoreboard-row fields pinned.
 
+### Phase C (2026-09-14)
+
+**C1, the body** (`scripts/measure-crouch.mjs`, Echo, 30 fps, crown = `mixamorigHeadTop_End`,
+world Y with the feet at the origin; the old rig's head top was 1.77 × 0.611 = 1.082 m crouched
+and 1.77 × 0.306 = 0.541 m sliding):
+
+| Clip | Crown | Skull base | Spine2 | Hips | vs old crouch rig | vs old slide rig |
+|---|---|---|---|---|---|---|
+| bind pose (T) | 1.737 | 1.505 | 1.287 | 0.916 | — | — |
+| `Idle_Aiming` (standing) | 1.614 | 1.423 | 1.231 | 0.868 | **−0.156 vs 1.770** | — |
+| `Crouch_Idle_Aiming` (a kneel) | 1.112 | 0.934 | 0.771 | 0.409 | **+0.030** | +0.571 |
+| `Crouch_Walk_Aiming` | 1.264 | 1.095 | 0.982 | 0.650 | **+0.182** | +0.723 |
+| `Crouch_Run_Aiming` | 1.378 | 1.218 | 1.122 | 0.816 | **+0.297** | +0.837 |
+| `incoming/Crouch_Idle_Aiming_Pistol` | 1.229 | 1.035 | 0.862 | 0.481 | +0.147 | +0.688 |
+| `incoming/Crouch_Idle_Reload` | 1.070 | 0.898 | 0.731 | 0.392 | −0.011 | +0.529 |
+| `incoming/Transition_Stand_To_Crouch_Aiming` (last frame) | 1.080 | 0.907 | 0.769 | 0.427 | −0.001 | — |
+| `incoming/Transition_Stand_To_Crouch_Pistol` (last frame) | 1.234 | 1.035 | 0.863 | 0.481 | +0.152 | — |
+
+Crown by skin, `Crouch_Idle_Aiming`: apex 1.169, echo / hazard / pulse / rhino / viper 1.112,
+sentry 1.139. `incoming/` clips on their own 69-bone skeleton vs on a skin: head **3.4–3.8 cm
+lower** on the skin (`Neck1`), spine identical.
+
+**C2, the layouts against the clips** (the same script, now against the layout `rigLayoutFor`
+wears for the clip; head boxes are padded 1 cm above the crown and below the skull base):
+`Crouch_Idle_Aiming` vs `humanoid-crouch` **−0.008 / +0.014 / +0.006** (crown / skull base /
+Spine2 vs chest centre); `Crouch_Walk_Aiming` vs `humanoid-crouch-walk` **−0.006 / +0.015 /
++0.012**; `Crouch_Run_Aiming` vs `humanoid-crouch-run` **−0.012 / +0.008 / +0.012**;
+`Idle_Aiming` vs `humanoid` −0.156 / −0.097 / −0.029 (untouched, decision 9). Layout head tops:
+1.770 / 1.120 / 1.270 / 1.390; chest centres 1.260 / 0.765 / 0.970 / 1.110.
+
+**C2, hit registration** (`scripts/hit-sweep.sh`, fixed to own its server — see "The
+instrument"; 40 s per cell, Foundry, one strafing target, one seeker; the "before" is a HEAD
+worktree with only the harness's `--crouch` patched in, its shooter aiming at the old rig's
+0.77 m chest; the "after" shooter aims at the layout's chest):
+
+| Target, tree | Rewind | none | 50 ms | 100 ms | 150 ms |
+|---|---|---|---|---|---|
+| crouching, before (old rig) | on | 65/120 = 54.2 % | 18/132 = 13.6 % | 41/131 = 31.3 % | 43/131 = 32.8 % |
+| crouching, before (old rig) | off | 66/120 = 55.0 % | 22/132 = 16.7 % | 41/130 = 31.5 % | 39/132 = 29.5 % |
+| **crouching, after (layouts)** | **on** | **73/120 = 60.8 %** | **47/132 = 35.6 %** | **58/138 = 42.0 %** | **45/130 = 34.6 %** |
+| crouching, after (layouts) | off | 56/120 = 46.7 % | 34/130 = 26.2 % | 23/130 = 17.7 % | 0/130 † |
+| standing, after | on | 59/120 = 49.2 % | 0/131 † | 38/130 = 29.2 % | 0/136 † |
+| standing, after | off | 70/120 = 58.3 % | 40/134 = 29.9 % | 49/132 = 37.1 % | 53/130 = 40.8 % |
+
+† **A dead cell is the instrument, not the rig.** Five of forty cells read exactly 0/N, in five
+different (mode, preset) cells, never twice in the same one; re-running the two standing ones
+in isolation gave **39.4 % and 8.4 %** at (on, 150) and **53.1 %** at (on, 50). The seeker walks
+straight at the target with no pathing and fires whenever it is within 25 m, so a run where it
+is stuck on geometry inside 25 m without line of sight is exactly zero. Run-to-run variance at
+one cell is therefore ±20 points, and the crouch before/after — higher at all four presets
+with rewind on — is four for four on a noisy instrument, not a measured delta. What the table
+does say without noise: the client's aim (layout chest, interpolated view) and the server's
+ruling (rewound rig with the layout of that tick) agree well enough to score 35–61 % on a
+crouching strafer, where the old rig scored 14–54 % — and that the hittest's `target` field is
+the provenance mark that the "after" rows came from the new build.
+
+**C3, the pads** (composited pane, 1600 × 1000 emulated, a bot held in place by a wrapped
+`controller.step` and healed every frame; the camera placed by a collision raycast so every
+distance had line of sight — the first 10 m and 25 m frames were taken from inside a wall and
+thrown away):
+
+- **Sleeve height under the pad footprint, per skin** (cm along the pad normal, positive =
+  sleeve above the pad's back face; at the 8 cm base, idle = run = crouch): Viper −0.4/−0.4,
+  Hazard −0.8/−0.3, Pulse −0.8/−0.2, Sentry −1.3/−0.8, **Echo +1.3/+1.2, Rhino +3.6/+4.0**,
+  Apex −0.6/+0.4 (its units). With the per-skin offsets: every skin between −0.1 and −1.4 (the
+  pad's back face 1–14 mm off the sleeve), Echo −0.3/−0.3.
+- **Hostile pixels** (2000-px buffer, one pad facing): at the plan's 5 × 3 cm, `off`
+  **24 / 6 / 1** at 5 / 10 / 25 m and `deuteranopia` 29 / 3 / 2; after the human's read on a
+  real display ("very small, part of the skin"), at 10 × 6 cm with the 6-px floor: `off`
+  **44 / 14 / 15**. The halo's pixels cannot be counted the same way — its hue band is the
+  bricks' and the hazard stripes' — so its number is not recorded rather than invented.
+- **Seen:** a kneeling Rhino at 1.2 m from both sides, pads flush, halo visible; the same in
+  idle from both sides and running from the left; a second enemy's pad readable at ~6 m in the
+  background; Rhino at 5 m in `deuteranopia` with orange pads; at 10 and 25 m the nameplate.
+  Crouch layouts over a kneeling body in the overlay (from the outline detour, same tree).
+  Console: no errors. Layouts seen worn by bots over ~4 000 frames of play: `humanoid` 98.9 %,
+  `humanoid-crouch-walk` 0.7 %, `humanoid-crouch` 0.15 %.
+- **Reversed transition:** `crouchToStand` at −1 runs 0.97 → 0.13 over 900 ms and hands to
+  `crouchIdleAiming` at 1.0 s.
+
+**Determinism:** `npm run hashes` **de376f8c** at 3600 ticks, identical to the HEAD worktree's
+Node run (all 10 maths digests agree, state matches across all 3600 ticks) and to the browser's
+`__operator.determinism.fingerprint()` in the same tree. Necessary, not sufficient: the
+scenario has no rig in it. `npm run check` green.
+
 ## Needs a browser
 
 The Browser pane in this session ran with `requestAnimationFrame` suspended; everything above
@@ -13912,19 +14169,30 @@ still during a firefight rather than flickering between a counted and a replicat
 friend dropping past thirty seconds and coming back to one row with their name and their kills
 on it; and `Kills x7` on the XP panel after a match where you actually killed seven.
 
-## How to start — the Phase C1 brief
+**From Phase C:** the pane composited this time (the follow loop teleported the player around
+a held bot every frame and set the view through `game.input.setView`), so the pads, the plates
+and the hitbox overlay over a kneeling enemy *were* seen at 1.2, 5, 10 and 25 m in both
+palettes, in a running match. What needs a display: the pads at play speed, and whether they
+read as equipment — see "Human playtest, when Phase C is closed".
 
-Phases A and B are built and at their gates (see the two "done" sections above); the human
+## How to start — the Phase D brief
+
+Phases A, B and C are built and at their gates (see the three "done" sections above); the human
 closes them. The next fresh session takes this file and the brief below.
 
-> **M13 Phase C1 — measure the body before deciding on it.** Read PLAN.md "Milestone 13",
-> Phase C (C1 first), and the two "done" sections for the tree you inherit. Build a browser probe
-> in the shape of the M13 planning session's verification — drive `game.loop.frame` by hand,
-> place the camera with `__operator.sim()`, sample `mixamorigHead` and `mixamorigSpine1` world Y
-> through each crouch and slide clip — producing one table: **clip × (visual head Y, rig head Y,
-> delta)**, plus crouch-walk against crouch-idle. Stop `BotMesh` scaling to `heightScale` (it is
-> a placeholder). Add the stand → crouch transition as `crouchToStand` at `timeScale = -1` and
-> look at it. Do not change the rig: C2 decides that from the table, and the human picks the
-> slide (decision 2). Gate: `npm run check`; the table recorded under "Measured" with the
-> numbers `HUMANOID_RIG` predicts beside them (1.08 m crouched, 0.54 m sliding); `npm run
-> hashes` unchanged. STOP at the gate.
+> **M13 Phase D — the animation library.** Read PLAN.md "Milestone 13", Phase D, and the three
+> "done" sections for the tree you inherit. Start with `scripts/animation-manifest.mjs` over
+> `incoming/` — clip names, durations, targeted bones, in Node without three — and make it
+> report a clip whose tracks target bones the skins lack (`mixamorigNeck1`, C1's finding) and
+> which of the two crouch depths a file is (the "Aiming" family settles at 1.08 m, the "Pistol"
+> family at 1.23; `scripts/measure-crouch.mjs` gives the number). Decide slots from that table,
+> not from file names. Then the folder layout, the catalogue's slots as variant arrays with one
+> `variantFor(slot, entityId, serial, count)`, `check-animations` in the gate, and the `name`
+> selector for the new files with the remaining `LegacyClipSelector`s counted. Only the slots
+> the inputs already support; the `throw` and `melee` bits wait for v13, with `heightScale`
+> leaving the snapshot in the same widening. A new crouch loop in a slot means re-running
+> `measure-crouch.mjs --pose` against `HUMANOID_CROUCH_*_RIG`: the deltas must stay within the
+> pads, or the layout moves with the clip. Gate: `npm run check` with `check:animations` in it;
+> the manifest table and the measure-crouch deltas under "Measured"; a match in the pane with
+> the new slots playing and the pads still on the enemies' shoulders; `npm run hashes` agreeing. STOP at
+> the gate.

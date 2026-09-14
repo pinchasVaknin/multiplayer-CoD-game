@@ -40,6 +40,8 @@ interface Args {
   harden: boolean;
   /** Run the S8.6 controlled hit-registration experiment instead of a match. */
   hittest: boolean;
+  /** The experiment's target holds crouch (M13 C2). */
+  crouch: boolean;
   /** Disconnect test: 'clean', 'hard' or 'none' (S8.11). */
   disconnect: 'clean' | 'hard' | 'none';
 }
@@ -56,6 +58,7 @@ function parseArgs(argv: readonly string[]): Args {
     seed: 1,
     harden: false,
     hittest: false,
+    crouch: false,
     disconnect: 'none',
   };
 
@@ -108,6 +111,9 @@ function parseArgs(argv: readonly string[]): Args {
       case '--hittest':
         args.hittest = true;
         break;
+      case '--crouch':
+        args.crouch = true;
+        break;
       case '--disconnect':
         if (value === 'clean' || value === 'hard') args.disconnect = value;
         i++;
@@ -134,7 +140,7 @@ async function main(): Promise<number> {
   }
 
   if (args.hittest) {
-    const result = await runHitTest(args.url, args.conditions, args.seconds, args.seed);
+    const result = await runHitTest(args.url, args.conditions, args.seconds, args.seed, args.crouch);
     metric('netharness', 'hittest', { url: args.url, ...result });
     await new Promise((resolve) => setTimeout(resolve, 250));
     return 0;

@@ -1,4 +1,5 @@
 import { simCos, simSin } from '../core/SimMath';
+import { isLowStance, LOCOMOTION_IDLE_SPEED, LOCOMOTION_RUN_SPEED, type StanceId } from '../player/Stance';
 /**
  * Oriented-box hitbox rig (brief S6.3).
  *
@@ -9,8 +10,24 @@ import { simCos, simSin } from '../core/SimMath';
  * A rig is real geometry: head, torso, two arms, two legs. Not one capsule. Ray tests
  * run against the entity's own box set and never touch the scene graph.
  *
- * Layout is shared (every humanoid points at the same `RigLayout`); only the transform
- * is per-entity. Nothing here allocates: hits are written into a caller-owned record.
+ * Layouts are shared (every humanoid points at the same few `RigLayout`s); only the
+ * transform and the choice of layout are per-entity. Nothing here allocates: hits are
+ * written into a caller-owned record.
+ *
+ * ## One layout per drawn pose (M13 C2)
+ *
+ * M3 compressed the standing layout uniformly by the capsule height — 0.61 crouched, 0.31
+ * sliding. The skinned bodies that arrived with M12 ignore that number and play a clip, and
+ * C1 measured where the clip actually puts the head: the crouch idle is a **kneel** with the
+ * crown at 1.11 m (the squashed rig said 1.08 — fine), the crouch walk holds it at 1.26 m
+ * (+0.18 m over the rig) and the crouch run, which is what a slide draws while it is fast,
+ * at 1.38 m against a slide rig 0.54 m tall. A round aimed at a sliding body's head passed
+ * over everything it could hit.
+ *
+ * So the low stances now have layouts of their own, built from the measured joints of the
+ * clip they are drawn with (`scripts/measure-crouch.mjs --pose`), and `rigLayoutFor` picks
+ * one by the same rule the animation selector uses to pick the clip. The standing layout is
+ * untouched: every hit-rate number in the plan was taken against it.
  */
 
 export type HitZone = 'head' | 'torso' | 'arm' | 'leg';
@@ -43,6 +60,11 @@ export interface RigLayout {
   readonly id: string;
   readonly boxes: readonly HitboxDef[];
   readonly height: number;
+  /**
+   * Where a bot aims at this body: the centre of the chest box, so aiming and hitting agree.
+   * 1.26 m standing, and lower in every low layout.
+   */
+  readonly aimY: number;
   /** Bounding sphere centre height, for the cheap reject. */
   readonly boundY: number;
   readonly boundRadius: number;
@@ -80,6 +102,206 @@ export const HUMANOID_RIG: RigLayout = buildLayout('humanoid', [
   { name: 'legR', zone: 'leg', ox: 0.11, oy: 0.42, oz: 0, sx: 0.18, sy: 0.84, sz: 0.2 },
 ]);
 
+/**
+ * A joint of the drawn body in the actor's frame: x to the right, y up, z with the body
+ * facing **−z**, so a negative z is in front of the feet. The numbers below are the mean
+ * over the clip for Echo, from `scripts/measure-crouch.mjs --pose`; the other skins agree
+ * within a few centimetres (Apex is 6 cm taller everywhere, from its own `modelScale`).
+ */
+type Joint = readonly [x: number, y: number, z: number];
+
+/** Half-extents added to a segment's bounding box on each axis: the limb's radius. */
+type Pad = readonly [x: number, y: number, z: number];
+
+/**
+ * The radius of each body part, chosen so that a segment box around the *standing* joints
+ * reproduces the standing box it replaces: head `Head→HeadTop_End` is 0.23 m tall and 0.09 m
+ * deep in bind, and padded by (0.11, 0.01, 0.07) it is the 0.22 × 0.25 × 0.23 head box above;
+ * chest `Spine1→Neck` is 0.30 m, padded to the 0.40 m chest box; abdomen `Hips→Spine1` is
+ * 0.23 m, padded to the 0.28 m abdomen box. The limbs split into two segments each (the
+ * standing layout uses one box per limb), padded to the standing limb's width and depth.
+ */
+const PAD = {
+  head: [0.11, 0.01, 0.07] as Pad,
+  neck: [0.065, 0.02, 0.055] as Pad,
+  chest: [0.23, 0.05, 0.12] as Pad,
+  abdomen: [0.2, 0.025, 0.12] as Pad,
+  arm: [0.07, 0.04, 0.08] as Pad,
+  leg: [0.09, 0.05, 0.1] as Pad,
+} as const;
+
+/**
+ * An axis-aligned box around the segment `a → b`, padded by the part's radius.
+ *
+ * Yaw is the only rotation the rig supports (see `HitboxRig`), so a pitched torso or a
+ * folded leg becomes the bounding box of its segment rather than a tilted slab. That
+ * over-covers the corners of a diagonal segment, which is the price the rig's own comment
+ * accepts; splitting each limb in two keeps the price small.
+ */
+function segmentBox(
+  name: string,
+  zone: HitZone,
+  a: Joint,
+  b: Joint,
+  pad: Pad,
+  upper?: boolean,
+): HitboxDef {
+  const box: HitboxDef = {
+    name,
+    zone,
+    ox: round((a[0] + b[0]) * 0.5),
+    oy: round((a[1] + b[1]) * 0.5),
+    oz: round((a[2] + b[2]) * 0.5),
+    sx: round(Math.abs(a[0] - b[0]) + pad[0] * 2),
+    sy: round(Math.abs(a[1] - b[1]) + pad[1] * 2),
+    sz: round(Math.abs(a[2] - b[2]) + pad[2] * 2),
+  };
+  return upper === true ? { ...box, upper: true } : box;
+}
+
+/** Three decimals: the joints are measured to centimetres, and a hash must not depend on a rounding mode. */
+function round(v: number): number {
+  return Math.round(v * 1000) / 1000;
+}
+
+/** The joints one low layout is built from. Left and right are the body's own. */
+interface PoseJoints {
+  readonly headTop: Joint;
+  readonly head: Joint;
+  readonly neck: Joint;
+  readonly spine1: Joint;
+  readonly hips: Joint;
+  readonly leftArm: Joint;
+  readonly leftForeArm: Joint;
+  readonly leftHand: Joint;
+  readonly rightArm: Joint;
+  readonly rightForeArm: Joint;
+  readonly rightHand: Joint;
+  readonly leftUpLeg: Joint;
+  readonly leftLeg: Joint;
+  readonly leftFoot: Joint;
+  readonly rightUpLeg: Joint;
+  readonly rightLeg: Joint;
+  readonly rightFoot: Joint;
+}
+
+function poseLayout(id: string, j: PoseJoints): RigLayout {
+  return buildLayout(id, [
+    segmentBox('head', 'head', j.head, j.headTop, PAD.head),
+    segmentBox('neck', 'head', j.neck, j.head, PAD.neck),
+    segmentBox('chest', 'torso', j.spine1, j.neck, PAD.chest, true),
+    segmentBox('abdomen', 'torso', j.hips, j.spine1, PAD.abdomen),
+    segmentBox('upperArmL', 'arm', j.leftArm, j.leftForeArm, PAD.arm),
+    segmentBox('foreArmL', 'arm', j.leftForeArm, j.leftHand, PAD.arm),
+    segmentBox('upperArmR', 'arm', j.rightArm, j.rightForeArm, PAD.arm),
+    segmentBox('foreArmR', 'arm', j.rightForeArm, j.rightHand, PAD.arm),
+    segmentBox('thighL', 'leg', j.leftUpLeg, j.leftLeg, PAD.leg),
+    segmentBox('shinL', 'leg', j.leftLeg, j.leftFoot, PAD.leg),
+    segmentBox('thighR', 'leg', j.rightUpLeg, j.rightLeg, PAD.leg),
+    segmentBox('shinR', 'leg', j.rightLeg, j.rightFoot, PAD.leg),
+  ]);
+}
+
+/**
+ * `Crouch_Idle_Aiming`: a kneel. Right knee on the floor, left foot forward, torso upright
+ * over hips at 0.41 m, head leaning 0.2 m forward with the crown at 1.11 m.
+ */
+export const HUMANOID_CROUCH_RIG: RigLayout = poseLayout('humanoid-crouch', {
+  headTop: [0.15, 1.11, -0.27],
+  head: [0.06, 0.93, -0.12],
+  neck: [0.03, 0.9, -0.07],
+  spine1: [-0.03, 0.63, 0.03],
+  hips: [0, 0.41, -0.01],
+  leftArm: [-0.16, 0.86, -0.12],
+  leftForeArm: [-0.13, 0.66, -0.27],
+  leftHand: [0.05, 0.75, -0.42],
+  rightArm: [0.18, 0.85, 0.05],
+  rightForeArm: [0.31, 0.64, 0.07],
+  rightHand: [0.21, 0.72, -0.14],
+  leftUpLeg: [-0.1, 0.36, -0.1],
+  leftLeg: [-0.08, 0.42, -0.49],
+  leftFoot: [-0.14, 0.11, -0.32],
+  rightUpLeg: [0.1, 0.34, 0.07],
+  rightLeg: [0.29, -0.01, 0.08],
+  rightFoot: [0.16, 0.18, 0.36],
+});
+
+/**
+ * `Crouch_Walk_Aiming`: hips at 0.65 m, torso pitched forward, crown at 1.26 m and half a
+ * metre in front of the feet. Also what a slide draws once it has slowed below the run
+ * threshold.
+ */
+export const HUMANOID_CROUCH_WALK_RIG: RigLayout = poseLayout('humanoid-crouch-walk', {
+  headTop: [0.2, 1.26, -0.47],
+  head: [0.13, 1.09, -0.3],
+  neck: [0.1, 1.07, -0.25],
+  spine1: [0.01, 0.87, -0.05],
+  hips: [0, 0.65, -0.01],
+  leftArm: [-0.09, 1.03, -0.3],
+  leftForeArm: [-0.08, 0.83, -0.43],
+  leftHand: [0.09, 0.86, -0.59],
+  rightArm: [0.25, 1.04, -0.11],
+  rightForeArm: [0.32, 0.81, -0.08],
+  rightHand: [0.26, 0.84, -0.31],
+  leftUpLeg: [-0.12, 0.59, -0.05],
+  leftLeg: [-0.07, 0.37, -0.32],
+  leftFoot: [-0.09, 0.16, -0.14],
+  rightUpLeg: [0.11, 0.59, 0.06],
+  rightLeg: [0.19, 0.36, -0.2],
+  rightFoot: [0.14, 0.15, -0.02],
+});
+
+/**
+ * `Crouch_Run_Aiming`: a hunched run — hips at 0.82 m, nearly standing, the crown at 1.38 m
+ * and 0.56 m in front of the feet. A crouching player never reaches the run speed; this is
+ * the pose a **slide** is drawn with while it is fast, and the one the 0.54 m slide rig was
+ * furthest from.
+ */
+export const HUMANOID_CROUCH_RUN_RIG: RigLayout = poseLayout('humanoid-crouch-run', {
+  headTop: [0.12, 1.38, -0.56],
+  head: [0.08, 1.22, -0.38],
+  neck: [0.07, 1.2, -0.32],
+  spine1: [0.03, 1.02, -0.08],
+  hips: [0, 0.82, -0.01],
+  leftArm: [-0.08, 1.14, -0.39],
+  leftForeArm: [-0.05, 1.03, -0.6],
+  leftHand: [0.08, 1.05, -0.81],
+  rightArm: [0.26, 1.17, -0.25],
+  rightForeArm: [0.34, 0.95, -0.3],
+  rightHand: [0.21, 1.0, -0.5],
+  leftUpLeg: [-0.13, 0.76, -0.03],
+  leftLeg: [-0.11, 0.44, -0.23],
+  leftFoot: [-0.09, 0.19, -0.01],
+  rightUpLeg: [0.12, 0.76, 0.05],
+  rightLeg: [0.14, 0.42, -0.09],
+  rightFoot: [0.12, 0.17, 0.12],
+});
+
+/** Every layout a humanoid can wear, for anything that needs to enumerate them (debug, audits). */
+export const HUMANOID_LAYOUTS: readonly RigLayout[] = [
+  HUMANOID_RIG,
+  HUMANOID_CROUCH_RIG,
+  HUMANOID_CROUCH_WALK_RIG,
+  HUMANOID_CROUCH_RUN_RIG,
+];
+
+/**
+ * The layout a body wears in `stance` moving at `(vx, vz)`, chosen by the rule the animation
+ * selector uses to choose the clip: standing stances wear the standing layout; a low stance
+ * wears the kneel, the crouch walk above the idle dead zone, and the crouch run above the run
+ * threshold — which only a slide reaches.
+ *
+ * Squared speeds, on purpose: `Math.hypot` is not something two runtimes have to agree on and
+ * a threshold comparison does not need it.
+ */
+export function rigLayoutFor(stance: StanceId, vx: number, vz: number): RigLayout {
+  if (!isLowStance(stance)) return HUMANOID_RIG;
+  const speedSq = vx * vx + vz * vz;
+  if (speedSq >= LOCOMOTION_RUN_SPEED * LOCOMOTION_RUN_SPEED) return HUMANOID_CROUCH_RUN_RIG;
+  if (speedSq > LOCOMOTION_IDLE_SPEED * LOCOMOTION_IDLE_SPEED) return HUMANOID_CROUCH_WALK_RIG;
+  return HUMANOID_CROUCH_RIG;
+}
+
 export function buildLayout(id: string, boxes: readonly HitboxDef[]): RigLayout {
   let top = 0;
   for (const b of boxes) top = Math.max(top, b.oy + b.sy * 0.5);
@@ -90,7 +312,10 @@ export function buildLayout(id: string, boxes: readonly HitboxDef[]): RigLayout 
     const corner = Math.hypot(b.sx, b.sy, b.sz) * 0.5;
     radius = Math.max(radius, Math.hypot(b.ox, dy, b.oz) + corner);
   }
-  return { id, boxes, height: top, boundY, boundRadius: radius };
+  // The chest if the layout marks one, else the first torso box (the sentry has no chest),
+  // else the middle of the silhouette.
+  const chest = boxes.find((b) => b.upper === true) ?? boxes.find((b) => b.zone === 'torso');
+  return { id, boxes, height: top, aimY: chest?.oy ?? top * 0.5, boundY, boundRadius: radius };
 }
 
 const EPS = 1e-6;
@@ -103,28 +328,29 @@ const EPS = 1e-6;
  * has tried it has regretted it.
  */
 export class HitboxRig {
-  readonly layout: RigLayout;
+  /**
+   * The boxes this body wears right now. Set from the stance and speed on the tick the shot
+   * resolves (`rigLayoutFor`), and rewound with the transform by lag compensation.
+   *
+   * M3 had a `heightScale` here instead — a uniform squash of the standing layout by the
+   * capsule height, so that cover would cover a crouching body. It covered the crouch idle
+   * and nothing else (C1's table); a layout per drawn pose replaced it in M13 C2.
+   */
+  layout: RigLayout;
 
   x = 0;
   y = 0;
   z = 0;
   yaw = 0;
 
-  /**
-   * Vertical scale, 1 = standing.
-   *
-   * Added in M3. Without it a crouching character's hitboxes stay at standing height,
-   * and a bot with a clear line over a 1 m barrier hits the chest of someone who is
-   * plainly ducked behind it — cover that does not cover. Boxes scale in offset and in
-   * height, so zones, widths and every multiplier verified in M2 are untouched; only how
-   * far off the ground each box sits changes.
-   */
-  heightScale = 1;
-
   private cos = 1;
   private sin = 0;
 
   constructor(layout: RigLayout = HUMANOID_RIG) {
+    this.layout = layout;
+  }
+
+  setLayout(layout: RigLayout): void {
     this.layout = layout;
   }
 
@@ -141,12 +367,12 @@ export class HitboxRig {
 
   /** World-space centre of the bounding sphere. */
   get boundCenterY(): number {
-    return this.y + this.layout.boundY * this.heightScale;
+    return this.y + this.layout.boundY;
   }
 
-  /** Height of this rig's silhouette right now, metres. */
+  /** Height of this rig's silhouette right now, metres: the top of its highest box. */
   get standingHeight(): number {
-    return this.layout.height * this.heightScale;
+    return this.layout.height;
   }
 
   /**
@@ -195,20 +421,19 @@ export class HitboxRig {
     let bestAxis = 0;
     let bestSign = 0;
 
-    const scale = this.heightScale;
     const boxes = this.layout.boxes;
     for (let i = 0; i < boxes.length; i++) {
       const box = boxes[i];
       if (box === undefined) continue;
       const t = raySlab(
         lox - box.ox,
-        ry - box.oy * scale,
+        ry - box.oy,
         loz - box.oz,
         ldx,
         dy,
         ldz,
         box.sx * 0.5,
-        box.sy * 0.5 * scale,
+        box.sy * 0.5,
         box.sz * 0.5,
         bestT,
       );
@@ -246,15 +471,14 @@ export class HitboxRig {
     const boxes = this.layout.boxes;
     const cs = this.cos;
     const sn = this.sin;
-    const scale = this.heightScale;
     let w = 0;
     for (const box of boxes) {
       const hx = box.sx * 0.5;
-      const hy = box.sy * 0.5 * scale;
+      const hy = box.sy * 0.5;
       const hz = box.sz * 0.5;
       for (let corner = 0; corner < 8; corner++) {
         const lx = box.ox + ((corner & 1) === 0 ? -hx : hx);
-        const ly = box.oy * scale + ((corner & 2) === 0 ? -hy : hy);
+        const ly = box.oy + ((corner & 2) === 0 ? -hy : hy);
         const lz = box.oz + ((corner & 4) === 0 ? -hz : hz);
         if (w + 3 > out.length) return w;
         out[w++] = this.x + lx * cs + lz * sn;

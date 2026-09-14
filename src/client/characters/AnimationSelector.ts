@@ -1,17 +1,24 @@
 import type { ActorAnimationInput } from '../../shared/ai/BotVisualState';
+import {
+  isLowStance as isLowStanceId,
+  LOCOMOTION_IDLE_SPEED,
+  LOCOMOTION_RUN_SPEED,
+} from '../../shared/player/Stance';
 import type { CharacterAnimationId } from './CharacterCatalog';
 
-/** A dead zone stops interpolation noise from making a standing actor moonwalk. */
-export const IDLE_SPEED = 0.12;
 /**
- * Above this, a non-sprinting standing actor uses the authored run loop. It intentionally sits
- * above the 4.6 m/s walk cap: speed comes from rendered pose deltas and must not flicker exactly
- * on the walk/run boundary. An authoritative sprint flag still chooses run immediately.
+ * The walk and run thresholds are the simulation's (`shared/player/Stance`), because the
+ * hitbox rig picks a crouching body's layout by the same speeds (`rigLayoutFor`, M13 C2):
+ * the clip and the boxes must change pose together. A dead zone stops interpolation noise
+ * from making a standing actor moonwalk; the run threshold sits above the walk cap so speed
+ * from rendered pose deltas cannot flicker on the boundary. An authoritative sprint flag
+ * still chooses run immediately.
  */
-export const RUN_SPEED = 5.4;
+export const IDLE_SPEED = LOCOMOTION_IDLE_SPEED;
+export const RUN_SPEED = LOCOMOTION_RUN_SPEED;
 
 export function isLowStance(input: Pick<ActorAnimationInput, 'stance'>): boolean {
-  return input.stance === 'CROUCH' || input.stance === 'SLIDE' || input.stance === 'MANTLE';
+  return isLowStanceId(input.stance);
 }
 
 /**

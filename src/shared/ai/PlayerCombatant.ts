@@ -1,7 +1,6 @@
-import { HitboxRig, HUMANOID_RIG } from '../combat/HitboxRig';
+import { HitboxRig, HUMANOID_RIG, rigLayoutFor } from '../combat/HitboxRig';
 import { PLAYER_ENTITY_ID } from '../combat/DamageSystem';
 import type { Health } from '../player/Health';
-import type { MovementConfig } from '../player/MovementConfig';
 import type { PlayerController } from '../player/PlayerController';
 import type { BotTeam, Combatant } from './Combatant';
 
@@ -68,7 +67,6 @@ export class PlayerCombatant implements Combatant {
     readonly health: Health,
     readonly team: BotTeam,
     private readonly player: PlayerController,
-    private readonly movement: MovementConfig,
     entityId: number = PLAYER_ENTITY_ID,
   ) {
     this.entityId = entityId;
@@ -96,7 +94,7 @@ export class PlayerCombatant implements Combatant {
     return this.player.sim.eyeHeight;
   }
   get aimHeight(): number {
-    return 1.26 * this.rig.heightScale;
+    return this.rig.layout.aimY;
   }
   get quiet(): boolean {
     const stance = this.player.sim.stance;
@@ -112,7 +110,7 @@ export class PlayerCombatant implements Combatant {
    */
   syncRig(): void {
     const sim = this.player.sim;
-    this.rig.heightScale = sim.capsuleHeight / Math.max(this.movement.standHeight, 1e-3);
+    this.rig.setLayout(rigLayoutFor(sim.stance, sim.vx, sim.vz));
     this.rig.setTransform(sim.x, sim.y, sim.z, sim.yaw);
   }
 }

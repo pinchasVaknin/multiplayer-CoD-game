@@ -1,4 +1,4 @@
-import type { HitboxRig } from '../../shared/combat/HitboxRig';
+import { HUMANOID_RIG, type HitboxRig, type RigLayout } from '../../shared/combat/HitboxRig';
 
 /**
  * One second of a `HitboxRig`'s transforms (M10, S4.13).
@@ -7,11 +7,13 @@ import type { HitboxRig } from '../../shared/combat/HitboxRig';
  * (60 ticks). The M2 rig is already oriented boxes; store its history, do not invent a second
  * representation."*
  *
- * That last clause is the design. A rig is fully described by five numbers — position, yaw
- * and the stance compression — because `HitboxRig` is a shared `RigLayout` plus a transform.
- * So the history is five `Float32Array`s and rewinding is writing five numbers back, not
- * reconstructing a body. Everything M2 verified about zones and multipliers keeps applying,
- * because the boxes being tested are the same boxes.
+ * That last clause is the design. A rig is fully described by four numbers and a choice —
+ * position, yaw and which of the shared `RigLayout`s it wears — because `HitboxRig` is a
+ * layout plus a transform. So the history is four `Float32Array`s and one array of layout
+ * references, and rewinding is writing them back, not reconstructing a body. Everything M2
+ * verified about zones and multipliers keeps applying, because the boxes being tested are
+ * the same boxes. (Until M13 C2 the fifth number was the stance compression; the layout
+ * reference is the same slot, holding the pose the body was drawn in on that tick.)
  *
  * ## Why the tick is stored alongside
  *
@@ -30,7 +32,7 @@ export class RigHistory {
   private readonly y = new Float32Array(HISTORY_TICKS);
   private readonly z = new Float32Array(HISTORY_TICKS);
   private readonly yaw = new Float32Array(HISTORY_TICKS);
-  private readonly scale = new Float32Array(HISTORY_TICKS);
+  private readonly layout: RigLayout[] = new Array<RigLayout>(HISTORY_TICKS).fill(HUMANOID_RIG);
   private readonly tick = new Int32Array(HISTORY_TICKS).fill(-1);
 
   /** Most recent tick written, or -1. */
@@ -43,7 +45,7 @@ export class RigHistory {
     this.y[i] = rig.y;
     this.z[i] = rig.z;
     this.yaw[i] = rig.yaw;
-    this.scale[i] = rig.heightScale;
+    this.layout[i] = rig.layout;
     this.tick[i] = tick;
     if (tick > this.newest) this.newest = tick;
   }
@@ -61,7 +63,7 @@ export class RigHistory {
       this.y[i] = rig.y;
       this.z[i] = rig.z;
       this.yaw[i] = rig.yaw;
-      this.scale[i] = rig.heightScale;
+      this.layout[i] = rig.layout;
       this.tick[i] = tick;
     }
     this.newest = tick;
@@ -81,7 +83,7 @@ export class RigHistory {
   applyAt(rig: HitboxRig, tick: number): boolean {
     const i = index(tick);
     if (this.tick[i] !== tick) return false;
-    rig.heightScale = this.scale[i] ?? 1;
+    rig.setLayout(this.layout[i] ?? HUMANOID_RIG);
     rig.setTransform(this.x[i] ?? 0, this.y[i] ?? 0, this.z[i] ?? 0, this.yaw[i] ?? 0);
     return true;
   }
@@ -97,11 +99,11 @@ export interface RigSnapshot {
   y: number;
   z: number;
   yaw: number;
-  scale: number;
+  layout: RigLayout;
 }
 
 export function makeRigSnapshot(): RigSnapshot {
-  return { x: 0, y: 0, z: 0, yaw: 0, scale: 1 };
+  return { x: 0, y: 0, z: 0, yaw: 0, layout: HUMANOID_RIG };
 }
 
 export function saveRig(rig: HitboxRig, out: RigSnapshot): void {
@@ -109,10 +111,10 @@ export function saveRig(rig: HitboxRig, out: RigSnapshot): void {
   out.y = rig.y;
   out.z = rig.z;
   out.yaw = rig.yaw;
-  out.scale = rig.heightScale;
+  out.layout = rig.layout;
 }
 
 export function restoreRig(src: RigSnapshot, rig: HitboxRig): void {
-  rig.heightScale = src.scale;
+  rig.setLayout(src.layout);
   rig.setTransform(src.x, src.y, src.z, src.yaw);
 }

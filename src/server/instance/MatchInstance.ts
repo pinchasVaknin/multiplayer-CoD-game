@@ -824,7 +824,7 @@ function writePlayer(e: EntitySnapshot, p: NetPlayer): void {
   e.vx = sim.vx;
   e.vz = sim.vz;
   e.stance = sim.stance;
-  e.heightScale = p.rig.heightScale;
+  e.heightScale = p.capsuleScale;
   e.health = clampByte(p.health.current);
   e.weaponIndex = weaponIndexOf(p.weapons.definition.id);
   e.flags =
@@ -851,7 +851,7 @@ function writeBot(e: EntitySnapshot, b: Bot): void {
   e.vx = sim.vx;
   e.vz = sim.vz;
   e.stance = sim.stance;
-  e.heightScale = b.rig.heightScale;
+  e.heightScale = b.capsuleScale;
   e.health = clampByte(b.health.current);
   e.weaponIndex = weaponIndexOf(b.weapons.definition.id);
   e.flags =

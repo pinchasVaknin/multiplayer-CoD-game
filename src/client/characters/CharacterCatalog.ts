@@ -70,19 +70,30 @@ export interface CharacterSupportHandProfile {
 }
 
 /**
- * Skeleton landmarks for the client-only IFF markers and overhead nameplate.
+ * Where a shoulder pad sits on a skin (M13 C3): a node under `bone`, at `offset` in the
+ * bone's own local units (centimetres for the Mixamo skins — the same units `palmOffset` is
+ * in, and Apex's ×10 rides the same override), turned by `rotation` (Euler XYZ, radians) so
+ * the node's +Z points out of the sleeve and its +X runs down the arm. The renderer reads the
+ * node's world frame and knows nothing about which bone it hangs from.
+ */
+export interface CharacterIndicatorPadProfile {
+  readonly bone: string;
+  readonly offset: readonly [number, number, number];
+  readonly rotation: readonly [number, number, number];
+}
+
+/**
+ * Skeleton landmarks for the client-only IFF layer: the overhead nameplate and the two
+ * shoulder pads.
  *
  * These stay with the rig profile rather than in the renderer: a new skin can use a different
- * skeleton without making the roster reconciler know about imported bone names.
+ * skeleton without making the roster reconciler know about imported bone names. The knee
+ * bones the emissive IFF spheres hung off left with them (M13 C3).
  */
 export interface CharacterIndicatorProfile {
   readonly headBone: string;
-  readonly leftUpperArmStartBone: string;
-  readonly leftUpperArmEndBone: string;
-  readonly rightUpperArmStartBone: string;
-  readonly rightUpperArmEndBone: string;
-  readonly leftKneeBone: string;
-  readonly rightKneeBone: string;
+  readonly leftShoulder: CharacterIndicatorPadProfile;
+  readonly rightShoulder: CharacterIndicatorPadProfile;
 }
 
 /** A component of a bone-local translation. */
@@ -124,6 +135,32 @@ export interface CharacterDefinition {
 const CHARACTER_VERSION = '2026-09-10-skins-v2';
 const ANIMATION_ROOT = '/models/bots/animations';
 
+/**
+ * Where the shoulder pads sit on a Mixamo skin (M13 C3), measured rather than guessed.
+ *
+ * The upper-arm bone's +Y runs down the arm to the elbow and its −Z is the lateral surface of
+ * the deltoid (world +Y in the T-pose; measured on Echo and Apex). A pad sits 4 cm down the arm
+ * and `lateralCm` out along that surface; the rotation maps the bone frame onto the pad's
+ * (+Z out of the sleeve, +X down the arm). The lateral distance is where the skinned sleeve
+ * vertices under the pad's footprint top out, plus 3 mm — probed in the running game for every
+ * skin, in idle, run and crouch, which read the same to a millimetre because the footprint is
+ * rigid to the bone. Viper 7.9, Hazard 8.0, Pulse 8.1 and Sentry 7.5 share the 8 cm base; Echo
+ * (9.6) and Rhino (12.3) wear bulkier sleeves and get their own rig ids; Apex is 8.7 in its
+ * ×10 units. A pad any closer is inside the sleeve; any further floats off it.
+ */
+const SHOULDER_PAD_LATERAL_CM = 8;
+const SHOULDER_PAD_DROP_CM = 4;
+const SHOULDER_PAD_ROTATION: readonly [number, number, number] = [-Math.PI, 0, -Math.PI / 2];
+
+function shoulderPads(lateralCm: number, unitScale = 1): CharacterIndicatorProfile {
+  const offset: readonly [number, number, number] = [0, SHOULDER_PAD_DROP_CM * unitScale, -lateralCm * unitScale];
+  return {
+    headBone: 'mixamorigHead',
+    leftShoulder: { bone: 'mixamorigLeftArm', offset, rotation: SHOULDER_PAD_ROTATION },
+    rightShoulder: { bone: 'mixamorigRightArm', offset, rotation: SHOULDER_PAD_ROTATION },
+  };
+}
+
 const MIXAMO_V1_RIG: CharacterRigProfile = {
   id: 'mixamo-v1',
   minimumBoneCount: 65,
@@ -155,18 +192,21 @@ const MIXAMO_V1_RIG: CharacterRigProfile = {
     handBone: 'mixamorigLeftHand',
     palmOffset: [-0.46, 4.98, -0.03],
   },
-  indicators: {
-    headBone: 'mixamorigHead',
-    leftUpperArmStartBone: 'mixamorigLeftArm',
-    leftUpperArmEndBone: 'mixamorigLeftForeArm',
-    rightUpperArmStartBone: 'mixamorigRightArm',
-    rightUpperArmEndBone: 'mixamorigRightForeArm',
-    leftKneeBone: 'mixamorigLeftLeg',
-    rightKneeBone: 'mixamorigRightLeg',
-  },
+  indicators: shoulderPads(SHOULDER_PAD_LATERAL_CM),
   modelScale: 0.975,
   modelYaw: Math.PI,
 };
+
+/**
+ * A bulkier sleeve than the pack's: the same rig with the pads further out. Measured the way
+ * the base number was; see `shoulderPads`.
+ */
+function withShoulderPads(base: CharacterRigProfile, id: string, lateralCm: number): CharacterRigProfile {
+  return { ...base, id, indicators: shoulderPads(lateralCm) };
+}
+
+const ECHO_RIG = withShoulderPads(MIXAMO_V1_RIG, 'mixamo-v1/echo', 9.6);
+const RHINO_RIG = withShoulderPads(MIXAMO_V1_RIG, 'mixamo-v1/rhino', 12.3);
 
 /**
  * Apex has the same named Mixamo landmarks as the regular pack, but its exported armature uses
@@ -182,6 +222,8 @@ const APEX_RIG: CharacterRigProfile = {
     ...MIXAMO_V1_RIG.supportHand,
     palmOffset: [-4.6, 49.8, -0.3],
   },
+  // Apex's ×10 rides the same mechanism as its `palmOffset`: measured flush at 8.7 cm.
+  indicators: shoulderPads(8.7, 10),
   modelScale: 1.025,
 };
 function versionedAssetUrl(path: string, version: string): string {
@@ -237,10 +279,10 @@ function character(
 
 export const CHARACTER_DEFINITIONS = {
   apex: character('apex', 'Apex.glb', APEX_RIG),
-  echo: character('echo', 'Echo.glb'),
+  echo: character('echo', 'Echo.glb', ECHO_RIG),
   hazard: character('hazard', 'Hazard.glb'),
   pulse: character('pulse', 'Pulse.glb'),
-  rhino: character('rhino', 'Rhino.glb'),
+  rhino: character('rhino', 'Rhino.glb', RHINO_RIG),
   sentry: character('sentry', 'Sentry.glb'),
   viper: character('viper', 'Viper.glb'),
 } satisfies Readonly<Record<CharacterId, CharacterDefinition>>;

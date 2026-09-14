@@ -36,6 +36,32 @@ export function legalStanceTargets(from: StanceId): readonly StanceId[] {
   return LEGAL[from];
 }
 
+/**
+ * The stances a body is drawn low in. A slide and a mantle have no authored clips of their
+ * own and are drawn with the crouch loops (`AnimationSelector`), and since M13 C2 the hitbox
+ * rig follows the same rule (`rigLayoutFor`): one predicate, so the boxes and the body cannot
+ * disagree about which pose a stance is.
+ */
+export function isLowStance(stance: StanceId): boolean {
+  return stance === 'CROUCH' || stance === 'SLIDE' || stance === 'MANTLE';
+}
+
+/**
+ * How fast a body reads as walking, metres per second. A dead zone, so interpolation noise
+ * cannot make a standing actor moonwalk — and, since M13 C2, the speed at which a crouching
+ * rig switches from the kneeling layout to the walking one. Shared for that reason: the
+ * renderer and the simulation pick the same pose at the same speed.
+ */
+export const LOCOMOTION_IDLE_SPEED = 0.12;
+
+/**
+ * Above this a body is drawn with a run loop. Deliberately above the 4.6 m/s walk cap: the
+ * renderer's speed comes from pose deltas and must not flicker on the walk/run boundary. A
+ * crouching body only reaches it in a slide, which is why the slide's rig is the crouch-run
+ * layout while the slide is fast and the crouch-walk layout once it has bled off.
+ */
+export const LOCOMOTION_RUN_SPEED = 5.4;
+
 /** Collision capsule height for a stance, metres. */
 export function capsuleHeightFor(cfg: MovementConfig, stance: StanceId): number {
   switch (stance) {

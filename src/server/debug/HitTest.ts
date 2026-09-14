@@ -32,6 +32,8 @@ const log = logger('hittest');
 
 export interface HitTestResult {
   readonly conditions: string;
+  /** The stance the target held: `stand`, or `crouch` with `--crouch`. */
+  readonly target: 'stand' | 'crouch';
   readonly shots: number;
   readonly hits: number;
   readonly hitRate: number;
@@ -45,8 +47,10 @@ export async function runHitTest(
   conditions: NetConditions,
   seconds: number,
   seed: number,
+  crouch = false,
 ): Promise<HitTestResult> {
   // The target strafes on a fixed cadence and never shoots back; the shooter tracks it.
+  // Crouching, when asked, so the crouch layouts are what is being hit (M13 C2).
   const target = new HeadlessClient({
     url,
     name: 'TARGET',
@@ -54,6 +58,7 @@ export async function runHitTest(
     conditions,
     behaviour: 'strafe',
     seed,
+    holdCrouch: crouch,
   });
   const shooter = new HeadlessClient({
     url,
@@ -83,6 +88,7 @@ export async function runHitTest(
   const hits = after.shotsHit - before.shotsHit;
   const result: HitTestResult = {
     conditions: describeConditions(conditions),
+    target: crouch ? 'crouch' : 'stand',
     shots,
     hits,
     hitRate: shots === 0 ? 0 : hits / shots,
@@ -91,7 +97,7 @@ export async function runHitTest(
   };
 
   log.info(
-    `${result.conditions}: ${hits}/${shots} = ${(result.hitRate * 100).toFixed(1)}% at ` +
+    `${result.conditions}, ${result.target}ing target: ${hits}/${shots} = ${(result.hitRate * 100).toFixed(1)}% at ` +
       `${result.rttMs}ms RTT (interpolating ${DEFAULT_INTERPOLATION_DELAY_MS}ms in the past).`,
   );
   return result;

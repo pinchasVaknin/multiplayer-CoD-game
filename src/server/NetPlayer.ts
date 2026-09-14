@@ -7,7 +7,7 @@ import {
   type BotVisualState,
 } from '../shared/ai/BotVisualState';
 import type { DamageSystem } from '../shared/combat/DamageSystem';
-import { HitboxRig, HUMANOID_RIG } from '../shared/combat/HitboxRig';
+import { HitboxRig, HUMANOID_RIG, rigLayoutFor } from '../shared/combat/HitboxRig';
 import type { GameBus } from '../shared/core/Events';
 import type { InputCommand } from '../shared/core/InputCommand';
 import { DT } from '../shared/core/Loop';
@@ -220,7 +220,14 @@ export class NetPlayer implements Combatant {
     return this.controller.sim.eyeHeight;
   }
   get aimHeight(): number {
-    return 1.26 * this.rig.heightScale;
+    return this.rig.layout.aimY;
+  }
+  /**
+   * Capsule height over stand height, 1 standing. What the snapshot carries as
+   * `heightScale`: the procedural placeholder's squash, not the rig's (M13 C2).
+   */
+  get capsuleScale(): number {
+    return this.controller.sim.capsuleHeight / Math.max(this.deps.movement.standHeight, 1e-3);
   }
   get quiet(): boolean {
     const stance = this.controller.sim.stance;
@@ -281,7 +288,7 @@ export class NetPlayer implements Combatant {
     this.weapons.reset();
     this.respawnTimer = 0;
     this.visual.spawnSerial++;
-    this.rig.heightScale = 1;
+    this.rig.setLayout(HUMANOID_RIG);
     this.rig.setTransform(x, y, z, yaw);
     savePlayerSim(this.controller.sim, this.simState);
   }
@@ -412,7 +419,7 @@ export class NetPlayer implements Combatant {
       sim.pitch += this.residual.pitch;
     }
 
-    this.rig.heightScale = sim.capsuleHeight / Math.max(this.deps.movement.standHeight, 1e-3);
+    this.rig.setLayout(rigLayoutFor(sim.stance, sim.vx, sim.vz));
     this.rig.setTransform(sim.x, sim.y, sim.z, sim.yaw);
     savePlayerSim(sim, this.simState);
   }

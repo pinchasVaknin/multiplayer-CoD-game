@@ -11,7 +11,12 @@ import {
   LEG_PIVOT_Y,
 } from '../../shared/ai/Gait';
 import { DEATH_VARIANTS, type ActorAnimationInput } from '../../shared/ai/BotVisualState';
-import type { ActorAvatar, ActorIndicatorAnchor, HeldWeaponAsset } from '../characters/ActorAvatar';
+import type {
+  ActorAvatar,
+  ActorIndicatorAnchor,
+  ActorIndicatorFrameAnchor,
+  HeldWeaponAsset,
+} from '../characters/ActorAvatar';
 
 /**
  * A bot's body, and the way it dies (brief S6.8; playtest round 5, F4).
@@ -161,12 +166,10 @@ export class BotMesh implements ActorAvatar {
   /** Hip nodes. The geometry hangs below each one, so a rotation here is a hip rotation. */
   private readonly legL = new THREE.Group();
   private readonly legR = new THREE.Group();
-  /** Presentation landmarks; the IFF renderer reads these rather than procedural box offsets. */
+  /** Presentation landmark; the nameplate hangs off it rather than off a procedural box offset. */
   private readonly headAnchor = new THREE.Object3D();
-  private readonly leftUpperArmAnchor = new THREE.Object3D();
-  private readonly rightUpperArmAnchor = new THREE.Object3D();
-  private readonly leftKneeAnchor = new THREE.Object3D();
-  private readonly rightKneeAnchor = new THREE.Object3D();
+  /** The shoulder pads' frames, on the outer face of each arm box (M13 C3). Static: the arms are baked. */
+  private readonly shoulderFrames: Readonly<Record<ActorIndicatorFrameAnchor, THREE.Object3D>>;
   /** The weapon in the hands. Null until the renderer knows which one this body carries. */
   private weapon: THREE.Mesh | null = null;
   private weaponId: string | null = null;
@@ -225,17 +228,10 @@ export class BotMesh implements ActorAvatar {
     const head = requiredRigBox('head');
     this.headAnchor.name = 'indicator-anchor:head';
     this.headAnchor.position.set(head.ox, head.oy + head.sy * 0.5, head.oz);
-    this.leftUpperArmAnchor.name = 'indicator-anchor:left-upper-arm';
-    this.leftUpperArmAnchor.position.copy(proceduralArmAnchor('armL'));
-    this.rightUpperArmAnchor.name = 'indicator-anchor:right-upper-arm';
-    this.rightUpperArmAnchor.position.copy(proceduralArmAnchor('armR'));
-    this.leftKneeAnchor.name = 'indicator-anchor:left-knee';
-    this.rightKneeAnchor.name = 'indicator-anchor:right-knee';
-    const knee = proceduralKneeAnchor();
-    this.leftKneeAnchor.position.copy(knee);
-    this.rightKneeAnchor.position.copy(knee);
-    this.legL.add(this.leftKneeAnchor);
-    this.legR.add(this.rightKneeAnchor);
+    this.shoulderFrames = {
+      leftShoulder: proceduralShoulderFrame('armL'),
+      rightShoulder: proceduralShoulderFrame('armR'),
+    };
 
     this.body.castShadow = true;
     this.head.castShadow = true;
@@ -247,8 +243,8 @@ export class BotMesh implements ActorAvatar {
       this.legL,
       this.legR,
       this.headAnchor,
-      this.leftUpperArmAnchor,
-      this.rightUpperArmAnchor,
+      this.shoulderFrames.leftShoulder,
+      this.shoulderFrames.rightShoulder,
     );
   }
 
@@ -328,19 +324,21 @@ export class BotMesh implements ActorAvatar {
       case 'head':
         this.headAnchor.getWorldPosition(target);
         return true;
-      case 'leftUpperArm':
-        this.leftUpperArmAnchor.getWorldPosition(target);
-        return true;
-      case 'rightUpperArm':
-        this.rightUpperArmAnchor.getWorldPosition(target);
-        return true;
-      case 'leftKnee':
-        this.leftKneeAnchor.getWorldPosition(target);
-        return true;
-      case 'rightKnee':
-        this.rightKneeAnchor.getWorldPosition(target);
-        return true;
+      case 'leftShoulder':
+      case 'rightShoulder':
+        return false;
     }
+  }
+
+  getIndicatorFrame(
+    anchor: ActorIndicatorFrameAnchor,
+    position: THREE.Vector3,
+    quaternion: THREE.Quaternion,
+  ): boolean {
+    const node = this.shoulderFrames[anchor];
+    node.getWorldPosition(position);
+    node.getWorldQuaternion(quaternion);
+    return true;
   }
 
   /** `ActorAvatar` bridge: preserve the existing procedural gait/death implementation. */
@@ -364,12 +362,16 @@ export class BotMesh implements ActorAvatar {
   }
 
   /**
-   * Place the body for this frame. `x/y/z` is the interpolated feet pose, `yaw` the facing
-   * and `heightScale` the stance compression that the hitbox rig is also using.
+   * Place the body for this frame. `x/y/z` is the interpolated feet pose and `yaw` the
+   * facing. `heightScale` is the wire's capsule compression, kept on the `ActorAvatar`
+   * contract and ignored here since M13 C1.
    */
   apply(x: number, y: number, z: number, yaw: number, heightScale: number, dt: number): void {
     this.group.rotation.set(0, 0, 0);
-    this.group.scale.set(1, this.dying ? 1 : heightScale, 1);
+    // A placeholder for the second or two before a skin lands: it stands at its own height
+    // whatever the stance (M13 C1). The rig it stands in for wears a layout, not a squash.
+    void heightScale;
+    this.group.scale.set(1, 1, 1);
     this.stepGait(x, z, dt);
 
     if (!this.dying) {
@@ -465,22 +467,31 @@ function requiredRigBox(name: string): (typeof HUMANOID_RIG.boxes)[number] {
   return box;
 }
 
-/** Midpoint of an arm after the same baked forward pitch used by `buildBodyGeometry`. */
-function proceduralArmAnchor(name: 'armL' | 'armR'): THREE.Vector3 {
-  const arm = requiredRigBox(name);
-  const halfLength = arm.sy * 0.5;
-  const shoulder = arm.oy + halfLength;
-  return new THREE.Vector3(
-    arm.ox,
-    shoulder - halfLength * Math.cos(ARM_PITCH),
-    arm.oz - halfLength * Math.sin(ARM_PITCH),
-  );
-}
+/** How far down the arm box from the shoulder the pad sits — the skin's calibration, in metres. */
+const SHOULDER_PAD_DROP = 0.04;
 
-/** The leg mesh hangs beneath its hip node, so this is its animated midpoint/knee landmark. */
-function proceduralKneeAnchor(): THREE.Vector3 {
-  const leg = requiredRigBox('legL');
-  return new THREE.Vector3(0, -leg.sy * 0.5, leg.oz);
+/**
+ * A pad's frame on the outer face of an arm box, in the pad convention (+Z out of the arm,
+ * +X down it), after the same baked forward pitch `buildBodyGeometry` gives the arms. The
+ * procedural body is a placeholder, so this is the box's face rather than a sleeve; it is
+ * what keeps a pad on the same shoulder before and after the skin lands.
+ */
+function proceduralShoulderFrame(name: 'armL' | 'armR'): THREE.Object3D {
+  const arm = requiredRigBox(name);
+  const outward = Math.sign(arm.ox) || 1;
+  const shoulderY = arm.oy + arm.sy * 0.5;
+  const node = new THREE.Object3D();
+  node.name = `indicator-frame:${name === 'armL' ? 'left' : 'right'}-shoulder`;
+  node.position.set(
+    arm.ox + outward * arm.sx * 0.5,
+    shoulderY - SHOULDER_PAD_DROP * Math.cos(ARM_PITCH),
+    arm.oz - SHOULDER_PAD_DROP * Math.sin(ARM_PITCH),
+  );
+  const z = new THREE.Vector3(outward, 0, 0);
+  const x = new THREE.Vector3(0, -Math.cos(ARM_PITCH), -Math.sin(ARM_PITCH));
+  const y = new THREE.Vector3().crossVectors(z, x);
+  node.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+  return node;
 }
 
 /** Boxes straight off the rig: same offsets, same extents, nothing to drift out of sync. */

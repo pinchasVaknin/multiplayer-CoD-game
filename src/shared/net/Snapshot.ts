@@ -93,7 +93,14 @@ export interface EntitySnapshot {
   vx: number;
   vz: number;
   stance: StanceId;
-  /** Rig vertical compression, 1 standing. Matches `HitboxRig.heightScale`. */
+  /**
+   * Capsule height over stand height, 1 standing.
+   *
+   * Until M13 C2 this was also the rig's compression. The rig now wears a layout chosen from
+   * `stance` and velocity (`rigLayoutFor`), both of which are on this same snapshot, so the
+   * field is redundant with them; it still drives the procedural placeholder's squash and it
+   * leaves the wire with the v13 widening rather than on its own version bump.
+   */
   heightScale: number;
   /** Current hit points, 0-255. */
   health: number;

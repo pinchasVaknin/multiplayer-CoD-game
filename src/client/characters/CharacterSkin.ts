@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import type { ActorIndicatorAnchor, HeldWeaponAsset } from './ActorAvatar';
-import type { CharacterRigProfile } from './CharacterCatalog';
+import type { ActorIndicatorAnchor, ActorIndicatorFrameAnchor, HeldWeaponAsset } from './ActorAvatar';
+import type { CharacterIndicatorPadProfile, CharacterRigProfile } from './CharacterCatalog';
 import { WeaponSupportHandConstraint } from './WeaponSupportHandConstraint';
 
 /**
@@ -16,9 +16,9 @@ export class CharacterSkin {
   private readonly weaponSocket = new THREE.Group();
   private readonly supportGripTarget = new THREE.Object3D();
   private readonly supportHandConstraint: WeaponSupportHandConstraint;
-  private readonly indicatorBones: IndicatorBones;
-  private readonly anchorStart = new THREE.Vector3();
-  private readonly anchorEnd = new THREE.Vector3();
+  private readonly headBone: THREE.Object3D;
+  /** One calibrated node per shoulder, parented to its upper-arm bone; the pads' frames. */
+  private readonly shoulderFrames: Readonly<Record<ActorIndicatorFrameAnchor, THREE.Object3D>>;
   private weapon: THREE.Mesh | null = null;
   private weaponId: string | null = null;
   private hasSupportGrip = false;
@@ -41,7 +41,11 @@ export class CharacterSkin {
     this.weaponSocket.add(this.supportGripTarget);
     this.root.add(instance);
     this.supportHandConstraint = new WeaponSupportHandConstraint(this.root, this.supportGripTarget, rig.supportHand);
-    this.indicatorBones = findIndicatorBones(instance, rig);
+    this.headBone = requiredBone(instance, rig.indicators.headBone, rig.id);
+    this.shoulderFrames = {
+      leftShoulder: padNode(instance, rig.indicators.leftShoulder, 'left', rig.id),
+      rightShoulder: padNode(instance, rig.indicators.rightShoulder, 'right', rig.id),
+    };
     this.configureWeaponSocketUnits(hand, rig);
   }
 
@@ -82,27 +86,24 @@ export class CharacterSkin {
   getIndicatorAnchor(anchor: ActorIndicatorAnchor, target: THREE.Vector3): boolean {
     switch (anchor) {
       case 'head':
-        this.indicatorBones.head.getWorldPosition(target);
+        this.headBone.getWorldPosition(target);
         return true;
-      case 'leftUpperArm':
-        return this.midpoint(
-          this.indicatorBones.leftUpperArmStart,
-          this.indicatorBones.leftUpperArmEnd,
-          target,
-        );
-      case 'rightUpperArm':
-        return this.midpoint(
-          this.indicatorBones.rightUpperArmStart,
-          this.indicatorBones.rightUpperArmEnd,
-          target,
-        );
-      case 'leftKnee':
-        this.indicatorBones.leftKnee.getWorldPosition(target);
-        return true;
-      case 'rightKnee':
-        this.indicatorBones.rightKnee.getWorldPosition(target);
-        return true;
+      case 'leftShoulder':
+      case 'rightShoulder':
+        return false;
     }
+  }
+
+  /** The calibrated pad node's world frame: scale-free, so the pad's metres stay metres. */
+  getIndicatorFrame(
+    anchor: ActorIndicatorFrameAnchor,
+    position: THREE.Vector3,
+    quaternion: THREE.Quaternion,
+  ): boolean {
+    const node = this.shoulderFrames[anchor];
+    node.getWorldPosition(position);
+    node.getWorldQuaternion(quaternion);
+    return true;
   }
 
   dispose(): void {
@@ -120,13 +121,6 @@ export class CharacterSkin {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
     });
-  }
-
-  private midpoint(start: THREE.Object3D, end: THREE.Object3D, target: THREE.Vector3): boolean {
-    start.getWorldPosition(this.anchorStart);
-    end.getWorldPosition(this.anchorEnd);
-    target.lerpVectors(this.anchorStart, this.anchorEnd, 0.5);
-    return true;
   }
 
   /**
@@ -149,27 +143,23 @@ export class CharacterSkin {
   }
 }
 
-interface IndicatorBones {
-  readonly head: THREE.Object3D;
-  readonly leftUpperArmStart: THREE.Object3D;
-  readonly leftUpperArmEnd: THREE.Object3D;
-  readonly rightUpperArmStart: THREE.Object3D;
-  readonly rightUpperArmEnd: THREE.Object3D;
-  readonly leftKnee: THREE.Object3D;
-  readonly rightKnee: THREE.Object3D;
-}
-
-function findIndicatorBones(instance: THREE.Object3D, rig: CharacterRigProfile): IndicatorBones {
-  const profile = rig.indicators;
-  return {
-    head: requiredBone(instance, profile.headBone, rig.id),
-    leftUpperArmStart: requiredBone(instance, profile.leftUpperArmStartBone, rig.id),
-    leftUpperArmEnd: requiredBone(instance, profile.leftUpperArmEndBone, rig.id),
-    rightUpperArmStart: requiredBone(instance, profile.rightUpperArmStartBone, rig.id),
-    rightUpperArmEnd: requiredBone(instance, profile.rightUpperArmEndBone, rig.id),
-    leftKnee: requiredBone(instance, profile.leftKneeBone, rig.id),
-    rightKnee: requiredBone(instance, profile.rightKneeBone, rig.id),
-  };
+/**
+ * The node a shoulder pad hangs from, under its bone at the profile's offset and rotation —
+ * the same construction as the support hand's palm marker, and in the same bone-local units.
+ */
+function padNode(
+  instance: THREE.Object3D,
+  profile: CharacterIndicatorPadProfile,
+  side: 'left' | 'right',
+  rigId: string,
+): THREE.Object3D {
+  const bone = requiredBone(instance, profile.bone, rigId);
+  const node = new THREE.Object3D();
+  node.name = `indicator-frame:${side}-shoulder`;
+  node.position.set(...profile.offset);
+  node.rotation.set(...profile.rotation);
+  bone.add(node);
+  return node;
 }
 
 function requiredBone(instance: THREE.Object3D, name: string, rigId: string): THREE.Object3D {

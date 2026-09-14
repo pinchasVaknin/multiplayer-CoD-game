@@ -56,14 +56,16 @@ export class CharacterAnimator {
     const desired = selectLocomotion(input, planarSpeed, armed);
     const low = isLowStance(input);
 
-    // The authored transition is useful only for the one low -> stand edge. All other stance
-    // changes cross-fade between loops, which is safer than pretending the asset pack covers
-    // slide, mantle, airborne, and every reverse transition.
+    // The one authored transition covers both edges of the crouch: low -> stand as exported,
+    // and stand -> low as the same clip played backwards (M13 C1: a 0.14 s cross-fade was the
+    // "body shrinks" report, and the reverse is the missing half for nothing). Every other
+    // stance change cross-fades between loops, which is safer than pretending the asset pack
+    // covers slide, mantle and airborne.
     if (this.transition !== null) {
       this.pendingLocomotion = desired;
-    } else if (this.wasLow && !low && this.hasClip('crouchToStand')) {
+    } else if (this.wasLow !== low && this.hasClip('crouchToStand')) {
       this.pendingLocomotion = desired;
-      this.transition = this.playOneShot('crouchToStand');
+      this.transition = this.playOneShot('crouchToStand', low);
     } else {
       this.playLoop(desired);
     }
@@ -135,15 +137,20 @@ export class CharacterAnimator {
     this.active = { id, action: next };
   }
 
-  private playOneShot(id: CharacterAnimationId): THREE.AnimationAction {
+  /** `reversed` plays the clip from its last frame back to its first; it finishes at time 0. */
+  private playOneShot(id: CharacterAnimationId, reversed = false): THREE.AnimationAction {
     const next = this.actionFor(id);
     const previous = this.active?.action ?? null;
     next.reset();
     next.enabled = true;
     next.setEffectiveWeight(1);
-    next.setEffectiveTimeScale(1);
+    next.setEffectiveTimeScale(reversed ? -1 : 1);
+    if (reversed) next.time = next.getClip().duration;
     next.play();
-    if (previous !== null && previous !== next) next.crossFadeFrom(previous, CROSS_FADE_SECONDS, true);
+    // The cross-fade's time warp divides by the action's time scale and so flips the sign of a
+    // reversed play, running it forward from its last frame to an instant finish. A reversed
+    // transition fades without warping.
+    if (previous !== null && previous !== next) next.crossFadeFrom(previous, CROSS_FADE_SECONDS, !reversed);
     this.active = { id, action: next };
     return next;
   }

@@ -6,7 +6,7 @@ import {
 } from '../../shared/ai/BotVisualState';
 import type { BotTeam } from '../../shared/ai/Combatant';
 import { DEATH_VARIANTS, deathVariantFor } from '../../shared/ai/BotVisualState';
-import { HitboxRig, HUMANOID_RIG } from '../../shared/combat/HitboxRig';
+import { HitboxRig, HUMANOID_RIG, rigLayoutFor } from '../../shared/combat/HitboxRig';
 import {
   makeInterpolatedPose,
   type EntityInterpolator,
@@ -206,7 +206,10 @@ export class RemoteActor implements RenderableActor {
 
     this.applyLatest(interp.latest);
 
-    this.rig.heightScale = this.pose.heightScale;
+    // The same layout rule as the server's (`rigLayoutFor`), from the replicated stance and
+    // velocity: this rig is what the hitbox overlay draws, so it has to wear what the
+    // authority wears.
+    this.rig.setLayout(rigLayoutFor(this.pose.stance, interp.latest.vx, interp.latest.vz));
     this.rig.setTransform(this.pose.x, this.pose.y, this.pose.z, this.pose.yaw);
   }
 

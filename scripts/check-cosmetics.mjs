@@ -46,7 +46,7 @@ const ALLOWED = {
   vx: '§4.15 velocity',
   vz: '§4.15 velocity',
   stance: '§4.15 stance',
-  heightScale: 'the collision capsule height stance implies — a hitbox fact, not a pose',
+  heightScale: 'the collision capsule height stance implies — a hitbox fact, not a pose (redundant with stance since M13 C2; leaves with v13)',
   health: '§4.15 health',
   weaponIndex: '§4.15 equipped weapon',
   flags: 'alive/firing/reloading/ads/sprinting/grounded/bot/team — all §4.15 gameplay state',

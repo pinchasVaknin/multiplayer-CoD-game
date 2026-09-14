@@ -3,7 +3,7 @@ import type { ActorAnimationInput } from '../../shared/ai/BotVisualState';
 import type { CharacterAssetBundle } from './CharacterAssetRepository';
 import { CharacterAnimator } from './CharacterAnimator';
 import { CharacterSkin } from './CharacterSkin';
-import type { ActorAvatar, ActorIndicatorAnchor, HeldWeaponAsset } from './ActorAvatar';
+import type { ActorAvatar, ActorIndicatorAnchor, ActorIndicatorFrameAnchor, HeldWeaponAsset } from './ActorAvatar';
 
 const FLINCH_SECONDS = 0.18;
 const FLINCH_ANGLE = 0.075;
@@ -52,6 +52,14 @@ export class CharacterAvatar implements ActorAvatar {
 
   getIndicatorAnchor(anchor: ActorIndicatorAnchor, target: THREE.Vector3): boolean {
     return this.skin.getIndicatorAnchor(anchor, target);
+  }
+
+  getIndicatorFrame(
+    anchor: ActorIndicatorFrameAnchor,
+    position: THREE.Vector3,
+    quaternion: THREE.Quaternion,
+  ): boolean {
+    return this.skin.getIndicatorFrame(anchor, position, quaternion);
   }
 
   beginDeath(dx: number, dz: number, variant: number, animation: ActorAnimationInput): void {

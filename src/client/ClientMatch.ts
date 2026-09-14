@@ -467,7 +467,6 @@ export class Match {
       this.playerHealth,
       deps.localTeam ?? PLAYER_TEAM,
       deps.player,
-      deps.movementConfig,
       /**
        * The server's seat, not the constant (M11 Gate B playtest).
        *
@@ -2180,7 +2179,7 @@ export class Match {
     this.anim.update(drive, this.deps.viewmodelConfig, dt);
 
     this.range?.updateVisuals(alpha, camera);
-    this.botRenderer.update(alpha, dt);
+    this.botRenderer.update(alpha, dt, camera);
     this.fx.update(dt);
     this.equipment.render(alpha, dt, camera);
     this.meta.render(dt);

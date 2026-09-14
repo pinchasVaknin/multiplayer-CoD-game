@@ -1,24 +1,54 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import type { TeamRelation } from '../../shared/ui/TeamColour';
 import { ACTOR_INDICATOR_LAYER } from '../engine/Renderer';
-import type { ActorAvatar, ActorIndicatorAnchor } from '../characters/ActorAvatar';
+import {
+  INDICATOR_FRAME_ANCHORS,
+  type ActorAvatar,
+  type ActorIndicatorFrameAnchor,
+} from '../characters/ActorAvatar';
 import { cssHex, palette, type GameplayPalette } from '../ui/Palette';
 
-const MARKER_ANCHORS = [
-  'leftUpperArm',
-  'rightUpperArm',
-  'leftKnee',
-  'rightKnee',
-] as const satisfies readonly ActorIndicatorAnchor[];
+/**
+ * The enemy tell is two shoulder pads (M13 C3): small flat red pads on the outer upper arm,
+ * flush with the sleeve, lit, each with a soft halo — Call of Duty Mobile's enemy dress,
+ * equipment rather than a marker. They replaced four emissive spheres on the arms and knees
+ * that read as a rash: geometry floating at the centre of a bone, the same from every angle.
+ *
+ * Pixel arithmetic, so nobody is surprised: at 90° and 1920 px a 5 cm pad is ~5 px at 10 m,
+ * ~2 px at 25 m and ~1 px at 50 m — and the first cut, at exactly that size and a 0.3 halo,
+ * was read on a real display as part of the skin at 1.5 m (M13 C3 gate, 2026-09-14): 24 px
+ * across a 2000 px frame at 5 m, on a shoulder that has red details of its own. So the pad is
+ * twice the plan's size, lit as the spheres were, its halo doubled, and it has the plan's
+ * screen-space floor: below `PAD_MIN_SCREEN_FRACTION` of the frame height the whole frame is
+ * scaled up so the pad holds ~6 px at 1080p. At range that is a red dot on the shoulder rather
+ * than nothing, and the nameplate (1.28 m wide, ~25 px at 50 m) remains the tell.
+ */
+const MARKER_ANCHORS = INDICATOR_FRAME_ANCHORS;
 
-type MarkerAnchor = (typeof MARKER_ANCHORS)[number];
+/** The pad: 10 × 6 × 1 cm, long side down the arm, thin side out of the sleeve (+Z). */
+const PAD_LENGTH = 0.1;
+const PAD_WIDTH = 0.06;
+const PAD_THICKNESS = 0.01;
+const PAD_CORNER = 0.006;
+/** The spheres ran 3.2; 1.5 read as paint on the sleeve. */
+const PAD_EMISSIVE_INTENSITY = 3.0;
+/** The halo: an additive sprite behind the pad. There is no bloom pass; this is the glow. */
+const HALO_RADIUS = 0.14;
+const HALO_ALPHA = 0.55;
+const HALO_TEXTURE_SIZE = 64;
+/**
+ * The pad's long side must cover at least this fraction of the frame height: 6 px of 1080.
+ * `scale = max(1, minPx / pxPerMetre(distance))`, the plan's one line, in frame fractions so it
+ * needs no buffer size — only the camera's vertical field of view and the distance.
+ */
+const PAD_MIN_SCREEN_FRACTION = 6 / 1080;
 
 const LABEL_WIDTH = 512;
 const LABEL_HEIGHT = 160;
 const LABEL_WORLD_WIDTH = 1.28;
 const LABEL_WORLD_HEIGHT = LABEL_WORLD_WIDTH * (LABEL_HEIGHT / LABEL_WIDTH);
 const LABEL_CLEARANCE = 0.38;
-const MARKER_SURFACE_OFFSET = 0.045;
 const HEALTH_SMOOTHING = 16;
 
 /** Canvas fill styles for one relation, derived from the live palette and nothing else. */
@@ -49,14 +79,17 @@ function relationColours(p: GameplayPalette): Readonly<Record<TeamRelation, Rela
 /**
  * Shared surfaces and colours for every indicator the renderer draws.
  *
- * One material for the four hostile-only points on every body, and one colour table for every
- * label. Both follow the palette: `paletteSerial` moves when it changes, and an indicator that
- * sees a serial other than the one it last painted with redraws its canvas on its next update.
- * The repaint is therefore lazy and per-indicator, and nobody has to walk the roster.
+ * One pad geometry, one pad material and one halo material for the two hostile-only pads on
+ * every body, and one colour table for every label. All follow the palette: `paletteSerial`
+ * moves when it changes, and an indicator that sees a serial other than the one it last
+ * painted with redraws its canvas on its next update. The repaint is therefore lazy and
+ * per-indicator, and nobody has to walk the roster; the pad and halo materials are shared, so
+ * they are repainted once, in the palette callback.
  */
 export interface ActorIndicatorAssets {
-  readonly markerGeometry: THREE.SphereGeometry;
-  readonly markerMaterial: THREE.MeshStandardMaterial;
+  readonly padGeometry: THREE.BufferGeometry;
+  readonly padMaterial: THREE.MeshStandardMaterial;
+  readonly haloMaterial: THREE.SpriteMaterial;
   readonly colours: Readonly<Record<TeamRelation, RelationColours>>;
   /** Bumped on every palette change. Compared, never interpreted. */
   readonly paletteSerial: number;
@@ -64,35 +97,75 @@ export interface ActorIndicatorAssets {
 }
 
 export function buildActorIndicatorAssets(): ActorIndicatorAssets {
-  const markerGeometry = new THREE.SphereGeometry(0.078, 10, 8);
-  const markerMaterial = new THREE.MeshStandardMaterial({
-    emissiveIntensity: 3.2,
-    roughness: 0.28,
-    metalness: 0.08,
+  const padGeometry = new RoundedBoxGeometry(PAD_LENGTH, PAD_WIDTH, PAD_THICKNESS, 2, PAD_CORNER);
+  const padMaterial = new THREE.MeshStandardMaterial({
+    emissiveIntensity: PAD_EMISSIVE_INTENSITY,
+    roughness: 0.35,
+    metalness: 0.1,
+    toneMapped: false,
+  });
+  const haloTexture = buildHaloTexture();
+  const haloMaterial = new THREE.SpriteMaterial({
+    map: haloTexture,
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    opacity: HALO_ALPHA,
+    depthTest: true,
+    depthWrite: false,
     toneMapped: false,
   });
 
   const assets = {
-    markerGeometry,
-    markerMaterial,
+    padGeometry,
+    padMaterial,
+    haloMaterial,
     colours: relationColours(palette.current),
     paletteSerial: 0,
     dispose(): void {
       unsubscribe();
-      markerGeometry.dispose();
-      markerMaterial.dispose();
+      padGeometry.dispose();
+      padMaterial.dispose();
+      haloMaterial.dispose();
+      haloTexture.dispose();
     },
   };
 
-  // Called once immediately, which is what paints the material in the first place.
+  // Called once immediately, which is what paints the materials in the first place.
   const unsubscribe = palette.onChange((p) => {
-    markerMaterial.color.setHex(p.hostile);
-    markerMaterial.emissive.setHex(p.hostile);
+    padMaterial.color.setHex(p.hostile);
+    padMaterial.emissive.setHex(p.hostile);
+    haloMaterial.color.setHex(p.hostile);
     assets.colours = relationColours(p);
     assets.paletteSerial++;
   });
 
   return assets;
+}
+
+/** A soft radial falloff, white on transparent; the sprite material tints it. */
+function buildHaloTexture(): THREE.Texture {
+  const canvas = document.createElement('canvas');
+  canvas.width = HALO_TEXTURE_SIZE;
+  canvas.height = HALO_TEXTURE_SIZE;
+  const ctx = canvas.getContext('2d');
+  if (ctx === null) throw new Error('2D canvas context unavailable; cannot build the pad halo.');
+  const half = HALO_TEXTURE_SIZE / 2;
+  const gradient = ctx.createRadialGradient(half, half, 0, half, half, half);
+  gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+  gradient.addColorStop(0.45, 'rgba(255, 255, 255, 0.45)');
+  gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, HALO_TEXTURE_SIZE, HALO_TEXTURE_SIZE);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/** One shoulder's pad and its halo, placed together on the avatar's frame. */
+interface ShoulderPad {
+  readonly frame: THREE.Group;
+  readonly pad: THREE.Mesh;
+  readonly halo: THREE.Sprite;
 }
 
 export interface ActorIndicatorState {
@@ -103,10 +176,13 @@ export interface ActorIndicatorState {
 }
 
 /**
- * One actor's client-only IFF presentation.
+ * One actor's client-only IFF presentation: the nameplate over the head, and the two shoulder
+ * pads on a hostile body.
  *
- * The avatar supplies animated semantic landmarks, this object draws them, and `BotRenderer`
- * decides the viewer-relative relation. None of those layers needs to know the other's details.
+ * The avatar supplies animated semantic landmarks — a point for the head, a frame for each
+ * shoulder — this object draws on them, and `BotRenderer` decides the viewer-relative relation
+ * (`relationTo`, which is `isHostile` plus the neutral case no actor can be). None of those
+ * layers needs to know the other's details.
  */
 export class ActorIndicator {
   readonly group = new THREE.Group();
@@ -116,10 +192,12 @@ export class ActorIndicator {
   private readonly labelTexture: THREE.CanvasTexture;
   private readonly labelMaterial: THREE.SpriteMaterial;
   private readonly label: THREE.Sprite;
-  private readonly markers = new Map<MarkerAnchor, THREE.Mesh>();
+  private readonly pads = new Map<ActorIndicatorFrameAnchor, ShoulderPad>();
   private readonly head = new THREE.Vector3();
-  private readonly markerPosition = new THREE.Vector3();
-  private readonly outward = new THREE.Vector3();
+  private readonly labelPosition = new THREE.Vector3();
+  private readonly framePosition = new THREE.Vector3();
+  private readonly frameQuaternion = new THREE.Quaternion();
+  private readonly parentQuaternion = new THREE.Quaternion();
   private readonly localPosition = new THREE.Vector3();
 
   private shownHealth = 1;
@@ -159,18 +237,31 @@ export class ActorIndicator {
     this.group.add(this.label);
 
     for (const anchor of MARKER_ANCHORS) {
-      const marker = new THREE.Mesh(assets.markerGeometry, assets.markerMaterial);
-      marker.name = `actor-indicator:${anchor}`;
-      marker.castShadow = false;
-      marker.receiveShadow = false;
-      marker.layers.set(ACTOR_INDICATOR_LAYER);
-      this.markers.set(anchor, marker);
-      this.group.add(marker);
+      // The frame is the avatar's; the pad sits half its thickness out along +Z so its back
+      // face is on the sleeve, and the halo sits on the surface behind it, billboarded.
+      const frame = new THREE.Group();
+      frame.name = `actor-indicator:${anchor}`;
+      const pad = new THREE.Mesh(assets.padGeometry, assets.padMaterial);
+      pad.name = 'pad';
+      pad.position.z = PAD_THICKNESS * 0.5;
+      pad.castShadow = false;
+      pad.receiveShadow = false;
+      pad.layers.set(ACTOR_INDICATOR_LAYER);
+      const halo = new THREE.Sprite(assets.haloMaterial);
+      halo.name = 'halo';
+      halo.scale.set(HALO_RADIUS * 2, HALO_RADIUS * 2, 1);
+      halo.layers.set(ACTOR_INDICATOR_LAYER);
+      frame.add(halo, pad);
+      this.pads.set(anchor, { frame, pad, halo });
+      this.group.add(frame);
     }
   }
 
-  /** Reconcile position, visibility, relation colours, and the smoothly rendered HP value. */
-  update(state: ActorIndicatorState, avatar: ActorAvatar, dt: number): void {
+  /**
+   * Reconcile position, visibility, relation colours, the pads, and the smoothly rendered HP
+   * value. `camera` sizes the pads' screen-space floor; without one they stay at world size.
+   */
+  update(state: ActorIndicatorState, avatar: ActorAvatar, dt: number, camera?: THREE.PerspectiveCamera): void {
     if (!state.participating || !avatar.getIndicatorAnchor('head', this.head)) {
       this.group.visible = false;
       this.wasVisible = false;
@@ -179,28 +270,24 @@ export class ActorIndicator {
 
     this.group.visible = true;
     this.group.updateWorldMatrix(true, false);
-    this.markerPosition.copy(this.head);
-    this.markerPosition.y += LABEL_CLEARANCE;
-    this.placeAtWorld(this.label, this.markerPosition);
+    this.labelPosition.copy(this.head);
+    this.labelPosition.y += LABEL_CLEARANCE;
+    this.placeAtWorld(this.label, this.labelPosition);
 
+    // Hostile bodies wear the pads; friendly ones rely on the plate.
     const hostile = state.relation === 'HOSTILE';
+    this.group.getWorldQuaternion(this.parentQuaternion).invert();
     for (const anchor of MARKER_ANCHORS) {
-      const marker = this.markers.get(anchor);
-      if (marker === undefined) continue;
-      if (!hostile || !avatar.getIndicatorAnchor(anchor, this.markerPosition)) {
-        marker.visible = false;
+      const shoulder = this.pads.get(anchor);
+      if (shoulder === undefined) continue;
+      if (!hostile || !avatar.getIndicatorFrame(anchor, this.framePosition, this.frameQuaternion)) {
+        shoulder.frame.visible = false;
         continue;
       }
-
-      // The source landmark is at the skeleton/box centre. Nudge the emissive sphere away
-      // from the body centre so it remains legible on the outside of a sleeve or knee pad.
-      this.outward.set(this.markerPosition.x - this.head.x, 0, this.markerPosition.z - this.head.z);
-      if (this.outward.lengthSq() > 1e-6) {
-        this.outward.normalize().multiplyScalar(MARKER_SURFACE_OFFSET);
-        this.markerPosition.add(this.outward);
-      }
-      this.placeAtWorld(marker, this.markerPosition);
-      marker.visible = true;
+      this.placeAtWorld(shoulder.frame, this.framePosition);
+      shoulder.frame.quaternion.copy(this.parentQuaternion).multiply(this.frameQuaternion);
+      shoulder.frame.scale.setScalar(camera === undefined ? 1 : this.padFloorScale(camera));
+      shoulder.frame.visible = true;
     }
 
     const name = normaliseName(state.displayName);
@@ -233,7 +320,19 @@ export class ActorIndicator {
     this.labelTexture.dispose();
     this.labelMaterial.dispose();
     this.group.clear();
-    this.markers.clear();
+    this.pads.clear();
+  }
+
+  /**
+   * How much to grow a pad at `framePosition` so its long side covers `PAD_MIN_SCREEN_FRACTION`
+   * of the frame height; 1 when it already does. A perspective camera's frame height at
+   * distance d is `2 d tan(fov / 2)`, so the pad's fraction is `PAD_LENGTH / that`.
+   */
+  private padFloorScale(camera: THREE.PerspectiveCamera): number {
+    const distance = this.framePosition.distanceTo(camera.position);
+    const frameHeight = 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
+    if (frameHeight <= 0) return 1;
+    return Math.max(1, (PAD_MIN_SCREEN_FRACTION * frameHeight) / PAD_LENGTH);
   }
 
   private placeAtWorld(node: THREE.Object3D, position: THREE.Vector3): void {

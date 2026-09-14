@@ -106,8 +106,11 @@ export class BotRenderer {
     return team === 'A' ? this.groupA : this.groupB;
   }
 
-  /** Render pass: reconcile the mesh set, apply poses, advance animations. */
-  update(alpha: number, dt: number): void {
+  /**
+   * Render pass: reconcile the mesh set, apply poses, advance animations. `camera` is the
+   * player's, for the pads' screen-space floor (M13 C3); the thermal optic passes none.
+   */
+  update(alpha: number, dt: number, camera?: THREE.PerspectiveCamera): void {
     this.present.clear();
     this.gltfAvatarCreationsRemaining = MAX_GLTF_AVATAR_CREATIONS_PER_FRAME;
     const viewer = this.viewer();
@@ -143,6 +146,7 @@ export class BotRenderer {
         },
         mesh,
         dt,
+        camera,
       );
     }
 

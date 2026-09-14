@@ -1,4 +1,4 @@
-import { HitboxRig, HUMANOID_RIG } from '../combat/HitboxRig';
+import { HitboxRig, HUMANOID_RIG, rigLayoutFor } from '../combat/HitboxRig';
 import type { DamageSystem } from '../combat/DamageSystem';
 import { EV, type GameBus } from '../core/Events';
 import { Btn, isDown, type MutableInputCommand, type InputCommand } from '../core/InputCommand';
@@ -210,8 +210,15 @@ export class Bot implements Combatant, PathClient {
     return this.controller.sim.eyeHeight;
   }
   get aimHeight(): number {
-    // The chest box of the rig it is actually wearing, so aiming and hitting agree.
-    return 1.26 * this.rig.heightScale;
+    // The chest box of the layout it is actually wearing, so aiming and hitting agree.
+    return this.rig.layout.aimY;
+  }
+  /**
+   * Capsule height over stand height, 1 standing. What the snapshot carries as
+   * `heightScale`: the procedural placeholder's squash, not the rig's (M13 C2).
+   */
+  get capsuleScale(): number {
+    return this.currScale;
   }
   get quiet(): boolean {
     const stance = this.controller.sim.stance;
@@ -338,7 +345,7 @@ export class Bot implements Combatant, PathClient {
     this.respawnTimer = 0;
     this.deadTime = 0;
     this.visual.spawnSerial++;
-    this.rig.heightScale = 1;
+    this.rig.setLayout(HUMANOID_RIG);
     this.rig.setTransform(x, y, z, yaw);
     this.prevX = x;
     this.prevY = y;
@@ -458,10 +465,10 @@ export class Bot implements Combatant, PathClient {
       this.combat.applyRecoilResidual(this.residual.yaw, this.residual.pitch);
     }
 
-    // The rig tracks the *simulation* pose on the tick the shot resolves, and compresses
-    // with the stance so cover actually covers.
+    // The rig tracks the *simulation* pose on the tick the shot resolves, and wears the
+    // layout of the pose the stance is drawn in, so cover actually covers.
     this.currScale = sim.capsuleHeight / Math.max(this.deps.movement.standHeight, 1e-3);
-    this.rig.heightScale = this.currScale;
+    this.rig.setLayout(rigLayoutFor(sim.stance, sim.vx, sim.vz));
     this.rig.setTransform(sim.x, sim.y, sim.z, sim.yaw);
 
     this.currX = sim.x;

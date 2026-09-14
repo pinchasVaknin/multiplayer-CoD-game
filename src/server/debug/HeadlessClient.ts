@@ -21,6 +21,7 @@ import { DEFAULT_INTERPOLATION_DELAY_MS, makeInterpolatedPose } from '../../shar
 import { EFlag, weaponIdAt } from '../../shared/net/Snapshot';
 import { WEAPON_DEFS } from '../../shared/weapons/WeaponDefs';
 import { hitsFrom, shotsFrom } from '../../shared/combat/ShotAccounting';
+import { rigLayoutFor } from '../../shared/combat/HitboxRig';
 import {
   cloneMovementConfig,
   DEFAULT_MOVEMENT_CONFIG,
@@ -130,6 +131,12 @@ export interface HeadlessClientOptions {
   readonly seed: number;
   /** Ask the server for the rewind debug feed. */
   readonly wantRewindDebug?: boolean;
+  /**
+   * Hold crouch throughout (M13 C2). The hit-registration experiment's target strafes
+   * standing; against a crouching one the shooter is aiming at the crouch layouts, which is
+   * the comparison `hit-sweep.sh` is run for before and after a layout changes.
+   */
+  readonly holdCrouch?: boolean;
 
   // -- M11: the skirmish flow -------------------------------------------------
 
@@ -1864,6 +1871,7 @@ export class HeadlessClient {
     let buttons = 0;
 
     if (this.alive) {
+      if (this.opts.holdCrouch === true) buttons |= Btn.Crouch;
       switch (this.opts.behaviour) {
         case 'strafe': {
           // Reverse every ~0.6 s. Fast enough to matter, slow enough to reach full speed.
@@ -1979,6 +1987,7 @@ export class HeadlessClient {
     let bestX = 0;
     let bestY = 0;
     let bestZ = 0;
+    let bestAimY = 0;
 
     for (const [id, interp] of this.net.remotes) {
       if (id === this.net.entityId) continue;
@@ -1992,6 +2001,9 @@ export class HeadlessClient {
         bestX = this.pose.x;
         bestY = this.pose.y;
         bestZ = this.pose.z;
+        // Chest height of the layout that body is wearing, so a crouching target is aimed at
+        // where its torso box actually is rather than where a standing one's would be.
+        bestAimY = rigLayoutFor(this.pose.stance, interp.latest.vx, interp.latest.vz).aimY;
       }
     }
 
@@ -2003,8 +2015,7 @@ export class HeadlessClient {
 
     const dx = bestX - sim.x;
     const dz = bestZ - sim.z;
-    // Chest height, matching where `HitboxRig`'s torso box actually is.
-    const dy = bestY + 1.26 - (sim.y + sim.eyeHeight);
+    const dy = bestY + bestAimY - (sim.y + sim.eyeHeight);
     this.yaw = Math.atan2(-dx, -dz);
     this.pitch = Math.atan2(dy, Math.hypot(dx, dz));
   }
