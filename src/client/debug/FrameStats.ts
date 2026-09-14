@@ -6,7 +6,7 @@
  * This is the number the milestone reports.
  */
 
-export const HISTORY_LENGTH = 600;
+const HISTORY_LENGTH = 600;
 
 export class FrameStats {
   /**

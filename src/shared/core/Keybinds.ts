@@ -239,7 +239,7 @@ export class Keybinds {
 }
 
 /** Mouse buttons and wheel share the code namespace; this is how they are told apart. */
-export function isPointerInput(input: string): boolean {
+function isPointerInput(input: string): boolean {
   return input.startsWith('Mouse') || input === 'WheelUp' || input === 'WheelDown';
 }
 

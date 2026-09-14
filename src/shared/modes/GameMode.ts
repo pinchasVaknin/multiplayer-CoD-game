@@ -402,14 +402,14 @@ export interface BombInfo {
 export type MutableBombInfo = { -readonly [K in keyof BombInfo]: BombInfo[K] };
 
 /** Which of two team scores is ahead, for the result of a timed match. */
-export function leaderOf(a: number, b: number): ScoreTeam | 'DRAW' {
+function leaderOf(a: number, b: number): ScoreTeam | 'DRAW' {
   if (a > b) return 'A';
   if (b > a) return 'B';
   return 'DRAW';
 }
 
 /** A whole-match result for a team mode, the winning side credited with its one round. */
-export function teamMatchResult(winner: ScoreTeam | 'DRAW', reason: string, a: number, b: number): MatchResult {
+function teamMatchResult(winner: ScoreTeam | 'DRAW', reason: string, a: number, b: number): MatchResult {
   return {
     kind: 'match', winner, reason, scoreA: a, scoreB: b,
     roundsA: winner === 'A' ? 1 : 0, roundsB: winner === 'B' ? 1 : 0,
