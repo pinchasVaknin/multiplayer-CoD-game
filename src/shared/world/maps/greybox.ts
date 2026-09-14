@@ -525,12 +525,3 @@ export const GREYBOX_MAP: MapDef = {
   },
 };
 
-/** Endpoints of the measurement lane, used by the debug harness. */
-export const SPEED_LANE = {
-  z: -14,
-  startX: -20,
-  endX: 20,
-  get length(): number {
-    return this.endX - this.startX;
-  },
-} as const;

@@ -263,11 +263,6 @@ export function requireWeapon(id: string): WeaponDef {
   return def;
 }
 
-/** Every weapon of a class, in roster order. */
-export function weaponsOfClass(cls: WeaponClass): WeaponDef[] {
-  return ALL_WEAPONS.filter((def) => def.class === cls);
-}
-
 export function cloneWeaponDef(src: WeaponDef): WeaponDef {
   const out: WeaponDef = {
     ...src,

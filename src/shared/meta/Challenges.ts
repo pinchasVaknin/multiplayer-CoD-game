@@ -405,23 +405,9 @@ export const CHALLENGES: readonly ChallengeDef[] = [
   },
 ];
 
-export const CHALLENGE_IDS: readonly ChallengeId[] = CHALLENGES.map((c) => c.id);
-
 const BY_ID = new Map<ChallengeId, ChallengeDef>(CHALLENGES.map((c) => [c.id, c]));
 
 export function challengeDef(id: ChallengeId): ChallengeDef | undefined {
   return BY_ID.get(id);
 }
 
-export function challengesInCategory(category: ChallengeCategory): ChallengeDef[] {
-  return CHALLENGES.filter((c) => c.category === category);
-}
-
-export const CHALLENGE_CATEGORIES: readonly ChallengeCategory[] = [
-  'COMBAT',
-  'PRECISION',
-  'MOVEMENT',
-  'TACTICAL',
-  'MASTERY',
-  'CAMO',
-];

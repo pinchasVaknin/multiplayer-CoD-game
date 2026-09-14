@@ -64,10 +64,6 @@ export function isLegalBotTransition(from: BotState, to: BotState): boolean {
   return from === to || LEGAL[from].includes(to);
 }
 
-export function legalBotTargets(from: BotState): readonly BotState[] {
-  return LEGAL[from];
-}
-
 /** States in which the bot is trying to put rounds on something. */
 export function isFiringState(state: BotState): boolean {
   return (

@@ -361,6 +361,3 @@ export function surfaceAtIndex(index: number): MaterialSurface {
   return BY_INDEX[index] ?? DEFAULT_SURFACE;
 }
 
-export function materialKeyAtIndex(index: number): MaterialKey {
-  return MATERIAL_KEYS[index] ?? 'concrete';
-}

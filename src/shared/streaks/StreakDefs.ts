@@ -252,10 +252,6 @@ export const DEFAULT_STREAK_CONFIG: StreakConfig = {
   chopperReloadSeconds: 2.4,
 };
 
-export function cloneStreakConfig(src: StreakConfig): StreakConfig {
-  return { ...src };
-}
-
 /**
  * Every shipped streak id, in def order.
  *

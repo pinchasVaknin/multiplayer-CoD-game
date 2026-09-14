@@ -1,6 +1,6 @@
 import type { EquipmentId } from '../equipment/EquipmentDefs';
 import type { StreakId } from '../streaks/StreakDefs';
-import { perkDef, type PerkId, type PerkTier } from '../perks/PerkDefs';
+import type { PerkId } from '../perks/PerkDefs';
 import { perkWeaponEffects, resolvePerkState, type PerkState } from '../perks/PerkState';
 import { resolveWeaponDef, type AttachmentId } from '../weapons/Attachments';
 import { requireWeapon, type WeaponDef } from '../weapons/WeaponDefs';
@@ -167,18 +167,6 @@ function activePerks(slot: LoadoutSlot): PerkId[] {
     if (id !== null) out.push(id);
   }
   return out;
-}
-
-/** Which perk, if any, occupies a tier. */
-export function perkInTier(slot: LoadoutSlot, tier: PerkTier): PerkId | null {
-  return slot.perks[tier - 1] ?? null;
-}
-
-export function setPerkInTier(slot: LoadoutSlot, tier: PerkTier, id: PerkId | null): void {
-  // A perk may only sit in its own tier: the editor never offers it elsewhere, and a save
-  // that claims otherwise is rejected by `sanitiseLoadout` rather than honoured here.
-  if (id !== null && perkDef(id).tier !== tier) return;
-  slot.perks[tier - 1] = id;
 }
 
 /**

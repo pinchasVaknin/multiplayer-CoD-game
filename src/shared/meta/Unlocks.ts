@@ -2,7 +2,7 @@ import { ALL_EQUIPMENT, type EquipmentId } from '../equipment/EquipmentDefs';
 import { PERK_IDS, perkDef, type PerkId } from '../perks/PerkDefs';
 import { ATTACHMENT_IDS, attachmentDef, fitsWeapon, type AttachmentId } from '../weapons/Attachments';
 import { requireWeapon, WEAPON_DEFS, type WeaponDef } from '../weapons/WeaponDefs';
-import { camoDef, CAMO_IDS, type CamoId } from './Camos';
+import { camoDef, type CamoId } from './Camos';
 import { fieldUpgradeDef, FIELD_UPGRADE_IDS, type FieldUpgradeId } from './FieldUpgrades';
 import type { LoadoutSlot } from './Loadouts';
 import type { SaveV2, WeaponSaveData } from './SaveData';
@@ -114,8 +114,6 @@ function equipmentUnlockLevel(id: EquipmentId): number {
 const WEAPON_LEVEL_XP: readonly number[] = [
   400, 700, 1100, 1600, 2200, 2900, 3700, 4600, 5600,
 ];
-
-export const MAX_WEAPON_LEVEL = WEAPON_LEVEL_XP.length + 1;
 
 /** The weapon level a per-weapon XP total buys. */
 export function weaponLevelForXp(xp: number): number {
@@ -444,7 +442,3 @@ export function attachmentsForWeapon(def: WeaponDef): AttachmentId[] {
   );
 }
 
-/** Camos the profile has earned, in declaration order. */
-export function ownedCamos(save: SaveV2): CamoId[] {
-  return CAMO_IDS.filter((id) => save.camos[id] === true);
-}

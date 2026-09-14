@@ -100,7 +100,11 @@ function makeTotals(): TeamTotals {
  */
 const DAMAGE_LEDGER_SIZE = 128;
 
-/** 8 seconds at 60 Hz. Mirrors `meta/XpRules.ASSIST_WINDOW_SECONDS`. */
+/**
+ * Eight seconds of grace on an assist, at 60 Hz: damage this recently before a death counts
+ * toward it. Long enough that softening somebody up and losing the trade still credits you,
+ * short enough that a hit landed at the start of the lane does not.
+ */
 const ASSIST_WINDOW_TICKS = 480;
 
 interface DamageRecord {

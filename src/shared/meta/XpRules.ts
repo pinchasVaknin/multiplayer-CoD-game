@@ -128,13 +128,6 @@ export function xpSourceAt(index: number): XpSource | undefined {
 }
 
 /**
- * `challenge` is the one row whose value is not fixed: a challenge carries its own XP
- * award, so the tally accumulates the awarded totals and the row's `value` of 1 makes the
- * multiplication a no-op. Recorded here rather than special-cased at the call site.
- */
-export const XP_SOURCES_WITH_OWN_VALUE: ReadonlySet<XpSourceId> = new Set<XpSourceId>(['challenge']);
-
-/**
  * Whole minutes of match, which is what `matchTime` is counted in (round 5, B6).
  *
  * Floored rather than rounded, and exported rather than written twice: single-player counts
@@ -149,14 +142,6 @@ export function matchMinutes(seconds: number): number {
 
 /** Metres beyond which a kill counts as a longshot. Also the challenge threshold. */
 export const LONGSHOT_METRES = 38;
-
-/**
- * Seconds of grace on an assist: damage this recently before a death counts toward it.
- *
- * Long enough that softening somebody up and losing the trade still credits you, short
- * enough that a hit landed at the start of the lane does not.
- */
-export const ASSIST_WINDOW_SECONDS = 8;
 
 /**
  * Per-weapon XP is a fraction of what the *player* earns with that weapon in hand.
