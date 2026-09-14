@@ -13307,7 +13307,9 @@ because it is the tree a fresh session inherits.
   with its own README; the catalogue's `CharacterAnimationId` is a slot holding variants, dealt
   by `variantFor` from `(entityId, spawnSerial)` and deaths by the simulation's `deathVariant`;
   `npm run animations` reads any GLB in Node, `scripts/animation-import.mjs` moves a file out of
-  `incoming/` as one named clip, and `check:animations` is in the gate. See "Phase D — done".
+  `incoming/` as one named clip (every shipped file is on that contract; the eleven originals
+  were rewritten in place under decision 13), and `check:animations` is in the gate. See
+  "Phase D — done".
 - **Skins are dealt from a seeded `Rng`** (`RandomCharacterSelector`), keyed by the save's
   lifetime match count and the session's build count. Client-local: two clients do not agree on
   a bot's skin. The end state is a server-chosen `characterId` in the snapshot (Phase B's shape,
@@ -13998,16 +14000,17 @@ public/models/bots/animations/
   incoming/            the seven pistol files
   README.md            what each folder means, the five steps for adding a clip, the skeletons
 ```
-`*` meets the contract (one named clip); the eleven others are still session exports read by
-the legacy `last` rule, moved by `git mv` with their LFS pointers. `CHARACTER_VERSION` is
-`2026-09-14-library-v1`.
+`*` was imported from `incoming/` this phase; the eleven others were moved by `git mv` with
+their LFS pointers and, as of the addendum below, rewritten in place by the same tool. Every
+file is on the contract. `CHARACTER_VERSION` is `2026-09-14-library-v2`.
 
 **The catalogue.** `CharacterAnimationId` is a slot; `CharacterDefinition.animations` maps each
 to a `CharacterAnimationSlot`, a non-empty tuple of `CharacterAnimationDefinition`. The table is
-one line per slot — `runRelaxed: slot('runRelaxed', 'loop', legacy('locomotion/stand/Run_Relaxed',
-0.517), named('locomotion/stand/Sprint_Relaxed'))` — with `named(path)` deriving the `name`
-selector from the file stem, and every variant of a slot sharing its kind (loop / weapon-ready
-/ one-shot), because two clips that disagree about that are two slots. `AnimationSelector`
+one line per slot — `runRelaxed: slot('runRelaxed', 'loop', 'locomotion/stand/Run_Relaxed',
+'locomotion/stand/Sprint_Relaxed')` — each path naming a file whose one clip is named after it
+(`clipName`, the whole of the selector since the addendum), and every variant of a slot sharing
+its kind (loop / weapon-ready / one-shot), because two clips that disagree about that are two
+slots. `AnimationSelector`
 still returns a slot and learned nothing; it gained `selectAction`, the one-shot that stands in
 for locomotion while the input says so (a reload in the kneel, standing still, or walking —
 not running, sliding or crouch-walking, which have no clip and keep their loop).
@@ -14045,11 +14048,11 @@ retargeted; the 3–4 cm is on record, not hidden.
 
 `scripts/check-animations.mjs`, in the gate as `check:animations`. Six rules: every catalogued
 file exists; every shipped file outside `incoming/` is catalogued; every slot the selector can
-return has a file, and every catalogued slot is asked for by the selector or the animator; a
-`named` file has one clip named after itself and a `legacy` file's last clip is the length the
-catalogue says; `DEATH_VARIANTS` divides evenly over every death slot; every folder is named in
-the README. It reads the catalogue and the selector by regex and the GLBs through the manifest's
-reader, and counts the legacy files left. **Red before green:** a stray `.glb` in `actions/`
+return has a file, and every catalogued slot is asked for by the selector or the animator;
+every file has one clip named after itself (until the addendum: a `named` file did, and a
+`legacy` file's last clip was the length the catalogue said); `DEATH_VARIANTS` divides evenly
+over every death slot; every folder is named in the README. It reads the catalogue and the
+selector by regex and the GLBs through the manifest's reader. **Red before green:** a stray `.glb` in `actions/`
 (caught: "shipped but no slot names it"); `Death_Crouch` under the `name` selector plus a slot
 naming an `incoming/` file (caught: "13 clip(s) named mixamo.com…", "nothing in incoming/ is
 loaded"); `DEATH_VARIANTS = 3` (caught: "indexed modulo 2, not dealt evenly"). Then green:
@@ -14058,16 +14061,48 @@ legacy, 7 waiting.**
 
 ### Found while here, not fixed
 
-- **The eleven originals are one command from the contract.** `animation-import.mjs` over them
-  is bit-identical track data at **7 088 → 1 387 KiB** (Death_Crouch 1 231 → 179; Transition
-  1 074 → 98), one version bump, and the legacy selector and its `expectedDuration` guard leave
-  the tree. Left alone because the plan kept them; decision 13.
+- ~~**The eleven originals are one command from the contract.**~~ Done the same day at the
+  human's word — see the addendum below.
 - `ActorAvatar.update` still carries `heightScale`, now read by nobody but the wire's
   `EntitySnapshot.heightScale`; both leave with v13.
 - `docs/CHARACTER-ASSETS.md` still said the IFF layer was "emissive points on upper arms/knees"
   — stale since C3; fixed here in passing.
 - The README in the animations folder ships with `dist/` (Vite copies `public/` whole). A few
   kilobytes; left.
+
+### Addendum (same day): the eleven, imported, and the legacy selector gone
+
+The human took decision 13. `animation-import.mjs` gained an in-place mode (a file already in
+its slot folder, no destination: written beside itself, read back, then renamed over the
+source) and was run over the eleven. Verified under the real `GLTFLoader` **before** the
+rewrite, on every one: the source's last clip against the rewritten file's only clip — same
+track count (195), same duration, same 65-bone skeleton, **0 differing values** in every time
+and value of every track, all eleven. Sizes: `Idle_Relaxed` 537 → 226, `Idle_Aiming` 727 → 106,
+`Walk_Relaxed` 210 → 94, `Walk_Aiming` 137 → 95, `Run_Relaxed` 333 → 77, `Crouch_Idle_Aiming`
+644 → 109, `Crouch_Walk_Aiming` 277 → 88, `Crouch_Run_Aiming` 998 → 101,
+`Transition_Crouch_To_Stand` 1 074 → 98, `Death_Stand` 919 → 214, `Death_Crouch` 1 231 → 179
+KiB. **The shipped library is 17 files, 2 498 KiB, where it was 8 199** — 5.6 MiB less on every
+first load.
+
+With every file on the contract the legacy selector left the tree: `LegacyClipSelector`,
+`NamedClipSelector` and the `selector` union are gone, `CharacterAnimationDefinition.clipName`
+is the whole of it, `selectSourceClip` asks by name and names what it found when it fails
+("expected a clip named `Idle_Reload` and found `mixamo.com`, `mixamo.com.001`… — run
+`scripts/animation-import.mjs` on the file"), and the catalogue's slot lines are plain paths.
+`check-animations` rule 4 is one rule for every file, and it ran red on a session export copied
+over `actions/Idle_Reload.glb` ("has 4 clip(s) named `mixamo.com`… the contract is one clip
+named `Idle_Reload`") before it ran green. `measure-crouch.mjs` builds its definitions with
+`clipName: source.clip.name` and still measures a raw `incoming/` file. `CHARACTER_VERSION`
+`2026-09-14-library-v2`.
+
+Re-measured after the rewrite, every row identical (bit-identical tracks must be):
+`Crouch_Idle_Aiming` −0.008 / +0.014 / +0.006, `Crouch_Walk_Aiming` −0.006 / +0.015 / +0.012,
+`Crouch_Run_Aiming` −0.012 / +0.008 / +0.012, `Idle_Aiming` −0.156 / −0.097 / −0.029. `npm run
+hashes` **de376f8c**. In the pane (hidden; stepped by hand, 280 frames, nine skinned bodies):
+every one of the seventeen files playing under its own name — `Idle_Aiming` 117 samples,
+`Walk_Aiming` 204, `Run_Relaxed` 42 + `Sprint_Relaxed` 25, `Death_Stand` 43 + `Death_Stand_01`
+77, `Death_Crouch` 61, both transitions, three reloads, the three crouch loops — 17 fetches of
+the v2 URLs once each, seven skins ready, no console error, no bind warning.
 
 ### Human playtest, when Phase D is closed
 
@@ -14134,7 +14169,7 @@ viewmodel already owns rather than a new one.
 | 5 | ~~Which of the new clips exist — slide, throw, reload, melee, flinch, more deaths?~~ **Answered by the manifest (Phase D, 2026-09-14):** three reloads, one more standing death, a sprint, the authored stand → crouch, and a seven-file pistol family. No slide, throw, melee or flinch, so v13 is not needed for the library; `heightScale` and the `throw`/`melee` bits still wait for it | — |
 | 11 | **The pistol family** — `Idle/Walk/Run/Sprint_Aiming_Pistol`, `Crouch_Idle_Aiming_Pistol`, both `*_Pistol` transitions, in `incoming/`. Their crouch is a half-squat **11 cm above the kneel layout's head box**, so admitting them means a fourth low layout keyed on the weapon class in `rigLayoutFor` (the sim knows the weapon), a class on `HeldWeaponAsset` for the selector, and a hit-sweep against it. Admit as a family, or leave them? | A phase of its own, after decision 9: both move the rig, and the pistol is a class the game already has. Not half of it — a pistol body that stands in its own clips and kneels in the rifle's pops 12 cm at the crouch edge |
 | 12 | **`Crouch_Idle_Reload`** sits −0.050 / −0.022 / −0.034 (crown / skull base / chest) under `humanoid-crouch` — outside C2's 1 cm pad, for a one-shot of at most four seconds, in the direction of the standing rig's own 16 cm. Accept it, or add a reload layout keyed on `reloading` (which the sim and the wire both have)? | Accept for now, and re-measure with decision 9's rebuild; a layout for a transient pose is a fifth layout for 5 cm |
-| 13 | **The eleven original files** are session exports read by the legacy `last` rule. `animation-import.mjs` over them is bit-identical track data at **7 088 → 1 387 KiB**, one version bump, and the legacy selector leaves the tree. Do it? | Yes, whenever the next `CHARACTER_VERSION` bump happens anyway (a new clip, the pistol family) — one command per file, and `check:animations` reports 0 legacy after |
+| 13 | ~~The eleven original files through `animation-import.mjs`?~~ **Answered by the human (2026-09-14): yes.** Done the same day, bit-identical under `GLTFLoader` on all eleven, 7 088 → 1 387 KiB, the legacy selector gone from the tree — see the Phase D addendum | — |
 | 6 | Scoreboard rows: keep a departed player's row for the match, or drop it at unseat? | Keep it for the match, keyed by reconnect token; drop only when the match ends |
 | 7 | Free-for-All spectating: `SpectatorTarget.isWatchable` shows a dead player same-side bodies only, which in FFA is half the lobby. Anyone, or leave it? | Anyone — there are no team-mates to protect, and the reference games spectate the killer. One `isHostile`-shaped change in `shared/modes/SpectatorTarget.ts` plus its harness invariant ("never an enemy") rewritten for FFA |
 | 8 | A sentry's kills: credited to its owner (as the chopper's and the mortar's are), or to nobody (as today)? | The owner. `SentryGun` fires as its own entity so it can be shot down; the credit is a second question. `ScoreSystem.recordKill` could resolve a streak entity to its owner through `StreakSystem`, or the sentry's `DamageRequest.sourceId` could be the owner with the rig excluded from its own trace by id. The first keeps "who shot" honest on the feed; the human picks |
@@ -14398,6 +14433,12 @@ hidden and the same match was stepped by hand (`loop.frame`, 1 500 frames): 9 sk
 `node-hashes.json` unchanged. Expected: nothing here is read by the simulation (`Bot.animation`
 is a getter the renderer calls), and the scenario has no renderer.
 
+**Addendum, the eleven imported** (decision 13): `GLTFLoader` identity on all eleven, 0
+differing values; library **8 199 → 2 498 KiB**; the check red on a session export planted
+over `actions/Idle_Reload.glb`, then green — "17 shipped files, every one on the export
+contract"; `measure-crouch.mjs` rows identical; `npm run hashes` de376f8c; in the pane all
+seventeen files playing under their own names, no console error.
+
 ## Needs a browser
 
 The Browser pane in this session ran with `requestAnimationFrame` suspended; everything above
@@ -14449,4 +14490,4 @@ human closes them. The next fresh session takes this file and the brief below.
 > key card under `Settings`'s BINDINGS tab, *Reset progress* to a new DATA tab behind a two-step
 > confirmation, four buttons on the menu; `npm run layout` stays green. Neither phase touches
 > the simulation, so `npm run hashes` is a formality and `npm run check` is the gate. Decisions
-> 9–13 are the human's and are not this phase's to make. STOP at the gate.
+> 9–12 are the human's and are not this phase's to make. STOP at the gate.

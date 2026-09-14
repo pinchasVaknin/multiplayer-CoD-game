@@ -252,7 +252,7 @@ export function readAnimationFile(file, skins = new Map()) {
     clips,
     /**
      * The export contract: one clip, named after the file. Anything else is a Mixamo session
-     * export and needs the legacy "last clip" rule or a pass through `animation-import.mjs`.
+     * export and needs a pass through `animation-import.mjs`.
      */
     contract: clips.length === 1 && clips[0].name === path.basename(file, '.glb'),
   };
@@ -319,7 +319,7 @@ function printReport(entries, skins) {
   line();
   line(`- ${entries.length} file(s) under \`${ANIMATIONS_DIR}\`; skins and their bone counts: ${skinList}.`);
   line('- Duration is the largest sampler input `max` in the clip. Hips is the motion bone\'s world height on the file\'s own skeleton, in the file\'s metres (no skin, no `modelScale`): first → last for a one-shot, min / **mean** / max for a loop. Travel is the hips\' largest planar excursion, which is 0 for an in-place clip.');
-  line('- **Last** is the clip the legacy `last` selector takes; a file that meets the export contract has exactly one clip, named after the file.');
+  line('- **Last** is the clip a session export is named for (the last of the session); a file on the export contract has exactly one clip, named after the file, marked ✓.');
   line();
   line('- "Off-skin" is a bone the clip animates that some skins do not have, with how many of the skins lack it: the track binds to nothing there and the pose it carried is lost on that skin.');
   line();
@@ -339,7 +339,7 @@ function printReport(entries, skins) {
   if (cumulative.length > 0) {
     line('## Every clip in the cumulative files');
     line();
-    line('A Mixamo session export: each clip is one animation of the session and only the last is the one the file is named for. The others are what the legacy selector skips and what `animation-import.mjs` drops.');
+    line('A Mixamo session export: each clip is one animation of the session and only the last is the one the file is named for. The others are what `animation-import.mjs` drops.');
     line();
     line('| File | # | Clip | Length | Hips mean |');
     line('|---|---|---|---|---|');
@@ -366,7 +366,7 @@ function printReport(entries, skins) {
   }
 
   const legacy = entries.filter((e) => !e.contract);
-  line(`${entries.length - legacy.length} file(s) meet the export contract; ${legacy.length} need the legacy selector or an import.`);
+  line(`${entries.length - legacy.length} file(s) meet the export contract; ${legacy.length} need an import.`);
 }
 
 // -- main -------------------------------------------------------------------------------

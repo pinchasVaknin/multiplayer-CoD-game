@@ -381,10 +381,12 @@ async function measureSkin(skin, sources, fps, game) {
 
   const clips = [];
   for (const source of sources) {
+    // The last clip of the file, by its own name: the catalogue's rule for a contract file
+    // (one clip, named after the file) and the session-export rule for a raw `incoming/` one.
     const definition = {
       id: source.stem,
       url: source.name,
-      selector: { kind: 'last', expectedDuration: source.clip.duration },
+      clipName: source.clip.name,
       loop: true,
       weaponReady: true,
     };
@@ -453,7 +455,7 @@ function printReport({ args, skins, sources, layouts, layoutFor, standing }) {
 
   line('# Crouch measurement (M13 Phase C1)');
   line();
-  line(`- Clips: ${sources.length} file(s) matching \`/${args.match}/i\` in ${args.dirs.map((d) => `\`${d}\``).join(', ')}, the **last** clip of each (the catalogue's rule), sampled at ${args.fps} fps.`);
+  line(`- Clips: ${sources.length} file(s) matching \`/${args.match}/i\` in ${args.dirs.map((d) => `\`${d}\``).join(', ')}, the **last** clip of each (the only one in a contract file; the wanted one in a session export), sampled at ${args.fps} fps.`);
   line(`- Skin(s): ${skins.map((s) => `\`${s.id}\` (${s.rigId}, modelScale ${s.modelScale})`).join(', ')}. World Y in metres, actor origin at the feet.`);
   line(
     `- Layouts (\`HitboxRig\`), head box top / head box bottom / chest centre: ` +

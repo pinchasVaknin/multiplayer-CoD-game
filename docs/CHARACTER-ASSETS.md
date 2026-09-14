@@ -74,11 +74,12 @@ and textures no larger than 2048px. `Hazard` is the largest at 37.56 MiB; `Echo`
   from `(entityId, spawnSerial)` for a life, and deaths by the simulation's own `deathVariant`
   modulo the slot's count — never at random, so every client draws the same body the same way.
   `npm run check:animations` holds the catalogue and the folder to each other in the gate.
-- The eleven original files contain multiple cumulative clips named `mixamo.com` rather than
-  one semantic clip (the first is a 0.017 s placeholder, so `animations[0]` is incorrect); the
-  catalogue reads them with the legacy `last` selector. Newer files are passed through
-  `scripts/animation-import.mjs`, which keeps the one clip the file is named for and meets the
-  contract below; `scripts/animation-manifest.mjs` reads what is actually in any file first.
+- A Mixamo session export contains every animation of the session as cumulative clips named
+  `mixamo.com.NNN` rather than one semantic clip (the first is a 0.017 s placeholder). Every
+  file in the library is passed through `scripts/animation-import.mjs`, which keeps the one
+  clip the file is named for and meets the contract below — the original eleven were rewritten
+  in place on 2026-09-14 — and `scripts/animation-manifest.mjs` reads what is actually in any
+  file first.
 - All clips include `mixamorigHips.position` root motion. The loader locks only the configured
   planar components to the skin bind pose so it cannot drift relative to the network pose. For
   the current Mixamo export, local `Z` maps to rendered vertical height and must remain live for
@@ -100,16 +101,16 @@ and textures no larger than 2048px. `Hazard` is the largest at 37.56 MiB; `Echo`
   `reloadSeconds`; the support-hand constraint is released for it. Throws and melee wait for
   their snapshot bits.
 
-The legacy `last` selector plus expected duration is an adapter for the eleven original files,
-not a file-format convention to extend; `check:animations` counts how many are left.
+The catalogue asks for a clip by name and nothing else; the legacy "last clip plus expected
+duration" adapter the original files needed is gone with them.
 
 ## Required export contract
 
 Export each animation as an animation-only GLB containing exactly one clip, **named after the
 file** — `deaths/Death_Stand_01.glb` holds one clip called `Death_Stand_01` — on the skins'
 65-bone skeleton where possible. `scripts/animation-import.mjs` turns a Mixamo session export
-into that shape; the catalogue then names the file with `named('deaths/Death_Stand_01')`, which
-is the `name` selector. Every skin must satisfy its `CharacterRigProfile`:
+into that shape; the catalogue then names the file as `'deaths/Death_Stand_01'` and asks for
+the clip by that stem. Every skin must satisfy its `CharacterRigProfile`:
 
 - the required named bones and compatible bind/rest pose;
 - an explicit weapon hand/socket and calibrated transform;

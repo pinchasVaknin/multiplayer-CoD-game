@@ -19,11 +19,10 @@
  *      catalogue with at least one file. And each catalogued slot is named by the selector or
  *      the animator (which asks for the transitions itself), or it is a file shipped in every
  *      deploy and never drawn.
- *   4. **A contract file has exactly one clip, named after the file.** A `named(path)` entry
- *      points at a file `animation-import.mjs` wrote (or an export that already met the
- *      contract); a Mixamo session export in that position would load the wrong clip, or no
- *      clip, at runtime. And a `legacy(path, duration)` entry's last clip is that long — the
- *      runtime's own guard, run here where the message names the file.
+ *   4. **Every file has exactly one clip, named after the file** — the export contract, met
+ *      by every file since decision 13 (2026-09-14). A Mixamo session export in a slot would
+ *      fail to load at runtime (the catalogue asks for the clip by name and finds
+ *      `mixamo.com.NNN`); here the message names the file and the tool that fixes it.
  *   5. **`DEATH_VARIANTS` is a multiple of every death slot's count.** The simulation deals
  *      `deathVariant` from `DEATH_VARIANTS`; the client indexes the slot's clips by it modulo
  *      their count. With four variants and three clips the first is dealt twice as often, and
@@ -31,8 +30,6 @@
  *   6. **Every folder is explained.** A folder under the library that the README does not
  *      name is a folder whose meaning is in someone's head.
  *
- * It also counts the legacy files still read by the "last clip" rule, because the count is
- * the measure of how far the folder is from its own contract.
  *
  * ## Limits, stated rather than assumed
  *
@@ -81,18 +78,15 @@ if (unionMatch === null) {
 const slotIds = [...unionMatch[1].matchAll(/'([A-Za-z0-9]+)'/g)].map((m) => m[1]);
 
 /**
- * The library table: `  <slot>: slot('<slot>', '<kind>', legacy('<path>', <s>) | named('<path>'), ...),`
- * one line per slot, at one indent level. The line is split into its file entries.
+ * The library table: `  <slot>: slot('<slot>', '<kind>', '<folder>/<File>', ...),` one line
+ * per slot, at one indent level. The line is split into its file paths.
  */
 const slotLineRe = /^\s{2}([A-Za-z0-9]+):\s*slot\('([A-Za-z0-9]+)',\s*'([a-zA-Z]+)',([^\n]*)\),?$/gm;
 const slots = new Map();
 for (const match of catalogSource.matchAll(slotLineRe)) {
   const [, key, id, kind, rest] = match;
   if (key !== id) failures.push(`catalogue slot "${key}" is built as slot('${id}', …) — the key and the id must agree`);
-  const files = [];
-  for (const entry of rest.matchAll(/\b(legacy|named)\('([^']+)'(?:,\s*([0-9.]+))?\)/g)) {
-    files.push({ selector: entry[1], path: entry[2], legacyDuration: entry[3] === undefined ? null : Number(entry[3]) });
-  }
+  const files = [...rest.matchAll(/'([A-Za-z0-9_]+(?:\/[A-Za-z0-9_]+)+)'/g)].map((entry) => ({ path: entry[1] }));
   if (files.length === 0) failures.push(`catalogue slot "${key}" names no files`);
   slots.set(key, { kind, files });
 }
@@ -152,9 +146,7 @@ for (const id of slots.keys()) {
 
 // ---- 4. the contract, per file ---------------------------------------------------------
 
-let legacyCount = 0;
-let contractCount = 0;
-for (const [rel, entry] of catalogued) {
+for (const rel of catalogued.keys()) {
   if (!shipped.has(rel)) continue;
   let file;
   try {
@@ -163,34 +155,15 @@ for (const [rel, entry] of catalogued) {
     failures.push(`${rel}: ${error instanceof Error ? error.message : String(error)}`);
     continue;
   }
-  const last = file.clips.at(-1);
-  if (last === undefined) {
-    failures.push(`${rel} contains no clips`);
+  const stem = path.basename(rel, '.glb');
+  if (!file.contract) {
+    failures.push(
+      `${rel} has ${file.clips.length} clip(s) named ${file.clips.map((c) => `"${c.name}"`).join(', ') || 'nothing'} — ` +
+        `the contract is one clip named "${stem}"; run scripts/animation-import.mjs on it`,
+    );
     continue;
   }
-  if (last.hips === null) failures.push(`${rel}: the last clip has no mixamorigHips translation track, which the root lock needs`);
-
-  if (entry.selector === 'named') {
-    contractCount++;
-    const stem = path.basename(rel, '.glb');
-    if (file.clips.length !== 1 || file.clips[0].name !== stem) {
-      failures.push(
-        `${rel} is catalogued with the name selector but has ${file.clips.length} clip(s) named ` +
-          `${file.clips.map((c) => `"${c.name}"`).join(', ')} — the contract is one clip named "${stem}"; ` +
-          `run scripts/animation-import.mjs on it`,
-      );
-    }
-  } else {
-    legacyCount++;
-    if (entry.legacyDuration === null) {
-      failures.push(`${rel} uses the legacy selector with no expected duration`);
-    } else if (Math.abs(last.duration - entry.legacyDuration) > 0.05) {
-      failures.push(
-        `${rel}: the catalogue expects a ${entry.legacyDuration}s last clip and the file's is ${last.duration.toFixed(3)}s — ` +
-          `the file changed under the legacy selector; update the duration or import it`,
-      );
-    }
-  }
+  if (file.clips[0].hips === null) failures.push(`${rel}: the clip has no mixamorigHips translation track, which the root lock needs`);
 }
 
 // ---- 5. deaths: the simulation's count against the catalogue's ---------------------------
@@ -253,6 +226,5 @@ const variantSlots = [...slots.values()].filter((slot) => slot.files.length > 1)
 const incoming = listGlbFiles(animationsRoot).filter((rel) => rel.startsWith(`${INCOMING_DIR}/`)).length;
 console.log(
   `animation audit ok — ${slots.size} slots (${asked.size} the selector can return, ${variantSlots} with variants) over ` +
-    `${shipped.size} shipped files: ${contractCount} meet the export contract, ${legacyCount} still read by the legacy last-clip rule; ` +
-    `${incoming} waiting in ${INCOMING_DIR}/.`,
+    `${shipped.size} shipped files, every one on the export contract; ${incoming} waiting in ${INCOMING_DIR}/.`,
 );

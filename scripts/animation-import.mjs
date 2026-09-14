@@ -3,12 +3,12 @@
  * M13 Phase D — take a file out of `incoming/` and into a slot folder, meeting the export
  * contract on the way.
  *
- * The contract (`docs/CHARACTER-ASSETS.md`) is one named semantic clip per file, selected by
- * the catalogue's `name` selector. Nothing delivered so far meets it: a Mixamo session
- * exported from Blender carries every animation of the session as cumulative `mixamo.com.NNN`
- * clips, of which the last is the one the file is named for, and the catalogue's legacy `last`
- * selector plus an expected duration is how the game has been finding it. That rule is a
- * thing a human has to remember at every export, so here it is as a tool instead:
+ * The contract (`docs/CHARACTER-ASSETS.md`) is one clip per file, named after the file, which
+ * the catalogue asks for by name. Nothing delivered has met it: a Mixamo session exported from
+ * Blender carries every animation of the session as cumulative `mixamo.com.NNN` clips, of
+ * which the last is the one the file is named for, and until decision 13 a legacy "last clip
+ * plus expected duration" selector was how the game found it. That rule is a thing a human has
+ * to remember at every export, so here it is as a tool instead:
  *
  *   node scripts/animation-import.mjs incoming/Death_Stand_01.glb deaths
  *
@@ -17,7 +17,12 @@
  * bytes at new offsets — and everything the other clips referenced dropped, so the file is
  * also a fraction of its size. The source leaves `incoming/` unless `--keep` says otherwise.
  * `--clip <index>` picks a clip other than the last, `--as <Name>` names the output (and its
- * clip) differently from the source, and `--dry-run` reports without writing.
+ * clip) differently from the source, and `--dry-run` reports without writing. With no folder,
+ *
+ *   node scripts/animation-import.mjs deaths/Death_Stand.glb
+ *
+ * rewrites a file already in its slot folder in place — how the original eleven session
+ * exports were brought onto the contract (decision 13, 2026-09-14).
  *
  * It rewrites the GLB at the JSON level: keep one animation, walk every reference to an
  * accessor (the animation's samplers, the skins' inverse bind matrices, any mesh), keep those
@@ -27,7 +32,7 @@
  * way it read the source.
  */
 
-import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ANIMATIONS_DIR, INCOMING_DIR, readAnimationFile, readGlb, ROOT, skinBoneSet } from './animation-manifest.mjs';
@@ -177,13 +182,13 @@ function parseArgs(argv) {
     else if (arg === '--keep') args.keep = true;
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--help' || arg === '-h') {
-      console.log('usage: animation-import.mjs <incoming/file.glb> <folder under animations> [--clip <index>] [--as <Name>] [--keep] [--dry-run]');
+      console.log('usage: animation-import.mjs <file.glb> [<folder under animations>] [--clip <index>] [--as <Name>] [--keep] [--dry-run]');
       process.exit(0);
     } else if (args.source === null) args.source = arg;
     else if (args.folder === null) args.folder = arg;
     else throw new Error(`unexpected argument ${arg}`);
   }
-  if (args.source === null || args.folder === null) throw new Error('need a source file and a destination folder; --help');
+  if (args.source === null) throw new Error('need a source file; --help');
   if (args.clip !== null && (!Number.isInteger(args.clip) || args.clip < 0)) throw new Error('--clip must be a non-negative integer');
   return args;
 }
@@ -196,16 +201,23 @@ function main() {
   const source = existsSync(under) ? under : path.resolve(ROOT, args.source);
   if (!existsSync(source) || !statSync(source).isFile()) throw new Error(`no such file: ${args.source}`);
 
-  const folder = path.join(animationsRoot, args.folder);
+  // No folder: the file is already where it belongs and is rewritten in place.
+  const inPlace = args.folder === null;
+  const folder = inPlace ? path.dirname(source) : path.join(animationsRoot, args.folder);
   const relFolder = path.relative(animationsRoot, folder).replace(/\\/g, '/');
   if (relFolder.startsWith('..') || relFolder === '' || relFolder === INCOMING_DIR || relFolder.startsWith(`${INCOMING_DIR}/`)) {
-    throw new Error(`destination must be a slot folder under ${ANIMATIONS_DIR}, not "${args.folder}"`);
+    throw new Error(
+      inPlace
+        ? `${args.source} is not in a slot folder; give it one to import it`
+        : `destination must be a slot folder under ${ANIMATIONS_DIR}, not "${args.folder}"`,
+    );
   }
 
   const name = args.as ?? path.basename(source, '.glb');
   if (!/^[A-Za-z0-9_]+$/.test(name)) throw new Error(`"${name}" is not a clip name: letters, digits and underscores only`);
   const destination = path.join(folder, `${name}.glb`);
-  if (existsSync(destination)) throw new Error(`${path.relative(ROOT, destination)} already exists`);
+  const replacing = path.resolve(destination) === path.resolve(source);
+  if (existsSync(destination) && !replacing) throw new Error(`${path.relative(ROOT, destination)} already exists`);
 
   const { json, bin } = readGlb(source, { bin: true });
   if (bin === null) throw new Error(`${args.source} has no BIN chunk`);
@@ -220,29 +232,32 @@ function main() {
   const glb = encodeGlb(rewritten.json, rewritten.bin);
 
   console.log(
-    `${path.relative(ROOT, source).replace(/\\/g, '/')} → ${path.relative(ROOT, destination).replace(/\\/g, '/')}: ` +
+    `${path.relative(ROOT, source).replace(/\\/g, '/')} → ${replacing ? 'in place' : path.relative(ROOT, destination).replace(/\\/g, '/')}: ` +
       `clip ${clipIndex} of ${clipCount} ("${chosen.name}", ${chosen.duration.toFixed(3)} s, ${chosen.channels} tracks) as "${name}"; ` +
       `${(before.bytes / 1024).toFixed(0)} KiB → ${(glb.length / 1024).toFixed(0)} KiB` +
       (chosen.offSkin.length > 0 ? `; off-skin tracks kept: ${chosen.offSkin.map((o) => o.bone).join(', ')}` : ''),
   );
   if (args.dryRun) return;
 
+  // Written beside the destination and read back the way the manifest will, so a malformed
+  // write is caught here and not in a browser — and an in-place rewrite never half-replaces
+  // its own source.
   mkdirSync(folder, { recursive: true });
-  writeFileSync(destination, glb);
-
-  // Read it back the way the manifest will, so a malformed write is caught here and not in a browser.
-  const after = readAnimationFile(destination, skinBoneSet().perSkin);
+  const staging = `${destination}.importing`;
+  writeFileSync(staging, glb);
+  const after = readAnimationFile(staging, skinBoneSet().perSkin);
   const only = after.clips[0];
-  if (after.clips.length !== 1 || only.name !== name || !after.contract) {
-    unlinkSync(destination);
+  if (after.clips.length !== 1 || only.name !== name) {
+    unlinkSync(staging);
     throw new Error(`the written file does not meet the contract (clips: ${after.clips.length}, name: "${only?.name}")`);
   }
   if (Math.abs(only.duration - chosen.duration) > 1e-6 || only.channels !== chosen.channels || only.targetBones !== chosen.targetBones) {
-    unlinkSync(destination);
+    unlinkSync(staging);
     throw new Error(`the written clip differs from the source (${only.duration} s / ${only.channels} tracks vs ${chosen.duration} s / ${chosen.channels})`);
   }
+  renameSync(staging, destination);
 
-  if (!args.keep) unlinkSync(source);
+  if (!args.keep && !replacing) unlinkSync(source);
 }
 
 if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -51,7 +51,7 @@
     "check:authority": "node scripts/check-authority.mjs",
     "//check:flags": "Playtest round 5 B9. The URL flag table in README.md is a public interface; it had three copies and no check, so ?name= was parsed, discarded and documented as a feature for a milestone. Holds the README and shared/net/UrlFlags to each other, refuses a documented flag nothing reads, and refuses a key read where the scan cannot see it.",
     "check:flags": "node scripts/check-flags.mjs",
-    "//check:animations": "M13 Phase D. The animation catalogue and public/models/bots/animations/ are two descriptions of one library: every catalogued file exists, every shipped file is catalogued, every slot the selector can return has a clip, a name-selected file has the one named clip the export contract asks for, and DEATH_VARIANTS divides evenly over every death slot. Counts the files still read by the legacy last-clip rule.",
+    "//check:animations": "M13 Phase D. The animation catalogue and public/models/bots/animations/ are two descriptions of one library: every catalogued file exists, every shipped file is catalogued, every slot the selector can return has a clip, every file has the one named clip the export contract asks for, and DEATH_VARIANTS divides evenly over every death slot.",
     "check:animations": "node scripts/check-animations.mjs",
     "//animations": "M13 Phase D. What is inside every animation GLB — clip names, lengths, bones, the hips' height — read from the JSON chunk in Node. Run over incoming/ to decide a new file's slot from a table rather than from its name; animation-import.mjs then moves it into the slot folder as one named clip.",
     "animations": "node scripts/animation-manifest.mjs"

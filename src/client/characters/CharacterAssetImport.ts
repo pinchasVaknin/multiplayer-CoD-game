@@ -122,28 +122,22 @@ function scaleBoneTranslations(clip: THREE.AnimationClip, scale: number): void {
   }
 }
 
+/**
+ * The clip the catalogue names, by name. A file on the export contract has exactly one, so
+ * this is also where a file that is not — a session export dropped in by hand — is refused
+ * with the name it lacks.
+ */
 function selectSourceClip(
   definition: CharacterAnimationDefinition,
   source: readonly THREE.AnimationClip[],
 ): THREE.AnimationClip {
-  let clip: THREE.AnimationClip | undefined;
-  const selector = definition.selector;
-  if (selector.kind === 'name') {
-    clip = source.find((candidate) => candidate.name === selector.name);
-    if (clip === undefined) {
-      throw new Error(
-        `Animation "${definition.id}" expected a clip named "${selector.name}", but it was not found.`,
-      );
-    }
-  } else {
-    clip = source.at(-1);
-    if (clip === undefined) throw new Error(`Animation "${definition.id}" contains no clips.`);
-    if (Math.abs(clip.duration - selector.expectedDuration) > 0.05) {
-      throw new Error(
-        `Animation "${definition.id}" expected a ${selector.expectedDuration}s legacy clip, got ${clip.duration}s. ` +
-          'Update the manifest or re-export one named semantic clip.',
-      );
-    }
+  const clip = source.find((candidate) => candidate.name === definition.clipName);
+  if (clip === undefined) {
+    throw new Error(
+      `Animation "${definition.id}" expected a clip named "${definition.clipName}" and found ` +
+        `${source.length === 0 ? 'none' : source.map((candidate) => `"${candidate.name}"`).join(', ')}; ` +
+        'run scripts/animation-import.mjs on the file.',
+    );
   }
   return clip;
 }

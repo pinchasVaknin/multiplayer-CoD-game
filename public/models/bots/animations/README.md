@@ -36,13 +36,14 @@ a body wears is dealt from facts every client shares (`AnimationVariant.ts`), ne
    is the **export contract**: one named clip per file. A Blender/Mixamo session export
    carries every clip of the session and only the last is the one wanted; the tool keeps that
    one, byte for byte, and drops the rest.
-5. Add it to the slot in `CharacterCatalog.ts` with `named('<folder>/<File>')`, bump
+5. Add it to the slot in `CharacterCatalog.ts` as `'<folder>/<File>'`, bump
    `CHARACTER_VERSION`, and run `npm run check`.
 
-The eleven original files are still session exports read by the legacy "last clip" rule
-(`legacy(path, expectedDuration)` in the catalogue); `check:animations` counts how many are
-left. Passing them through `animation-import.mjs` makes them contract files with identical
-track data at roughly a fifth of the size.
+Every file here is on the contract — the eleven originals were session exports until
+2026-09-14, when the same tool rewrote them in place (identical track data, 6.9 → 1.4 MiB).
+`check:animations` refuses a file that is not, and the runtime asks for the clip by name and
+throws if the name is missing, so a session export dropped straight into a slot folder fails at
+the gate rather than at a match.
 
 ## Skeletons
 

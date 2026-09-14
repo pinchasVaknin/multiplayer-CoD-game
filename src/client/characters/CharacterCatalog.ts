@@ -38,27 +38,16 @@ export type CharacterAnimationId =
   | 'deathStand'
   | 'deathCrouch';
 
-export type LegacyClipSelector = {
-  /**
-   * The original eleven files contain cumulative, unnamed Mixamo clips. `last` isolates that
-   * export accident here until those files are passed through `scripts/animation-import.mjs`,
-   * which writes the one clip the file is named for and nothing else. `check:animations`
-   * counts how many are left.
-   */
-  readonly kind: 'last';
-  /** A cheap guard against an artist overwriting the file with a different last clip. */
-  readonly expectedDuration: number;
-};
-
-export type NamedClipSelector = {
-  readonly kind: 'name';
-  readonly name: string;
-};
-
 export interface CharacterAnimationDefinition {
   readonly id: CharacterAnimationId;
   readonly url: string;
-  readonly selector: LegacyClipSelector | NamedClipSelector;
+  /**
+   * The export contract: the file holds exactly one clip, named after the file. Every file in
+   * the library is on it since decision 13 (2026-09-14) — the original eleven Mixamo session
+   * exports were rewritten in place by `scripts/animation-import.mjs`, which also brings in
+   * every new file — and `check:animations` refuses one that is not.
+   */
+  readonly clipName: string;
   readonly loop: boolean;
   /**
    * Whether the clip holds a firearm in both hands, so the presentation-only support-hand
@@ -149,7 +138,7 @@ export interface CharacterDefinition {
   readonly animations: Readonly<Record<CharacterAnimationId, CharacterAnimationSlot>>;
 }
 
-const CHARACTER_VERSION = '2026-09-14-library-v1';
+const CHARACTER_VERSION = '2026-09-14-library-v2';
 const ANIMATION_ROOT = '/models/bots/animations';
 
 /**
@@ -250,37 +239,19 @@ function versionedAssetUrl(path: string, version: string): string {
 type ClipKind = 'loop' | 'weaponReadyLoop' | 'oneShot';
 
 /**
- * A file in the library, named by its path under `public/models/bots/animations/` without the
- * extension. The folder is the slot family (`locomotion/stand`, `deaths`, …); the README there
- * says what each folder means. `check:animations` holds this table and that folder to each
- * other, so a file nobody catalogued and a catalogue entry nobody shipped both fail the gate.
+ * A slot's variants, each a file named by its path under `public/models/bots/animations/`
+ * without the extension, in the order `variantFor` indexes them. The folder is the slot family
+ * (`locomotion/stand`, `deaths`, …); the README there says what each folder means, and
+ * `check:animations` holds this table and that folder to each other, so a file nobody
+ * catalogued and a catalogue entry nobody shipped both fail the gate. Variants share the kind:
+ * two clips that disagree about looping or about holding a weapon are two slots, not two
+ * variants.
  */
-type ClipFile =
-  /** A file that meets the export contract: one clip, named after the file. */
-  | { readonly path: string; readonly legacyDuration?: undefined }
-  /** One of the original session exports, still read by the legacy "last clip" rule. */
-  | { readonly path: string; readonly legacyDuration: number };
-
-function named(path: string): ClipFile {
-  return { path };
-}
-
-function legacy(path: string, legacyDuration: number): ClipFile {
-  return { path, legacyDuration };
-}
-
-/**
- * A slot's variants, in the order `variantFor` indexes them. They share the kind: two clips
- * that disagree about looping or about holding a weapon are two slots, not two variants.
- */
-function slot(id: CharacterAnimationId, kind: ClipKind, first: ClipFile, ...rest: readonly ClipFile[]): CharacterAnimationSlot {
-  const define = (file: ClipFile): CharacterAnimationDefinition => ({
+function slot(id: CharacterAnimationId, kind: ClipKind, first: string, ...rest: readonly string[]): CharacterAnimationSlot {
+  const define = (path: string): CharacterAnimationDefinition => ({
     id,
-    url: versionedAssetUrl(`${ANIMATION_ROOT}/${file.path}.glb`, CHARACTER_VERSION),
-    selector:
-      file.legacyDuration === undefined
-        ? { kind: 'name', name: file.path.slice(file.path.lastIndexOf('/') + 1) }
-        : { kind: 'last', expectedDuration: file.legacyDuration },
+    url: versionedAssetUrl(`${ANIMATION_ROOT}/${path}.glb`, CHARACTER_VERSION),
+    clipName: path.slice(path.lastIndexOf('/') + 1),
     loop: kind !== 'oneShot',
     weaponReady: kind === 'weaponReadyLoop',
   });
@@ -306,21 +277,21 @@ function slot(id: CharacterAnimationId, kind: ClipKind, first: ClipFile, ...rest
  *   slot. PLAN.md carries the decision.
  */
 const MIXAMO_ANIMATIONS: Readonly<Record<CharacterAnimationId, CharacterAnimationSlot>> = {
-  idleRelaxed: slot('idleRelaxed', 'loop', legacy('locomotion/stand/Idle_Relaxed', 7.717)),
-  idleWeaponReady: slot('idleWeaponReady', 'weaponReadyLoop', legacy('locomotion/stand/Idle_Aiming', 2.117)),
-  walkRelaxed: slot('walkRelaxed', 'loop', legacy('locomotion/stand/Walk_Relaxed', 1.317)),
-  walkWeaponReady: slot('walkWeaponReady', 'weaponReadyLoop', legacy('locomotion/stand/Walk_Aiming', 1.383)),
-  runRelaxed: slot('runRelaxed', 'loop', legacy('locomotion/stand/Run_Relaxed', 0.517), named('locomotion/stand/Sprint_Relaxed')),
-  crouchIdleAiming: slot('crouchIdleAiming', 'weaponReadyLoop', legacy('locomotion/crouch/Crouch_Idle_Aiming', 2.117)),
-  crouchWalkAiming: slot('crouchWalkAiming', 'weaponReadyLoop', legacy('locomotion/crouch/Crouch_Walk_Aiming', 1.017)),
-  crouchRunAiming: slot('crouchRunAiming', 'weaponReadyLoop', legacy('locomotion/crouch/Crouch_Run_Aiming', 0.783)),
-  crouchToStand: slot('crouchToStand', 'oneShot', legacy('transitions/Transition_Crouch_To_Stand', 1.1)),
-  standToCrouch: slot('standToCrouch', 'oneShot', named('transitions/Transition_Stand_To_Crouch_Aiming')),
-  reloadStand: slot('reloadStand', 'oneShot', named('actions/Idle_Reload')),
-  reloadWalk: slot('reloadWalk', 'oneShot', named('actions/Walk_Reload')),
-  reloadCrouch: slot('reloadCrouch', 'oneShot', named('actions/Crouch_Idle_Reload')),
-  deathStand: slot('deathStand', 'oneShot', legacy('deaths/Death_Stand', 3.033), named('deaths/Death_Stand_01')),
-  deathCrouch: slot('deathCrouch', 'oneShot', legacy('deaths/Death_Crouch', 2.367)),
+  idleRelaxed: slot('idleRelaxed', 'loop', 'locomotion/stand/Idle_Relaxed'),
+  idleWeaponReady: slot('idleWeaponReady', 'weaponReadyLoop', 'locomotion/stand/Idle_Aiming'),
+  walkRelaxed: slot('walkRelaxed', 'loop', 'locomotion/stand/Walk_Relaxed'),
+  walkWeaponReady: slot('walkWeaponReady', 'weaponReadyLoop', 'locomotion/stand/Walk_Aiming'),
+  runRelaxed: slot('runRelaxed', 'loop', 'locomotion/stand/Run_Relaxed', 'locomotion/stand/Sprint_Relaxed'),
+  crouchIdleAiming: slot('crouchIdleAiming', 'weaponReadyLoop', 'locomotion/crouch/Crouch_Idle_Aiming'),
+  crouchWalkAiming: slot('crouchWalkAiming', 'weaponReadyLoop', 'locomotion/crouch/Crouch_Walk_Aiming'),
+  crouchRunAiming: slot('crouchRunAiming', 'weaponReadyLoop', 'locomotion/crouch/Crouch_Run_Aiming'),
+  crouchToStand: slot('crouchToStand', 'oneShot', 'transitions/Transition_Crouch_To_Stand'),
+  standToCrouch: slot('standToCrouch', 'oneShot', 'transitions/Transition_Stand_To_Crouch_Aiming'),
+  reloadStand: slot('reloadStand', 'oneShot', 'actions/Idle_Reload'),
+  reloadWalk: slot('reloadWalk', 'oneShot', 'actions/Walk_Reload'),
+  reloadCrouch: slot('reloadCrouch', 'oneShot', 'actions/Crouch_Idle_Reload'),
+  deathStand: slot('deathStand', 'oneShot', 'deaths/Death_Stand', 'deaths/Death_Stand_01'),
+  deathCrouch: slot('deathCrouch', 'oneShot', 'deaths/Death_Crouch'),
 };
 
 function character(
