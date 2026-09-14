@@ -8,9 +8,10 @@
  * number is something a script can take. This is the script.
  *
  * It serves `probes/layout.html` from the dev server the project already has, drives a
- * headless Chrome at six viewports, and asks the page to measure itself at each. The rules it
- * asserts and why they are those rules are in `src/client/probes/layout.ts`; this half is
- * only transport.
+ * headless Chrome at eight viewports (M15, A1: the 1920x1080 design frame and the 1280x720
+ * floor, then round 5's six), and asks the page to measure itself at each. The rule it
+ * asserts and why it is that rule are in `src/client/probes/layout.ts`; this half is only
+ * transport.
  *
  * ## No new libraries, and no `--dump-dom`
  *
@@ -269,19 +270,19 @@ async function main() {
       );
       const run = await evaluate(cdp, sessionId, 'window.__layoutProbe.run()');
       const label = `${run.width}x${run.height}`;
-      console.log(`${label}`);
+      // The frame's scale at this window (M15, A1); the content sizes below are in frame pixels.
+      console.log(`${label}  (frame x${run.scale.toFixed(3)})`);
       for (const screen of run.screens) {
         const bad = screen.violations.length;
         failures += bad;
-        const size = `content ${screen.contentWidth}x${screen.contentHeight}`;
+        const size = `frame ${screen.contentWidth}x${screen.contentHeight}`;
         const verdict = bad === 0 ? 'ok' : `${bad} violation${bad === 1 ? '' : 's'}`;
         console.log(`  ${screen.screen.padEnd(24)} ${size.padEnd(24)} ${verdict}`);
         for (const violation of screen.violations) {
           detail.push(`${label} · ${screen.screen} · ${violation.rule}/${violation.axis}
     ${violation.element}
     ${violation.detail}
-    before: ${formatRect(violation.before)}
-    after:  ${formatRect(violation.after)}`);
+    at: ${formatRect(violation.rect)}`);
         }
       }
       console.log('');
@@ -291,7 +292,7 @@ async function main() {
       console.log('--- violations ---\n');
       for (const entry of detail) console.log(`${entry}\n`);
     }
-    console.log(failures === 0 ? 'PASS — every surface fits or scrolls' : `FAIL — ${failures} violations`);
+    console.log(failures === 0 ? 'PASS — every surface fits its frame' : `FAIL — ${failures} violations`);
   } finally {
     cdp?.close();
     // Wait for it to be gone before deleting its profile: on Windows a still-open handle in a

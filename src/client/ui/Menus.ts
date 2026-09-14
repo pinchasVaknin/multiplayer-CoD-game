@@ -6,6 +6,7 @@ import {
 import { inputLabel, type ActionId, type BindingMap } from '../../shared/core/Keybinds';
 import type { GameModeId } from '../../shared/modes/GameMode';
 import { MAPS, MODES, modesForMap } from '../../shared/modes/ModeRegistry';
+import { createScreen } from './Frame';
 
 
 /**
@@ -97,14 +98,17 @@ const FULLSCREEN_HINT = 'F11 for fullscreen — required to capture Ctrl+W (crou
 export class Menus {
   private readonly deps: MenuDeps;
   private readonly screen: HTMLElement;
+  /** The 1920x1080 box the pages are painted into (M15, A1). `screen` is the layer. */
+  private readonly frame: HTMLElement;
   private page: Page = 'MAIN';
   /** Whether the reset button is one click from doing it. Cleared on every `show`. */
   private resetArmed = false;
 
   constructor(deps: MenuDeps) {
     this.deps = deps;
-    this.screen = document.createElement('div');
-    this.screen.className = 'op-screen';
+    const { layer, frame } = createScreen('op-screen');
+    this.screen = layer;
+    this.frame = frame;
     this.screen.hidden = true;
     deps.host.appendChild(this.screen);
   }
@@ -112,7 +116,7 @@ export class Menus {
   showBoot(message: string): void {
     this.page = 'MAIN';
     this.screen.hidden = false;
-    this.screen.replaceChildren(title('OPERATOR'), subtitle(message));
+    this.frame.replaceChildren(title('OPERATOR'), subtitle(message));
   }
 
   /**
@@ -133,7 +137,7 @@ export class Menus {
     const body = document.createElement('p');
     body.className = 'op-screen__note';
     body.textContent = detail;
-    this.screen.replaceChildren(title('OPERATOR'), subtitle(headline), body);
+    this.frame.replaceChildren(title('OPERATOR'), subtitle(headline), body);
   }
 
   /** Open the front end at its main page. */
@@ -221,7 +225,7 @@ export class Menus {
     profile.className = 'op-screen__sub op-accent';
     profile.textContent = this.deps.profileLine();
 
-    this.screen.replaceChildren(
+    this.frame.replaceChildren(
       title('OPERATOR'),
       subtitle(this.deps.statusLine()),
       profile,
@@ -380,7 +384,7 @@ export class Menus {
     columns.className = 'op-pickers';
     columns.append(modeList, mapList, difficultyList);
 
-    this.screen.replaceChildren(
+    this.frame.replaceChildren(
       title('OPERATOR'),
       subtitle('Select mode, map and difficulty'),
       columns,

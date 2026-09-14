@@ -52,6 +52,28 @@ body.op-locked #viewport {
 
 /* ---- Full-screen state overlays (BOOT / MENU / PAUSED / SUMMARY) -------- */
 
+/*
+ * Two elements per screen (M15, Phase A1): the **layer** is full-bleed and carries the
+ * backdrop, the blur and the z-order; the **frame** inside it is a 1920x1080 box, centred by
+ * the layer and scaled by `--ui-scale`, and it is where every screen's content lives. See
+ * `ui/Frame.ts` for why a frame, and why `zoom`.
+ *
+ * ## The rule that used to be here, and why it is gone
+ *
+ * Through playtest round 5 this layer was the scroll container: `justify-content: safe center`
+ * so an overflowing column fell back to `start` (B1/B2 — a centred overflow puts its top half
+ * at a negative offset that no scroll position reaches), `overflow: auto` on both axes so a
+ * screen taller than the window scrolled from its own top, and a padding that made
+ * `min(px, 100%)` a gutter. The layout probe's first rule, *reachable*, was written against
+ * that: vertical overflow was "a legitimate answer to a long screen".
+ *
+ * M15 withdraws that answer: **nothing scrolls, at any window size.** The length went
+ * elsewhere — into tabs, paged strips and collapsibles, screen by screen, in the phase that
+ * owns each — and the probe's rule is now *no overflow*. So this layer neither scrolls nor
+ * lays out; the frame does the laying out, at a size that never changes, and a screen that
+ * fits the frame fits every window. Do not put `overflow: auto` back here to make a long
+ * screen fit: the probe will refuse it, and that is the point of the probe.
+ */
 .op-screen {
   position: absolute;
   inset: 0;
@@ -61,47 +83,42 @@ body.op-locked #viewport {
    * the crosshair and the vignettes paint over the top of it.
    */
   z-index: 10;
+  /* Centres the frame's *scaled* box: a zoomed child is laid out by its parent at its zoomed
+   * size, so an ultrawide window gets equal gutters and a 16:10 one equal bands. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 45%, rgba(20, 23, 28, 0.86), rgba(7, 8, 10, 0.97));
+  backdrop-filter: blur(2px);
+}
+
+/*
+ * The frame. 1920x1080 in its own pixels, `zoom`ed to the window; `--ui-scale` is written on
+ * `#ui-root` by `applyFrameScale` and inherited from there.
+ *
+ * `overflow: hidden` rather than `visible` is deliberate and is a *measurement*, not a fix:
+ * a screen that is taller than the frame is clipped at the frame's edge, where the probe's
+ * no-overflow rule reads it off `scrollHeight > clientHeight` and names the screen. Letting
+ * it spill would hide the same defect in the layer's gutter on a 16:10 window and put it
+ * off-screen on a 16:9 one. `safe center` stays for the same reason: while a screen is over
+ * height, the top of it is the half that must be on screen, because that is where its
+ * title is and the title is how the probe's report is read.
+ */
+.op-frame {
+  flex: none;
+  width: 1920px;
+  height: 1080px;
+  zoom: var(--ui-scale, 1);
   display: flex;
   flex-direction: column;
   align-items: center;
-  /*
-   * `safe center`, and the `safe` is the whole of playtest round 5's B1 and B2.
-   *
-   * This was `center`. A flex line that is longer than its container distributes the overflow
-   * to **both** ends, and the half that goes off the top of a scroll container is at a
-   * negative offset — somewhere no scroll position can reach, because `scrollTop` does not go
-   * below zero. On a 1366x626 window the main menu's 879px of content put `OPERATOR` at
-   * y = -127 and `RESET PROGRESS` past the bottom edge, which is why the report reads "the
-   * wheel does nothing" rather than "the page is long": the wheel was not the problem, there
-   * was nothing for it to scroll and half the content was unreachable even if there had been.
-   *
-   * `safe` says: centre while it fits, and fall back to `start` the moment it does not. With
-   * the `overflow` below, that is the whole rule — a screen taller than the window scrolls
-   * from its own top, and no individual screen has to know how tall it is.
-   */
   justify-content: safe center;
   gap: var(--s-6);
-  /*
-   * The layer scrolls; the document never does (`html, body { overflow: hidden }` at the top
-   * of this file, which is what keeps the canvas still). Both axes are `auto` rather than
-   * `overflow-y: auto` alone, because a single-axis declaration computes the *other* axis to
-   * `auto` as well — that is where B3's horizontal scrollbar came from — and because clipping
-   * a horizontal overflow with `hidden` would hide content instead of the layout that
-   * produced it. Content wider than the layer is a bug `scripts/layout-probe.mjs` fails on,
-   * not a thing to scroll to.
-   */
-  overflow: auto;
-  /* The same reasoning as `.op-settings`': scrolling past either end stays here rather than
-   * chaining to the document and, on Chrome, arming the overscroll gesture. */
-  overscroll-behavior: contain;
-  /*
-   * Nothing sits flush against an edge, and the sides are what make `min(px, 100%)` a gutter.
-   * Every capped element below measures itself against this box — which excludes the padding
-   * and the scrollbar — rather than against `vw`, which counts both.
-   */
-  padding: var(--s-8) var(--s-4);
-  background: radial-gradient(ellipse at 50% 45%, rgba(20, 23, 28, 0.86), rgba(7, 8, 10, 0.97));
-  backdrop-filter: blur(2px);
+  overflow: hidden;
+  /* Nothing sits flush against the frame's edge; `min(px, 100%)` below measures against this
+   * box less its padding. */
+  padding: var(--s-8) var(--s-12);
 }
 
 /*
@@ -448,7 +465,8 @@ body.op-locked #viewport {
  * layer does all three now; a screen that needs a tighter rhythm than the layer's still
  * says so, which is what this is.
  */
-.eom {
+/* The layer's frame, not the layer: the frame is the flex column now (M15, A1). */
+.eom .op-frame {
   gap: var(--s-5);
 }
 

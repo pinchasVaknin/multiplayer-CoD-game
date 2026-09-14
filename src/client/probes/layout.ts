@@ -18,37 +18,45 @@ import { LoadoutEditor } from '../ui/LoadoutEditor';
 import { Menus, type MenuSelection } from '../ui/Menus';
 import { PauseMenu } from '../ui/PauseMenu';
 import { Settings } from '../ui/Settings';
+import { applyFrameScale } from '../ui/Frame';
 import { PROBE_VIEWPORTS, type Viewport } from './Viewports';
 
 /**
- * The layout probe's page half (playtest round 5, P1).
+ * The layout probe's page half (playtest round 5, P1; rewritten for M15, A1).
  *
  * B1, B2 and B3 were all reported as "it looks cut off", and all three were found with a
  * `getBoundingClientRect()` against a stated viewport. P0 rule 7 draws the conclusion: a
  * layout bug on this project is a **number**, not something a human has to notice, so this
- * mounts every full-screen surface at a list of viewports and asserts two things about each.
+ * mounts every full-screen surface at a list of viewports and asserts one thing about each.
  *
- * ## The two rules
+ * ## The rule: nothing scrolls, nothing is clipped, nothing leaves the window
  *
- * **Reachable.** Every laid-out element in the screen must end up wholly inside the viewport
- * after `scrollIntoView({ block: 'nearest', inline: 'nearest' })` — the minimum scroll that
- * would bring it into view if any scroll could. That phrasing is what makes the rule catch
- * B1 rather than shrug at it: a flex column that centres its overflow puts half of it at a
- * negative offset, and a negative offset is not somewhere a scroll container can go. So an
- * element off the *bottom* of a scrollable screen passes and an element off the *top* of the
- * same screen fails, which is exactly the asymmetry the report described as "the wheel does
- * nothing".
+ * M15's rule for the front end is that nothing scrolls at any window size, and the mechanism
+ * is the design frame (`ui/Frame.ts`): every screen is laid out at 1920x1080 and the frame is
+ * `zoom`ed to the window. So the probe asks, of every laid-out element on a mounted screen:
  *
- * An element larger than the viewport on an axis is skipped on that axis, and its children
- * are not: the layer itself is exactly viewport-sized, and a 900px column inside a 626px
- * window is the thing under test rather than a violation in itself. What has to hold is that
- * every *part* of it can be brought into view.
+ * - **Outside.** Its rect is wholly inside the viewport. No scroll is attempted first — the
+ *   old rule scrolled each element into view and asked whether *that* had worked, because
+ *   vertical overflow was then "a legitimate answer to a long screen". It is not one now, so
+ *   an element off any edge is a violation on the spot, and an element larger than the
+ *   viewport on an axis is one too rather than a thing to skip.
+ * - **Overflow.** If it clips or scrolls (`overflow` other than `visible` on an axis), its
+ *   content fits it: `scrollHeight <= clientHeight` and `scrollWidth <= clientWidth`. This is
+ *   the rule that sees a scroller — `.op-settings`' binding list, the editor's option list —
+ *   and the one that sees the frame itself clip a screen that is over height, which is how
+ *   A1's first measurement was taken. B3's *sideways* is the x-axis case of it. One
+ *   exemption: a single-line ellipsis (`text-overflow: ellipsis` with `white-space: nowrap`)
+ *   is a designed truncation of one string, not a scroll, and is not reported.
  *
- * **No sideways scrolling.** Any element whose used `overflow-x` is `auto` or `scroll` must
- * have `scrollWidth <= clientWidth`. Vertical overflow is a legitimate answer to a long
- * screen; horizontal overflow is not, and B3 is what it looks like — `.eom` sets
- * `overflow-y: auto`, CSS computes the other axis to `auto` alongside it, and the AXIS half
- * of the scoreboard went under a horizontal scrollbar.
+ * One finding per cause. `getBoundingClientRect()` does not know about clipping, so every row
+ * a scroller has scrolled past is also "outside the window" by the first rule — the first run
+ * of this version reported one binding list as thirty-eight lines. An element that an
+ * ancestor clips on an axis is therefore not reported as outside on that axis: the ancestor's
+ * overflow line is the finding, and the row count is in its detail.
+ *
+ * Both are reported in window pixels, as the browser sees them; the content size beside each
+ * screen is in **frame** pixels (window pixels over `--ui-scale`), because "1336 tall in a
+ * 1080 frame" is the number a fix is written against and it is the same at every viewport.
  *
  * ## What it deliberately does not do
  *
@@ -71,19 +79,17 @@ export interface Rect {
 }
 
 export interface Violation {
-  readonly rule: 'unreachable' | 'sideways';
+  readonly rule: 'outside' | 'overflow';
   readonly axis: 'x' | 'y';
   readonly element: string;
-  /** Where it sat before anything tried to scroll to it. The reported number. */
-  readonly before: Rect;
-  /** Where it sat after the minimum scroll that would have revealed it. */
-  readonly after: Rect;
+  /** Where it sat, in window pixels. The reported number. */
+  readonly rect: Rect;
   readonly detail: string;
 }
 
 export interface ScreenReport {
   readonly screen: string;
-  /** How tall the screen's content actually is, from the union of its children's boxes. */
+  /** How tall the screen's content is in frame pixels, from the union of its children's boxes. */
   readonly contentHeight: number;
   /** How wide, the same way. */
   readonly contentWidth: number;
@@ -94,6 +100,8 @@ export interface ScreenReport {
 export interface ProbeRun {
   readonly width: number;
   readonly height: number;
+  /** `--ui-scale` at this viewport: frame pixels times this are window pixels. */
+  readonly scale: number;
   readonly screens: ScreenReport[];
 }
 
@@ -118,18 +126,17 @@ function describe(el: Element): string {
   return text === '' ? selector : `${selector} "${text}"`;
 }
 
-function measure(screen: string, layer: HTMLElement): ScreenReport {
+function measure(screen: string, layer: HTMLElement, scale: number): ScreenReport {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const violations: Violation[] = [];
   const all: HTMLElement[] = [layer, ...Array.from(layer.querySelectorAll<HTMLElement>('*'))];
 
   /*
-   * The content's own extent, before anything scrolls, so the report carries the same kind of
-   * number B1 and B2 were written with. Measured off the layer's descendants rather than off
-   * `scrollHeight`, which cannot see the half of the overflow sitting above the origin — that
-   * blind spot is why the report's "content height is 744px" and its "title at y = -118" did
-   * not add up to each other.
+   * The content's own extent, so the report carries the same kind of number B1 and B2 were
+   * written with. Measured off the layer's descendants rather than off `scrollHeight`, which
+   * cannot see content sitting above the origin — that blind spot is why the old report's
+   * "content height is 744px" and its "title at y = -118" did not add up to each other.
    */
   let top = Number.POSITIVE_INFINITY;
   let bottom = Number.NEGATIVE_INFINITY;
@@ -143,64 +150,91 @@ function measure(screen: string, layer: HTMLElement): ScreenReport {
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;
     laid.push(el);
-    if (el === layer) continue;
+    // The layer is the window and the frame is the frame; the content is what is in it.
+    if (el === layer || el.classList.contains('op-frame')) continue;
     top = Math.min(top, r.top);
     bottom = Math.max(bottom, r.bottom);
     left = Math.min(left, r.left);
     right = Math.max(right, r.right);
   }
 
+  /** Whether some ancestor up to the layer clips `el` on this axis — then it is that ancestor's finding. */
+  const clippedByAncestor = (el: HTMLElement, axis: 'x' | 'y'): boolean => {
+    const r = el.getBoundingClientRect();
+    for (let a = el.parentElement; a !== null && a !== layer.parentElement; a = a.parentElement) {
+      const style = getComputedStyle(a);
+      const clips = axis === 'y' ? style.overflowY !== 'visible' : style.overflowX !== 'visible';
+      if (!clips) continue;
+      const box = a.getBoundingClientRect();
+      const out =
+        axis === 'y'
+          ? r.top < box.top - EPSILON || r.bottom > box.bottom + EPSILON
+          : r.left < box.left - EPSILON || r.right > box.right + EPSILON;
+      if (out) return true;
+    }
+    return false;
+  };
+
   for (const el of laid) {
-    const before = rectOf(el);
-    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    const after = rectOf(el);
-    if (after.height <= vh + EPSILON && (after.top < -EPSILON || after.bottom > vh + EPSILON)) {
+    const rect = rectOf(el);
+    if ((rect.top < -EPSILON || rect.bottom > vh + EPSILON) && !clippedByAncestor(el, 'y')) {
       violations.push({
-        rule: 'unreachable',
+        rule: 'outside',
         axis: 'y',
         element: describe(el),
-        before,
-        after,
+        rect,
         detail:
-          after.top < -EPSILON
-            ? `${(-after.top).toFixed(0)}px above the top of a ${vh}px viewport, and no scroll brings it back`
-            : `${(after.bottom - vh).toFixed(0)}px below the bottom of a ${vh}px viewport, and no scroll reaches it`,
+          rect.top < -EPSILON
+            ? `${(-rect.top).toFixed(0)}px above the top of a ${vh}px window`
+            : `${(rect.bottom - vh).toFixed(0)}px below the bottom of a ${vh}px window`,
       });
     }
-    if (after.width <= vw + EPSILON && (after.left < -EPSILON || after.right > vw + EPSILON)) {
+    if ((rect.left < -EPSILON || rect.right > vw + EPSILON) && !clippedByAncestor(el, 'x')) {
       violations.push({
-        rule: 'unreachable',
+        rule: 'outside',
         axis: 'x',
         element: describe(el),
-        before,
-        after,
+        rect,
         detail:
-          after.left < -EPSILON
-            ? `${(-after.left).toFixed(0)}px off the left of a ${vw}px viewport`
-            : `${(after.right - vw).toFixed(0)}px off the right of a ${vw}px viewport`,
+          rect.left < -EPSILON
+            ? `${(-rect.left).toFixed(0)}px off the left of a ${vw}px window`
+            : `${(rect.right - vw).toFixed(0)}px off the right of a ${vw}px window`,
       });
     }
   }
 
   for (const el of laid) {
     const style = getComputedStyle(el);
-    if (style.overflowX !== 'auto' && style.overflowX !== 'scroll') continue;
-    const spill = el.scrollWidth - el.clientWidth;
-    if (spill <= 1) continue;
-    violations.push({
-      rule: 'sideways',
-      axis: 'x',
-      element: describe(el),
-      before: rectOf(el),
-      after: rectOf(el),
-      detail: `scrolls sideways: ${el.scrollWidth}px of content in a ${el.clientWidth}px box`,
-    });
+    const rect = rectOf(el);
+    // `scrollHeight` and `clientHeight` are both in the element's own (zoomed) pixels, so the
+    // comparison holds at any scale and the numbers in the message are frame pixels.
+    const spillY = el.scrollHeight - el.clientHeight;
+    const spillX = el.scrollWidth - el.clientWidth;
+    if (style.overflowY !== 'visible' && spillY > 1) {
+      violations.push({
+        rule: 'overflow',
+        axis: 'y',
+        element: describe(el),
+        rect,
+        detail: `${el.scrollHeight}px of content in a ${el.clientHeight}px box (overflow-y: ${style.overflowY})`,
+      });
+    }
+    const ellipsis = style.textOverflow === 'ellipsis' && style.whiteSpace === 'nowrap';
+    if (style.overflowX !== 'visible' && spillX > 1 && !ellipsis) {
+      violations.push({
+        rule: 'overflow',
+        axis: 'x',
+        element: describe(el),
+        rect,
+        detail: `${el.scrollWidth}px of content in a ${el.clientWidth}px box (overflow-x: ${style.overflowX})`,
+      });
+    }
   }
 
   return {
     screen,
-    contentHeight: laid.length > 1 ? Math.round(bottom - top) : 0,
-    contentWidth: laid.length > 1 ? Math.round(right - left) : 0,
+    contentHeight: laid.length > 1 ? Math.round((bottom - top) / scale) : 0,
+    contentWidth: laid.length > 1 ? Math.round((right - left) / scale) : 0,
     elements: laid.length,
     violations,
   };
@@ -506,13 +540,16 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
 ];
 
 function run(): ProbeRun {
+  // The viewport was just emulated by the driver and nothing has fired a resize listener, so
+  // the frame is scaled here, the way `Game.onResize` does it in the real client.
+  const scale = applyFrameScale(host, window.innerWidth, window.innerHeight);
   const screens: ScreenReport[] = [];
   for (const surface of SURFACES) {
     const layer = surface.show();
-    screens.push(measure(surface.name, layer));
+    screens.push(measure(surface.name, layer, scale));
     surface.hide();
   }
-  return { width: window.innerWidth, height: window.innerHeight, screens };
+  return { width: window.innerWidth, height: window.innerHeight, scale, screens };
 }
 
 declare global {
@@ -552,5 +589,11 @@ if (wanted !== null) {
   if (surface === undefined) {
     throw new Error(`layout probe: no surface "${wanted}". Try one of: ${SURFACES.map((s) => s.name).join(', ')}`);
   }
+  // Scaled on load and on every drag, so the window a human resizes shows what the probe saw.
+  const rescale = (): void => {
+    applyFrameScale(host, window.innerWidth, window.innerHeight);
+  };
+  rescale();
+  window.addEventListener('resize', rescale);
   surface.show();
 }

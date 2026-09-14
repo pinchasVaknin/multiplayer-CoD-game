@@ -13,6 +13,7 @@ import {
   type SettingsV1,
   type ShadowQuality,
 } from '../../shared/meta/SaveData';
+import { createScreen } from './Frame';
 
 /**
  * The settings screen (brief S6.3).
@@ -73,6 +74,8 @@ const COLORBLIND_LABELS: Readonly<Record<ColorblindMode, string>> = {
 export class Settings {
   private readonly deps: SettingsDeps;
   private readonly screen: HTMLElement;
+  /** The 1920x1080 box the tabs are painted into (M15, A1). `screen` is the layer. */
+  private readonly frame: HTMLElement;
   private tab: Tab = 'CONTROLS';
 
   /** Which binding slot is waiting for a key, or null. */
@@ -94,8 +97,9 @@ export class Settings {
 
   constructor(deps: SettingsDeps) {
     this.deps = deps;
-    this.screen = document.createElement('div');
-    this.screen.className = 'op-screen op-screen--wide';
+    const { layer, frame } = createScreen('op-screen op-screen--wide');
+    this.screen = layer;
+    this.frame = frame;
     this.screen.hidden = true;
     deps.host.appendChild(this.screen);
   }
@@ -174,7 +178,7 @@ export class Settings {
     actions.className = 'op-actions';
     actions.appendChild(back);
 
-    this.screen.replaceChildren(title('SETTINGS'), nav, body, actions);
+    this.frame.replaceChildren(title('SETTINGS'), nav, body, actions);
     this.body = body;
     // After insertion: `scrollTop` on a detached element is silently ignored, so assigning
     // it before `replaceChildren` would look right and do nothing.

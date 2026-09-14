@@ -612,8 +612,9 @@ finding, which is S8's rule for tests applied to an instrument.
 
 **A2, the menu.** Two halves. **Right:** the navigation — PLAY (multiplayer, primary, one
 click to the arena as §6.1 requires), PLAY SOLO (the mode/map/difficulty page, which becomes a
-panel sliding over the same frame rather than a second page), CREATE A CLASS, SETTINGS, QUIT
-(decision 7). Each button is a `clip-path` polygon with a skewed leading edge, a `mask-image`
+panel sliding over the same frame rather than a second page), CREATE A CLASS, SETTINGS — four,
+not the reference's six: no ZOMBIES or STORE exists here, and QUIT is out (decision 7: a
+browser tab closes itself). Each button is a `clip-path` polygon with a skewed leading edge, a `mask-image`
 gradient that frays its trailing edge into the backdrop, and a hover sweep along the skew —
 the "smeared" reading is three declarations and a pseudo-element, no image. The callsign
 field, the profile line (level, class, record) and the status line move to a header strip at
@@ -643,6 +644,84 @@ settings; `npm run check` green; seeded harness and content probe byte-identical
 `shared/` moves); the client bundle re-measured and recorded. **Pane:** the menu at 1920×1080,
 1366×626 and 1280×720, screenshots in the record; the dolly stepped by hand (`loop.frame`) and
 its edge measured — a pixel column at the mask's boundary reads `--c-void` on the menu side.
+
+### A1 — done (session of 2026-09-15): the frame, the rule, and the first measurement
+
+**The frame.** `ui/Frame.ts`: `FRAME_WIDTH/HEIGHT = 1920/1080`, `frameScale(vw, vh) =
+min(vw / 1920, vh / 1080)` (three vitest cases, no lower clamp), `applyFrameScale(root, vw,
+vh)` writing `--ui-scale` onto `#ui-root`, and `createScreen(layerClass)` returning a
+full-bleed **layer** and the 1920×1080 **frame** inside it. `.op-screen` is the layer now —
+the backdrop, the blur, the z-order, `hidden`, and a flex centre for its one child; `.op-frame`
+is the box: `zoom: var(--ui-scale)`, `overflow: hidden`, `justify-content: safe center`, the
+padding. The five screens create theirs through it and append to the frame (`Menus`,
+`LoadoutEditor`, `Settings`, `PauseMenu`, `EndOfMatch` — eight mount sites); `.eom`'s and
+`.lo`'s `gap` moved to their frames. `Game` calls `applyFrameScale` beside `Renderer.setSize`
+in the constructor and in `onResize`. The B1/B2 comment at `.op-screen`'s `overflow` is
+rewritten to say what the rule was, why it is gone, and not to bring it back. `LoadingScreen`
+(`.op-loading`, three elements on its own layer, the §4.18 fallback) and `VoteOverlay` (HUD)
+are not in a frame: neither is a front-end screen, and neither has anything to overflow with.
+
+**One departure from the brief, and why.** The brief put the zoom on `#ui-root`. It is on the
+frame instead: `MatchFeedback` and `ClientMatch` place the HUD's hit markers and direction
+indicators from `window.innerWidth` / `innerHeight`, in window pixels, and a zoomed `#ui-root`
+would have moved every one of them by `1 / scale`. The HUD stays in window pixels and outside
+the frame; the variable is still written on `#ui-root`, so a later phase can read it there.
+
+**The rule.** `probes/layout.ts` asserts one thing now — *outside* (no laid-out element's rect
+leaves the window; no scroll is tried first, and an element larger than the window is a
+violation rather than a thing to skip) and *overflow* (any element whose `overflow` is not
+`visible` on an axis has `scrollHeight <= clientHeight` and `scrollWidth <= clientWidth`;
+a single-line ellipsis is exempt, being a designed truncation of one string). One finding per
+cause: an element an ancestor clips is not also reported as outside — the first run of this
+version reported one binding list as thirty-eight lines. Content sizes are reported in
+**frame** pixels. `Viewports.ts` gains 1920×1080 (the frame, scale 1) and 1280×720 (the
+floor) at the head of the list; the driver prints the scale beside each viewport and says
+`fits its frame` where it said `fits or scrolls`.
+
+**Measured — the tree as it was, under the frame, at eight viewports. The red list:**
+
+| Screen | Frame px at 1920×1080 | Verdict |
+|---|---|---|
+| menu | 497 × 879 | fits |
+| unsupported | 322 × 195 | fits |
+| solo-setup | 840 × 568 | fits |
+| settings/CONTROLS · AUDIO · VIDEO | 780 × 362 · 371 · 544 | fit |
+| **settings/BINDINGS** | 780 × 1336 | **`.op-settings` scrolls — 1184 px of rows in a 605 px box** (`max-height: 56vh; overflow-y: auto`). A4's |
+| pause | 431 × 496 | fits |
+| summary · summary/ffa | 1040 × 476 · 644 | fit |
+| create-a-class | 1240 × 931 | fits |
+| **create-a-class/open-row** | 1240 × 1021 | **`.lo-options` scrolls — 606 px in a 319 px box** (B11's list) **and the frame clips the screen by 5 px** (1085 in 1080). B's |
+
+`FAIL — 24 violations` over 96 screen × viewport cells: the same three causes on the same two
+screens at each of the eight sizes, nothing else red at any. The probe stays red until A4 and
+B close them; a red instrument is a finding (S8).
+
+**Two things the frame found that the brief did not predict:**
+
+- **A media query folds on the window, not the frame.** `meta.css` carried `@media (max-width:
+  1080px) { .lo-columns { grid-template-columns: 1fr } }`; at 1024×640 the editor — still
+  1920 frame px wide — folded to one column and ran to 1970 frame px, 81 violations at that
+  one size in the first run. Deleted, with the reason in its place: nothing inside the frame
+  may vary with the window.
+- **`vh` and `vw` inside the frame are not the window's.** Chrome resolves a viewport unit
+  inside a zoomed element in the element's own pixels: `56vh` on `.op-settings` is 605 frame
+  px at 1920×1080 and 455 at 375×812 — the window's height, in frame units. Every `vh`/`vw` in
+  front-end CSS (`.op-settings`' 56vh; `.sb`'s 94vw where the board is embedded) becomes a
+  frame-pixel value in the phase that owns the screen, and none may be added.
+
+**Uniformity, measured.** With the fold gone, a screen's frame-px height drifts under 1 %
+across the viewports down to the floor (menu 879 at 1920×1080, 875 at 1280×720, 863 at
+1366×626) and up to 10 % at 375×812 (965): text zoomed to two or three pixels rasterises to
+whole ones. Below the floor the rule holds and the drift is the price of it; at and above the
+floor the frame is uniform.
+
+**Pane:** the real client at 1024×768 — `--ui-scale 0.533`, the frame 1024×576 at y = 96 with
+equal bands, `scrollHeight = clientHeight = 1080`, no console error; resized to 1280×720 —
+scale 0.667, the frame exactly the window; Create-a-Class opened, `WeaponPreview` rendering
+inside the frame. **Gate:** `npm run check` green (**119** tests in 14 files; boundaries 350
+files). Eleven files changed, all under `client/`, `client/probes/` and `scripts/`; nothing in
+`shared/` or `server/`, so the seeded harness and the content probe — built from those two
+partitions alone — are byte-identical by construction.
 
 ## Phase B — Create-a-Class: the stage, six boxes, the strips, the skins
 
@@ -836,10 +915,10 @@ in full.
 | 2 | ~~Skin picker: local-first, or the wire field in the same milestone?~~ **Taken: local-first**; B6 is the wire step if B1–B5 land with room | — |
 | 3 | ~~The floor viewport?~~ **Taken: 1280×720.** The rule still holds below it; legibility is not promised | — |
 | 4 | ~~Archive M14 to open this section?~~ **Taken**, this session | — |
-| 5 | Three skins are 24–38 MB (Viper, Echo, Hazard) against 4–5 MB for the other four — almost certainly texture size, not geometry — and the 28 MB one is the default that preloads at boot. Recompress the three to the four's size, and make a 4 MB skin the default? | Yes, before B1: a stage that waits 28 MB for its first model is a stage that opens empty. A `gltf-transform` pass is a script run once, not a dependency of the build |
-| 6 | Phase E: run the fight behind the menu, or stop at the dolly? | Decide on E's three numbers, not before them |
-| 7 | QUIT in a browser: disconnect and return to the boot screen (a new `MENU → BOOT` edge), or leave the button out? | Keep it; dropping the socket and returning to BOOT is the honest meaning of "quit" here, and the reference has the button |
-| 8 | The intro on Search & Destroy rounds two onward: never (the freeze is round one only), or a 2 s site flyover each round? | Never. The freeze exists for the class pick, and the record says a ten-second hold between rounds *"would add a minute to a best-of-five"* |
+| 5 | ~~Three skins are 24–38 MB (Viper, Echo, Hazard) against 4–5 MB for the other four, and the 28 MB one is the default that preloads at boot. Recompress, and change the default?~~ **Taken (2026-09-15): yes, before B1** — a `B0` step: recompress the three to the four's size and make a 4 MB skin the default. A `gltf-transform` pass run once, not a build dependency | — |
+| 6 | ~~Phase E: run the fight behind the menu, or stop at the dolly?~~ **Taken: proceed**, provided the three numbers hold — the leak count flat, the sim's ms per frame, the bundle delta. E ships on them or not at all | — |
+| 7 | ~~QUIT in a browser: a `MENU → BOOT` edge, or leave the button out?~~ **Taken: no QUIT button.** A tab closes itself; the menu has four entries | — |
+| 8 | ~~The intro on Search & Destroy rounds two onward?~~ **Taken: round one only.** The freeze is round one only and exists for the class pick | — |
 
 ## Dependency order
 
@@ -863,8 +942,9 @@ report that a screen "looks cut off" is answered by running it.
 
 ## How to start — the next brief
 
-A fresh session starts at **A1**: add `--ui-scale`, the two viewports and the no-overflow rule
-to `probes/layout.ts`, run `npm run layout`, and record what is red — that list is the
-milestone's first measurement and the reason A1 stands alone. Then A2. Each phase closes with
+A1 is done and its red list is above: two screens, three causes, the probe red on them until
+A4 and B. A fresh session starts at **A2**, the menu, on the frame as it now is — `npm run
+layout` first, to see the same 24 before touching anything — then A3 and A4, and `npm run
+layout` green on the menu, the play panel and the settings is Gate A. Each phase closes with
 its gate's numbers in a "done" subsection here, in the order above, and the milestone closes
 the way M13 and M14 did: this section moves to the archive in the session that closes it.

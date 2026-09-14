@@ -11,7 +11,8 @@
 
 /* Only the gap — see `.eom` in app.css. The scroll, the padding and the alignment are the
  * layer's since round 5's P1. */
-.lo {
+/* The layer's frame, not the layer: the frame is the flex column now (M15, A1). */
+.lo .op-frame {
   gap: var(--s-4);
 }
 
@@ -78,11 +79,16 @@
   align-items: start;
 }
 
-@media (max-width: 1080px) {
-  .lo-columns {
-    grid-template-columns: 1fr;
-  }
-}
+/*
+ * There used to be an `@media (max-width: 1080px)` fold to one column here. A media query
+ * measures the *window*, and under the design frame (M15, A1) the window is not what the
+ * editor is laid out in: the frame is 1920 wide at every window size, so the fold fired at
+ * 1024x640 on a layout that was still 1920 wide and stacked three columns to 1970 frame
+ * pixels — a screen that fit the frame at 1920x1080 and overflowed it at every smaller
+ * window, which is precisely the non-uniformity the frame exists to remove. Nothing in the
+ * frame may vary with the window; the probe's uniform-scale check is what would catch a
+ * second one.
+ */
 
 .lo-slots {
   display: flex;

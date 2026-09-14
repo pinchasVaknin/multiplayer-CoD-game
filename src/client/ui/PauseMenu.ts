@@ -1,3 +1,5 @@
+import { createScreen } from './Frame';
+
 /**
  * The pause screen (M5, from the M4 playtest notes).
  *
@@ -73,8 +75,8 @@ export class PauseMenu {
   constructor(deps: PauseMenuDeps) {
     this.deps = deps;
 
-    this.screen = document.createElement('div');
-    this.screen.className = 'op-screen op-screen--pause';
+    const { layer, frame } = createScreen('op-screen op-screen--pause');
+    this.screen = layer;
     this.screen.hidden = true;
 
     const heading = document.createElement('h1');
@@ -142,7 +144,7 @@ export class PauseMenu {
     this.codeResult = document.createElement('p');
     this.codeResult.className = 'op-screen__sub op-code__result';
 
-    this.screen.append(heading, this.status, actions, hint, codeForm, this.codeResult);
+    frame.append(heading, this.status, actions, hint, codeForm, this.codeResult);
     deps.host.appendChild(this.screen);
   }
 

@@ -24,6 +24,7 @@ import { logger } from '../shared/core/Log';
 import type { SummaryInfo, WelcomeInfo } from '../shared/net/Messages';
 import type { SkirmishSink } from '../shared/net/NetClient';
 import { isArenaInstance, toNetLoadout, type NetLoadout } from '../shared/net/Skirmish';
+import { applyFrameScale } from './ui/Frame';
 import { LoadingScreen } from './ui/LoadingScreen';
 import { VoteOverlay } from './ui/VoteOverlay';
 import { QuickLoadout } from './ui/QuickLoadout';
@@ -531,6 +532,8 @@ export class Game {
 
     this.renderer = new Renderer(canvas);
     this.renderer.setSize(window.innerWidth, window.innerHeight, settings.renderScale);
+    // The same fact for the DOM: the front end's 1920x1080 frame scales to this window (M15, A1).
+    applyFrameScale(uiHost, window.innerWidth, window.innerHeight);
     this.textures = new ProceduralTextures(this.renderer.three);
     // Warm one representative bundle while BOOT/MENU are visible. Other skins load only when
     // an actor receives them, so a match does not reserve the whole cosmetic catalogue on the
@@ -2691,6 +2694,7 @@ export class Game {
 
   private readonly onResize = (): void => {
     this.renderer.setSize(window.innerWidth, window.innerHeight, this.profile.settings.renderScale);
+    applyFrameScale(this.uiHost, window.innerWidth, window.innerHeight);
     this.cameraRig.resize(this.renderer.aspect);
     this.viewmodel.resize(this.renderer.aspect);
   };

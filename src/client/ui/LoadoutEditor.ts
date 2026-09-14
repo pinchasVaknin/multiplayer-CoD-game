@@ -9,6 +9,7 @@ import { STREAK_DEFS, streakDef } from '../../shared/streaks/StreakDefs';
 import { perkDef, perksOfTier, PERK_TIERS, type PerkTier } from '../../shared/perks/PerkDefs';
 import { attachmentDef } from '../../shared/weapons/Attachments';
 import { ALL_WEAPONS, requireWeapon, type WeaponDef } from '../../shared/weapons/WeaponDefs';
+import { createScreen } from './Frame';
 import { LoadoutStats } from './LoadoutStats';
 import { WeaponPreview } from './WeaponPreview';
 
@@ -132,6 +133,8 @@ function previewSlotOf(row: RowKind): 'primary' | 'secondary' {
 export class LoadoutEditor {
   private readonly deps: LoadoutEditorDeps;
   private readonly screen: HTMLElement;
+  /** The 1920x1080 box the editor is painted into (M15, A1). `screen` is the layer. */
+  private readonly frame: HTMLElement;
   private readonly stats = new LoadoutStats();
   private readonly preview: WeaponPreview;
 
@@ -160,8 +163,9 @@ export class LoadoutEditor {
   constructor(deps: LoadoutEditorDeps) {
     this.deps = deps;
     this.preview = new WeaponPreview({ anisotropy: deps.anisotropy });
-    this.screen = document.createElement('div');
-    this.screen.className = 'op-screen lo';
+    const { layer, frame } = createScreen('op-screen lo');
+    this.screen = layer;
+    this.frame = frame;
     this.screen.hidden = true;
     deps.host.appendChild(this.screen);
   }
@@ -242,7 +246,7 @@ export class LoadoutEditor {
     exit.classList.add('op-btn--primary');
     actions.append(exit);
 
-    this.screen.replaceChildren(this.paintHeader(), columns, actions);
+    this.frame.replaceChildren(this.paintHeader(), columns, actions);
     this.refresh();
   }
 

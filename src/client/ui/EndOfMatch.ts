@@ -1,6 +1,7 @@
 import { accuracy, killDeath, type PlayerScore, type ScoreSystem, type ScoreTeam } from '../../shared/combat/ScoreSystem';
 import type { ColumnDef, MatchResult } from '../../shared/modes/GameMode';
 import { personalOutcome } from '../../shared/modes/MatchOutcome';
+import { createScreen } from './Frame';
 import { Scoreboard } from './Scoreboard';
 import type { ViewerContext } from '../../shared/ui/TeamColour';
 
@@ -44,8 +45,8 @@ export class EndOfMatch {
   private readonly actions: HTMLElement;
 
   constructor(deps: SummaryDeps) {
-    this.element = document.createElement('div');
-    this.element.className = 'op-screen eom';
+    const { layer, frame } = createScreen('op-screen eom');
+    this.element = layer;
     this.element.hidden = true;
 
     this.outcome = document.createElement('h1');
@@ -104,7 +105,7 @@ export class EndOfMatch {
     this.actions.className = 'op-actions';
     this.actions.append(this.continueButton, this.exitButton);
 
-    this.element.append(
+    frame.append(
       this.outcome,
       this.detail,
       this.personal,
