@@ -14,6 +14,7 @@ import {
   type ShadowQuality,
 } from '../../shared/meta/SaveData';
 import { createScreen } from './Frame';
+import { buildKeyCard, FULLSCREEN_HINT } from './KeyCard';
 
 /**
  * The settings screen (brief S6.3).
@@ -40,6 +41,21 @@ import { createScreen } from './Frame';
  * dispatch before `Input` is reached. That is the only place in the project outside
  * `core/Input.ts` that touches a raw keyboard event, and it exists to stop the input layer
  * seeing something rather than to do gameplay with it.
+ *
+ * ## Five tabs, none of them scrolling (M15, A4)
+ *
+ * The binding list used to be a `56vh` scroller, and a post-M8 fix carried its scroll offset
+ * across every repaint so that arming a row three-quarters of the way down did not snap the
+ * list back to the top. Under the design frame nothing scrolls: the 22 actions stand in
+ * three columns — Movement, Combat, and Equipment with Interface beneath it — and the
+ * tallest column is eight rows, so the whole tab fits the frame with the title, the tabs and
+ * Back around it. The offset machinery went with the scroller; there is no offset to keep.
+ *
+ * **INFO** is the fifth tab: the controls card, the fullscreen hint and the reset control that
+ * used to stack under the main menu's buttons (A4). The card is built from the live bindings
+ * by `KeyCard.ts`, exactly as it was on the menu. Reset keeps its two-step arm, and the arm
+ * clears on every tab change and every `show`, so a player cannot leave the screen one click
+ * from erasing everything.
  */
 
 export interface SettingsDeps {
@@ -51,11 +67,20 @@ export interface SettingsDeps {
   readonly onBack: () => void;
   /** Put every binding back to the shipped default. */
   readonly onResetBindings: () => void;
+  /** M6: wipe the profile. The confirmation is this file's, the wipe is `Profile`'s. */
+  readonly onResetProgress: () => void;
 }
 
-type Tab = 'CONTROLS' | 'BINDINGS' | 'AUDIO' | 'VIDEO';
+type Tab = 'CONTROLS' | 'BINDINGS' | 'AUDIO' | 'VIDEO' | 'INFO';
 
-const TABS: readonly Tab[] = ['CONTROLS', 'BINDINGS', 'AUDIO', 'VIDEO'];
+const TABS: readonly Tab[] = ['CONTROLS', 'BINDINGS', 'AUDIO', 'VIDEO', 'INFO'];
+
+/** The binding groups as they stand in the three columns, left to right. */
+const BINDING_COLUMNS: readonly (readonly ActionDef['group'][])[] = [
+  ['Movement'],
+  ['Combat'],
+  ['Equipment', 'Interface'],
+];
 
 const SHADOW_LABELS: Readonly<Record<ShadowQuality, string>> = {
   off: 'Off',
@@ -82,18 +107,8 @@ export class Settings {
   private capturing: { action: ActionId; slot: number } | null = null;
   /** Shown under the binding list after a rebind took a key off something else. */
   private notice = '';
-
-  /**
-   * The scrolling body, and how far down it was (post-M8 playtest).
-   *
-   * `paint()` rebuilds the whole screen, which is what keeps the DOM a pure function of the
-   * settings record and is worth keeping. The cost is that the scroll position lives on an
-   * element that gets thrown away — so arming a binding row three-quarters of the way down
-   * the list snapped the page back to the top, and the row you were trying to rebind was off
-   * screen. The offset is carried across the rebuild rather than the rebuild being avoided.
-   */
-  private body: HTMLElement | null = null;
-  private scrollTop = 0;
+  /** Whether the reset-progress button is one click from doing it. Cleared on `show` and on a tab change. */
+  private resetArmed = false;
 
   constructor(deps: SettingsDeps) {
     this.deps = deps;
@@ -108,8 +123,7 @@ export class Settings {
     this.screen.hidden = false;
     this.capturing = null;
     this.notice = '';
-    // Opening the screen is the one time the list *should* start at the top.
-    this.scrollTop = 0;
+    this.resetArmed = false;
     this.paint();
   }
 
@@ -144,9 +158,6 @@ export class Settings {
   // -- painting --------------------------------------------------------------
 
   private paint(): void {
-    // Read before the rebuild, because the element holding it is about to be discarded.
-    this.rememberScroll();
-
     const nav = document.createElement('div');
     nav.className = 'op-tabs';
     for (const tab of TABS) {
@@ -158,8 +169,7 @@ export class Settings {
       b.addEventListener('click', () => {
         this.stopCapture();
         this.tab = tab;
-        // A different tab is a different list; starting it half-way down would be nonsense.
-        this.scrollTop = 0;
+        this.resetArmed = false;
         this.paint();
       });
       nav.appendChild(b);
@@ -170,7 +180,8 @@ export class Settings {
     if (this.tab === 'CONTROLS') this.paintControls(body);
     else if (this.tab === 'BINDINGS') this.paintBindings(body);
     else if (this.tab === 'AUDIO') this.paintAudio(body);
-    else this.paintVideo(body);
+    else if (this.tab === 'VIDEO') this.paintVideo(body);
+    else this.paintInfo(body);
 
     const back = this.button('Back', () => this.deps.onBack());
     back.classList.add('op-btn--quiet');
@@ -179,16 +190,6 @@ export class Settings {
     actions.appendChild(back);
 
     this.frame.replaceChildren(title('SETTINGS'), nav, body, actions);
-    this.body = body;
-    // After insertion: `scrollTop` on a detached element is silently ignored, so assigning
-    // it before `replaceChildren` would look right and do nothing.
-    body.scrollTop = this.scrollTop;
-  }
-
-  private rememberScroll(): void {
-    const body = this.body;
-    if (body === null || !body.isConnected) return;
-    this.scrollTop = body.scrollTop;
   }
 
   private paintControls(host: HTMLElement): void {
@@ -225,6 +226,7 @@ export class Settings {
   }
 
   private paintBindings(host: HTMLElement): void {
+    host.classList.add('op-settings--bindings');
     const groups = new Map<ActionDef['group'], ActionDef[]>();
     for (const a of ACTIONS) {
       const list = groups.get(a.group);
@@ -233,16 +235,23 @@ export class Settings {
     }
 
     const bindings = this.deps.read().bindings;
-    for (const [group, actions] of groups) {
-      const heading = document.createElement('span');
-      heading.className = 'op-label op-settings__group';
-      heading.textContent = group;
-      host.appendChild(heading);
-
-      for (const action of actions) {
-        host.appendChild(this.bindingRow(action, bindings));
+    const columns = document.createElement('div');
+    columns.className = 'op-settings__columns';
+    for (const column of BINDING_COLUMNS) {
+      const col = document.createElement('div');
+      col.className = 'op-settings__column';
+      for (const group of column) {
+        const heading = document.createElement('span');
+        heading.className = 'op-label op-settings__group';
+        heading.textContent = group;
+        col.appendChild(heading);
+        for (const action of groups.get(group) ?? []) {
+          col.appendChild(this.bindingRow(action, bindings));
+        }
       }
+      columns.appendChild(col);
     }
+    host.appendChild(columns);
 
     const note = document.createElement('p');
     note.className = 'op-screen__sub';
@@ -261,6 +270,58 @@ export class Settings {
     });
     reset.classList.add('op-btn--quiet');
     host.appendChild(reset);
+  }
+
+  /**
+   * INFO (M15, A4): what the main menu used to carry under its buttons.
+   *
+   * The card is a reminder, built from the live bindings so it can never disagree with the
+   * BINDINGS tab beside it. Reset progress is a two-step button rather than a `window.confirm`:
+   * the page owns pointer lock and a native modal steals focus in a way the input layer then
+   * has to recover from. The second press has to be a deliberate second click, and clicking
+   * any other tab — or re-entering the screen — puts it back.
+   */
+  private paintInfo(host: HTMLElement): void {
+    host.classList.add('op-settings--info');
+
+    const controls = document.createElement('span');
+    controls.className = 'op-label op-settings__group';
+    controls.textContent = 'Controls';
+    host.appendChild(controls);
+    host.appendChild(buildKeyCard(this.deps.read().bindings));
+
+    const hint = document.createElement('p');
+    hint.className = 'op-screen__sub';
+    hint.textContent = FULLSCREEN_HINT;
+    host.appendChild(hint);
+
+    const progress = document.createElement('span');
+    progress.className = 'op-label op-settings__group';
+    progress.textContent = 'Progress';
+    host.appendChild(progress);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'op-danger';
+    const reset = this.button(this.resetArmed ? 'Confirm — erase all progress' : 'Reset progress', () => {
+      if (!this.resetArmed) {
+        this.resetArmed = true;
+        this.paint();
+        return;
+      }
+      this.resetArmed = false;
+      this.deps.onResetProgress();
+      this.notice = '';
+      this.paint();
+    });
+    reset.classList.add(this.resetArmed ? 'op-btn--danger' : 'op-btn--quiet');
+    wrap.appendChild(reset);
+    if (this.resetArmed) {
+      const warn = document.createElement('span');
+      warn.className = 'op-label';
+      warn.textContent = 'LEVEL, UNLOCKS, CAMOS AND CLASSES. SETTINGS ARE KEPT.';
+      wrap.appendChild(warn);
+    }
+    host.appendChild(wrap);
   }
 
   private bindingRow(action: ActionDef, bindings: BindingMap): HTMLElement {

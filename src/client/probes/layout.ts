@@ -1,5 +1,4 @@
 import { createGameBus } from '../../shared/core/Events';
-import { defaultBindings } from '../../shared/core/Keybinds';
 import { ScoreSystem, type ScoreTeam } from '../../shared/combat/ScoreSystem';
 import type { ColumnDef } from '../../shared/modes/GameMode';
 import { defaultSettings } from '../../shared/meta/SaveData';
@@ -275,10 +274,8 @@ const menus = new Menus({
   onDisplayName: noop,
   onLoadout: noop,
   onSettings: noop,
-  onResetProgress: noop,
   statusLine: () => 'LAYOUT PROBE',
   profileLine: () => 'LEVEL 1 · ASSAULT · 0 / 500 XP',
-  bindings: () => defaultBindings(),
 });
 
 const settings = new Settings({
@@ -287,6 +284,7 @@ const settings = new Settings({
   onChange: noop,
   onBack: noop,
   onResetBindings: noop,
+  onResetProgress: noop,
 });
 
 const pause = new PauseMenu({
@@ -448,12 +446,12 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
     show: () => {
       menus.show();
       const layer = layerOf(PLAIN_SCREEN);
-      click(layer, 'Play Solo');
+      click(layer, 'PLAY SOLO');
       return layer;
     },
     hide: () => menus.hide(),
   },
-  ...(['CONTROLS', 'BINDINGS', 'AUDIO', 'VIDEO'] as const).map((tab) => ({
+  ...(['CONTROLS', 'BINDINGS', 'AUDIO', 'VIDEO', 'INFO'] as const).map((tab) => ({
     name: `settings/${tab}`,
     show: (): HTMLElement => {
       settings.show();

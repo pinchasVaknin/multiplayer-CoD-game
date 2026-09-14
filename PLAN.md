@@ -723,6 +723,77 @@ files). Eleven files changed, all under `client/`, `client/probes/` and `scripts
 `shared/` or `server/`, so the seeded harness and the content probe — built from those two
 partitions alone — are byte-identical by construction.
 
+### A2 — done (session of 2026-09-15): the menu on the frame — and A4 with it
+
+**A4 came with A2, not after it.** The brief ordered the menu before the controls card, and
+the first thing the menu's layout showed was that it cannot be drawn *around* the card: a
+fourteen-row key list has no place in a header, a stage and a footer. So the card, the
+fullscreen hint and the reset control moved first (`KeyCard.ts` — `CONTROL_ROWS`,
+`FULLSCREEN_HINT`, `buildKeyCard(bindings)`, built from the live bindings exactly as M8 built
+it), into a fifth Settings tab, **INFO**; `MenuDeps` lost `bindings` and `onResetProgress`,
+`SettingsDeps` gained `onResetProgress`, and the two-step arm went with it, cleared on `show`
+and on every tab change. Gate A also names the settings screen, so the A1 red list's first
+row was closed here too: `.op-settings` is no longer a `56vh` scroller — the 22 actions stand
+in **three columns** (Movement · Combat · Equipment with Interface beneath), the tallest
+eight rows, and the post-M8 `scrollTop` carry-over (`body`, `rememberScroll`) is deleted with
+the scroller, there being no offset left to keep.
+
+**The menu** (`Menus.ts`, 464 → 459 lines with the card gone). The frame is a grid — `head`,
+`stage`, `foot` — under a layer that *fades* the backdrop rather than dimming it: left to
+right, transparent over the canvas to `--c-void` under the navigation, with a second gradient
+bringing the top edge down, and no blur (`.op-screen--menu`). **Header:** the wordmark, a
+rule and `ARENA FPS` on the left; the player card on the right — the callsign as a name (no
+box, a rule beneath, the accent while it is being written; still written to the profile on
+every keystroke, still never a gate) with the profile line under it. **Stage:** the left half
+holds nothing, because the canvas under it is the backdrop (A3's); the right holds the
+navigation in a 600 px column, four buttons — PLAY (primary, disabled with its reason when no
+server is configured), PLAY SOLO, CREATE A CLASS, SETTINGS — and no fifth: no ZOMBIES or
+STORE exists here and QUIT is out (decision 7). **Footer:** the status line, bottom right.
+`showBoot` and `showUnsupported` keep the plain centred frame: a one-line status has nothing
+to navigate.
+
+**The buttons are cut, not boxed**, and it is CSS alone: a `clip-path` polygon skews the
+leading edge 26 px and pulls the trailing corner in 10; on the primary a `mask-image`
+dissolves the leading 11 % into the backdrop instead of ending it on a line, with the
+accent as a rule beneath; a skewed `::after` band sweeps the length on hover and on keyboard
+focus. Four glyphs — play, a crosshair, a loadout list, sliders — are one `path` each in
+`Menus.ts`, drawn through `makeIconSvg` for the reason `WeaponIcons` draws the rifles (no
+image assets), filled with `currentColor` so they take the button's state. Chevron the same.
+
+**Play Solo is a panel, not a page.** The three pickers and Back / Start match are a
+`section.op-setup` (1000 px, accent rule on the left) that spans the stage and right-aligns,
+so opening it moves neither the header nor the footer; it slides 16 px and fades over
+`--dur-med`, and the frame's side padding is 64, so even the first keyframe is inside the
+window — which is what lets the probe measure the panel on the frame it was inserted into
+without waiting. `prefers-reduced-motion` turns the slide and the sweep off.
+
+**Measured.** `npm run layout`, 13 surfaces × 8 viewports (INFO is the thirteenth):
+
+| Screen | Frame px at 1920×1080 | Verdict |
+|---|---|---|
+| menu | 1792 × 1004 | fits — the header, stage and footer fill the frame less its padding |
+| solo-setup | 1808 × 1004 | fits — 16 wider is the panel's first keyframe |
+| settings/BINDINGS | 1240 × 701 | **fits** — was 1336 with a 1184-in-605 scroller |
+| settings/INFO | 780 × 655 | fits — the card, the hint and the reset |
+| settings/CONTROLS · AUDIO · VIDEO, pause, both summaries, create-a-class | unchanged | fit |
+| create-a-class/open-row | 1240 × 1021 | the same two violations — B's |
+
+`FAIL — 16 violations`, all sixteen the editor's open row at each of the eight viewports;
+the menu, the play panel and every settings tab are green at every size, which is the layout
+half of Gate A. **Pane**, the real client at 1024×768: the frame 1024×576, header 956 wide at
+y = 117, the nav column at x 670–990, the player card at 841–990; PLAY SOLO opened — header
+rect identical before and after, the panel at 465–998, three 264 px picker columns, *Start
+match* focused; BINDINGS in three columns with Back on screen; INFO with the card, the hint
+and *Reset progress*; no console error on any of them. (The pane's screenshot crops to
+800 device pixels wide, so the right of the frame was verified by rect and by
+`elementFromPoint`, not by picture; a red fixed-position probe at `right: 0` confirmed the
+crop is the capture's, not the layout's.) **Gate:** `npm run check` green (119 tests;
+boundaries 351 files). Six files, all `client/`; `shared/` and `server/` untouched.
+
+**Needs a browser (the human's):** whether the leading dissolve and the sweep read as a
+smear rather than a fade, on a real display at play distance; and the fade against a bright
+map, which does not exist until A3.
+
 ## Phase B — Create-a-Class: the stage, six boxes, the strips, the skins
 
 **B1, the stage.** Left half: the selected skin on a lit disc, `idleWeaponReady` looping,
@@ -942,9 +1013,13 @@ report that a screen "looks cut off" is answered by running it.
 
 ## How to start — the next brief
 
-A1 is done and its red list is above: two screens, three causes, the probe red on them until
-A4 and B. A fresh session starts at **A2**, the menu, on the frame as it now is — `npm run
-layout` first, to see the same 24 before touching anything — then A3 and A4, and `npm run
-layout` green on the menu, the play panel and the settings is Gate A. Each phase closes with
-its gate's numbers in a "done" subsection here, in the order above, and the milestone closes
-the way M13 and M14 did: this section moves to the archive in the session that closes it.
+A1, A2 and A4 are done and recorded above; the probe is red on one screen (the editor's open
+row, B's) and green on everything Gate A names. A fresh session starts at **A3**, the backdrop
+dolly: a world that is not a match — `MapRender` + `SkyDome` + the particulate on
+`save.mapId`, built through `MapBuildQueue` while the boot screen is up, the camera on
+`lane.a → lane.center` at eye height — rendered in `MENU` under the fade `.op-screen--menu`
+already paints. `npm run layout` first, to see the same 16 before touching anything. Gate A
+closes with A3's pane measurements (the mask's boundary column reads `--c-void`) and the
+bundle re-measured. Each phase closes with its gate's numbers in a "done" subsection here, in
+the order above, and the milestone closes the way M13 and M14 did: this section moves to the
+archive in the session that closes it.

@@ -677,6 +677,8 @@ export class Game {
       onChange: (patch) => this.applySettings(patch),
       onBack: () => this.transitionTo(this.settingsReturn),
       onResetBindings: () => this.applySettings({ bindings: defaultBindings() }),
+      // M15 A4: the reset control lives on the INFO tab now; the wipe is still `Profile`'s.
+      onResetProgress: () => this.profile.resetProgress(),
     });
 
     this.loop = new Loop({

@@ -3,19 +3,45 @@ import {
   BOT_DIFFICULTY_BLURBS,
   type BotDifficulty,
 } from '../../shared/ai/DifficultyTiers';
-import { inputLabel, type ActionId, type BindingMap } from '../../shared/core/Keybinds';
 import type { GameModeId } from '../../shared/modes/GameMode';
 import { MAPS, MODES, modesForMap } from '../../shared/modes/ModeRegistry';
 import { createScreen } from './Frame';
-
+import { makeIconSvg } from './WeaponIcons';
 
 /**
- * The front end (brief S6.7): main -> play -> match.
+ * The front end (brief S6.7; rebuilt on the design frame by M15, A2): main -> play -> match.
  *
- * "It does not need to be elaborate, but it must not look like unstyled HTML." So it is two
- * pages, every value resolved from the design tokens in `styles/tokens.css`, and the mode and
- * map lists are built from `ModeRegistry` rather than hardcoded — a new mode in M7 appears
- * here for free, and a mode that only exists in this file could never be played.
+ * ## Two halves
+ *
+ * The frame is a header, a stage and a footer. The **header** is the wordmark on the left and
+ * the player card on the right — the callsign, editable in place, and the profile line under
+ * it — where the references put them. The **stage** is the left half, which is nothing but
+ * the backdrop (the canvas underneath, which A3 fills with a map on a dolly), and the right
+ * half, which holds the navigation: four buttons, and only four, because that is how many
+ * places there are to go — PLAY (multiplayer, primary, one click to the arena as §6.1
+ * requires), PLAY SOLO, CREATE A CLASS and SETTINGS. The reference has six; ZOMBIES and STORE
+ * do not exist here and QUIT is out by decision 7, a tab being a thing that closes itself.
+ * The **footer** carries the status line.
+ *
+ * The controls card, the fullscreen hint and the reset control that used to stack under the
+ * buttons are in Settings → INFO now (A4, `KeyCard.ts`): the menu has no room for fourteen
+ * rows in this layout, and none of the three is a thing that should greet a player.
+ *
+ * ## The buttons are cut, not boxed
+ *
+ * "Not standard rigid boxes" is the brief's phrase, and it is three declarations in
+ * `app.css`: a `clip-path` polygon that skews the leading edge, a `mask-image` that dissolves
+ * the primary's leading end into the backdrop rather than ending it on a line, and a
+ * pseudo-element that sweeps a highlight along the skew on hover. No image, because there are
+ * none (M12's first paragraph), and the look reads the same at every scale of the frame.
+ *
+ * ## Play Solo is a panel, not a page
+ *
+ * The mode / map / difficulty pickers used to replace the whole screen. They slide in over
+ * the stage now and the header and footer stay where they are, so going to pick a map is not
+ * leaving the menu. The slide is 16 px and the frame's padding is 64, so a probe that
+ * measures the panel on the frame it was inserted into finds it inside the window even at
+ * the first keyframe.
  *
  * Pointer lock can only be requested from a user gesture, so the button that starts a match
  * is genuinely load-bearing rather than a formality.
@@ -49,51 +75,32 @@ export interface MenuDeps {
   readonly onLoadout: () => void;
   /** M8: enter the `SETTINGS` state. */
   readonly onSettings: () => void;
-  /** M6: wipe the profile. The confirmation is this file's, the wipe is `Profile`'s. */
-  readonly onResetProgress: () => void;
-  /** Shown under the title: build stats, or whatever the caller wants to say. */
+  /** Shown in the footer: build stats, or whatever the caller wants to say. */
   readonly statusLine: () => string;
   /** M6: level, class and record. Redrawn every time the menu is shown. */
   readonly profileLine: () => string;
-  /** M8: the live binding table, so the controls card names the player's own keys. */
-  readonly bindings: () => BindingMap;
 }
 
 type Page = 'MAIN' | 'PLAY';
 
 /**
- * The controls card, built from the player's actual bindings (M8).
- *
- * It used to be a hard-coded list, which was fine until S6.3 made every key reassignable —
- * at which point a card that still said "W A S D" for a player who had moved to the arrow
- * keys would be worse than no card at all. Each row names the actions it summarises and the
- * card resolves them through `Keybinds`, so it is correct by construction.
- *
- * The last three rows are chords and modifiers rather than single actions, so they are
- * composed from the bindings of their parts.
+ * The four glyphs, one path each in a 24-box, filled with `currentColor` (`fill-rule:
+ * evenodd` in the stylesheet is what makes the ring a ring). Drawn here for the reason
+ * `WeaponIcons` draws the rifles: there are no image assets, and a glyph in a source file is
+ * one the frame scales without a second copy.
  */
-const CONTROL_ROWS: readonly Readonly<{ actions: readonly ActionId[]; label: string }>[] = [
-  { actions: ['moveForward', 'moveLeft', 'moveBack', 'moveRight'], label: 'Move' },
-  { actions: ['sprint'], label: 'Sprint (double-tap for tactical)' },
-  { actions: ['crouch'], label: 'Crouch (with sprint, slide)' },
-  { actions: ['jump'], label: 'Jump / mantle' },
-  { actions: ['fire'], label: 'Fire' },
-  { actions: ['ads'], label: 'Aim down sights' },
-  { actions: ['reload'], label: 'Reload' },
-  { actions: ['swapWeapon', 'slot1', 'slot2'], label: 'Swap weapon' },
-  { actions: ['lethal', 'tactical'], label: 'Lethal / tactical' },
-  { actions: ['fieldUpgrade'], label: 'Field upgrade' },
-  { actions: ['streak1', 'streak2', 'streak3'], label: 'Killstreaks' },
-  { actions: ['use'], label: 'Use / plant / defuse' },
-  { actions: ['scoreboard'], label: 'Scoreboard' },
-];
-
-/**
- * `Ctrl+W` closes a browser tab and no amount of `preventDefault` stops it; only the Keyboard
- * Lock API can, and only while the page is fullscreen. Saying so on the menu is better than
- * letting a player discover it mid-slide. See PLAN.md.
- */
-const FULLSCREEN_HINT = 'F11 for fullscreen — required to capture Ctrl+W (crouch + forward)';
+const GLYPH = {
+  play: 'M7 4 L19 12 L7 20 Z',
+  solo:
+    'M12 4 A8 8 0 1 0 12 20 A8 8 0 1 0 12 4 Z M12 7 A5 5 0 1 1 12 17 A5 5 0 1 1 12 7 Z ' +
+    'M11 1h2v4h-2z M11 19h2v4h-2z M1 11h4v2H1z M19 11h4v2h-4z ' +
+    'M12 10.5 A1.5 1.5 0 1 0 12 13.5 A1.5 1.5 0 1 0 12 10.5 Z',
+  loadout: 'M3 5h18v3H3z M3 10.5h18v3H3z M3 16h11v3H3z',
+  settings:
+    'M3 6h9v2H3z M16 6h5v2h-5z M3 16h4v2H3z M11 16h10v2H11z ' +
+    'M14 4.5 A2.5 2.5 0 1 0 14 9.5 A2.5 2.5 0 1 0 14 4.5 Z M9 14.5 A2.5 2.5 0 1 0 9 19.5 A2.5 2.5 0 1 0 9 14.5 Z',
+  chevron: 'M9 4 L17 12 L9 20 L7.4 18.4 L13.8 12 L7.4 5.6 Z',
+} as const;
 
 export class Menus {
   private readonly deps: MenuDeps;
@@ -101,21 +108,26 @@ export class Menus {
   /** The 1920x1080 box the pages are painted into (M15, A1). `screen` is the layer. */
   private readonly frame: HTMLElement;
   private page: Page = 'MAIN';
-  /** Whether the reset button is one click from doing it. Cleared on every `show`. */
-  private resetArmed = false;
 
   constructor(deps: MenuDeps) {
     this.deps = deps;
-    const { layer, frame } = createScreen('op-screen');
+    const { layer, frame } = createScreen('op-screen op-screen--menu');
     this.screen = layer;
     this.frame = frame;
     this.screen.hidden = true;
     deps.host.appendChild(this.screen);
   }
 
+  /**
+   * A one-line status over the backdrop: booting, connecting, reconnecting, refused.
+   *
+   * The plain centred frame rather than the menu layout, because there is nothing to press
+   * and the message is the whole screen.
+   */
   showBoot(message: string): void {
     this.page = 'MAIN';
     this.screen.hidden = false;
+    this.frame.classList.remove('op-menu');
     this.frame.replaceChildren(title('OPERATOR'), subtitle(message));
   }
 
@@ -134,6 +146,7 @@ export class Menus {
   showUnsupported(headline: string, detail: string): void {
     this.page = 'MAIN';
     this.screen.hidden = false;
+    this.frame.classList.remove('op-menu');
     const body = document.createElement('p');
     body.className = 'op-screen__note';
     body.textContent = detail;
@@ -143,7 +156,6 @@ export class Menus {
   /** Open the front end at its main page. */
   show(): void {
     this.page = 'MAIN';
-    this.resetArmed = false;
     this.screen.hidden = false;
     this.paint();
   }
@@ -163,104 +175,55 @@ export class Menus {
   // -- pages -----------------------------------------------------------------
 
   private paint(): void {
-    if (this.page === 'MAIN') this.paintMain();
-    else this.paintPlay();
+    this.frame.classList.add('op-menu');
+    const stage = document.createElement('div');
+    stage.className = 'op-menu__stage';
+    const focus = this.page === 'MAIN' ? this.paintNav(stage) : this.paintSetup(stage);
+    this.frame.replaceChildren(this.header(), stage, this.footer());
+    focus.focus();
   }
 
-  private paintMain(): void {
-    /**
-     * Two buttons (M11, §6.1).
-     *
-     * **Play Multiplayer** is first and primary, and it is one click from shooting: no server
-     * picker, no name gate, no intermediate screen. §6.1 is explicit that a display name is
-     * *requested* but never *blocks* — the field below is prefilled with a generated default,
-     * so a player who ignores it entirely is in the arena within a round trip.
-     *
-     * **Play Solo** keeps the M1-M8 game reachable. §6.2: *"Leaving this button inert would
-     * ship a build in which all of that work is unreachable."* It goes to the existing mode and
-     * map picker, unchanged.
-     */
-    const multiplayer = this.button('Play Multiplayer', () => this.deps.onPlayMultiplayer());
-    multiplayer.classList.add('op-btn--primary');
-    if (!this.deps.serverConfigured()) {
-      // No address configured at build or runtime (§4.9 forbids hardcoding one). Disabled with
-      // a reason rather than failing on click — an inert button is what §6.2 refuses.
-      multiplayer.disabled = true;
-      multiplayer.title = 'No server address configured — set VITE_SERVER_URL or ?server=';
-    }
+  /** The wordmark and the player card. */
+  private header(): HTMLElement {
+    const head = document.createElement('header');
+    head.className = 'op-menu__head';
 
-    const play = this.button('Play Solo', () => {
-      this.page = 'PLAY';
-      this.paint();
-    });
+    const brand = document.createElement('div');
+    brand.className = 'op-menu__brand';
+    const wordmark = document.createElement('h1');
+    wordmark.className = 'op-menu__wordmark';
+    wordmark.textContent = 'OPERATOR';
+    const rule = document.createElement('span');
+    rule.className = 'op-menu__rule';
+    const tag = document.createElement('span');
+    tag.className = 'op-menu__tag';
+    tag.textContent = 'ARENA FPS';
+    brand.append(wordmark, rule, tag);
 
-    const loadout = this.button('Create a class', () => this.deps.onLoadout());
-    const settings = this.button('Settings', () => this.deps.onSettings());
-
-    const bindings = this.deps.bindings();
-    const keys = document.createElement('dl');
-    keys.className = 'op-keys';
-    for (const row of CONTROL_ROWS) {
-      // Only the first binding of each action: the card is a reminder, not the settings
-      // screen, and a row reading "L Ctrl / C / L Shift" helps nobody.
-      const combo = row.actions
-        .map((id) => bindings[id]?.[0])
-        .filter((input): input is string => input !== undefined)
-        .map(inputLabel)
-        .join(' ');
-      if (combo === '') continue;
-      const dt = document.createElement('dt');
-      dt.textContent = combo;
-      const dd = document.createElement('dd');
-      dd.textContent = row.label;
-      keys.append(dt, dd);
-    }
-    const esc = document.createElement('dt');
-    esc.textContent = 'Esc';
-    const escLabel = document.createElement('dd');
-    escLabel.textContent = 'Pause';
-    keys.append(esc, escLabel);
-
-    const profile = document.createElement('p');
-    profile.className = 'op-screen__sub op-accent';
-    profile.textContent = this.deps.profileLine();
-
-    this.frame.replaceChildren(
-      title('OPERATOR'),
-      subtitle(this.deps.statusLine()),
-      profile,
-      multiplayer,
-      this.nameField(),
-      play,
-      loadout,
-      settings,
-      keys,
-      subtitle(FULLSCREEN_HINT),
-      this.resetControl(),
-    );
-    multiplayer.focus();
+    head.append(brand, this.playerCard());
+    return head;
   }
 
   /**
-   * The display name (§6.1).
+   * The player card: the display name (§6.1) and the profile line.
    *
    * *"A display name is requested but a default is generated so a player can be in the arena
-   * in one click."* So this is a field, not a gate: it starts filled, it is never validated
-   * before entry, and nothing about it can stop the button above it working. The value is
-   * written straight back to the profile on every keystroke, which is also how it survives a
-   * reload.
+   * in one click."* So the callsign is a field, not a gate: it starts filled, it is never
+   * validated before entry, and nothing about it can stop PLAY working. The value is written
+   * straight back to the profile on every keystroke, which is also how it survives a reload.
    */
-  private nameField(): HTMLElement {
-    const wrap = document.createElement('label');
-    wrap.className = 'op-field';
+  private playerCard(): HTMLElement {
+    const card = document.createElement('div');
+    card.className = 'op-menu__player';
 
+    const field = document.createElement('label');
+    field.className = 'op-menu__callsign';
     const label = document.createElement('span');
     label.className = 'op-label';
     label.textContent = 'CALLSIGN';
-
     const input = document.createElement('input');
     input.type = 'text';
-    input.className = 'op-input';
+    input.className = 'op-input op-menu__name';
     input.maxLength = 20;
     input.value = this.deps.displayName();
     input.spellcheck = false;
@@ -269,47 +232,73 @@ export class Menus {
     // The menu is a DOM surface over a canvas that owns the keyboard. Without this, typing
     // "W" in the callsign field also walks the player forward.
     input.addEventListener('keydown', (e) => e.stopPropagation());
+    field.append(label, input);
 
-    wrap.append(label, input);
-    return wrap;
+    const profile = document.createElement('p');
+    profile.className = 'op-menu__profile op-label';
+    profile.textContent = this.deps.profileLine();
+
+    card.append(field, profile);
+    return card;
   }
 
-  /**
-   * "Reset progress", behind a confirmation (S6.6).
-   *
-   * A two-step button rather than a `window.confirm`: the page owns pointer lock and a
-   * native modal steals focus in a way the input layer then has to recover from. The
-   * second press has to be a deliberate second click, and clicking anything else — or
-   * re-entering the menu — puts it back.
-   */
-  private resetControl(): HTMLElement {
-    const wrap = document.createElement('div');
-    wrap.className = 'op-danger';
-    const button = this.button(
-      this.resetArmed ? 'Confirm — erase all progress' : 'Reset progress',
-      () => {
-        if (!this.resetArmed) {
-          this.resetArmed = true;
-          this.paint();
-          return;
-        }
-        this.resetArmed = false;
-        this.deps.onResetProgress();
-        this.paint();
-      },
-    );
-    button.classList.add(this.resetArmed ? 'op-btn--danger' : 'op-btn--quiet');
-    wrap.appendChild(button);
-    if (this.resetArmed) {
-      const warn = document.createElement('span');
-      warn.className = 'op-label';
-      warn.textContent = 'LEVEL, UNLOCKS, CAMOS AND CLASSES. SETTINGS ARE KEPT.';
-      wrap.appendChild(warn);
+  private footer(): HTMLElement {
+    const foot = document.createElement('footer');
+    foot.className = 'op-menu__foot';
+    const status = document.createElement('span');
+    status.className = 'op-label';
+    status.textContent = this.deps.statusLine();
+    foot.appendChild(status);
+    return foot;
+  }
+
+  /** The four buttons. Returns the one to focus. */
+  private paintNav(stage: HTMLElement): HTMLElement {
+    const nav = document.createElement('nav');
+    nav.className = 'op-menu__nav';
+
+    /**
+     * **PLAY** is first and primary, and it is one click from shooting: no server picker, no
+     * name gate, no intermediate screen (M11, §6.1). **PLAY SOLO** keeps the M1-M8 game
+     * reachable (§6.2: *"Leaving this button inert would ship a build in which all of that
+     * work is unreachable."*).
+     */
+    const multiplayer = this.navButton('PLAY', GLYPH.play, () => this.deps.onPlayMultiplayer());
+    multiplayer.classList.add('op-nav--primary');
+    if (!this.deps.serverConfigured()) {
+      // No address configured at build or runtime (§4.9 forbids hardcoding one). Disabled with
+      // a reason rather than failing on click — an inert button is what §6.2 refuses.
+      multiplayer.disabled = true;
+      multiplayer.title = 'No server address configured — set VITE_SERVER_URL or ?server=';
     }
-    return wrap;
+    const solo = this.navButton('PLAY SOLO', GLYPH.solo, () => {
+      this.page = 'PLAY';
+      this.paint();
+    });
+    const loadout = this.navButton('CREATE A CLASS', GLYPH.loadout, () => this.deps.onLoadout());
+    const settings = this.navButton('SETTINGS', GLYPH.settings, () => this.deps.onSettings());
+
+    nav.append(multiplayer, solo, loadout, settings);
+    stage.appendChild(nav);
+    return multiplayer.disabled ? solo : multiplayer;
   }
 
-  private paintPlay(): void {
+  private navButton(label: string, glyph: string, onClick: () => void): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'op-nav';
+    const icon = makeIconSvg(glyph, '0 0 24 24', 'op-nav__icon');
+    const text = document.createElement('span');
+    text.className = 'op-nav__label';
+    text.textContent = label;
+    const chevron = makeIconSvg(GLYPH.chevron, '0 0 24 24', 'op-nav__chevron');
+    b.append(icon, text, chevron);
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  /** The mode / map / difficulty panel. Returns the one to focus. */
+  private paintSetup(stage: HTMLElement): HTMLElement {
     const modeList = this.picker(
       'Mode',
       // Only what this map can run: Domination needs flags and S&D needs bomb sites, and
@@ -384,13 +373,15 @@ export class Menus {
     columns.className = 'op-pickers';
     columns.append(modeList, mapList, difficultyList);
 
-    this.frame.replaceChildren(
-      title('OPERATOR'),
-      subtitle('Select mode, map and difficulty'),
-      columns,
-      actions,
-    );
-    launch.focus();
+    const heading = document.createElement('span');
+    heading.className = 'op-label op-setup__heading';
+    heading.textContent = 'PLAY SOLO — select mode, map and difficulty';
+
+    const panel = document.createElement('section');
+    panel.className = 'op-setup';
+    panel.append(heading, columns, actions);
+    stage.appendChild(panel);
+    return launch;
   }
 
   // -- primitives ------------------------------------------------------------

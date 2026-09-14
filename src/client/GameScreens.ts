@@ -96,10 +96,8 @@ export class GameScreens {
       onDisplayName: deps.onDisplayName,
       onLoadout: deps.onLoadout,
       onSettings: deps.onSettings,
-      onResetProgress: () => deps.profile.resetProgress(),
       statusLine: deps.statusLine,
       profileLine: () => profileLine(deps.profile),
-      bindings: () => deps.profile.settings.bindings,
     });
 
     this.loadoutEditor = new LoadoutEditor({
