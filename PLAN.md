@@ -585,3 +585,50 @@ start-up); `npm run check` green in **8.6 s** wall, ten audits + test + typechec
 harness normalised-identical to the run taken before Phase A (`t`, `pid`, `simMsMean`,
 `heapMb` are wall-clock and differ between two runs on one tree; everything else is the seeded
 outcome and did not). Content probe byte-identical. Commit `f064449`.
+
+## Phase B — done (session of 2026-09-14): the seam, proved in four pipelines
+
+**The switch.** `"experimentalDecorators": true` in `tsconfig.base.json`, with the comment
+stating why the standard form is not an option here and what to revisit;
+`oxc: { decorator: { legacy: true } }` in `vite.config.ts` and `vite.server.config.ts`
+(`vitest.config.ts` had it since Phase A).
+
+**The decorator.** `src/shared/core/Decorators.ts` exports `timed(label)`: a legacy method
+decorator that reads `nowMs()` from `shared/core/Clock` before and after the call and reports
+`"<label> <ms>ms"` at `info` through `logger('timed')` — after the call returns *or throws*,
+with the value and the exception passing through untouched. Synchronous methods only; an
+`async` method would be timed to its promise, not its work, and nothing needed that shape.
+The file comment carries the three rules (methods and classes only, never the tick path, a
+decorator replaces repetition and never adds behaviour).
+
+**The one use, and a departure from the brief.** The brief asked for a method in
+`src/server/debug/` or `src/client/debug/` "that today does the `const t = nowMs()` …
+`nowMs() - t` dance by hand", exercised by `node dist-server/main.js --matches 1 --asap`.
+Neither half exists in this tree: every hand-written pair in the debug folders either feeds a
+report field (`SnagHarness.run`'s `wallSeconds`, `BotHarness`, `MatchHarness`) or times a
+span inside a method (`HeadlessClient`'s build and reconnect windows), so a decorator that
+logs would either change a report's fields or duplicate a measurement; and `main.ts` reaches
+no `server/debug/` module at all — it imports the `shared/debug/` audits, which are functions.
+So the use is **`ModePanel.measureLanes`** (`client/debug/ModePanel.ts`): private, one-shot,
+not hot, behind the F1 overlay's *Measure lane timings* button and `__operator.laneReport()`,
+with no timing of its own before — the decorator **adds one debug log line** there, which is
+the smallest deviation available and is stated here so nobody reads it as a replacement. The
+brief's counts for C1 are re-taken in Phase C with this in mind.
+
+**Proved, four pipelines, one decorated method each:**
+
+| Pipeline | Evidence |
+|---|---|
+| vitest (Vite transform, Node 24) | `Decorators.test.ts`: `step(21) = 42` through `@timed`, one `info` line `worker.step 21.00ms` on a fake clock; the method sits on the prototype, not the instance; a throw still logs. 4 cases |
+| `vite build` (rolldown + oxc, client) | `dist/assets/index-*.js` carries `Ej([_j("ModePanel.measureLanes")],Dj.prototype,"measureLanes",null)` — `__decorate`, minified. **0** lines starting with `@identifier` across `dist/assets/*.js` |
+| `vite build --config vite.server.config.ts` (SSR) | The repo's server config imported verbatim into a scratch config with only the entry and `outDir` swapped, over a scratch class decorated with the real `timed`: `__decorate([timed("proof.step")], Proof.prototype, "step", null)` in the output; `node` prints `[timed] proof.step 0.01ms` then `step(21) = 42`. **0** `@` lines across `dist-server/*.js` (which carry no decorator yet — C1/C2 will be the first) |
+| `vite` dev server (oxc per-module transform, `vite.config.ts`) | `GET /src/client/debug/ModePanel.ts` returns `_decorate([timed("ModePanel.measureLanes")], ModePanel.prototype, "measureLanes", null)`, 0 `@` lines; in the pane (rAF suspended, `loop.frame` stepped by hand into a match) `__operator.laneReport()` printed **`[timed] ModePanel.measureLanes 2.70ms`** and returned six lane timings, no console error |
+
+`node dist-server/main.js --matches 1 --asap` ran clean on the rebuilt bundle (seed 1: B wins
+68-75, 16 777 ticks — the same outcome as the baseline's match 1).
+
+**Gate:** `npm run check` green in 9.3 s (**113** tests); seeded harness normalised-identical
+to the pre-Phase-A baseline; content probe byte-identical.
+
+**Needs a browser (the human's):** the same button on a real display — F1, *Measure lane
+timings*, `[timed] ModePanel.measureLanes …ms` in the console and nothing red beside it.

@@ -18,6 +18,9 @@ import { defineConfig } from 'vite';
  * at real source lines rather than at bundle offsets.
  */
 export default defineConfig({
+  // Legacy decorators lowered here as in vite.config.ts, and for the same reason: the TC39
+  // form reaches dist-server/ verbatim and Node 24 rejects it (M14, Phase B).
+  oxc: { decorator: { legacy: true } },
   build: {
     // Three entries. `main` is the M9 headless harness (runs matches, exits with a result),
     // `serve` is the M10 dedicated server (listens, does not stop), and `hashRun` is the

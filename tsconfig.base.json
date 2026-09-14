@@ -12,6 +12,18 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
 
+    /**
+     * Legacy (TypeScript) decorators, not the TC39 standard ones (M14, Phase B).
+     *
+     * Measured on this toolchain: oxc leaves a standard `@name` line verbatim in the bundle at
+     * every `build.target` tried and Node 24 rejects the syntax, so the standard form is a
+     * SyntaxError in every runtime. oxc lowers the legacy form; both Vite configs turn that on.
+     * Consequences: `(target, key, descriptor)` signatures, no `accessor`, and never a field
+     * decorator (a [[Define]] field shadows the prototype under `useDefineForClassFields`).
+     * `check:decorators` holds the tree to that. Revisit when oxc lowers TC39 decorators.
+     */
+    "experimentalDecorators": true,
+
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,

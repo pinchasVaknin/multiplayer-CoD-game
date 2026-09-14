@@ -37,6 +37,15 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
+  /**
+   * Lower legacy decorators (M14, Phase B). The standard TC39 form is not an option on this
+   * toolchain: oxc ships the `@name` line verbatim whatever `build.target` says, and every
+   * browser then throws a SyntaxError at load. `experimentalDecorators` in tsconfig.base.json
+   * is the compiler's half of the same choice, and `vitest.config.ts` carries this line too
+   * because vitest transforms through Vite. Revisit when oxc's `DecoratorOptions` grows past
+   * `legacy` and `emitDecoratorMetadata`.
+   */
+  oxc: { decorator: { legacy: true } },
   build: {
     target: 'es2022',
     sourcemap: true,

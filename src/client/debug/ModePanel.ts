@@ -1,6 +1,7 @@
 import type { Match } from '../ClientMatch';
 import { accuracy, type ScoreTeam } from '../../shared/combat/ScoreSystem';
 import { EV, type GameBus } from '../../shared/core/Events';
+import { timed } from '../../shared/core/Decorators';
 import { formatClock } from '../ui/HudBanner';
 import type { MapEntry } from '../../shared/modes/ModeRegistry';
 import type { LaneDef } from '../../shared/world/maps/types';
@@ -164,7 +165,11 @@ export class ModePanel {
    * here with a generous budget rather than being asked to solve inside one tick. The result
    * is the smoothed path a bot would actually follow, which is the same route a player takes
    * because it is the same navmesh.
+   *
+   * Timed by decoration (M14, Phase B): the first legacy decorator in the client bundle, on a
+   * one-shot job behind a button, so the F1 overlay is where a human proves the lowering ran.
    */
+  @timed('ModePanel.measureLanes')
   private measureLanes(): LaneReport {
     const bots = this.match.bots;
     const nav = bots.nav;
