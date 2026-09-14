@@ -225,18 +225,3 @@ export class Rewind {
     return this.pool.pop() ?? makeRigSnapshot();
   }
 }
-
-/**
- * How far back a shooter was looking, in milliseconds.
- *
- * `RTT/2` is how long their command took to arrive; `interpolationDelay` is how far in the
- * past their client renders everyone else (S4.12). The sum is the age of the world they were
- * actually aiming at, and it is the whole of the lag compensation calculation.
- *
- * Clamped at zero because a clock estimate can go slightly negative on a very fast link, and
- * a negative rewind would be an extrapolation into a future the server has not simulated.
- */
-export function viewLagMsFor(rttMs: number, interpolationDelayMs: number): number {
-  const lag = rttMs * 0.5 + interpolationDelayMs;
-  return lag > 0 ? lag : 0;
-}

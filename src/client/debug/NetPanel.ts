@@ -25,7 +25,9 @@ import { setField, type DebugOverlay } from './DebugOverlay';
  * A client cannot observe its own lag compensation — the rewind happens on the server, to
  * other people's hitboxes, on a tick the client will not see for another half a round trip. So
  * every figure here is derived from the client's own *inputs* to that calculation: its RTT and
- * its interpolation delay, run through the same arithmetic `viewLagMsFor` uses on the server.
+ * its interpolation delay, summed as `RTT/2 + interpolationDelay` exactly as the server does in
+ * the callback `MatchInstance` installs on `Match.viewLagMsFor`. Neither side clamps a negative
+ * sum: a clock estimate that runs slightly ahead on a very fast link shows here as it is.
  *
  * This comment used to end *"plus the per-shot record the server sends back to a client that
  * asked for it with `?rewinddebug=1`"*. **There is no such record.** No message on the wire
