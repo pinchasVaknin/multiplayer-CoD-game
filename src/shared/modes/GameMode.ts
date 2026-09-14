@@ -1,7 +1,7 @@
 import type { Combatant } from '../ai/Combatant';
 import type { ObjectiveZone } from './ObjectiveZone';
 import type { HitZone } from '../combat/HitboxRig';
-import type { PlayerScore, ScoreSystem, ScoreTeam } from '../combat/ScoreSystem';
+import { accuracy, killDeath, type PlayerScore, type ScoreSystem, type ScoreTeam } from '../combat/ScoreSystem';
 import type { GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
 import type { MapDef } from '../world/maps/types';
@@ -83,6 +83,21 @@ export interface ColumnDef {
   readonly align: 'left' | 'right';
   readonly value: (row: PlayerScore) => string;
 }
+
+/**
+ * The columns every mode's scoreboard shares. Each mode composes its own order from these and
+ * puts its objective columns where they read best — Domination's captures before K/D, Team
+ * Deathmatch's best streak last — so there is no flag here, only a list to write.
+ */
+export const COL_SCORE: ColumnDef = { key: 'score', label: 'Score', width: 6, align: 'right', value: (r) => String(r.score) };
+export const COL_KILLS: ColumnDef = { key: 'kills', label: 'K', width: 4, align: 'right', value: (r) => String(r.kills) };
+export const COL_DEATHS: ColumnDef = { key: 'deaths', label: 'D', width: 4, align: 'right', value: (r) => String(r.deaths) };
+export const COL_KD: ColumnDef = { key: 'kd', label: 'K/D', width: 5, align: 'right', value: (r) => killDeath(r).toFixed(2) };
+export const COL_ACC: ColumnDef = {
+  key: 'acc', label: 'Acc', width: 6, align: 'right',
+  value: (r) => { const p = accuracy(r); return p < 0 ? '—' : `${p.toFixed(0)}%`; },
+};
+export const COL_BEST: ColumnDef = { key: 'streak', label: 'Best', width: 5, align: 'right', value: (r) => String(r.bestStreak) };
 
 export interface ModeDeps {
   readonly bus: GameBus;
@@ -391,4 +406,35 @@ export function leaderOf(a: number, b: number): ScoreTeam | 'DRAW' {
   if (a > b) return 'A';
   if (b > a) return 'B';
   return 'DRAW';
+}
+
+/** A whole-match result for a team mode, the winning side credited with its one round. */
+export function teamMatchResult(winner: ScoreTeam | 'DRAW', reason: string, a: number, b: number): MatchResult {
+  return {
+    kind: 'match', winner, reason, scoreA: a, scoreB: b,
+    roundsA: winner === 'A' ? 1 : 0, roundsB: winner === 'B' ? 1 : 0,
+  };
+}
+
+/**
+ * The win condition Team Deathmatch, Domination and Kill Confirmed share: the first side to
+ * the limit wins, a tie at the limit is a draw, and when the mode's own clock runs out the
+ * leader wins on time. `limitReason` is what the mode calls its limit — 'Score limit',
+ * 'Tag limit' — and is the only thing that differs between the three.
+ */
+export function teamScoreWinCondition(
+  a: number,
+  b: number,
+  scoreLimit: number,
+  ticksLeft: number,
+  limitReason: string,
+): MatchResult | null {
+  if (a >= scoreLimit || b >= scoreLimit) {
+    return teamMatchResult(leaderOf(a, b), limitReason, a, b);
+  }
+  if (ticksLeft <= 0) {
+    const winner = leaderOf(a, b);
+    return teamMatchResult(winner, winner === 'DRAW' ? 'Time — draw' : 'Time limit', a, b);
+  }
+  return null;
 }

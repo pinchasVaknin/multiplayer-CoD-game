@@ -1,5 +1,11 @@
-import { accuracy, killDeath, type ScoreTeam } from '../combat/ScoreSystem';
+import type { ScoreTeam } from '../combat/ScoreSystem';
 import {
+  COL_ACC,
+  COL_BEST,
+  COL_DEATHS,
+  COL_KD,
+  COL_KILLS,
+  COL_SCORE,
   GameMode,
   type ColumnDef,
   type Entity,
@@ -208,17 +214,7 @@ export class FreeForAll extends GameMode {
 
   /** No team columns: FFA's board is a straight ladder. */
   override getScoreboardColumns(): ColumnDef[] {
-    return [
-      { key: 'score', label: 'Score', width: 6, align: 'right', value: (r) => String(r.score) },
-      { key: 'kills', label: 'K', width: 4, align: 'right', value: (r) => String(r.kills) },
-      { key: 'deaths', label: 'D', width: 4, align: 'right', value: (r) => String(r.deaths) },
-      { key: 'kd', label: 'K/D', width: 5, align: 'right', value: (r) => killDeath(r).toFixed(2) },
-      {
-        key: 'acc', label: 'Acc', width: 6, align: 'right',
-        value: (r) => { const p = accuracy(r); return p < 0 ? '—' : `${p.toFixed(0)}%`; },
-      },
-      { key: 'streak', label: 'Best', width: 5, align: 'right', value: (r) => String(r.bestStreak) },
-    ];
+    return [COL_SCORE, COL_KILLS, COL_DEATHS, COL_KD, COL_ACC, COL_BEST];
   }
 
   override onRoundStart(_round: number): void {

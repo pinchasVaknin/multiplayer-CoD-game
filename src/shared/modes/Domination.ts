@@ -6,12 +6,17 @@ import {
   type ObjectiveProvider,
   type ObjectiveTarget,
 } from '../ai/ObjectiveIntent';
-import { accuracy, killDeath, type ScoreTeam } from '../combat/ScoreSystem';
+import type { ScoreTeam } from '../combat/ScoreSystem';
 import { EV } from '../core/Events';
 import { DT } from '../core/Loop';
 import {
+  COL_ACC,
+  COL_DEATHS,
+  COL_KD,
+  COL_KILLS,
+  COL_SCORE,
   GameMode,
-  leaderOf,
+  teamScoreWinCondition,
   type ColumnDef,
   type Entity,
   type GameModeId,
@@ -222,31 +227,25 @@ export class Domination extends GameMode implements ObjectiveProvider {
   }
 
   override checkWinCondition(): MatchResult | RoundResult | null {
-    const a = this.teamScore('A');
-    const b = this.teamScore('B');
-    if (a >= this.config.scoreLimit || b >= this.config.scoreLimit) {
-      return this.result(leaderOf(a, b), 'Score limit', a, b);
-    }
-    if (this.ticksLeft <= 0) {
-      const winner = leaderOf(a, b);
-      return this.result(winner, winner === 'DRAW' ? 'Time — draw' : 'Time limit', a, b);
-    }
-    return null;
+    return teamScoreWinCondition(
+      this.teamScore('A'),
+      this.teamScore('B'),
+      this.config.scoreLimit,
+      this.ticksLeft,
+      'Score limit',
+    );
   }
 
   override getScoreboardColumns(): ColumnDef[] {
     return [
-      { key: 'score', label: 'Score', width: 6, align: 'right', value: (r) => String(r.score) },
-      { key: 'kills', label: 'K', width: 4, align: 'right', value: (r) => String(r.kills) },
-      { key: 'deaths', label: 'D', width: 4, align: 'right', value: (r) => String(r.deaths) },
+      COL_SCORE,
+      COL_KILLS,
+      COL_DEATHS,
       // S6.4: Domination shows captures and defends.
       { key: 'cap', label: 'Cap', width: 5, align: 'right', value: (r) => String(r.captures) },
       { key: 'def', label: 'Def', width: 5, align: 'right', value: (r) => String(r.defends) },
-      { key: 'kd', label: 'K/D', width: 5, align: 'right', value: (r) => killDeath(r).toFixed(2) },
-      {
-        key: 'acc', label: 'Acc', width: 6, align: 'right',
-        value: (r) => { const p = accuracy(r); return p < 0 ? '—' : `${p.toFixed(0)}%`; },
-      },
+      COL_KD,
+      COL_ACC,
     ];
   }
 
@@ -402,12 +401,5 @@ export class Domination extends GameMode implements ObjectiveProvider {
     ev.team = zone.capturingTeam;
     ev.contested = zone.contested;
     this.deps.bus.emit(EV.ObjectiveProgress, ev);
-  }
-
-  private result(winner: ScoreTeam | 'DRAW', reason: string, a: number, b: number): MatchResult {
-    return {
-      kind: 'match', winner, reason, scoreA: a, scoreB: b,
-      roundsA: winner === 'A' ? 1 : 0, roundsB: winner === 'B' ? 1 : 0,
-    };
   }
 }

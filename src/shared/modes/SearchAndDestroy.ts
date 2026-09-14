@@ -6,10 +6,15 @@ import {
   type ObjectiveProvider,
   type ObjectiveTarget,
 } from '../ai/ObjectiveIntent';
-import { accuracy, killDeath, type ScoreTeam } from '../combat/ScoreSystem';
+import type { ScoreTeam } from '../combat/ScoreSystem';
 import { EV } from '../core/Events';
 import { DT } from '../core/Loop';
 import {
+  COL_ACC,
+  COL_DEATHS,
+  COL_KD,
+  COL_KILLS,
+  COL_SCORE,
   GameMode,
   type BombInfo,
   type MutableBombInfo,
@@ -448,17 +453,14 @@ export class SearchAndDestroy extends GameMode implements ObjectiveProvider {
 
   override getScoreboardColumns(): ColumnDef[] {
     return [
-      { key: 'score', label: 'Score', width: 6, align: 'right', value: (r) => String(r.score) },
-      { key: 'kills', label: 'K', width: 4, align: 'right', value: (r) => String(r.kills) },
-      { key: 'deaths', label: 'D', width: 4, align: 'right', value: (r) => String(r.deaths) },
+      COL_SCORE,
+      COL_KILLS,
+      COL_DEATHS,
       // S6.4: S&D shows plants and defuses.
       { key: 'plants', label: 'Plt', width: 5, align: 'right', value: (r) => String(r.plants) },
       { key: 'defuses', label: 'Dfz', width: 5, align: 'right', value: (r) => String(r.defuses) },
-      { key: 'kd', label: 'K/D', width: 5, align: 'right', value: (r) => killDeath(r).toFixed(2) },
-      {
-        key: 'acc', label: 'Acc', width: 6, align: 'right',
-        value: (r) => { const p = accuracy(r); return p < 0 ? '—' : `${p.toFixed(0)}%`; },
-      },
+      COL_KD,
+      COL_ACC,
     ];
   }
 
