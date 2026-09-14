@@ -12,6 +12,7 @@ import { briefVisible, captionHasCountdown, matchCaption } from '../../shared/ui
 import { Hud, makeHudState, type HudState } from './Hud';
 import { Scoreboard } from './Scoreboard';
 import { HudStreaks, makeStreakHudState, type StreakHudState } from './HudStreaks';
+import { Disposable } from '../../shared/core/Disposable';
 
 /**
  * Everything the player looks at during a match, in one owner.
@@ -85,7 +86,7 @@ export interface MatchHudDeps {
   readonly modeBrief: string;
 }
 
-export class MatchHud {
+export class MatchHud extends Disposable {
   readonly hud: Hud;
   readonly scoreboard: Scoreboard;
   /** M7: the streak strip and the objective banner. */
@@ -95,10 +96,10 @@ export class MatchHud {
   readonly state: HudState = makeHudState();
 
   private readonly deps: MatchHudDeps;
-  private readonly unsubscribe: Array<() => void> = [];
   private scoreboardOpen = false;
 
   constructor(deps: MatchHudDeps) {
+    super();
     this.deps = deps;
     this.hud = new Hud({
       host: deps.uiHost,
@@ -253,9 +254,8 @@ export class MatchHud {
     this.setScoreboardOpen(false);
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+  override dispose(): void {
+    super.dispose();
     this.streaks.dispose();
     this.scoreboard.dispose();
     this.hud.dispose();
@@ -298,13 +298,13 @@ export class MatchHud {
   private subscribe(): void {
     const { bus, audio } = this.deps;
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.KillfeedEntry, (p) => {
         this.hud.pushKillfeed(p);
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.ScoreChanged, (p) => {
         const banner = this.state.banner;
         banner.scoreA = p.teamA;
@@ -313,14 +313,14 @@ export class MatchHud {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.MatchStarted, (p) => {
         this.state.banner.roundsToWin = p.roundsToWin;
       }),
     );
 
     // The announcer, and the duck under it, both live inside `playAnnouncer` (S6.5).
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.AnnouncerCue, (p) => {
         audio.playAnnouncer(p.cue);
       }),
@@ -337,7 +337,7 @@ export class MatchHud {
      * only thing that knows whether a can is fitted, and the resolved def lives inside
      * their `WeaponSystem`.
      */
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.WeaponFired, (p) => {
         if (!p.minimapPing) return;
         const shooter = this.findRoster(p.sourceId);

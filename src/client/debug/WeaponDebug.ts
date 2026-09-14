@@ -29,6 +29,7 @@ import type { HitboxDebug } from './HitboxDebug';
 import { LatencyProbe } from './LatencyProbe';
 import { makeAccessorGroup, makeTuningGroup } from './TuningPanel';
 import { PLOT_HEIGHT, PLOT_WIDTH, RING_HEIGHT, RING_WIDTH, WeaponPlots } from './WeaponPlots';
+import { Disposable } from '../../shared/core/Disposable';
 
 /**
  * The M2 half of the debug overlay (brief S7).
@@ -42,10 +43,9 @@ import { PLOT_HEIGHT, PLOT_WIDTH, RING_HEIGHT, RING_WIDTH, WeaponPlots } from '.
 const LATENCY_W = 300;
 const LATENCY_H = 70;
 
-export class WeaponDebug {
+export class WeaponDebug extends Disposable {
   private readonly latencyCanvas: CanvasRenderingContext2D;
   private readonly plots: WeaponPlots;
-  private readonly unsubscribe: Array<() => void> = [];
 
   private readonly fAmmo: Field;
   private readonly fState: Field;
@@ -74,6 +74,7 @@ export class WeaponDebug {
     bus: GameBus,
     private readonly onWeaponChanged: () => void,
   ) {
+    super();
     const left = overlay.leftColumn;
 
     const weapons = overlay.section('Weapon', left);
@@ -182,7 +183,7 @@ export class WeaponDebug {
     // The unsubscribe is retained from M4: this panel is built and destroyed with each match,
     // and a live subscription would keep it — and through it the whole `Match` — alive for the
     // life of the page. One of the two leaks the multi-match heap run found.
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.WeaponFired, (p) => {
         this.plots.record(p.dx, p.dy, p.dz, p.shotIndex);
         this.shotTimes.push(performance.now());
@@ -196,9 +197,8 @@ export class WeaponDebug {
     window.addEventListener('keydown', this.onKeyDown);
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+  override dispose(): void {
+    super.dispose();
     window.removeEventListener('keydown', this.onKeyDown);
   }
 

@@ -4,6 +4,7 @@ import type { Match } from '../ClientMatch';
 import { PLAYER_ENTITY_ID } from '../../shared/combat/DamageSystem';
 import { STREAK_DEFS, type StreakId } from '../../shared/streaks/StreakDefs';
 import type { DebugOverlay } from './DebugOverlay';
+import { Disposable } from '../../shared/core/Disposable';
 
 /**
  * The killstreak instrumentation (M7, brief S7).
@@ -23,7 +24,7 @@ interface Field {
   last: string;
 }
 
-export class StreakPanel {
+export class StreakPanel extends Disposable {
   private readonly match: Match;
 
   private readonly fProgress: Field;
@@ -34,9 +35,9 @@ export class StreakPanel {
   private readonly fPackages: Field;
   private readonly fChopper: Field;
   private readonly log: HTMLElement;
-  private readonly unsubscribe: Array<() => void> = [];
 
   constructor(overlay: DebugOverlay, match: Match, bus: GameBus) {
+    super();
     this.match = match;
 
     const streaks = overlay.section('Killstreaks', overlay.rightColumn);
@@ -77,11 +78,6 @@ export class StreakPanel {
 
     this.subscribe(bus);
     overlay.addTextHook(() => this.refresh());
-  }
-
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
   }
 
   // -- internals --------------------------------------------------------------
@@ -177,22 +173,22 @@ export class StreakPanel {
       while (this.log.childElementCount > 14) this.log.lastElementChild?.remove();
     };
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.StreakEarned, (p) => push(`EARNED ${p.name} (${p.requirement}) by ${p.entityId}`)),
     );
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.StreakActivated, (p) => push(`ACTIVE ${p.name} #${p.instanceId} by ${p.entityId}`)),
     );
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.StreakExpired, (p) => push(`EXPIRED ${p.streakId} #${p.instanceId}`)),
     );
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.StreakDestroyed, (p) => push(`DESTROYED ${p.streakId} #${p.instanceId} by ${p.byId}`)),
     );
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.CarePackageDropped, (p) => push(`PACKAGE dropped #${p.packageId} (${p.ownerTeam})`)),
     );
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.CarePackageClaimed, (p) => push(`PACKAGE #${p.packageId} -> ${p.entityId}: ${p.name}`)),
     );
   }

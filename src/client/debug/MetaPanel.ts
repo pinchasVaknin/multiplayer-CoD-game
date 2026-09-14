@@ -10,6 +10,7 @@ import type { WeaponDef } from '../../shared/weapons/WeaponDefs';
 import type { DebugOverlay } from './DebugOverlay';
 import { SaveInspector } from './SaveInspector';
 import { AVERAGE_MATCH, simulateXp, simulationToLines } from '../../shared/meta/XpSimulator';
+import { Disposable } from '../../shared/core/Disposable';
 
 /**
  * The M6 debug panels (brief S7).
@@ -33,11 +34,10 @@ import { AVERAGE_MATCH, simulateXp, simulationToLines } from '../../shared/meta/
 /** Every event the tap watches. The whole `EV` map, so nothing can fire unseen. */
 const TAPPED: readonly (keyof GameEvents)[] = Object.values(EV);
 
-export class MetaPanel {
+export class MetaPanel extends Disposable {
   private readonly profile: Profile;
   private readonly match: Match;
   private readonly inspector: SaveInspector;
-  private readonly unsubscribe: Array<() => void> = [];
 
   /** Event name -> times fired since the match began. */
   private readonly tap = new Map<string, number>();
@@ -58,6 +58,7 @@ export class MetaPanel {
   private readonly simBody: HTMLElement;
 
   constructor(overlay: DebugOverlay, match: Match, profile: Profile, bus: GameBus) {
+    super();
     this.profile = profile;
     this.match = match;
 
@@ -118,7 +119,7 @@ export class MetaPanel {
     // One subscription per event type, each incrementing a counter. Cheap enough to leave
     // on: `emit` already walks a list, and this adds one integer bump per dispatch.
     for (const name of TAPPED) {
-      this.unsubscribe.push(
+      this.own(
         bus.on(name, () => {
           this.tap.set(String(name), (this.tap.get(String(name)) ?? 0) + 1);
           this.tapTotal++;
@@ -128,11 +129,6 @@ export class MetaPanel {
 
     overlay.addTextHook(() => this.refresh());
     this.runSimulation(100);
-  }
-
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
   }
 
   /** The save inspector, for the console API. */

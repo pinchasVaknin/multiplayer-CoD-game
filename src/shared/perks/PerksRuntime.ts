@@ -5,6 +5,7 @@ import { DT } from '../core/Loop';
 import type { PlayerSim } from '../player/PlayerState';
 import type { WeaponSystem } from '../weapons/WeaponSystem';
 import { NO_PERKS, type PerkState } from './PerkState';
+import { Disposable } from '../core/Disposable';
 
 /**
  * The two perks that need a world presence: Scavenger and Tracker.
@@ -62,7 +63,7 @@ export interface PerksRuntimeDeps {
 
 const evScavenged = { entityId: 0, x: 0, y: 0, z: 0, rounds: 0 };
 
-export class PerksRuntime {
+export class PerksRuntime extends Disposable {
   /** Diagnostics for the F1 panel. The print count moved to `PerksRenderer` with the trail. */
   pickupsSpawned = 0;
   pickupsCollected = 0;
@@ -70,7 +71,6 @@ export class PerksRuntime {
   private state: PerkState = NO_PERKS;
 
   private readonly deps: PerksRuntimeDeps;
-  private readonly unsubscribe: Array<() => void> = [];
 
   /**
    * The live pickup pool (M9).
@@ -81,13 +81,14 @@ export class PerksRuntime {
   readonly pickups: Pickup[] = [];
 
   constructor(deps: PerksRuntimeDeps) {
+    super();
     this.deps = deps;
 
     for (let i = 0; i < PICKUP_CAPACITY; i++) {
       this.pickups.push({ active: false, x: 0, y: 0, z: 0, age: 0 });
     }
 
-    this.unsubscribe.push(deps.bus.on(EV.EntityKilled, (p) => this.onKilled(p.targetId)));
+    this.own(deps.bus.on(EV.EntityKilled, (p) => this.onKilled(p.targetId)));
   }
 
   /** Called whenever the loadout changes, which in practice is once per match. */
@@ -118,11 +119,6 @@ export class PerksRuntime {
       if (Math.abs(dy) > 2) continue;
       this.collect(pickup);
     }
-  }
-
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
   }
 
   // -- internals --------------------------------------------------------------

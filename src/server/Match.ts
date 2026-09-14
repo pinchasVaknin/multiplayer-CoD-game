@@ -67,6 +67,7 @@ import type { CollisionWorld } from '../shared/world/CollisionWorld';
 import { loadMapCollision, type LoadedCollision } from '../shared/world/MapLoader';
 import type { NavGrid } from '../shared/world/Navmesh';
 import { Spectator } from './Spectator';
+import { Disposable } from '../shared/core/Disposable';
 
 const log = logger('Match');
 
@@ -197,7 +198,7 @@ interface PlayerHand {
   readonly inventory: EquipmentInventory;
 }
 
-export class ServerMatch {
+export class ServerMatch extends Disposable {
   readonly bus: GameBus = createGameBus();
   readonly world: CollisionWorld;
   readonly damage: DamageSystem;
@@ -285,7 +286,6 @@ export class ServerMatch {
   private readonly pendingLoadouts = new Map<number, ResolvedLoadout>();
 
   private readonly spectator: Spectator;
-  private readonly unsubscribe: Array<() => void> = [];
   private result: MatchResult | null = null;
   private ticks = 0;
 
@@ -302,6 +302,7 @@ export class ServerMatch {
   private nextPlayerId = HUMAN_ID_BASE;
 
   constructor(private readonly options: ServerMatchOptions) {
+    super();
     this.currentTick = options.startTick ?? 0;
     this.mapEntry = findMap(options.mapId);
     this.modeEntry = findMode(asModeId(options.modeId));
@@ -529,7 +530,7 @@ export class ServerMatch {
      */
     this.bots.perception.occluder = this.equipment.smoke;
 
-    this.unsubscribe.push(
+    this.own(
       this.bus.on(EV.MatchEnded, () => {
         this.result = this.flow.result;
       }),
@@ -555,7 +556,7 @@ export class ServerMatch {
      * Guarded by `usesRoundReset` exactly as the client's is: a single-round mode fires this
      * once, at the start, against a world that has just spawned everybody anyway.
      */
-    this.unsubscribe.push(
+    this.own(
       this.bus.on(EV.RoundStarted, () => {
         if (this.modeEntry.usesRoundReset !== true) return;
         this.bots.respawnAll();
@@ -582,7 +583,7 @@ export class ServerMatch {
      * same spawn carrying tier detail for the director, and listening to both counts every bot
      * life twice — measured in round 4's streak audit at 304 life-starts against 154 real ones.
      */
-    this.unsubscribe.push(this.bus.on(EV.PlayerSpawned, (p) => this.beginLife(p.entityId)));
+    this.own(this.bus.on(EV.PlayerSpawned, (p) => this.beginLife(p.entityId)));
 
     /**
      * Death and flinch for connected humans (M10).
@@ -593,7 +594,7 @@ export class ServerMatch {
      * making `BotDirector` aware of `NetPlayer`, would put a networking type into `shared/ai`
      * and break the partition for no gain.
      */
-    this.unsubscribe.push(
+    this.own(
       this.bus.on(EV.EntityKilled, (p) => {
         const victim = this.getPlayer(p.targetId);
         if (victim === undefined) return;
@@ -604,7 +605,7 @@ export class ServerMatch {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       this.bus.on(EV.DamageDealt, (p) => {
         // The shot counters are written from `weapon.fired` alone (round 5, B5) — a damage
         // event is not a round, and this handler sees a grenade's three victims as three.
@@ -618,7 +619,7 @@ export class ServerMatch {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       this.bus.on(EV.WeaponFired, (p) => {
         const shooter = this.getPlayer(p.sourceId);
         if (shooter === undefined) return;
@@ -629,7 +630,7 @@ export class ServerMatch {
 
     // The replicated event stream. Subscribed here so it sees the authoritative bus and
     // nothing else — a client's own presentation bus is a different object entirely.
-    for (const off of this.outgoing.subscribe(this.bus)) this.unsubscribe.push(off);
+    for (const off of this.outgoing.subscribe(this.bus)) this.own(off);
 
     this.populate();
     // The flow starts in WARMUP and does not run its clock until told. The browser does this
@@ -1474,9 +1475,8 @@ export class ServerMatch {
     return this.bots.report();
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+  override dispose(): void {
+    super.dispose();
     this.flow.dispose();
     this.score.dispose();
     /**

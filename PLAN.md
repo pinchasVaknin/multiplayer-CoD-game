@@ -632,3 +632,94 @@ to the pre-Phase-A baseline; content probe byte-identical.
 
 **Needs a browser (the human's):** the same button on a real display — F1, *Measure lane
 timings*, `[timed] ModePanel.measureLanes …ms` in the console and nothing red beside it.
+
+## Phase C — done (session of 2026-09-14): one concern built, four declined, each on a count
+
+Every candidate was re-counted in this tree before anything was written, per S4. The counts
+the brief carried (taken the same day) were a floor and are corrected below where they differ.
+
+### C1 — `@timed`, generalised: **rejected, 0 replaceable sites**
+
+The tree holds **34 elapsed-time subtractions in 24 files** (`nowMs() - t` or
+`performance.now() - t`, tests and the clock modules excluded). Sorted by shape:
+
+| Shape | Count | Where |
+|---|---|---|
+| Whole method, on the tick or frame path (S3) | 5 | `MatchInstance.step`, `StreakSystem.simulate`, `MatchEquipment.simulate`, `MatchMeta.simulate`, `Hud.update` — each writes `this.lastMs`/`lastStepMs` for `FrameStats` |
+| Whole method, result feeds a report or a metric | 3 | `SnagHarness.run` → `report.wallSeconds`; `MapBakery.bakeAll` → `report.totalMs`; `Migration.move` → `MigrationRecord.durationMs` |
+| Whole *function* (no class to decorate) | 3 | `buildMapChunked` (a generator), `bakeNavmesh` → `stats.bakeMs`, `hashRun`'s `main` |
+| A span inside a method, or across two methods | 23 | `FrameLoop` (sim and render halves), `MapBuildQueue` (chunk, frame budget), `MapBakery` (collision, nav), `HeadlessClient` (build, summary hold, resync), `Server` (allocate, ready wait), `ServerLoop`, `main`'s pump, `skirmishHarness`'s first input, `MatchHarness`'s per-match loop, `BotHarness`'s start/report pair, `AiScheduler`'s begin/end, `LiveMatch`'s ready wait, `Hud`'s hit latency, `MapRender`'s AO |
+
+A `@timed` that logs replaces a pair only where the method's whole body is the span *and* the
+number goes nowhere but a log line. That count is **zero**: the five whole-method pairs that
+could take it are the five the contract froze, and the three off the tick path put the number
+into a report a harness prints and `__operator` returns. Replacing any of them changes the
+fields a harness prints, which C1's own gate forbids. So `@timed` stays at its one Phase B use
+and the twenty-odd spans stay hand-written — they are not repetition of one concern, they are
+twenty different measurements. The brief's "20 pairs in 7 files, all in harness and debug
+code" was an undercount of the pairs and an overcount of the ones a decorator can reach.
+
+### C2 — subscription lifetime: **built, as a base class, 17 classes**
+
+**The count.** 83 `bus.on(` calls and 75 `dispose()` methods in the tree; **17 classes** with
+the exact shape — `private readonly unsubscribe: Array<() => void> = []`, filled by
+`this.unsubscribe.push(bus.on(...))` in the constructor or a `subscribe()`, drained by the
+two lines `for (const off of this.unsubscribe) off(); this.unsubscribe.length = 0;` in
+`dispose()` — ten in `client/` (`DebugOverlay`, `MetaPanel`, `ModePanel`, `StreakPanel`,
+`WeaponDebug`, `MatchEquipment`, `MatchFeedback`, `MatchObjectives`, `PerksRenderer`,
+`MatchHud`), one in `server/` (`ServerMatch`), six in `shared/` (`BotDirector`,
+`ScoreSystem`, `MatchLedger`, `MatchFlow`, `PerksRuntime`, `StreakSystem`). Sixteen drain
+first and tear the rest down after; `StreakSystem` calls `endAll()` *before* draining. The
+other holders of an unsubscriber keep one in a nullable field, and `EventCollector`
+(`server/net`) returns its list to `ServerMatch` — different shapes, left alone.
+
+**Decorator against mixin, both designed.** A `@disposable` class decorator would have to
+wrap `dispose()` in one fixed order (so `StreakSystem` is out, or reordered — S1 says no),
+could not type an `own()` without an interface merge on every class (so the list would be
+reached through a field *name*), and is refused under `shared/combat` and `shared/ai` by
+Phase D's check (so `ScoreSystem` and `BotDirector` are out): fourteen of seventeen at best,
+none of them typed. **`abstract class Disposable`** in `shared/core/Disposable.ts` takes all
+seventeen: a private `subscriptions` list, `protected own(...offs)` (variadic because `push`
+was — `MatchLedger` takes its seven in one call), and `dispose()` that drains in order; a
+subclass overrides `dispose()` with `override` (the compiler insists) and calls
+`super.dispose()` exactly where its two drain lines were. Nothing on any tick changes: a
+subclass's methods stay on its own prototype, `super()` runs once per instance, `own()` runs
+at subscribe time. Neither form needs a flag or a field decorator; the mixin won on the three
+counts above, and the milestone's decorator count therefore stays at one — which is the
+brief's own rule working (*"choose the one that needs no flag and no field decorator"*, and
+then the one that serves every site).
+
+**The change.** 17 files: 17 `extends Disposable`, 17 `super()` calls, 17 field declarations
+gone, 34 drain lines gone, 55 `push(` sites now `own(`, 10 `override dispose()` keeping their
+own teardown, and 7 `dispose()` methods that were *only* the drain deleted outright (the
+inherited one is identical). Net **−28 lines** across the seventeen; `Disposable.ts` is 60
+lines, of which 45 are the comment that says why, and its test is three cases.
+
+**Gate, all five instruments:** `npm run check` green (**116** tests); seeded harness
+normalised-identical; content probe byte-identical; **`npm run leak`: 29 → 29 (+0) over 100
+cycles, and the count at every sampled cycle (10, 20, … 100) identical to the pre-C2 run,
+LEAK CHECK PASSED**; skirmish: the twelve invariant lines identical (migrations 3/0 failed,
+worst mispredictions after migration 0, misrouted 0, WAITING-in-live 0, result surfaces in
+the room 0, spectator self/enemy/dead 0/0/0, quick-loadout-while-alive 0, sentries on own
+side 0, FLOW CHECK PASSED), and the flow event's `subscriptions: 79` the same in both runs.
+
+### C3 — console commands by decorator: **not built (decision 3, default taken)**
+
+`installConsoleApi` builds **one object literal with 83 top-level entries** (the brief's 72
+undercounted the nested groups) and DEBUG.md's "Console API" documents it as a table. S5 is
+explicit that a table stays a table, and a `@command('name', 'help')` that registered
+entries by decoration would hide this one behind class scans. The human's default was to
+leave it; left.
+
+### C4 — per-module loggers: **rejected, wrong level**
+
+**32 files** open with `const log = logger('tag')` at module scope; **zero** classes hold a
+logger as a field. A decorator attaches to a class or a method and cannot reach a module-level
+constant, so there is nothing for one to replace here. Recorded so nobody re-derives it.
+
+### C5 — wire validation: **rejected, frozen path**
+
+`server/net/Validation.ts` (one exported function, `validateCommand`) and `Session.ts` sit on
+the receive path the contract froze (S3: `shared/net`, and the server's decode of it); a
+wrapper per message is an allocation per message. Rejected without a count, because the count
+does not matter there.

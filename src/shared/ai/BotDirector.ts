@@ -31,6 +31,7 @@ import { dealTiers } from './RosterDeal';
 import { hitsFrom, shotsFrom } from '../combat/ShotAccounting';
 import { makeSpawnChoice, SpawnSelector, type SpawnChoice } from './SpawnSelector';
 import { simCos } from '../core/SimMath';
+import { Disposable } from '../core/Disposable';
 
 const log = logger('BotDirector');
 
@@ -216,7 +217,7 @@ export interface NavStats {
   coverage: number;
 }
 
-export class BotDirector {
+export class BotDirector extends Disposable {
   /**
    * Set by `Match` once the mode exists. Null means "always allowed", which is what the M3
    * harness and the bot-only soak want: they have no match flow to ask.
@@ -307,7 +308,6 @@ export class BotDirector {
   private readonly byId = new Map<number, Bot>();
   private readonly rng: Rng;
   private readonly choice: SpawnChoice = makeSpawnChoice();
-  private readonly unsubscribe: Array<() => void> = [];
   private tick = 0;
 
   /**
@@ -321,6 +321,7 @@ export class BotDirector {
   private nextIndex = 0;
 
   constructor(deps: BotDirectorDeps) {
+    super();
     this.deps = deps;
     this.rng = new Rng(deps.seed);
 
@@ -594,9 +595,8 @@ export class BotDirector {
     for (const bot of this.bots) this.spawnBot(bot);
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+  override dispose(): void {
+    super.dispose();
     this.clear();
   }
 
@@ -624,7 +624,7 @@ export class BotDirector {
     const bus = this.deps.bus;
 
     // ---- hearing (S6.3) --------------------------------------------------
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.WeaponFired, (p) => {
         // Rays, not pulls, and both halves from this one event (round 5, B5). The acceptance
         // hit-rate per tier is this divided by itself, so it was a shotgun bot away from
@@ -638,7 +638,7 @@ export class BotDirector {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.PlayerFootstep, (p) => {
         // Crouch-walking is silent by design: S6.3 gives footsteps a 12 m radius and
         // qualifies it with "non-crouch", which is the whole reason to ever crouch-walk.
@@ -657,7 +657,7 @@ export class BotDirector {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.PlayerLanded, (p) => {
         if (p.impactSpeed < 4) return;
         this.perception.noise.emit(
@@ -672,7 +672,7 @@ export class BotDirector {
     );
 
     // ---- damage ----------------------------------------------------------
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.DamageDealt, (p) => {
         const shooter = this.byId.get(p.sourceId);
         // Damage only: a bot's frag is not a round it fired. Counted here it made the tier
@@ -690,7 +690,7 @@ export class BotDirector {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.EntityKilled, (p) => {
         const killer = this.byId.get(p.sourceId);
         if (killer !== undefined) killer.kills++;

@@ -19,6 +19,7 @@ import {
   type XpLines,
   type XpSourceId,
 } from './XpRules';
+import { Disposable } from '../core/Disposable';
 
 /**
  * One seat's match, counted (M13 Phase B, bug 4.2).
@@ -112,14 +113,13 @@ export interface LedgerExtras {
 
 const NO_EXTRAS: LedgerExtras = { challenges: 0, challengeXp: 0, weaponLevels: 0 };
 
-export class MatchLedger {
+export class MatchLedger extends Disposable {
   /** The seat. Written by `adopt` alone. */
   entityId: number;
 
   /** Per-source counts, keyed by XP source. */
   private readonly counts = new Map<XpSourceId, number>();
   readonly weaponTallies = new Map<string, WeaponTally>();
-  private readonly unsubscribe: Array<() => void> = [];
   private readonly killTicks: number[] = new Array<number>(KILL_RING).fill(-99999);
   private killRingHead = 0;
 
@@ -147,11 +147,12 @@ export class MatchLedger {
   private ticksPlayed = 0;
 
   constructor(deps: MatchLedgerDeps) {
+    super();
     this.deps = deps;
     this.entityId = deps.entityId;
     const bus = deps.bus;
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.WeaponFired, (p) => {
         if (p.sourceId !== this.entityId) return;
         const tally = this.tally(p.weaponId);
@@ -287,11 +288,6 @@ export class MatchLedger {
       out.push({ id: source.id, label: source.label, count, xp, kind: source.kind });
     }
     return [matchFloorLine(), ...out];
-  }
-
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
   }
 
   // -- internals --------------------------------------------------------------

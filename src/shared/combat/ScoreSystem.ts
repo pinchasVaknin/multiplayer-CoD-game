@@ -2,6 +2,7 @@ import { EV, type GameBus } from '../core/Events';
 import { isHostile } from './Hostility';
 import { LocalIdentity } from './LocalIdentity';
 import { hitsFrom, shotsFrom } from './ShotAccounting';
+import { Disposable } from '../core/Disposable';
 
 /**
  * Who is winning, and what everybody in the match has done (brief S6.5).
@@ -113,7 +114,7 @@ interface DamageRecord {
   tick: number;
 }
 
-export class ScoreSystem {
+export class ScoreSystem extends Disposable {
   /**
    * Whether this match has teams at all (M11 Gate B playtest).
    *
@@ -173,7 +174,6 @@ export class ScoreSystem {
   /** Flat array as well as a map: the scoreboard sorts this every time it opens. */
   private readonly all: PlayerScore[] = [];
   private readonly totals: Record<ScoreTeam, TeamTotals> = { A: makeTotals(), B: makeTotals() };
-  private readonly unsubscribe: Array<() => void> = [];
 
   private readonly ledger: DamageRecord[] = [];
   private ledgerHead = 0;
@@ -189,6 +189,7 @@ export class ScoreSystem {
    * single-player seat and `isLocal` means exactly what it has always meant.
    */
   constructor(bus: GameBus, identity: LocalIdentity = new LocalIdentity(), authoritative = true) {
+    super();
     this.identity = identity;
     this.authoritative = authoritative;
     for (let i = 0; i < DAMAGE_LEDGER_SIZE; i++) {
@@ -200,7 +201,7 @@ export class ScoreSystem {
      * `Welcome` arrived would be wrong forever. Re-stamp the whole table when the assignment
      * changes — it happens at most once per session and the table is a dozen rows.
      */
-    this.unsubscribe.push(
+    this.own(
       this.identity.onChange(() => {
         for (const row of this.all) row.isLocal = this.identity.is(row.entityId);
       }),
@@ -216,7 +217,7 @@ export class ScoreSystem {
      * board could read 267%. See `ShotAccounting` for the definition and for what is
      * deliberately excluded from it.
      */
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.WeaponFired, (p) => {
         const row = this.rowsById.get(p.sourceId);
         if (row === undefined) return;
@@ -225,7 +226,7 @@ export class ScoreSystem {
         this.serial++;
       }),
     );
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.DamageDealt, (p) => {
         const row = this.rowsById.get(p.sourceId);
         if (row === undefined) return;
@@ -544,9 +545,8 @@ export class ScoreSystem {
     this.serial++;
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+  override dispose(): void {
+    super.dispose();
     this.clear();
   }
 }

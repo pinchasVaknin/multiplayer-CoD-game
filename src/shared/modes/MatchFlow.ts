@@ -7,6 +7,7 @@ import { EV, type AnnouncerCue, type GameBus } from '../core/Events';
 import { DT } from '../core/Loop';
 import type { GameMode, KillEvent, MatchResult, RoundResult } from './GameMode';
 import { wonBy } from './MatchOutcome';
+import { Disposable } from '../core/Disposable';
 
 /**
  * Match flow: rounds, the clock, and who is allowed to come back (brief S6.2).
@@ -152,11 +153,10 @@ const evScore = { teamA: 0, teamB: 0, limit: 0 };
 const evSwapped = { afterRound: 0 };
 const evCue = { cue: 'fight' as AnnouncerCue };
 
-export class MatchFlow {
+export class MatchFlow extends Disposable {
   readonly killfeed: Killfeed;
 
   private readonly deps: MatchFlowDeps;
-  private readonly unsubscribe: Array<() => void> = [];
   /** Respawns already used this round, by entity id. Only read when lives are finite. */
   private readonly livesUsed = new Map<number, number>();
 
@@ -173,6 +173,7 @@ export class MatchFlow {
   private lastScoreB = -1;
 
   constructor(deps: MatchFlowDeps) {
+    super();
     this.deps = deps;
     this.authoritative = deps.authoritative !== false;
     this.killfeed = new Killfeed(deps.bus, deps.roster, deps.identity ?? new LocalIdentity());
@@ -479,11 +480,6 @@ export class MatchFlow {
     this.deps.bus.emit(EV.SidesSwapped, evSwapped);
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
-  }
-
   // -- internals -------------------------------------------------------------
 
   private goLive(): void {
@@ -597,7 +593,7 @@ export class MatchFlow {
   private subscribe(): void {
     const { bus, mode, roster } = this.deps;
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.EntityKilled, (p) => {
         // Kills only count while the round is live. A round that ended two ticks ago is not
         // still scoring, and neither is a match that is over.
@@ -652,13 +648,13 @@ export class MatchFlow {
 
     // Spawns reach the mode through the same events everything else does, so a mode that
     // cares (Kill Confirmed's tags, Domination's flag ownership) never needs the roster.
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.BotSpawned, (p) => {
         const entity = find(roster, p.entityId);
         if (entity !== undefined) mode.onSpawn(entity);
       }),
     );
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.PlayerSpawned, (p) => {
         const entity = find(roster, p.entityId);
         if (entity !== undefined) mode.onSpawn(entity);

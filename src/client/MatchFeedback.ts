@@ -16,6 +16,7 @@ import type { LatencyProbe } from './debug/LatencyProbe';
 import type { Hud } from './ui/Hud';
 import type { WeaponAudio } from './weapons/WeaponAudio';
 import { WEAPON_DEFS } from '../shared/weapons/WeaponDefs';
+import { Disposable } from '../shared/core/Disposable';
 
 /**
  * Everything that *presents* a shot, in one place.
@@ -109,17 +110,17 @@ const NUMBER_QUEUE = 8;
 /** Reusable position record for "where did that sound come from". Zero allocation. */
 const sourceAt = { x: 0, y: 0, z: 0 };
 
-export class MatchFeedback {
+export class MatchFeedback extends Disposable {
   /** Set on the tick a local shot resolves; consumed by the latency probe on render. */
   private shotSinceRender = false;
 
   private readonly deps: FeedbackDeps;
-  private readonly unsubscribe: Array<() => void> = [];
   private readonly numberQueue: PendingNumber[] = [];
   private readonly projectScratch = new THREE.Vector3();
   private numberCount = 0;
 
   constructor(deps: FeedbackDeps) {
+    super();
     this.deps = deps;
     for (let i = 0; i < NUMBER_QUEUE; i++) {
       this.numberQueue.push({ x: 0, y: 0, z: 0, amount: 0, zone: 'torso' });
@@ -137,17 +138,12 @@ export class MatchFeedback {
     this.deps.latency.notePresented(performance.now());
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
-  }
-
   // -- wiring ----------------------------------------------------------------
 
   private subscribe(): void {
     const { bus, cameraRig, input, fx, hud, weaponAudio, latency } = this.deps;
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.WeaponFired, (p) => {
         /**
          * The weapon is the *shooter's*, off the event, not the local player's off the
@@ -178,7 +174,7 @@ export class MatchFeedback {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.BulletImpact, (p) => {
         fx.spawnImpact(p.x, p.y, p.z, p.nx, p.ny, p.nz, p.material, p.penetrated);
         weaponAudio.playImpact(p.x, p.y, p.z, p.material, p.penetrated);
@@ -194,14 +190,14 @@ export class MatchFeedback {
      * own hitmarker path would be a second implementation of feedback, and the two would
      * eventually disagree about what a kill looks like.
      */
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.MeleeSwing, (p) => {
         weaponAudio.playMeleeSwing(p.x, p.y, p.z, p.hit);
         if (this.deps.identity.is(p.sourceId)) cameraRig.shake.add(p.hit ? 0.16 : 0.06);
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.DamageDealt, (p) => {
         if (this.deps.identity.is(p.targetId)) {
           this.onPlayerHurt(p.sourceId, p.amount);
@@ -226,7 +222,7 @@ export class MatchFeedback {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.EntityKilled, (p) => {
         if (this.deps.identity.is(p.targetId)) {
           this.deps.onPlayerKilled();
@@ -239,21 +235,21 @@ export class MatchFeedback {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.WeaponDryFired, (p) => {
         const at = this.sourcePosition(p.sourceId);
         weaponAudio.playDryFire(at.x, at.y, at.z);
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.WeaponReloadStep, (p) => {
         const at = this.sourcePosition(p.sourceId);
         weaponAudio.playReloadStep(at.x, at.y, at.z, p.step);
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.WeaponAdsChanged, (p) => {
         const at = this.sourcePosition(p.sourceId);
         weaponAudio.playAdsRustle(at.x, at.y, at.z, p.aiming);
@@ -268,7 +264,7 @@ export class MatchFeedback {
      * moves the local player's view, which was an M3 bug when `player.landed` grew an entity id
      * and this handler did not read it.
      */
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.PlayerLanded, (p) => {
         const own = this.deps.identity.is(p.entityId);
         if (own) cameraRig.applyLanding(this.deps.cameraConfig, p.impactSpeed);
@@ -283,7 +279,7 @@ export class MatchFeedback {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.PlayerFootstep, (p) => {
         // M8 mix: your own steps are constant, carry no information, and are the best mask
         // in the game for the one sound you most need to hear (`engine/AudioMix.ts`).

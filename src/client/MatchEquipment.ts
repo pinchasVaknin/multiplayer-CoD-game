@@ -31,6 +31,7 @@ import { ThrowController } from '../shared/equipment/ThrowController';
 import type { PlayerSim } from '../shared/player/PlayerState';
 import type { Hud } from './ui/Hud';
 import type { CollisionWorld } from '../shared/world/CollisionWorld';
+import { Disposable } from '../shared/core/Disposable';
 
 /**
  * Equipment, composed into a match.
@@ -87,7 +88,7 @@ const CONCUSSION_MIN_FALLOFF = 0.35;
 /** The ring is a hint at this range, not the wall of tone a flashbang produces. */
 const CONCUSSION_RING_SCALE = 0.45;
 
-export class MatchEquipment {
+export class MatchEquipment extends Disposable {
   readonly system: EquipmentSystem;
   readonly thrower: ThrowController;
   readonly botThrower: BotThrower;
@@ -104,7 +105,6 @@ export class MatchEquipment {
   lastMs = 0;
 
   private readonly deps: MatchEquipmentDeps;
-  private readonly unsubscribe: Array<() => void> = [];
   private readonly rng: Rng;
   /** Serials seen in the current replicated frame. Reused; nothing here allocates per frame. */
   private readonly seenSerials = new Set<number>();
@@ -133,6 +133,7 @@ export class MatchEquipment {
   private throwCursor = 0;
 
   constructor(deps: MatchEquipmentDeps) {
+    super();
     this.deps = deps;
     this.rng = new Rng(deps.seed ^ 0x1b3d_77a1);
 
@@ -163,7 +164,7 @@ export class MatchEquipment {
     deps.bots.perception.occluder = this.system.smoke;
     deps.bots.perception.blindSource = this.system.flash;
 
-    this.unsubscribe.push(
+    this.own(
       deps.bus.on(EV.EquipmentThrown, (p) => this.audio.playThrow(p.x, p.y, p.z)),
       deps.bus.on(EV.EquipmentBounced, (p) =>
         this.audio.playBounce(p.x, p.y, p.z, p.speed, p.material, p.stuck),
@@ -326,9 +327,8 @@ export class MatchEquipment {
     this.fx.update(this.system.projectiles, this.system.smoke, alpha, dt, camera, this.elapsed);
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+  override dispose(): void {
+    super.dispose();
     this.deps.bots.perception.occluder = null;
     this.deps.bots.perception.blindSource = null;
     this.system.clear();

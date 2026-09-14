@@ -24,6 +24,7 @@ import type { CollisionDebug } from './CollisionDebug';
 import { FrameStats } from './FrameStats';
 import { Speedometer } from './Speedometer';
 import { makeTuningGroup, TuningPanel, type TuningGroup } from './TuningPanel';
+import { Disposable } from '../../shared/core/Disposable';
 
 /**
  * The F1 debug overlay (brief S6).
@@ -107,7 +108,7 @@ export class DebugSection {
   }
 }
 
-export class DebugOverlay {
+export class DebugOverlay extends Disposable {
   readonly stats: FrameStats;
   readonly speedo: Speedometer;
 
@@ -115,7 +116,6 @@ export class DebugOverlay {
   private readonly ctx: DebugContext;
   private readonly sections: DebugSection[] = [];
   private readonly panels: TuningPanel[] = [];
-  private readonly unsubscribe: Array<() => void> = [];
   private readonly textHooks: Array<() => void> = [];
   private readonly graphHooks: Array<() => void> = [];
   private readonly left: HTMLElement;
@@ -175,6 +175,7 @@ export class DebugOverlay {
   onDismiss: (() => void) | null = null;
 
   constructor(host: HTMLElement, ctx: DebugContext) {
+    super();
     this.ctx = ctx;
     this.stats = ctx.stats;
     this.speedo = ctx.speedo;
@@ -345,7 +346,7 @@ export class DebugOverlay {
     // and a subscription that outlives it keeps the whole overlay — and through `ctx`, the
     // player, the collision world and the map's stats — alive for the life of the page. This
     // was one of two leaks the multi-match heap run found.
-    this.unsubscribe.push(ctx.bus.on(EV.PlayerSpawned, () => this.speedo.reset()));
+    this.own(ctx.bus.on(EV.PlayerSpawned, () => this.speedo.reset()));
 
     host.appendChild(this.root);
     window.addEventListener('keydown', this.onKeyDown);
@@ -439,9 +440,8 @@ export class DebugOverlay {
     }
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+  override dispose(): void {
+    super.dispose();
     window.removeEventListener('keydown', this.onKeyDown);
     this.root.remove();
   }

@@ -9,6 +9,7 @@ import { MAX_WAYPOINTS, Path, type PathClient } from '../../shared/ai/Pathing';
 import type { AiDebug } from './AiDebug';
 import type { MatchHarness } from './MatchHarness';
 import type { DebugOverlay } from './DebugOverlay';
+import { Disposable } from '../../shared/core/Disposable';
 
 /**
  * The M4 debug panels (brief S7): mode state, objectives, lane timings, spawn scoring and a
@@ -43,12 +44,11 @@ export interface LaneReport {
   sprintSpeed: number;
 }
 
-export class ModePanel {
+export class ModePanel extends Disposable {
   private readonly match: Match;
   private readonly map: MapEntry;
   private readonly harness: MatchHarness;
   private readonly aiDebug: AiDebug;
-  private readonly unsubscribe: Array<() => void> = [];
 
   private readonly fPhase: { el: HTMLElement; last: string };
   private readonly fScore: { el: HTMLElement; last: string };
@@ -70,6 +70,7 @@ export class ModePanel {
     aiDebug: AiDebug,
     bus: GameBus,
   ) {
+    super();
     this.match = match;
     this.map = map;
     this.harness = harness;
@@ -129,7 +130,7 @@ export class ModePanel {
       }),
     );
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.KillfeedEntry, (p) => {
         const line = document.createElement('div');
         line.className = 'dbg-log__line';
@@ -149,11 +150,6 @@ export class ModePanel {
   laneReport(): LaneReport {
     if (this.laneCache === null) this.laneCache = this.measureLanes();
     return this.laneCache;
-  }
-
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
   }
 
   // -- lane timing -----------------------------------------------------------

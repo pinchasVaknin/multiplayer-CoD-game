@@ -7,6 +7,7 @@ import {
   PICKUP_LIFETIME,
   type PerksRuntime,
 } from '../../shared/perks/PerksRuntime';
+import { Disposable } from '../../shared/core/Disposable';
 
 /**
  * What the perks look like (M9).
@@ -30,7 +31,7 @@ const TRAIL_CAPACITY = 160;
 /** Seconds a footprint stays visible. */
 const TRAIL_LIFETIME = 9;
 
-export class PerksRenderer {
+export class PerksRenderer extends Disposable {
   readonly group = new THREE.Group();
 
   /** Diagnostics for the F1 panel. */
@@ -50,13 +51,13 @@ export class PerksRenderer {
   private readonly trailGeometry: THREE.BufferGeometry;
   private readonly trailMaterial: THREE.PointsMaterial;
 
-  private readonly unsubscribe: Array<() => void> = [];
 
   constructor(
     private readonly perks: PerksRuntime,
     bus: GameBus,
     scene: THREE.Scene,
   ) {
+    super();
     this.group.name = 'perks';
 
     // ---- scavenger pickups --------------------------------------------------
@@ -101,7 +102,7 @@ export class PerksRenderer {
 
     scene.add(this.group);
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.PlayerFootstep, (p) => this.onFootstep(p.entityId, p.x, p.y, p.z)),
       // A fresh life clears the trail: hunting the ghost of somebody who has already
       // respawned across the map is worse than no information.
@@ -137,9 +138,8 @@ export class PerksRenderer {
     this.updateTrail(dt);
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+  override dispose(): void {
+    super.dispose();
     this.group.removeFromParent();
     this.group.clear();
     this.pickupGeometry.dispose();

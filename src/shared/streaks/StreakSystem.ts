@@ -21,6 +21,7 @@ import {
 } from './StreakDefs';
 import { StreakLedger, type StreakEconomyReport, type StreakPrice } from './StreakLedger';
 import { Uav } from './Uav';
+import { Disposable } from '../core/Disposable';
 
 /**
  * Who can afford what, what is currently in the world, and the three M6 perk hooks (M7).
@@ -119,7 +120,7 @@ const STREAK_ENTITY_BASE = 900;
 /** The cooldown, in sim ticks. Seconds are the authored unit; ticks are the clock (S4.1). */
 const COOLDOWN_TICKS = Math.round(STREAK_COOLDOWN_SECONDS * SIM_HZ);
 
-export class StreakSystem implements ObjectiveProvider {
+export class StreakSystem extends Disposable implements ObjectiveProvider {
   /** Everything alive in the world right now. Read by the debug panel and the frame stats. */
   readonly active: Killstreak[] = [];
 
@@ -134,7 +135,6 @@ export class StreakSystem implements ObjectiveProvider {
 
   private readonly deps: StreakSystemDeps;
   private readonly ctx: StreakContext;
-  private readonly unsubscribe: Array<() => void> = [];
   /** Every sentry that has left the world, folded. The live ones are added on read. */
   private readonly retiredSentries: SentryTally = makeSentryTally();
   private nextInstanceId = 1;
@@ -165,6 +165,7 @@ export class StreakSystem implements ObjectiveProvider {
   private readonly evExpired = { entityId: 0, streakId: '', instanceId: 0 };
 
   constructor(deps: StreakSystemDeps) {
+    super();
     this.deps = deps;
     this.ledger = new StreakLedger({
       pricesOf: (id) => this.pricesFor(id),
@@ -503,10 +504,9 @@ export class StreakSystem implements ObjectiveProvider {
     return out;
   }
 
-  dispose(): void {
+  override dispose(): void {
     this.endAll();
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+    super.dispose();
     this.ledger.clear();
   }
 
@@ -585,7 +585,7 @@ export class StreakSystem implements ObjectiveProvider {
   private subscribe(): void {
     const bus = this.deps.bus;
 
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.EntityKilled, (p) => {
         // Death first: whoever died loses the balance, and their cooldowns keep running. The
         // killer is credited afterwards, from the score's own count.
@@ -605,7 +605,7 @@ export class StreakSystem implements ObjectiveProvider {
      * roll's price into the balance keeps a single currency, and the gamble is intact: a crate
      * is still worth between five and twelve kills depending on the roll.
      */
-    this.unsubscribe.push(
+    this.own(
       bus.on(EV.CarePackageClaimed, (p) => {
         this.creditKills(p.entityId, this.priceOf(p.streakId as StreakId, p.entityId));
       }),
@@ -628,7 +628,7 @@ export class StreakSystem implements ObjectiveProvider {
      * against 154 actual ones in a five-bot-a-side match. That `PlayerController.spawn` is the
      * one door is also the answer P5 is looking for.
      */
-    this.unsubscribe.push(bus.on(EV.PlayerSpawned, (p) => this.ledger.noteLifeStart(p.entityId)));
+    this.own(bus.on(EV.PlayerSpawned, (p) => this.ledger.noteLifeStart(p.entityId)));
 
     /**
      * A round boundary, which under this economy is **not** a life boundary (round 4, P5).
@@ -642,11 +642,11 @@ export class StreakSystem implements ObjectiveProvider {
      * `StreakEconomyReport.walletsAtRoundBoundary`. Cooldowns are not part of either count: a
      * round boundary is not a life boundary and a cooldown does not care about either.
      */
-    this.unsubscribe.push(bus.on(EV.RoundStarted, () => this.ledger.noteRoundBoundary()));
+    this.own(bus.on(EV.RoundStarted, () => this.ledger.noteRoundBoundary()));
 
     // Nothing survives the end of a match — see the chopper's single-exit rule.
-    this.unsubscribe.push(bus.on(EV.MatchEnded, () => this.endAll()));
-    this.unsubscribe.push(bus.on(EV.RoundEnded, () => this.endAll()));
+    this.own(bus.on(EV.MatchEnded, () => this.endAll()));
+    this.own(bus.on(EV.RoundEnded, () => this.endAll()));
   }
 
   /**

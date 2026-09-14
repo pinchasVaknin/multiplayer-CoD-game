@@ -8,6 +8,7 @@ import { stackRate } from '../shared/modes/ObjectiveZone';
 import { KillConfirmed } from '../shared/modes/KillConfirmed';
 import { SearchAndDestroy } from '../shared/modes/SearchAndDestroy';
 import type { ObjectiveZone } from '../shared/modes/ObjectiveZone';
+import { Disposable } from '../shared/core/Disposable';
 
 /**
  * The objectives, as things you can see in the world (M7, brief S6.3).
@@ -144,7 +145,7 @@ interface TagVisual {
  */
 const CARRY_HEIGHT = 0.95;
 
-export class MatchObjectives {
+export class MatchObjectives extends Disposable {
   readonly group = new THREE.Group();
 
   private readonly deps: MatchObjectivesDeps;
@@ -166,7 +167,6 @@ export class MatchObjectives {
   private readonly bombLight: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   /** Post-M8: the progress ring shown while somebody is working on the bomb. */
   private interactRing: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | null = null;
-  private readonly unsubscribe: Array<() => void> = [];
   /**
    * Materials whose hostile colour is baked in at construction (M8).
    *
@@ -178,6 +178,7 @@ export class MatchObjectives {
   private spin = 0;
 
   constructor(deps: MatchObjectivesDeps) {
+    super();
     this.deps = deps;
     this.group.name = 'objectives';
 
@@ -195,7 +196,7 @@ export class MatchObjectives {
 
     // Repaint the baked-in materials whenever the palette moves. Fires immediately, which
     // is what sets them correctly for a session that started in a colourblind mode.
-    this.unsubscribe.push(
+    this.own(
       palette.onChange((p) => {
         for (const mat of this.hostileMaterials) mat.color.setHex(p.hostile);
       }),
@@ -235,9 +236,8 @@ export class MatchObjectives {
     if (mode instanceof SearchAndDestroy) this.updateBomb(mode);
   }
 
-  dispose(): void {
-    for (const off of this.unsubscribe) off();
-    this.unsubscribe.length = 0;
+  override dispose(): void {
+    super.dispose();
     this.deps.scene.remove(this.group);
     this.group.clear();
     for (const d of this.disposables) d.dispose();
