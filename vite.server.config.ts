@@ -44,6 +44,10 @@ export default defineConfig({
         // Playtest round 4 regression. The summary bar's arithmetic, stepped to completion
         // without a screen: a pure function of the level table, so one run is a fact.
         progression: 'src/server/progression.ts',
+        // Deep clean, 2026-09-14. The content facts a structural change to the modes or the
+        // maps must leave alone: scoreboard columns, the win condition over a score grid, and
+        // every spawn zone. A printer, not a judge: run it before and after, and diff.
+        content: 'src/server/content.ts',
       },
       output: { entryFileNames: '[name].js', format: 'esm' },
     },
