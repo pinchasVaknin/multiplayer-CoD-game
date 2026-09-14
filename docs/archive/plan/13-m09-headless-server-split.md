@@ -18,7 +18,7 @@ plausible homes.
 
 ## Phase 1 — the audit
 
-Full inventory in [`docs/M9-AUDIT.md`](../../M9-AUDIT.md). The headline was that the codebase
+Full inventory in [`docs/M9-AUDIT.md`](../2026-08-03-M9-AUDIT.md). The headline was that the codebase
 was in far better shape than the brief anticipated: **106 of 135 shared-bound files were
 already clean**, and the twenty-nine that were not clustered in four places rather than
 spreading thin.
