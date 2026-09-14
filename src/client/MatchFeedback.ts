@@ -15,7 +15,7 @@ import type { PlayerController } from '../shared/player/PlayerController';
 import type { LatencyProbe } from './debug/LatencyProbe';
 import type { Hud } from './ui/Hud';
 import type { WeaponAudio } from './weapons/WeaponAudio';
-import type { WeaponSystem } from '../shared/weapons/WeaponSystem';
+import { WEAPON_DEFS } from '../shared/weapons/WeaponDefs';
 
 /**
  * Everything that *presents* a shot, in one place.
@@ -50,7 +50,6 @@ export interface FeedbackDeps {
   readonly input: Input;
   readonly player: PlayerController;
   readonly playerHealth: Health;
-  readonly weapons: WeaponSystem;
   readonly weaponAudio: WeaponAudio;
   readonly fx: Fx;
   readonly hud: Hud;
@@ -146,11 +145,22 @@ export class MatchFeedback {
   // -- wiring ----------------------------------------------------------------
 
   private subscribe(): void {
-    const { bus, cameraRig, input, fx, hud, weaponAudio, weapons, latency } = this.deps;
+    const { bus, cameraRig, input, fx, hud, weaponAudio, latency } = this.deps;
 
     this.unsubscribe.push(
       bus.on(EV.WeaponFired, (p) => {
-        const def = weapons.definition;
+        /**
+         * The weapon is the *shooter's*, off the event, not the local player's off the
+         * inventory. Every emitter — a bot's `WeaponSystem`, the local one, `NetSession` for a
+         * remote player — writes the firing def's id here, and this handler used to read
+         * `weapons.definition` instead, so every shot in the match sounded like, and flashed
+         * like, whatever the viewer happened to be holding: hold a sniper and the whole lobby
+         * fires snipers; swap, and it swaps with you. An id nothing catalogues cannot arrive
+         * (each emitter takes it from a def), so a miss here is a programming error and not a
+         * case to fall back from — falling back to the viewer's weapon is the bug.
+         */
+        const def = WEAPON_DEFS[p.weaponId];
+        if (def === undefined) throw new Error(`WeaponFired names an unknown weapon "${p.weaponId}".`);
         // The muzzle *light* belongs to whoever fired, wherever they are standing; the flash
         // mesh hangs off the local player's own viewmodel and belongs only to them (M3 bug).
         const local = this.deps.identity.is(p.sourceId);

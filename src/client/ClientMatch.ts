@@ -695,7 +695,6 @@ export class Match {
       input: deps.input,
       player: deps.player,
       playerHealth: this.playerHealth,
-      weapons: this.weapons,
       weaponAudio: this.weaponAudio,
       fx: this.fx,
       hud: this.ui.hud,

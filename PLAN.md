@@ -14476,6 +14476,25 @@ authored stand → crouch beside last session's reversed one; two sprint gaits i
 second fall; and the kneeling reload's head 5 cm under its box — see "Human playtest, when
 Phase D is closed".
 
+## Between phases — the firing audio followed the viewer's weapon (2026-09-14)
+
+Reported by the human between D and E: *every* shot in the match sounded like whatever the
+local player was holding — hold a sniper and the lobby fires snipers; swap, and it swaps with
+you. One line, in `MatchFeedback`'s `EV.WeaponFired` handler since M9's partition (`939e7d4`):
+`const def = weapons.definition` — the local inventory's active weapon — where the event has
+carried the shooter's `weaponId` all along (a bot's `WeaponSystem`, the local one and
+`NetSession` all write the firing def's id into it). The muzzle-flash scale came off the same
+wrong def. Now `WEAPON_DEFS[p.weaponId]`, and an unknown id throws rather than falling back to
+the viewer's weapon, which was the bug; `FeedbackDeps.weapons` had no other reader and is gone.
+
+**Measured in the pane** (solo TDM, the viewer's slot set to `sniper_kestrel` through
+`WeaponSystem.setDefinition`, `playGunshot` wrapped to record which def's `voice` it was handed,
+paired with the `weapon.fired` events in order): broken tree, 50 bot shots over six weapons
+(`ar_halcyon` 20, `smg_meridian` 18, …) — **50 of 50 played the viewer's Kestrel voice**, the 2
+that "matched" being a bot that carried a Kestrel itself. Fixed tree, 96 bot shots over six
+weapons, the viewer swapped from the Kestrel to the Talon halfway — **96 of 96 played the
+shooter's own weapon's voice, 0 the viewer's.** `npm run check` green.
+
 ## How to start — the Phase E brief
 
 Phases A, B, C and D are built and at their gates (see the four "done" sections above); the
