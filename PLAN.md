@@ -6,8 +6,8 @@ milestone needs to know. A fresh session inherits the repository and this file, 
 M1–M8 built a complete single-player browser game. M9–M11 moved it onto a dedicated external
 server: the split first, then the netcode, then everything else on top of it. M12 is the scoped
 content backlog, M13 (archived) put skinned bodies on the bots and moved the board and the XP
-award to the server, and Milestone 14 is the milestone in progress; the backlog and M14 are
-below, in full.
+award to the server, M14 (archived) put vitest in the gate and legacy decorators behind a fence,
+and Milestone 15 is the milestone in progress; the backlog and M15 are below, in full.
 
 **Survival mode is cancelled** — permanently, not deferred. See "Roadmap update — post-M8" in
 [12-post-m8-round-4.md](docs/archive/plan/12-post-m8-round-4.md).
@@ -46,10 +46,11 @@ This index makes no claim about what is complete. The honest answer to that ques
 | 18 | M11 Gate B — playtest round 2 | 3,494 | [18-m11-gate-b-playtest-round-2.md](docs/archive/plan/18-m11-gate-b-playtest-round-2.md) |
 | 19 | Milestone 12 — the playtest round 4 and round 5 fix records | 4,120 | [19-m12-playtest-rounds-4-5-fixes.md](docs/archive/plan/19-m12-playtest-rounds-4-5-fixes.md) |
 | 20 | Milestone 13 — proposed: bodies that read, and one answer to "is this an enemy" | 1,207 | [20-m13-bodies-that-read.md](docs/archive/plan/20-m13-bodies-that-read.md) |
+| 21 | Milestone 14 — decorators where a concern is written by hand, and a unit-test runner that shares the gate | 339 | [21-m14-decorators-and-vitest.md](docs/archive/plan/21-m14-decorators-and-vitest.md) |
 
-What stays in this file: **Milestone 12 — proposed** (the content backlog) and **Milestone 14**
-(decorators where a concern is written by hand, and vitest — in progress; one "done" subsection
-per phase as each closes).
+What stays in this file: **Milestone 12 — proposed** (the content backlog) and **Milestone 15**
+(the front end, rebuilt to fit one screen — proposed; one "done" subsection per phase as each
+closes).
 
 ## How this file stays short
 
@@ -514,342 +515,356 @@ removed from them.
 
 ---
 
-# Milestone 14 — decorators where a concern is written by hand, and a unit-test runner that shares the gate
+# Milestone 15 — proposed: the front end, rebuilt to fit one screen
 
-Planned by the human on 2026-09-14 from two measured facts about the toolchain (TypeScript 7,
-Vite 8 on rolldown + oxc, Node 24): **standard TC39 decorators do not run here** — oxc leaves
-the `@name` line verbatim in the bundle at every `build.target` tried and Node rejects the
-syntax — and **legacy decorators do** (`experimentalDecorators` plus `oxc.decorator.legacy`, a
-proof build ran `step(21) = 42` through a method decorator). So this milestone is legacy
-decorators, **class and method only, never a field** (a [[Define]] field shadows the
-prototype under `useDefineForClassFields`), **never on the simulation tick** (S3: nothing
-reached from `simulate`/`step`/`onTick`/`tick` in `shared/`, nor `shared/net` encode/decode,
-`shared/player`, `shared/combat`, `shared/ai`), and only for a concern with three or more
-hand-written sites that change together (S4). Tables stay tables (S5); the boundary check is
-not edited (S6). Vitest is the one new devDependency (S2, amended); tests are co-located and
-obey their partition (S7); the harnesses stay the integration instruments and a red test is a
-finding, not something to fix in a harness (S8). Zero behaviour change throughout (S1): the
-seeded harness and the content probe are byte-identical after every commit.
+Planned by the human on 2026-09-15 from five requirements and five reference images — a main
+menu, a Create-a-Class screen, a match intro, an end-of-match screen, and one rule over all of
+them: **nothing scrolls, anywhere, at any window size.** The references are the look (an
+asymmetric menu over a cinematic left half, nav buttons that are smeared rather than boxed, a
+character on a lit platform, a right-hand loadout column of six boxes that each show only what
+is equipped); the numbers below are what this tree already has and what each item costs
+against it. The four decisions the brief turned on were taken the same day, on the
+recommendation: **the menu backdrop is a live render of the game, not a video** (no video file
+exists, and none is wanted at 5–20 MB against a 391 kB client); **the skin picker ships
+local-first**, the wire field after; **1280×720 is the floor** the no-scroll rule is measured
+at; and **Milestone 14 was archived** to make room for this section — its record is
+[21-m14-decorators-and-vitest.md](docs/archive/plan/21-m14-decorators-and-vitest.md).
 
-Four phases: **A** the runner and a first wave of characterisation tests; **B** the transform
-seam proved in vitest, in `dist-server/` and in `dist/`, with one `@timed` on one debug method;
-**C** the concerns, one commit each, evidence first (C1 timing, C2 subscription lifetime with
-`npm run leak` as the gate, C3 the human's decision, C4 and C5 rejected with reasons); **D**
-`check:decorators` in the gate, a Tests section in DEBUG.md, and this record. The human closed
-Milestone 13 after Phase A and cancelled its Phase E outright; its record is
-[20-m13-bodies-that-read.md](docs/archive/plan/20-m13-bodies-that-read.md).
+Five phases, in dependency order: **A** the frame (one scale, no scroll), the menu with its
+backdrop dolly, and the controls card moved into Settings; **B** Create-a-Class — the stage,
+six boxes, the strips, the skin picker; **C** the match intro, a camera the round-one freeze
+already pays for; **D** the end of the match — the lineup and the accordion; **E** combat
+behind the menu — the solo simulation running under the backdrop, last, because it is the one
+piece whose cost has to be measured by `npm run leak`-shaped instruments before it ships.
+Zero gameplay change throughout: nothing in `shared/` moves before B6, the server is not
+touched by any phase but B6, and the seeded harness and the content probe are byte-identical
+after every commit. **No product code was written in this session.**
 
-## Phase A — done (session of 2026-09-14): vitest, and 109 characterisation tests
+## The rule that decides the layout: nothing scrolls
 
-**The runner.** `vitest@5.0.0` (released 2026-09-03; peer range `^6 || ^7 || ^8`, so 4.1.11
-would also have served — the human's call if the fresh major misbehaves). `vitest.config.ts`
-stands alone and does not import `vite.config.ts`, whose `define.__SERVER_URL__`,
-`optimizeDeps` and dev `server` blocks a test never wants; it already carries
-`oxc: { decorator: { legacy: true } }` for Phase B. `test.include = ['src/**/*.test.ts']`,
-`environment: 'node'`, `globals: false` — `describe/it/expect` are imported in every file, so
-a `shared/` test typechecks under `tsconfig.shared.json` with no DOM lib and no globals, which
-was verified rather than assumed. `npm test` is `vitest run`; `npm run test` sits in `check`
-between `check:plan` and `typecheck` (decision 4, default taken). `vitest.config.ts` is
-typechecked in the client partition beside `vite.config.ts`.
+Today the opposite is policy, and it was a fix. Playtest round 5's B1/B2 found the main menu
+at 879 px of content in a 626 px window with half of it at a negative offset; the answer was
+`justify-content: safe center` and `overflow: auto` on the `.op-screen` layer
+(`styles/app.css`, the comment at the layer's `overflow`), so *"a screen taller than the
+window scrolls from its own top, and no individual screen has to know how tall it is."* B11
+then rebuilt the loadout editor so that its option list is never destroyed, *because* it
+scrolls. The layout probe (`scripts/layout-probe.mjs`, `probes/layout.ts`) asserts two rules
+at six viewports: every element is **reachable** by some scroll, and nothing scrolls
+**sideways**. Vertical scrolling is, in that probe's own words, *"a legitimate answer to a
+long screen."*
 
-**The first wave.** Eleven files, one per module, all in `src/shared/`, green against the tree
-as it is with no product code touched: `core/SimMath` (textbook values, the symmetries, the
-one-ULP claim through `verifyAgainstNative`), `core/Rng` (same seed same sequence, adjacent
-seeds diverge, seed 0 works, the state round-trip, `eventSeed`), `core/StateHash` (the FNV
-offset basis, a known one-byte hash, `+0` and `-0` hash differently), `core/EventBus`
-(dispatch order, unsubscribe-from-inside, subscribe-mid-dispatch, nested emit, `clear()`
-inside a dispatch throws, and the process-wide live count returning to where it started),
-`net/Wire` (every primitive round-trips, little-endian, clamping, UTF-8 outside ASCII, the
-255-byte string cap, overflow and overrun without throwing, `raw()` copies), `net/Protocol`
-(each quantiser an identity within half a step, `quantiseCommandInPlace` idempotent,
-`rejectText` for every code), `meta/SaveData` (a hand-written v1 and v2 save reach
-`SAVE_VERSION` with level and XP intact, the v1 audio-bus derivation, the v2 → v3 binding
-repair applied exactly once, the synthetic v0 `verify/progression.js` uses), `modes/GameMode`
-(`teamScoreWinCondition` over the same nine-pair grid `content.ts` prints, the six `COL_*`
-over the same three fixed rows — the expected strings are the probe's own output),
-`modes/MatchOutcome` (`wonBy`, places with the winner pinned, the ordinals, `isMvp`),
-`world/maps/build` (the three `rotateHalf*` on two-element inputs, the pitched-brush refusal),
-`core/Keybinds` (a `BindingMap` round-trips, every default resolves to its bit, ADS is
-`Mouse2`, rebind steals, `normaliseBindings` restores a missing action's defaults).
+This milestone withdraws that answer. The mechanism is one thing rather than a decision per
+screen:
 
-**S7 worked on the first file.** `check-boundaries` refused `Math.sin` in `SimMath.test.ts`
-— a test is a file in `shared/` like any other — so the comparison against the natives goes
-through the `verifyAgainstNative` the module already exports. No exemption was added.
+- **A design frame.** The front end is authored at 1920×1080 and the UI root carries
+  `zoom: var(--ui-scale)` with `--ui-scale = min(vw / 1920, vh / 1080)`, set from the same
+  `resize` listener that calls `Renderer.setSize`. `zoom` rather than `transform: scale()`
+  because it re-lays out at the scaled size — text is rasterised at its final size and
+  `getBoundingClientRect()` reports what is on screen, so the probe measures the truth. Chrome
+  has always had it; Firefox since 126. The frame is centred; the backdrop layer is full-bleed,
+  so a 16:10 or an ultrawide window gets more sky, not black bars.
+- **A third probe rule, and the first rewritten.** *No overflow*: for every element in a
+  mounted screen, `scrollHeight <= clientHeight` and `scrollWidth <= clientWidth`, and no
+  element's rect leaves the viewport — which is *reachable* with the scroll taken away, so it
+  subsumes it; *sideways* stays as the named special case. Viewports: the six in
+  `Viewports.ts` plus **1920×1080** and **1280×720**, the floor. Below the floor the frame
+  still fits — the formula has no lower clamp and the rule holds at 375×812 too — but nothing
+  is promised about legibility there; that width is the device gate's territory already.
+- **Where the length goes.** The things that are long today become tabs, paged strips or
+  collapsibles, screen by screen: the menu's key card (13 actions and Esc) → a Settings tab;
+  the editor's 14 rows → six boxes, each opening one strip, paged where a list outruns the
+  strip; the 22 rebindable actions → the BINDINGS tab that already exists, in two columns;
+  the ten-player board on the summary → a toggle over the lineup. Nothing gets an
+  `overflow: auto`, and the probe is what refuses one.
+- **`html, body { overflow: hidden }`** stays; it is what keeps the canvas still.
 
-**One finding, characterised rather than fixed:** `simSin(-0)` returns `+0` where
-`Math.sin(-0)` keeps `-0`. Harmless — `-0 === 0`, and nothing in the simulation branches on
-the sign of a zero — so the test pins the current answer and the note is here.
-
-**Measured:** `npm test` **109 cases in 11 files, 0.66 s** inside the runner (2.1 s wall with
-start-up); `npm run check` green in **8.6 s** wall, ten audits + test + typecheck ×3. Seeded
-harness normalised-identical to the run taken before Phase A (`t`, `pid`, `simMsMean`,
-`heapMb` are wall-clock and differ between two runs on one tree; everything else is the seeded
-outcome and did not). Content probe byte-identical. Commit `f064449`.
-
-## Phase B — done (session of 2026-09-14): the seam, proved in four pipelines
-
-**The switch.** `"experimentalDecorators": true` in `tsconfig.base.json`, with the comment
-stating why the standard form is not an option here and what to revisit;
-`oxc: { decorator: { legacy: true } }` in `vite.config.ts` and `vite.server.config.ts`
-(`vitest.config.ts` had it since Phase A).
-
-**The decorator.** `src/shared/core/Decorators.ts` exports `timed(label)`: a legacy method
-decorator that reads `nowMs()` from `shared/core/Clock` before and after the call and reports
-`"<label> <ms>ms"` at `info` through `logger('timed')` — after the call returns *or throws*,
-with the value and the exception passing through untouched. Synchronous methods only; an
-`async` method would be timed to its promise, not its work, and nothing needed that shape.
-The file comment carries the three rules (methods and classes only, never the tick path, a
-decorator replaces repetition and never adds behaviour).
-
-**The one use, and a departure from the brief.** The brief asked for a method in
-`src/server/debug/` or `src/client/debug/` "that today does the `const t = nowMs()` …
-`nowMs() - t` dance by hand", exercised by `node dist-server/main.js --matches 1 --asap`.
-Neither half exists in this tree: every hand-written pair in the debug folders either feeds a
-report field (`SnagHarness.run`'s `wallSeconds`, `BotHarness`, `MatchHarness`) or times a
-span inside a method (`HeadlessClient`'s build and reconnect windows), so a decorator that
-logs would either change a report's fields or duplicate a measurement; and `main.ts` reaches
-no `server/debug/` module at all — it imports the `shared/debug/` audits, which are functions.
-So the use is **`ModePanel.measureLanes`** (`client/debug/ModePanel.ts`): private, one-shot,
-not hot, behind the F1 overlay's *Measure lane timings* button and `__operator.laneReport()`,
-with no timing of its own before — the decorator **adds one debug log line** there, which is
-the smallest deviation available and is stated here so nobody reads it as a replacement. The
-brief's counts for C1 are re-taken in Phase C with this in mind.
-
-**Proved, four pipelines, one decorated method each:**
-
-| Pipeline | Evidence |
-|---|---|
-| vitest (Vite transform, Node 24) | `Decorators.test.ts`: `step(21) = 42` through `@timed`, one `info` line `worker.step 21.00ms` on a fake clock; the method sits on the prototype, not the instance; a throw still logs. 4 cases |
-| `vite build` (rolldown + oxc, client) | `dist/assets/index-*.js` carries `Ej([_j("ModePanel.measureLanes")],Dj.prototype,"measureLanes",null)` — `__decorate`, minified. **0** lines starting with `@identifier` across `dist/assets/*.js` |
-| `vite build --config vite.server.config.ts` (SSR) | The repo's server config imported verbatim into a scratch config with only the entry and `outDir` swapped, over a scratch class decorated with the real `timed`: `__decorate([timed("proof.step")], Proof.prototype, "step", null)` in the output; `node` prints `[timed] proof.step 0.01ms` then `step(21) = 42`. **0** `@` lines across `dist-server/*.js` (which carry no decorator yet — C1/C2 will be the first) |
-| `vite` dev server (oxc per-module transform, `vite.config.ts`) | `GET /src/client/debug/ModePanel.ts` returns `_decorate([timed("ModePanel.measureLanes")], ModePanel.prototype, "measureLanes", null)`, 0 `@` lines; in the pane (rAF suspended, `loop.frame` stepped by hand into a match) `__operator.laneReport()` printed **`[timed] ModePanel.measureLanes 2.70ms`** and returned six lane timings, no console error |
-
-`node dist-server/main.js --matches 1 --asap` ran clean on the rebuilt bundle (seed 1: B wins
-68-75, 16 777 ticks — the same outcome as the baseline's match 1).
-
-**Gate:** `npm run check` green in 9.3 s (**113** tests); seeded harness normalised-identical
-to the pre-Phase-A baseline; content probe byte-identical.
-
-**Needs a browser (the human's):** the same button on a real display — F1, *Measure lane
-timings*, `[timed] ModePanel.measureLanes …ms` in the console and nothing red beside it.
-
-## Phase C — done (session of 2026-09-14): one concern built, four declined, each on a count
-
-Every candidate was re-counted in this tree before anything was written, per S4. The counts
-the brief carried (taken the same day) were a floor and are corrected below where they differ.
-
-### C1 — `@timed`, generalised: **rejected, 0 replaceable sites**
-
-The tree holds **34 elapsed-time subtractions in 24 files** (`nowMs() - t` or
-`performance.now() - t`, tests and the clock modules excluded). Sorted by shape:
-
-| Shape | Count | Where |
-|---|---|---|
-| Whole method, on the tick or frame path (S3) | 5 | `MatchInstance.step`, `StreakSystem.simulate`, `MatchEquipment.simulate`, `MatchMeta.simulate`, `Hud.update` — each writes `this.lastMs`/`lastStepMs` for `FrameStats` |
-| Whole method, result feeds a report or a metric | 3 | `SnagHarness.run` → `report.wallSeconds`; `MapBakery.bakeAll` → `report.totalMs`; `Migration.move` → `MigrationRecord.durationMs` |
-| Whole *function* (no class to decorate) | 3 | `buildMapChunked` (a generator), `bakeNavmesh` → `stats.bakeMs`, `hashRun`'s `main` |
-| A span inside a method, or across two methods | 23 | `FrameLoop` (sim and render halves), `MapBuildQueue` (chunk, frame budget), `MapBakery` (collision, nav), `HeadlessClient` (build, summary hold, resync), `Server` (allocate, ready wait), `ServerLoop`, `main`'s pump, `skirmishHarness`'s first input, `MatchHarness`'s per-match loop, `BotHarness`'s start/report pair, `AiScheduler`'s begin/end, `LiveMatch`'s ready wait, `Hud`'s hit latency, `MapRender`'s AO |
-
-A `@timed` that logs replaces a pair only where the method's whole body is the span *and* the
-number goes nowhere but a log line. That count is **zero**: the five whole-method pairs that
-could take it are the five the contract froze, and the three off the tick path put the number
-into a report a harness prints and `__operator` returns. Replacing any of them changes the
-fields a harness prints, which C1's own gate forbids. So `@timed` stays at its one Phase B use
-and the twenty-odd spans stay hand-written — they are not repetition of one concern, they are
-twenty different measurements. The brief's "20 pairs in 7 files, all in harness and debug
-code" was an undercount of the pairs and an overcount of the ones a decorator can reach.
-
-### C2 — subscription lifetime: **built, as a base class, 17 classes**
-
-**The count.** 83 `bus.on(` calls and 75 `dispose()` methods in the tree; **17 classes** with
-the exact shape — `private readonly unsubscribe: Array<() => void> = []`, filled by
-`this.unsubscribe.push(bus.on(...))` in the constructor or a `subscribe()`, drained by the
-two lines `for (const off of this.unsubscribe) off(); this.unsubscribe.length = 0;` in
-`dispose()` — ten in `client/` (`DebugOverlay`, `MetaPanel`, `ModePanel`, `StreakPanel`,
-`WeaponDebug`, `MatchEquipment`, `MatchFeedback`, `MatchObjectives`, `PerksRenderer`,
-`MatchHud`), one in `server/` (`ServerMatch`), six in `shared/` (`BotDirector`,
-`ScoreSystem`, `MatchLedger`, `MatchFlow`, `PerksRuntime`, `StreakSystem`). Sixteen drain
-first and tear the rest down after; `StreakSystem` calls `endAll()` *before* draining. The
-other holders of an unsubscriber keep one in a nullable field, and `EventCollector`
-(`server/net`) returns its list to `ServerMatch` — different shapes, left alone.
-
-**Decorator against mixin, both designed.** A `@disposable` class decorator would have to
-wrap `dispose()` in one fixed order (so `StreakSystem` is out, or reordered — S1 says no),
-could not type an `own()` without an interface merge on every class (so the list would be
-reached through a field *name*), and is refused under `shared/combat` and `shared/ai` by
-Phase D's check (so `ScoreSystem` and `BotDirector` are out): fourteen of seventeen at best,
-none of them typed. **`abstract class Disposable`** in `shared/core/Disposable.ts` takes all
-seventeen: a private `subscriptions` list, `protected own(...offs)` (variadic because `push`
-was — `MatchLedger` takes its seven in one call), and `dispose()` that drains in order; a
-subclass overrides `dispose()` with `override` (the compiler insists) and calls
-`super.dispose()` exactly where its two drain lines were. Nothing on any tick changes: a
-subclass's methods stay on its own prototype, `super()` runs once per instance, `own()` runs
-at subscribe time. Neither form needs a flag or a field decorator; the mixin won on the three
-counts above, and the milestone's decorator count therefore stays at one — which is the
-brief's own rule working (*"choose the one that needs no flag and no field decorator"*, and
-then the one that serves every site).
-
-**The change.** 17 files: 17 `extends Disposable`, 17 `super()` calls, 17 field declarations
-gone, 34 drain lines gone, 55 `push(` sites now `own(`, 10 `override dispose()` keeping their
-own teardown, and 7 `dispose()` methods that were *only* the drain deleted outright (the
-inherited one is identical). Net **−28 lines** across the seventeen; `Disposable.ts` is 60
-lines, of which 45 are the comment that says why, and its test is three cases.
-
-**Gate, all five instruments:** `npm run check` green (**116** tests); seeded harness
-normalised-identical; content probe byte-identical; **`npm run leak`: 29 → 29 (+0) over 100
-cycles, and the count at every sampled cycle (10, 20, … 100) identical to the pre-C2 run,
-LEAK CHECK PASSED**; skirmish: the twelve invariant lines identical (migrations 3/0 failed,
-worst mispredictions after migration 0, misrouted 0, WAITING-in-live 0, result surfaces in
-the room 0, spectator self/enemy/dead 0/0/0, quick-loadout-while-alive 0, sentries on own
-side 0, FLOW CHECK PASSED), and the flow event's `subscriptions: 79` the same in both runs.
-
-### C3 — console commands by decorator: **not built (decision 3, default taken)**
-
-`installConsoleApi` builds **one object literal with 83 top-level entries** (the brief's 72
-undercounted the nested groups) and DEBUG.md's "Console API" documents it as a table. S5 is
-explicit that a table stays a table, and a `@command('name', 'help')` that registered
-entries by decoration would hide this one behind class scans. The human's default was to
-leave it; left.
-
-### C4 — per-module loggers: **rejected, wrong level**
-
-**32 files** open with `const log = logger('tag')` at module scope; **zero** classes hold a
-logger as a field. A decorator attaches to a class or a method and cannot reach a module-level
-constant, so there is nothing for one to replace here. Recorded so nobody re-derives it.
-
-### C5 — wire validation: **rejected, frozen path**
-
-`server/net/Validation.ts` (one exported function, `validateCommand`) and `Session.ts` sit on
-the receive path the contract froze (S3: `shared/net`, and the server's decode of it); a
-wrapper per message is an allocation per message. Rejected without a count, because the count
-does not matter there.
-
-## Between phases — two reports from the multiplayer playtest (2026-09-15)
-
-Raised by the human between Phases C and D, both from a networked session; both reproduced in
-the pane against a local dedicated server on the unfixed tree, fixed, and measured again.
-
-**The ballot outlived the socket** (`5bc40ac`). *"Quit a multiplayer match, start a solo one:
-NEXT VOTE IN stays up with a clock of 447.4 s."* `VoteOverlay` is app-lifetime — one instance
-on the UI host — and the arena's 4 Hz broadcast is its only writer; `onMigrated` hid it on a
-move between instances, but `teardownWorld`, the session boundary, did not. So the last
-`PLAY` broadcast stayed applied, and every frame `tick()` computed `(phaseEndsTick −
-syncedServerTick()) × DT` with no session behind `syncedServerTick()`, which is zero: the
-clock showed `phaseEndsTick / 60`, and 26 844 ticks is 447.4 s. **Measured before:** joined
-the arena at `phaseEndsTick 3701`, quit, started solo — overlay visible, `NEXT VOTE IN 61.7`
-(= 3701 / 60), `syncedTick 0`. **After:** `teardownWorld` calls `voteOverlay.hide()` under
-`!keep` (a rotation or a reconnect is not a session exit, and a notice up during one must
-survive it) — overlay hidden, `info: null`, in a solo match on Foundry and on Dunes.
-`VoteOverlay` holds no bus subscription, so C2's `Disposable` has nothing to own there; the
-session hook is the teardown, and it is the same rule `onMigrated` already applied.
-
-**The pad that was never red** (`c03a37e`). *"Enemy markers on the server appear yellow
-instead of red."* First suspected a team-state desync; it was not one — in the pane the
-viewer context, every actor's team and the palette lookup were right (hostile `#e8604c`; a
-first reading that said otherwise was a seat the vote cycle had already migrated into an SND
-match, where team A *is* the viewer's). The pad was a `MeshStandardMaterial` at
-`emissiveIntensity 3.0` with `toneMapped: false`: without tone mapping there is no headroom
-above 1.0 per channel, so three times (0.80, 0.12, 0.07) linear clips red at 1.0 while green
-and blue keep theirs, and the sun's diffuse adds on top. **Measured at the pad's centre,
-before:** (255, 163, 132) on Foundry, (255, 178, 142) on Dunes — salmon, paler under the
-brighter sun, for a palette of (232, 96, 76); the server's maps are the bright ones, which is
-where it was noticed. The 3.0 had been chosen because 1.5 "read as paint on the sleeve", but
-brighter than the palette's red is not a colour this pipeline can show — only a less red one.
-**After:** an unlit `MeshBasicMaterial` at the hostile hex, `toneMapped: false` — nothing to
-add, nothing to clip — (232, 96, 76) on Foundry and on three pads on Dunes. The halo is
-still the glow, and a patch that holds one colour on a lit shoulder reads as a device rather
-than as paint, which is what the 3.0 was reaching for.
-
-Both fixes are client-only: `npm run check` green (116 tests), seeded harness
-normalised-identical, content probe byte-identical. **Needs a browser:** the pad at the exact
-palette red on a real display — decision 10 (too much at night?) is now a question about the
-halo alone.
-
-## Phase D — done (session of 2026-09-15): the fence, the two documents, and this record
-
-**`scripts/check-decorators.mjs`, in the chain after `check:plan`.** Text over `src/` with
-comments and string bodies blanked (the same stripper `check-boundaries` uses), a decorator
-being `@name` with or without arguments at the start of a statement, and its target whatever
-follows the stack — `class`, a method (an identifier before `(` or `<`), a field (an
-identifier before `:`, `=`, `;`, `!`, `?` or a line end), or `accessor`. Three rules: a
-decorated method named `simulate`, `step`, `onTick` or `tick` anywhere is refused; any
-decorator under `shared/net`, `shared/player`, `shared/combat` or `shared/ai` is refused; a
-decorated field or `accessor` is refused (the [[Define]] field shadows the prototype and the
-decorator silently does nothing). Parameter decorators are not looked for and the header says
-so. **Proved red before it joined:** three plants — `@timed` on `MatchInstance.step`, on the
-field `ModePanel.laneCache`, and on `ScoreSystem.dispose` under `shared/combat` — produced
-exactly three violations, each under its own rule, and the tree went green again on revert.
-**Proved not to over-count:** `@param` and `@returns` in a doc comment, `'@notADecorator'` in
-a string and `// @alsoNotOne` in a line comment planted together left the count at three
-(the tree has no `@tag` doc comments of its own, so this had to be planted to be tested). On
-the tree as it is: **3 decorator uses across 348 files** — `ModePanel.measureLanes` and the
-two in `Decorators.test.ts`.
-
-**S7 again.** The Phase B test decorated a toy `step(n)`, and the check refuses a decorated
-`step` anywhere in `src/`, tests included. The method is now `double`; the rule has no
-exemption. Same shape as `Math.sin` in `SimMath.test.ts` in Phase A.
-
-**The documents.** DEBUG.md has a "Tests" section under a new `# M14` heading: `npm test`,
-where tests live, the partition rule and the finding rule, in the two sentences the brief
-asked for. README.md's "Debugging" points at it in one line, and its stale description of
-`check` ("the target-boundary check, then a typecheck") now names the audits and the tests.
-`check:flags` and `check:plan` green.
-
-## Measured, this session
+## What exists, measured this session
 
 | What | Number |
 |---|---|
-| `npm test` | **116 cases, 13 files**, 0.76 s in the runner, 2.4 s wall with start-up |
-| `npm run check` | green, **11 audits + test + typecheck ×3, 10.5 s** wall (8.6 s at Phase A) |
-| Decorator uses in the tree | **3** across 348 files: one product (`ModePanel.measureLanes`), two in its test |
-| C1, elapsed-time pairs | 34 subtractions in 24 files; **0** replaceable by a logging `@timed` (5 on the tick path, 3 feeding reports, 3 functions, 23 spans) |
-| C2, the subscription shape | **17 classes** (10 client, 1 server, 6 shared) onto `Disposable`; 55 `push(` → `own(`; **−28 lines net** across the 17; 7 `dispose()` methods deleted outright |
-| C3 / C4 / C5 | 83 console entries in one literal (table stays); 32 module-level loggers, 0 class-level; the receive path — all declined |
-| Sites left hand-written, and why | every C1 span (a report field or a span inside a method, not one concern); `EventCollector`'s returned list and the single-unsubscriber fields (a different shape); the 32 loggers (module level) |
-| `npm run leak`, C2 | 29 → 29 (+0) over 100 cycles, every sampled cycle identical to the pre-C2 run |
-| Skirmish, C2 | 12 invariant lines identical; flow event `subscriptions: 79` in both |
-| Seeded harness | normalised-identical to the pre-Phase-A baseline after every commit (`t`, `pid`, `simMsMean`, `heapMb` are wall-clock and stripped; everything else is the seeded outcome) |
-| Content probe | byte-identical after every commit |
-| Whole milestone, `src/` | 34 files, +1 655 / −165 (the +1 655 is 13 test files, `Decorators.ts` at 64 lines, `Disposable.ts` at 58) |
-| Between phases | vote overlay: 61.7 s on the unfixed tree (= 3 701 / 60) → hidden, `info: null`; pad centre: (255, 163, 132) Foundry / (255, 178, 142) Dunes → **(232, 96, 76)** on both |
+| Front end | `client/ui/`: 23 files, **8 000 lines** of TS; 5 stylesheets, **3 604 lines** of CSS; `tokens.css` holds the palette, the 4 px grid and the type ramp every value resolves to |
+| `Menus.ts` | 464 lines; one centred column — title, status, profile line, Play Multiplayer, callsign, Play Solo, Create a class, Settings, the key card, the fullscreen hint, reset — then a mode/map/difficulty page |
+| `LoadoutEditor.ts` | 864 lines; 5 slots, **14 rows** (primary, attachments, camo, secondary, sidearm attachments, lethal, tactical, perk ×3, field upgrade, streak ×3), one open at a time, `WeaponPreview` + `LoadoutStats` on the right; `.lo-options` scrolls (B11) |
+| `Settings.ts` | 590 lines, four tabs already (CONTROLS, BINDINGS, AUDIO, VIDEO); **22** rebindable actions |
+| `EndOfMatch.ts` + `XpSummary.ts` | 264 + 352 lines; the XP rows land on a 0.34 s cadence with a bar and a level-up flourish (S6.1, *"the payoff moment of the whole loop"*); the board is the match's own `Scoreboard`, embedded, 8 rows a side |
+| Layout probe | 2 rules × 6 viewports (1366×626 … 375×812), headless Chrome over CDP, an instrument (`npm run layout`), not a gate — the deploy host has no browser |
+| Video and image assets | **0** of either. The only assets are M13's: 7 skins in `public/models/bots/skins/` — **Apex 4.4 MB, Pulse 4.5, Rhino 4.9, Sentry 5.2, Viper 24.3, Echo 28.2, Hazard 37.6; 109 MB** — and 8.5 MB of animation clips. One skin preloads at boot (`echo`, the default, 28 MB); the rest load when an actor is dealt them |
+| A character stage's precedent | `WeaponPreview` builds its own `THREE.Scene` and `WebGLRenderer` on the editor's first tick; `CharacterAssetService.avatarProvider(def).create()` hands back a posed `CharacterSkin` with a weapon socket and an animator |
+| The freeze | `MATCH_START_SECONDS = 10`, round one only, every roster mode; the quick class selector (keys 1–5) is a HUD panel that lives in exactly this window |
+| A camera that is not the player's | `ChopperCamera.cameraFor(chopper, aspect)`: `Game` *asks* once per render frame and renders through the answer or through the rig — *"nothing for Game to undo"* |
+| Routes | `Pathfinder` over `NavGrid`, resumable and budgeted; `ModePanel.measureLanes` already solves spawn → centre synchronously with a large budget on the match's own instance; `LaneDef.center` is authored on all three real maps, three lanes each, *"where the two teams meet"* |
+| Objectives | Foundry, Dunes and Depot each author **3 flags + 2 bombsites** (`MapDef.objectives`: kind, position, radius, label); Greybox authors none |
+| Movement, for the camera | sprint 6.9 m/s (`MovementConfig`), eye 1.65 m (`PlayerState`); `CollisionWorld.overlapCapsule` is the one test movement uses |
+| Save | `SAVE_VERSION = 3`; a `LoadoutSlot` has a `name`; nothing on the profile names a character skin |
+| Wire | `MAX_PLAYERS = 10`; `EntitySnapshot` carries `weaponIndex` and `heightScale` and no character index; a body's skin is dealt client-side by `RandomCharacterSelector` from the entity id and a per-match salt |
+| Client build | 1 370 kB raw / 391 kB gzip (M12's measurement; re-taken at Phase A) |
 
-## Needs a browser
+## Phase A — the frame, the menu, and the controls card moved
 
-Two things, both the human's, both one action on a real display:
+**A1, the scale.** `--ui-scale` on `#ui-root`, the 1920×1080 frame, the resize hook, the
+third probe rule and the two new viewports, and the comment at `.op-screen`'s `overflow`
+rewritten to say what replaced the rule and why — the B1/B2 reasoning is history now, and a
+comment that argues for a rule the file no longer has is worse than none. Every existing
+screen is run through the probe at the eight viewports **before** any screen is redesigned,
+so the list of what overflows is measured rather than guessed; those screens are then fixed
+in the phase that owns them, and the probe stays red on them until then — a red probe is a
+finding, which is S8's rule for tests applied to an instrument.
 
-- **Phase B's button.** F1 → *Measure lane timings* → `[timed] ModePanel.measureLanes …ms` in
-  the console and nothing red beside it. Seen in the pane (`2.70ms`); not yet on a display.
-- **The pad at the palette's red.** It is now exactly `#e8604c` in every light, unlit, with the
-  halo as the glow. Whether that reads as a device on a sunlit shoulder at play speed, and
-  whether the halo alone is "too much at night" (decision 10, which is now about the halo
-  only), is a display question.
+**A2, the menu.** Two halves. **Right:** the navigation — PLAY (multiplayer, primary, one
+click to the arena as §6.1 requires), PLAY SOLO (the mode/map/difficulty page, which becomes a
+panel sliding over the same frame rather than a second page), CREATE A CLASS, SETTINGS, QUIT
+(decision 7). Each button is a `clip-path` polygon with a skewed leading edge, a `mask-image`
+gradient that frays its trailing edge into the backdrop, and a hover sweep along the skew —
+the "smeared" reading is three declarations and a pseudo-element, no image. The callsign
+field, the profile line (level, class, record) and the status line move to a header strip at
+the top right, where the references put the player card. **Left:** the backdrop, and the fade
+between the halves is a `mask-image` on the backdrop layer — a canvas whose right and top
+edges dissolve into `--c-void`, so the picture has no edge to read as a box.
+
+**A3, the backdrop dolly.** The backdrop is the game's own renderer drawing a real map: the
+map mesh, the sky dome and the particulate, with the camera on a slow dolly along one of the
+map's authored lanes at eye height — the bots' own route, smoothed the way Phase C smooths (C
+lands after A, so A ships with a straight dolly along `lane.a → lane.center` and takes C's
+spline when it exists). **No simulation runs**: no `Match`, no bots, no bus subscriptions — the
+world is `MapRender` + `SkyDome` + a camera, built through `MapBuildQueue` at its 5 ms budget
+while the boot screen is up, which is what the queue was built for (§6.5). Which map: the one
+the player last played (`save.mapId`), so the menu shows where they are going. This is the
+whole of "the backdrop" for Phase A; the bodies and the shooting are Phase E, and the reason
+they are separate is stated there.
+
+**A4, the controls card.** `CONTROL_ROWS` and `FULLSCREEN_HINT` move from `Menus.ts` to a
+fifth Settings tab, **INFO**, built from the live bindings exactly as they are today — M8's
+reasoning (a card that says W A S D to a player on the arrow keys is worse than none) does
+not change with the address. The reset control goes with them, keeping its two-step arm.
+`Menus.ts` loses `resetArmed`, the card and the hint; `paintMain` becomes the two halves.
+
+**Gate A.** `npm run layout` green at eight viewports on the menu, the play panel and the
+settings; `npm run check` green; seeded harness and content probe byte-identical (nothing in
+`shared/` moves); the client bundle re-measured and recorded. **Pane:** the menu at 1920×1080,
+1366×626 and 1280×720, screenshots in the record; the dolly stepped by hand (`loop.frame`) and
+its edge measured — a pixel column at the mask's boundary reads `--c-void` on the menu side.
+
+## Phase B — Create-a-Class: the stage, six boxes, the strips, the skins
+
+**B1, the stage.** Left half: the selected skin on a lit disc, `idleWeaponReady` looping,
+holding the class's primary through the weapon socket (`CharacterSkin.setWeapon`, the call
+the match makes), turning at 0.1 rad/s with the two arrows below it to grab. Rendered
+exactly as `WeaponPreview` renders the gun — its own scene, its own renderer, built on the
+first tick, disposed on exit. The skin loads through `CharacterAssetService.preload` on
+selection; until it resolves the disc holds the skin the stage last showed, and the default
+is preloaded at boot, so the first paint is never empty (decision 5 is about how long that
+first paint waits). The stat panel does not leave the screen — M6 called `LoadoutStats`
+*"the point of the screen"*, and that has not changed — it becomes a compact strip under the
+weapon strip's tabs, visible while a weapon box is open.
+
+**B2, six boxes.** The right column: **PRIMARY** (silhouette, name, camo swatch),
+**SECONDARY**, **EQUIPMENT** (lethal + tactical), **PERKS** (three icons), **KILLSTREAKS**
+(three icons, each labelled with its key), **FIELD UPGRADE**. Each shows only what is
+equipped. Six boxes under the header in a 1080 frame is 120 px each — room for an icon and
+two lines; fourteen would have been 60. The five class slots are tabs across the top right,
+where the reference puts them, and the slot's `name` is edited in place beneath them.
+
+**B3, the strips.** Clicking a box opens one strip beneath it — the in-place model B11 built
+(`refreshers`, one `openRow`) kept, the elements re-shaped — with the boxes above staying
+put. A weapon box's strip has three tabs: **WEAPON** (the list, paged at the strip's width),
+**ATTACHMENTS** (per slot, the fit rules unchanged), **SKIN** — the reference's word for what
+this project has called camo since M5; the label changes, `CamoId` does not. Equipment's
+strip has LETHAL / TACTICAL tabs; Perks' has 1 / 2 / 3; Killstreaks' has 3 / 4 / 5. A strip
+longer than its width is **paged**, never scrolled — the arrows at each end are the
+reference's, and the probe is what holds it to that. Locked items keep M5's rule: drawn with
+their requirement, never hidden.
+
+**B4, tooltips.** One tooltip element on the screen, positioned by the hovered item, filled
+from the def's existing `blurb` (perks, equipment, field upgrades, streaks and attachments all
+carry one). It never leaves the frame: it flips above when below would overflow, which is a
+rect test, not a guess.
+
+**B5, the skin picker.** CHANGE A SKIN at the bottom left, opening a horizontal strip of the
+seven skins with a thumbnail each. **The thumbnails are generated, not loaded:** rendering
+seven live models to fill a strip means fetching 109 MB to open a menu, so
+`scripts/skin-thumbs.mjs` drives the headless Chrome that `layout-probe` already knows how to
+find, renders each skin once to a 160 px canvas and writes
+`public/models/bots/skins/thumbs/*.png` — committed, ~15 kB each, regenerated when a skin
+changes, and `check:animations`' folder rule extends to them: a skin without a thumbnail
+fails the gate. Picking writes `skinId` to the profile — `SAVE_VERSION` 4, a migration in
+`SaveData.ts` with its test — and the stage reloads. **Local-first (decision 2):** the picked
+skin is what the stage and Phase D's lineup show; other players still see the dealt body. The
+wire step is **B6**: a `characterIndex: u8` on `EntitySnapshot` and on the join,
+`RandomCharacterSelector` becoming the fallback for a body that declared none — a
+`shared/net` change with `check:authority` and the netharness over it — taken in this
+milestone if B1–B5 land with room, else the first item of the next.
+
+**Gate B.** `npm run layout` green on the editor at eight viewports with every box's strip
+open in turn — the probe mounts the editor and opens each box, because a probe that measures
+only the closed state measures the easy state; `check:unlocks` and `check:cosmetics` green;
+`progression` byte-identical (the editor's gating is a courtesy over `sanitiseLoadout`, and
+this phase must not have moved it); the pane, 50 cycles of MENU → LOADOUT → MENU with
+`renderer.info.memory.geometries`, `.textures` and the bus's live count flat.
+
+## Phase C — the match intro: a camera the freeze already pays for
+
+**Where it plays, and what it hides.** The brief calls this a hidden loading screen. In this
+project there is nothing to hide: the connected path builds the next map during the previous
+match's summary and warmup (§6.5) and adopts it at the transition, and the solo path builds
+it before `MATCH`. What there *is* is the round-one freeze — ten seconds in which the player
+stands at spawn unable to move, ten rather than three (`MatchFlow.ts`) so there is time to
+read the quick class selector. The intro plays over that: **client-only presentation over a
+built world during a freeze the server already runs.** Conditions: `flow.currentPhase ===
+'WARMUP'`, `flow.round <= 1`, not the warmup arena (§6.1's lobby), not the Shooting Range, and
+the world built — if the fallback `LoadingScreen` is up, there is no intro. Nothing goes on
+the wire; the server does not know it happened.
+
+**The timeline** is driven by `flow.phaseSecondsRemaining`, not a local clock, so a client
+that joined with four seconds left gets four seconds of intro and the FIGHT cue lands on the
+player's own eyes regardless. Budget, of the 10 s: **Phase 1 ≤ 4.0 s, Phase 2 1.5 s, Phase 3
+≤ 3.0 s, return blend 0.5 s, and 1.0 s of the player's own view before the freeze lifts** —
+the last is not negotiable; a player looking through a cinematic camera when the round goes
+live has been ambushed by their own UI. TDM, FFA and Kill Confirmed have no Phase 3 and hold
+the overview instead.
+
+**Phase 1, the approach.** The route is the bots' route: a second `Pathfinder` over the
+match's `NavGrid` (its own arrays, so the bots' queue is untouched; disposed after), solved
+synchronously with `measureLanes`' budget from `nav.nearestCell(spawn)` to the **map centre —
+the `navBounds` centre snapped to its nearest walkable cell**. The waypoints become a
+Catmull-Rom spline; the eye rides it at 1.65 m over the cell surface; yaw follows the tangent
+with a 0.3 s lag and pitch holds −6°; speed is a distance/time profile with an ease at each
+end and a ceiling of 9 m/s against a 6.9 m/s sprint. A route longer than 4 s at the ceiling
+is trimmed from the spawn end, not sped up — the approach reads as a person moving, or it
+does not read.
+
+**Phase 2, the overview.** From the centre, a pull-back along a 45° elevation ray whose
+azimuth points from the centre toward the player's spawn — so the player's own side lands at
+the bottom of the frame, which is the reading "this is where I am" — to the distance at which
+the `navBounds` half-diagonal fits the vertical FOV. Computed from the bounds and the lens,
+not tuned per map.
+
+**Phase 3, the objectives.** Domination: the flags in label order, A → B → C; Search &
+Destroy: the two bombsites, A → B. From the overview the camera drops to 3 m over the first
+objective in 0.6 s with an ease-out (the snap), holds 0.4 s with the objective's label in the
+HUD, then travels to the next along a nav route at eye height with the speed profile
+inverted — ease-in, up to 40 m/s in the middle, ease-out into the hold — which is what a whip
+is when it is not allowed through walls. Routes here are solved the way Phase 1's is; a route
+the grid cannot find (two sites on disconnected surfaces) falls back to an arc *above* the
+map, never through it.
+
+**The return.** 0.5 s from the last pose to the rig's eye — position lerped, yaw and pitch
+the short way round — ending exactly at the 1.0 s mark. Any bound action or mouse button
+skips to the return blend; keys 1–5 do not, because the quick selector is the reason the
+window exists and a class pick must not cost the player the overview.
+
+**The seam.** `IntroCamera.cameraFor(intro, aspect)` in `client/`, asked in `Game`'s render
+pass before the chopper, the same shape and for the same reason (there can be no chopper in a
+freeze, but the order is a fact rather than an assumption). While it answers: no viewmodel,
+no crosshair, no compass; the mode title, the objective labels and the quick selector stay.
+`MotionBlur` is left as it is.
+
+**Gate C.** A harness, `npm run intro`, beside `readability`: for every map × mode, bake the
+navmesh, solve the three phases, sample the whole camera path at 0.25 m and assert **zero
+samples inside a collider** (`overlapCapsule` at 0.3 m) and **total time within budget**;
+prints the route lengths and the trims. Pure `shared/` geometry, so it runs on the server
+build with no browser. The timeline arithmetic is a vitest test. `npm run check` green;
+seeded harness byte-identical (the harness never renders, so the intro never runs there).
+**Needs a browser:** whether the whip reads as a whip and whether −6° is the right pitch are
+display questions.
+
+## Phase D — the end of the match: the lineup and the accordion
+
+**D1, the lineup.** Top half: the winning team — in Free-for-All the top three — on a stage,
+MVP centre and a step forward, each a `CharacterSkin` wearing the body the match dealt them
+(`characterSelector.characterIdFor(entityId)` from the world's own selector, so the body on
+the podium is the body you shot; the local player's is their picked skin once B5 lands),
+holding their last weapon, `idleWeaponReady`, nameplates in team colour beneath. A full lobby
+puts five on the stage; the frame has room for five at 1920. The scoreboard does not leave: a
+SCOREBOARD toggle flips the top half between the lineup and the board the player has held Tab
+on all match — the same `Scoreboard` instance, as S6.5 insists.
+
+**D2, the accordion.** Bottom band, fixed height, bottom-anchored. Collapsed: the total XP,
+the level bar and the level number — and the existing `XpSummary` animation plays *there*:
+rows land, the bar fills behind them, a level-up interrupts, exactly as S6.1 built it; only
+the rows are hidden until asked for. Expanded — on click, or on its own when the cadence
+finishes — the row list grows **upward** inside the band (`max-height` animated on a
+bottom-anchored list) to a ceiling the frame sets, so the page never moves and the probe never
+sees an overflow. The unlock list (weapon levels, challenges, camos) is the accordion's last
+rows. The buttons — CONTINUE, and EXIT where there is a server, as round 4's B4 settled — sit
+in the band's right end and never move.
+
+**Gate D.** `npm run layout` green on the summary at eight viewports, collapsed and expanded,
+with 2, 6 and 10 players (the probe already mounts it with fixed rows); `progression`
+byte-identical (the numbers the accordion shows are `XpReport`'s, and this phase does not
+touch `XpRules`); the pane, the S6.1 cadence timed against its constants.
+
+## Phase E — combat behind the menu, last
+
+Decision 1 chose a live render over a video, and the reference asks for *combat*. Phase A's
+dolly is the map; this is the fight: a solo `Match` on the backdrop map with a full roster of
+bots and **no player entity**, the sim stepped by the frame loop in `MENU` as it is in
+`MATCH`, the camera on the dolly. What it costs, and why it is last: a `Match` in `MENU` is a
+world outside the state the state machine builds worlds for (`Game.buildWorld` is `MATCH`'s);
+its bus subscriptions, its bots' `Pathfinder` arrays and its GPU resources are a new thing for
+a 100-cycle leak instrument to see — and the menu is entered and left more often than any
+match; and ten bots thinking at 60 Hz behind a menu is CPU a laptop on battery notices. So it
+ships with three numbers or not at all: the leak count flat over 100 MENU ↔ MATCH cycles, the
+sim's ms per frame in the pane, and the bundle delta. If the numbers are wrong, A3's dolly is
+the menu — and that is a menu that already meets the brief's *"edges blend and fade"* clause
+in full.
+
+## What each item breaks
+
+- **B1/B2's fix is replaced, not removed.** The `safe center` + `overflow: auto` reasoning in
+  `app.css` was right for the rule it served; the comment is rewritten to say the rule changed
+  and where the length went, so the next reader does not restore it.
+- **B11's test becomes moot.** Preserved scroll was the test that the editor's DOM is not
+  rebuilt; with paging there is no scroll to preserve. The in-place refresh stays, for the
+  reason it was built — a rebuilt tree is a lost tooltip and a jumped strip — and the test
+  becomes "the open strip's page survives an edit".
+- **`Menus.ts` and `LoadoutEditor.ts` are rewritten**, 1 328 lines between them; `Settings`
+  gains a tab; `EndOfMatch` and `XpSummary` are restructured with S6.1's timing kept to the
+  constant.
+- **`probes/layout.ts`** gains a rule and loses the premise of one; `Viewports.ts` gains two
+  rows.
+- **`SaveData`** goes to v4 (B5); **`EntitySnapshot`** gains a byte (B6, if taken).
+- **`Game`** gains a world that is not a match (A3), a camera that is not the player's (C) —
+  both asked-for rather than pushed — and a state (`MENU`) in which the frame loop renders.
+- **Nothing in `shared/` changes before B6**, which is why the harnesses are byte-identical
+  through A–D and why B6 is the one step with a netharness bill.
 
 ## Decisions waiting on the human
 
 | # | Decision | Recommendation |
 |---|---|---|
-| 1 | ~~Accept legacy decorators, fields excluded?~~ **Taken (Phase B):** `experimentalDecorators` + `oxc.decorator.legacy`, proved in four pipelines; the TC39 form ships verbatim and Node rejects it. Revisit when oxc's `DecoratorOptions` grows past `legacy` and `emitDecoratorMetadata` | — |
-| 2 | ~~S2 amended for vitest only; no jsdom?~~ **Taken (Phase A):** `vitest@5.0.0` is the one addition; client tests cover pure functions only. 4.1.11 carries the same peer range if the fresh major misbehaves | — |
-| 3 | ~~C3, console commands by decorator?~~ **Default taken (Phase C):** the table stays; 83 entries in one literal that DEBUG.md documents as a table (S5) | — |
-| 4 | ~~`npm test` inside `check`?~~ **Default taken (Phase A):** yes, before the typechecks; the deploy host runs 116 tests on every build | — |
-| 5 | **The milestone ends with one decorator.** C2, the primary target, went to a base class on the brief's own tie-breaker, and C1 fell to zero on the count. Keep `@timed` as the seam's proof of life (its one use adds a debug log line), or remove it and keep only the transform switch and the fence for the next concern that qualifies? | Keep it. It is the working example the fence is written against, its test is the seam's regression test, and the human already said so at Phase B |
-| 6 | `simSin(-0)` returns `+0` where `Math.sin(-0)` keeps `-0` (Phase A finding). Match the native, or leave it? | Leave it. `-0 === 0`, nothing in the simulation branches on the sign of a zero, and a change moves a value the cross-runtime hash covers for no gameplay reason |
-| 7 | Decision 10 of M13, restated: the pad is now the palette's red exactly; is the **halo** (14 cm, alpha 0.55, additive) right by day and by night? | Playtest; one constant each in `ActorIndicator` |
+| 1 | ~~Menu backdrop: live render or a supplied video?~~ **Taken (2026-09-15): live render.** No video asset exists; 5–20 MB against 391 kB is a multiplier, not a percentage | — |
+| 2 | ~~Skin picker: local-first, or the wire field in the same milestone?~~ **Taken: local-first**; B6 is the wire step if B1–B5 land with room | — |
+| 3 | ~~The floor viewport?~~ **Taken: 1280×720.** The rule still holds below it; legibility is not promised | — |
+| 4 | ~~Archive M14 to open this section?~~ **Taken**, this session | — |
+| 5 | Three skins are 24–38 MB (Viper, Echo, Hazard) against 4–5 MB for the other four — almost certainly texture size, not geometry — and the 28 MB one is the default that preloads at boot. Recompress the three to the four's size, and make a 4 MB skin the default? | Yes, before B1: a stage that waits 28 MB for its first model is a stage that opens empty. A `gltf-transform` pass is a script run once, not a dependency of the build |
+| 6 | Phase E: run the fight behind the menu, or stop at the dolly? | Decide on E's three numbers, not before them |
+| 7 | QUIT in a browser: disconnect and return to the boot screen (a new `MENU → BOOT` edge), or leave the button out? | Keep it; dropping the socket and returning to BOOT is the honest meaning of "quit" here, and the reference has the button |
+| 8 | The intro on Search & Destroy rounds two onward: never (the freeze is round one only), or a 2 s site flyover each round? | Never. The freeze exists for the class pick, and the record says a ten-second hold between rounds *"would add a minute to a best-of-five"* |
 
 ## Dependency order
 
-1. **Phase A** — the runner. Nothing depends on the tree; everything after depends on it.
-2. **Phase B** — the seam, proved before any concern was built on it.
-3. **Phase C** — C2 first (the primary target, and `leak` was already the instrument for it); C1 on its count; C3–C5 on theirs.
-4. **Phase D** — the fence last, because its rules were written against what C actually did.
-5. **M12's content**, in M12's order — unchanged by anything here.
+1. **A1** first and alone — the scale and the probe rule, run against every screen as it is,
+   so the overflow list is a measurement before anything is redesigned.
+2. **A2–A4**, then **B**, then **D** — three screens, each behind the probe; B before D
+   because D's lineup is B1's stage with five bodies on it.
+3. **C** independent of B and D; after A1 only because its HUD labels live in the frame.
+4. **B6** after B5, if room.
+5. **E** last, on its numbers.
+6. **M12's content**, in M12's order — unchanged by anything here. F4(a)'s "skins as
+   parameters" is answered by M13's glTF skins and B5's picker; the F4 row should say so when
+   M12 is next touched.
+
+## Needs a browser
+
+Everything about *feel*, and nothing about *fit*: whether the nav buttons read as smeared
+rather than broken, the backdrop's fade against a bright map, the stage's key light on a dark
+skin, the whip, the pitch, the accordion's rise. Fit is the probe's, at eight viewports, and a
+report that a screen "looks cut off" is answered by running it.
 
 ## How to start — the next brief
 
-Milestone 14 is at its gate; the human closes it. The tree a fresh session inherits: vitest in
-`check` (116 tests, co-located, partitioned), legacy decorators lowered in every pipeline with
-`check:decorators` fencing the tick path and fields, one `@timed`, one `Disposable` base under
-seventeen classes, and the two playtest reports above fixed. The next concern that qualifies
-under S4 — three hand-written sites that change together, off the tick path, no flag — gets a
-decorator or a base class on the same comparison C2 recorded, and the fence already knows
-where it may not go.
+A fresh session starts at **A1**: add `--ui-scale`, the two viewports and the no-overflow rule
+to `probes/layout.ts`, run `npm run layout`, and record what is red — that list is the
+milestone's first measurement and the reason A1 stands alone. Then A2. Each phase closes with
+its gate's numbers in a "done" subsection here, in the order above, and the milestone closes
+the way M13 and M14 did: this section moves to the archive in the session that closes it.
