@@ -1,6 +1,6 @@
 import type { StanceId } from '../player/Stance';
 import { STANCES } from '../player/Stance';
-import { makePlayerSimState, type PlayerSimState } from '../player/PlayerState';
+import type { PlayerSimState } from '../player/PlayerState';
 import { ALL_WEAPONS } from '../weapons/WeaponDefs';
 import type { ByteReader, ByteWriter } from './Wire';
 import {
@@ -519,6 +519,3 @@ export function readOwnerState(r: ByteReader, out: PlayerSimState): void {
   out.steppedUp = false;
 }
 
-export function makeOwnerState(): PlayerSimState {
-  return makePlayerSimState();
-}

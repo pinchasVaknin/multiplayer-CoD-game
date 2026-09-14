@@ -128,9 +128,6 @@ export const UNDOCUMENTED_URL_KEYS: ReadonlyMap<string, string> = new Map([
   ['show', 'client/probes/layout — which surface the headless layout probe mounts'],
 ]);
 
-/** The documented keys, for the check and for anything that wants to know what is legal. */
-export const URL_FLAG_KEYS: ReadonlySet<string> = new Set(URL_FLAGS.map((f) => f.key));
-
 /**
  * The longest display name that reaches a scoreboard.
  *

@@ -90,8 +90,6 @@ export const Cheat = {
   NoClip: 1 << 3,
 } as const;
 
-export type CheatBit = (typeof Cheat)[keyof typeof Cheat];
-
 /**
  * Every entitlement bit there is, and all of them the server's.
  *
@@ -318,8 +316,6 @@ export const CheatOutcome = {
   /** Recognised, but there is no seat to apply it to. */
   RefusedNoSeat: 6,
 } as const;
-
-export type CheatOutcomeId = (typeof CheatOutcome)[keyof typeof CheatOutcome];
 
 /** One line for the player, beside the field they typed into. */
 export function cheatOutcomeText(outcome: number): string {

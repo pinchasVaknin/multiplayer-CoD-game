@@ -1,5 +1,4 @@
 import { copyCommand, type InputCommand, type MutableInputCommand } from '../core/InputCommand';
-import { DT } from '../core/Loop';
 import type { PlayerController } from '../player/PlayerController';
 import {
   loadPlayerSim,
@@ -496,8 +495,5 @@ export class Prediction {
     return pending.length;
   }
 }
-
-/** Seconds of prediction the ring can hold. For the debug panel's sanity check. */
-export const PREDICTION_WINDOW_SECONDS = RING * DT;
 
 export { makePlayerSimState, savePlayerSim, loadPlayerSim, type PlayerSimState };

@@ -159,11 +159,6 @@ export const VOTE_CYCLE_CONFIG: VoteCycleConfig = {
   mapVoteSeconds: 10,
 };
 
-/** Total cycle length, seconds. 60 by construction rather than by assertion. */
-export function voteCycleSeconds(cfg: VoteCycleConfig = VOTE_CYCLE_CONFIG): number {
-  return cfg.playSeconds + cfg.modeVoteSeconds + cfg.mapVoteSeconds;
-}
-
 /**
  * What can be voted for, in a fixed wire order.
  *
@@ -176,26 +171,6 @@ export const MODE_BALLOT: readonly GameModeId[] = ['TDM', 'DOM', 'KC', 'FFA', 'S
 
 /** The three real maps. The greybox room is the arena you vote *from*, never a destination. */
 export const MAP_BALLOT: readonly string[] = ['mp_foundry', 'mp_dunes', 'mp_depot'];
-
-interface VoteTallyEntry {
-  /** Index into `MODE_BALLOT` or `MAP_BALLOT` for the current phase. */
-  readonly option: number;
-  readonly count: number;
-}
-
-export interface VoteView {
-  readonly phase: VotePhaseId;
-  /** Server tick the current phase ends on. The client's countdown is derived from this. */
-  readonly phaseEndsTick: number;
-  readonly tally: readonly VoteTallyEntry[];
-  /** This client's own vote for the current phase, or -1. */
-  readonly selfVote: number;
-  /** The winning mode once the mode vote has resolved, else -1. Stays set through MAP_VOTE. */
-  readonly decidedMode: number;
-  readonly decidedMap: number;
-  /** Humans connected to the arena. Zero cancels the cycle (§4.20). */
-  readonly humans: number;
-}
 
 // -- objective state (M11 Gate B, §6.8) ---------------------------------------
 
@@ -246,34 +221,6 @@ export const MAX_OBJECTIVES = 8;
 // -- dog tags (M11 Gate B, §6.8) ----------------------------------------------
 
 /**
- * One dog tag lying on the floor.
- *
- * The same failure as the Domination flags, one step further along. `KillConfirmed.onKill`
- * drops tags and `onTick` expires and collects them, and **both** are driven by `MatchFlow`,
- * which a networked client does not simulate. So a networked client's tag list is not stale —
- * it is permanently *empty*. Nothing is dropped, nothing is collected, and the mode whose whole
- * premise is picking things up off the floor has nothing on the floor at all.
- *
- * Keyed by id rather than ordered by index, because unlike zones the list is not fixed: tags
- * appear on deaths and vanish on pickup or expiry. `MatchObjectives.updateTags` already pools
- * its meshes by `tag.id`, so replicating the id keeps a tag's mesh attached to the same tag
- * across frames instead of making them swap places whenever one in the middle is collected.
- *
- * `life` is deliberately **not** on the wire. It decides when the server deletes a tag, and a
- * client that counted it down would be running exactly the authoritative timer §6.8 forbids —
- * a tag disappears when it stops being sent, which is one fact rather than two.
- */
-export interface TagState {
-  readonly id: number;
-  /** The side that *died*: `OBJ_TEAM_A` or `OBJ_TEAM_B`. Enemy tags confirm, own tags deny. */
-  readonly team: number;
-  /** Centimetres, `quantPos`. */
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-}
-
-/**
  * Tags carried in one frame.
  *
  * A tag lives 20 s and a busy Kill Confirmed match kills roughly once a second across a
@@ -290,42 +237,6 @@ export const BOMB_CARRIED = 0;
 export const BOMB_PLANTED = 1;
 export const BOMB_DEFUSED = 2;
 export const BOMB_EXPLODED = 3;
-
-/**
- * Search & Destroy's bomb, entire.
- *
- * §6.8 is explicit that this one is not optional: *"round state, bomb timer and plant/defuse
- * progress are server-authoritative — a client-side timer will drift and will decide a round
- * wrongly."* The drift is not hypothetical here. `stepPlant` and `stepDefuse` run off
- * `MatchFlow`, so on a networked client the bomb timer is not slow, it is **stopped**: it holds
- * whatever value it was constructed with for the entire round.
- *
- * `interactFraction` and `interactEntity` travel together for the reason the zone counts do.
- * A plant is *interruptible*, and a client re-deriving "somebody is planting" from a position
- * 100 ms in the past would keep the ring on screen for two frames after the planter was shot.
- * The server says who is working and how far along they are; the client draws that and nothing
- * else.
- */
-export interface BombReplica {
-  /** One of the `BOMB_*` codes. */
-  readonly state: number;
-  /** Who is carrying it, or -1 while it lies on the ground. */
-  readonly carrierId: number;
-  /** Which side attacks this round, as an owner code. Flips on the side swap (§6.4). */
-  readonly attackers: number;
-  /** Where it lies when nobody carries it. Centimetres, `quantPos`. */
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  /** Fuse remaining, in hundredths of a second. */
-  readonly timerCs: number;
-  /** Plant or defuse progress, 0..255. */
-  readonly interactProgress: number;
-  /** Who is planting or defusing, or -1. */
-  readonly interactEntity: number;
-  /** Index into the mode's site list once planted, or -1. */
-  readonly plantedSite: number;
-}
 
 // -- killstreaks (M11 Gate B, §6.8, §8.22) ------------------------------------
 

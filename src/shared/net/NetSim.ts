@@ -67,10 +67,6 @@ export const NET_PRESETS: Readonly<Record<string, NetConditions>> = {
   bad: { latencyMs: 100, jitterMs: 30, lossPct: 2, reorderPct: 0 },
 };
 
-export function presetNames(): string[] {
-  return Object.keys(NET_PRESETS);
-}
-
 /** Look a preset up by name, or null. Used by the URL flag and the live toggle. */
 export function findPreset(name: string): NetConditions | null {
   return NET_PRESETS[name.trim().toLowerCase()] ?? null;
