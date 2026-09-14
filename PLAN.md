@@ -49,6 +49,16 @@ What stays in this file: **Milestone 12 — proposed** (the content backlog Mile
 and **Milestone 13** (Phases A–D done; "How to start — the Phase E brief" is the next session's
 starting point).
 
+## How this file stays short
+
+This file holds exactly three things: the index above, the content backlog, and the one
+milestone in progress. Nothing else. When a milestone closes — in the session that closes it,
+before the summary — its whole section moves, verbatim, to `docs/archive/plan/NN-slug.md` with
+the provenance line the other files carry, and gets a row in the index; the `## Playtest round`
+sections that accumulated under it go with it. Lines move; nothing is rewritten. `npm run
+check:plan` refuses a third `# ` section here and an index that disagrees with the folder, so this
+is a gate rather than a habit — the same reason the boundary check exists.
+
 ---
 
 # Milestone 12 — proposed: the large content
