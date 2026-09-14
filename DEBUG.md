@@ -1019,7 +1019,8 @@ them. Type the literal text, brackets included. Case does not matter.
 
 ## Toggles and instants, which behave differently on purpose
 
-Every code declares a `CheatKind`, and the HUD renders by it:
+Every code declares its effect's kind — `'toggle'`, `'instant'` or `'surface'`, the discriminant on
+`CheatEffect` in `shared/cheats/Cheats.ts` — and the HUD renders by it:
 
 - **`DEBUG666`** is a `'surface'` code: it toggles the overlay itself and grants no entitlement.
   It toggles against **what is on screen**, so closing the panel with its × or with Escape and

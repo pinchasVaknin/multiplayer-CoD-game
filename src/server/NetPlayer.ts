@@ -66,7 +66,8 @@ export interface NetPlayerDeps {
    * milestone's standing failure is a fact that moved and left its readers behind — a grant that
    * silently defaulted to nothing on one seating path would be exactly that shape.
    *
-   * `NO_CHEATS` for anything with no connection behind it, which is every bot.
+   * Every NetPlayer has a session behind it — the one caller of `Match.addPlayer` passes
+   * `session.cheats`. Bots are `Bot`s, not NetPlayers, and are never granted anything.
    */
   readonly cheats: CheatGrants;
 }

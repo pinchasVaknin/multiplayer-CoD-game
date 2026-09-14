@@ -103,9 +103,8 @@ export const CHEAT_SIMULATION = Cheat.God | Cheat.Unseen | Cheat.NoClip;
 export const CHEAT_FULL_SPECTATOR = Cheat.God | Cheat.Unseen | Cheat.NoClip;
 
 /**
- * What kind of thing a code does, **declared** rather than inferred at each reader.
- *
- * Three kinds, and the differences are all differences of *lifetime*:
+ * What a recognised code asks for. `kind` is the discriminant and there is no second flag
+ * beside it; the three kinds are three *lifetimes*:
  *
  * - `'toggle'` — a state a player is in until they leave it. It has an entitlement bit, the
  *   server owns it, it is replicated, and the HUD shows it for as long as it is true.
@@ -114,15 +113,9 @@ export const CHEAT_FULL_SPECTATOR = Cheat.God | Cheat.Unseen | Cheat.NoClip;
  * - `'surface'` — a client surface with no simulation behind it. No bit, never sent to the
  *   server, and the store it writes is the one that already owns that surface.
  *
- * The kind is the discriminant and there is no second flag beside it. F14 carried a `local`
- * boolean as well, which meant the same thing as `'surface'` does and could disagree with the
- * bits; `check-cheats.mjs` now enforces the invariant that made that flag redundant — a
- * `'surface'` code carries no entitlement bits, so a client can never author one.
- */
-export type CheatKind = 'toggle' | 'instant' | 'surface';
-
-/**
- * What a recognised code asks for. The discriminant is the kind above.
+ * F14 carried a `local` boolean as well, which meant the same thing as `'surface'` does and could
+ * disagree with the bits; `check-cheats.mjs` now enforces the invariant that made that flag
+ * redundant — a `'surface'` code carries no entitlement bits, so a client can never author one.
  *
  * A toggle carries the bits it flips. An instant carries its payload — today only `kills`, and a
  * second kind of payment would add a field here rather than a branch anywhere downstream. A
@@ -378,10 +371,10 @@ export function describeCheatMask(mask: number): string {
 /**
  * What one seat is entitled to, as a thing an effect can hold a reference to.
  *
- * An interface rather than the class, so `NO_CHEATS` can be a shared frozen instance and a bot —
- * which has no session and can never be granted anything — costs nothing. Every effect takes one
- * of these; none of them takes a mask, because a number handed around is a number that gets
- * copied, and a copy is the second writer this whole file exists to avoid.
+ * An interface rather than the class, so an effect depends on what a seat can answer and not on
+ * how the server stores it. Every effect takes one of these; none of them takes a mask, because a
+ * number handed around is a number that gets copied, and a copy is the second writer this whole
+ * file exists to avoid.
  */
 export interface CheatGrants {
   readonly mask: number;
@@ -414,9 +407,3 @@ export class CheatState implements CheatGrants {
     this.bits = 0;
   }
 }
-
-/** Nothing, for ever. Bots, and any seat that has no connection behind it. */
-export const NO_CHEATS: CheatGrants = {
-  mask: 0,
-  has: () => false,
-};

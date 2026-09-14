@@ -599,7 +599,8 @@ export class Server {
        * screen, and that bit outlived its own subject: the ledger row it described is destroyed
        * by the next migration (`removePlayer` runs `StreakSystem.onOwnerRemoved`), so the tag
        * went on claiming an audit trail for a balance that no longer existed. An instant is
-       * *announced* by the client for a display duration — see `CheatKind` — and the durable
+       * *announced* by the client for a display duration — see the kinds on `CheatEffect` in
+       * `shared/cheats/Cheats.ts` — and the durable
        * record of it is this log line and `StreakEconomyReport.credited`, which is where a
        * transaction's record belongs.
        */

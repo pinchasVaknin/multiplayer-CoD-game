@@ -257,7 +257,8 @@ export function debugOverlayVisible(s: HudSurfaceState): boolean {
  * **Two lifetimes, one surface, composed rather than special-cased.** The toggles come from the
  * replicated mask and are up for as long as they are true; an instant cheat's announcement joins
  * them for a display duration and then leaves. `cheatCaption` is where that composition lives,
- * keyed by `CheatKind`, so the next instant cheat needs nothing here — which is the half F14 got
+ * keyed by the effect's kind (`CheatEffect` in `cheats/Cheats.ts`), so the next instant cheat needs
+ * nothing here — which is the half F14 got
  * wrong by giving one payment a latched bit and rendering everything from the mask.
  *
  * `Cheat.Debug` is deliberately never named. Having the debug overlay unlocked says nothing about
