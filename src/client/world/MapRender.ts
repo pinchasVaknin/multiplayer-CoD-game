@@ -318,6 +318,15 @@ export function* buildMapChunked(
             l.shadow.camera.updateProjectionMatrix();
           }
           root.add(l);
+          /**
+           * The light is disposed with the map (M15, A3 — found by the backdrop's build/dispose
+           * cycle). `root.clear()` takes the light out of the scene but never frees its shadow
+           * map: `DirectionalLight.dispose` is what releases the render target the first
+           * shadow pass allocated, and without it every map build left one behind —
+           * `renderer.info.memory.textures` rose by the shadow map's two textures on every
+           * MENU ↔ MATCH cycle, on a tree that built a map only when a match started.
+           */
+          disposables.push(l);
           break;
         }
         case 'point': {
