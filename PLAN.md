@@ -794,6 +794,75 @@ boundaries 351 files). Six files, all `client/`; `shared/` and `server/` untouch
 smear rather than a fade, on a real display at play distance; and the fade against a bright
 map, which does not exist until A3.
 
+### A3 — done (session of 2026-09-15): a world that is not a match, and Gate A closed
+
+**`client/world/MenuBackdrop.ts`** (284 lines, 45 of them code the rest says why). A
+`LoadedMap` plus `applyAmbient` plus the map's `Particulate` plus a camera this class moves —
+the three things `MatchWorld` puts in the scene before it builds a player into them, and
+nothing else: no `Match`, no bots, no `PlayerController`, no bus subscription, no navmesh
+bake. Built through its own `MapBuildQueue` at the 5 ms budget, pumped from the render pass;
+its `onComplete` takes the map and adopts it. Its own queue rather than `Game`'s, because that
+one's `onComplete` reports readiness to a server for a match being prepared, and the arena is
+`MATCH`, where this is already gone. `Game`: `MENU`'s `enter` calls `prepare(selection.mapId)`
+— the map the solo picker names, so the menu shows where the player is going; idempotent for
+the map already up — and `buildWorld` calls `dispose()` before it constructs a `MatchWorld`,
+which is the whole of the rule that keeps the scene at **one map, ever**: the backdrop exists
+only while `Game.world` is null. `draw`'s no-world branch renders the scene through the
+backdrop's camera with no viewmodel, or clears the canvas while the map is still building,
+exactly as it did before.
+
+**The dolly.** The middle lane by index — the spine on all three shipped maps — from `a` to
+`center` at 1.65 m (the player's eye), FOV 62°, a cosine push-and-pull at 0.55 m/s, a ±2.5°
+sway over 14 s, pitch −2°. The straight line is checked before it is ridden: the segment is
+sampled every 25 cm with a standing capsule against the map's own `CollisionWorld`, and the
+dolly runs over the free prefix; under 4 m it holds at `a` and sways. A map with no lanes
+(the greybox, the range) rides `spawns[0] → navBounds' centre`, `measureLanes`' fallback.
+Phase C's spline replaces the line; the check stays.
+
+**Measured, in the pane.** Dunes behind the menu: **34 chunks, 79 ms of work**, landing in
+5–7 frames of 5 ms pumping once the texture cache is warm (11 on the cold first build). The
+canvas at 15 % of the width reads **(111, 89, 64)** — the souk's sandstone, not the clear
+colour (12, 14, 17) — and the menu layer's computed gradient is `rgb(7, 8, 10)` from 78 %
+with `backdrop-filter: none`: the map on the left, the void on the right, no edge. The dolly
+moves — two screenshots five seconds apart show the wall's end and the far beams closer.
+The header sat on a sunlit wall, so the top fade went from 0.78 → 0 at 26 % to 0.9 → 0 at
+34 % and the header text carries a shadow; whether that is enough on a display is below.
+
+**GPU, with a new instrument.** `__operator.gpu()` reads `renderer.info.memory` (one console
+entry, in DEBUG.md's list). Frames stepped by hand in the hidden pane (`loop.frame`, the
+pane suspends rAF):
+
+| Cycle | Result |
+|---|---|
+| Backdrop prepare → dispose × 10, Dunes | **32 geometries / 12 textures with the map, 0 / 10 without, every cycle identical**; the map ready after 7 frames each time |
+| MENU ↔ MATCH × 6, backdrop *disabled* (the isolation run) | geometries flat, 15 at the menu and 67 in a match; **textures +7 per cycle**, 113 → 146 |
+| MENU ↔ MATCH × 8, backdrop on, after the fix below | geometries flat, 35 / 55; textures **+2 per cycle**, 27 → 45 |
+
+**Found while here — a leak in every map build since M4, not the backdrop's.** The
+isolation run is the attribution: with the backdrop off, the match cycle alone grew the
+texture count. The map's shadow-casting `DirectionalLight` was never disposed — `root.clear()`
+takes it out of the scene, and `DirectionalLight.dispose` is what frees the render target the
+first shadow pass allocates — so every build left a shadow map on the GPU. Fixed in
+`MapRender` by pushing the light onto the map's own disposables (`d7482ff`, its own commit).
+The +2 per cycle that remain are in the match path and unattributed; the recipe and the
+suspects (`EquipmentFx`'s canvas texture, `WeaponMesh`'s, the indicators' dispose being
+reached for every actor) are handed to a bug session rather than chased here.
+
+**Bundle, re-measured.** **1 522.38 kB raw / 437.83 kB gzip, 49.63 kB CSS** (M12 recorded
+1 370 / 391 / 43; M13's glTF and animation code sits between the two measurements, so the
+frame, the menu and the backdrop are a small part of the difference and the 6.6 kB of CSS is
+theirs).
+
+**Gate A, closed.** `npm run layout` green on the menu, the play panel and every settings tab
+at eight viewports (the sixteen violations left are the editor's open row, B's); `npm run
+check` green (119 tests; boundaries 352 files); nothing in `shared/` or `server/` touched by
+A1–A3, so the seeded harness and the content probe are byte-identical by construction.
+
+**Needs a browser (the human's):** the fade against a sunlit wall at play distance, and
+whether the wordmark holds on it; the dolly's speed and sway; which lane reads best per map —
+Foundry's CENTRE is the hall, Dunes' the covered street, Depot's the night yard — a
+`lanes[Math.floor(n / 2)]` today, a per-map choice if one of them is wrong.
+
 ## Phase B — Create-a-Class: the stage, six boxes, the strips, the skins
 
 **B1, the stage.** Left half: the selected skin on a lit disc, `idleWeaponReady` looping,
@@ -1013,13 +1082,10 @@ report that a screen "looks cut off" is answered by running it.
 
 ## How to start — the next brief
 
-A1, A2 and A4 are done and recorded above; the probe is red on one screen (the editor's open
-row, B's) and green on everything Gate A names. A fresh session starts at **A3**, the backdrop
-dolly: a world that is not a match — `MapRender` + `SkyDome` + the particulate on
-`save.mapId`, built through `MapBuildQueue` while the boot screen is up, the camera on
-`lane.a → lane.center` at eye height — rendered in `MENU` under the fade `.op-screen--menu`
-already paints. `npm run layout` first, to see the same 16 before touching anything. Gate A
-closes with A3's pane measurements (the mask's boundary column reads `--c-void`) and the
-bundle re-measured. Each phase closes with its gate's numbers in a "done" subsection here, in
-the order above, and the milestone closes the way M13 and M14 did: this section moves to the
-archive in the session that closes it.
+Phase A is done — A1, A2, A3 and A4 recorded above, Gate A closed — and the probe is red on
+one screen, the editor's open row, which is B's. A fresh session starts at **B0** (decision
+5): recompress Viper, Echo and Hazard to the four 4–5 MB skins' size and make a 4 MB skin the
+default, a `gltf-transform` pass run once; then **B1**, the stage. `npm run layout` first, to
+see the same 16 before touching anything. Each phase closes with its gate's numbers in a
+"done" subsection here, in the order above, and the milestone closes the way M13 and M14 did:
+this section moves to the archive in the session that closes it.

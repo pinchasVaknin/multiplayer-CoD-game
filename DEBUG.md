@@ -99,6 +99,7 @@ __operator.report()            // full harness report: speeds, slide rules, move
 __operator.harness             // debug/Harness.ts instance, for custom runs
 __operator.sim()               // live PlayerSim
 __operator.stats()             // FrameStats
+__operator.gpu()               // live geometry and texture counts (M15: the menu backdrop's build/dispose cycle)
 __operator.speedometer()       // Speedometer
 __operator.setSyntheticLoad(30) // ms of busy-wait per frame
 __operator.game                // everything else

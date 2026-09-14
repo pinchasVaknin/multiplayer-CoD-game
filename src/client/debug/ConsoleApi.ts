@@ -80,6 +80,7 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
     viewmodelConfig: game.viewmodelConfig,
     speedometer: () => game.speedo,
     stats: () => game.stats,
+    gpu: () => game.gpuMemory,
     latency: () => game.activeMatch?.latency,
     sim: () => game.playerSim,
     setSyntheticLoad: (ms: number) => game.setSyntheticLoad(ms),

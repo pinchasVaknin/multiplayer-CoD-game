@@ -29,6 +29,7 @@ import { LoadingScreen } from './ui/LoadingScreen';
 import { VoteOverlay } from './ui/VoteOverlay';
 import { QuickLoadout } from './ui/QuickLoadout';
 import { MapBuildQueue, type BuildReport } from './world/MapBuildQueue';
+import { MenuBackdrop } from './world/MenuBackdrop';
 import type { NetworkedMatchOptions } from './MatchWorld';
 import { CameraRig, type CameraDrive } from './engine/CameraRig';
 import { ProceduralAudio } from './engine/ProceduralAudio';
@@ -240,6 +241,8 @@ export class Game {
   private readonly scene = new THREE.Scene();
   private readonly renderer: Renderer;
   private readonly textures: ProceduralTextures;
+  /** The map behind the main menu (M15, A3). Exists only while `world` is null. */
+  private readonly backdrop: MenuBackdrop;
   /** Parsed GLB templates survive MatchWorld teardown and are shared by every mode. */
   private readonly characterAssets = new CharacterAssetService();
   /** Worlds built this session. Moves the skin deck between matches — see `buildWorld`. */
@@ -535,6 +538,11 @@ export class Game {
     // The same fact for the DOM: the front end's 1920x1080 frame scales to this window (M15, A1).
     applyFrameScale(uiHost, window.innerWidth, window.innerHeight);
     this.textures = new ProceduralTextures(this.renderer.three);
+    this.backdrop = new MenuBackdrop({
+      scene: this.scene,
+      textures: this.textures,
+      shadowQuality: () => this.profile.settings.shadowQuality,
+    });
     // Warm one representative bundle while BOOT/MENU are visible. Other skins load only when
     // an actor receives them, so a match does not reserve the whole cosmetic catalogue on the
     // GPU just because those files exist in public/.
@@ -764,6 +772,18 @@ export class Game {
     return this.loop;
   }
 
+  /**
+   * What the GPU is holding (M15, A3): three.js's own counts of live geometries and textures.
+   *
+   * The instrument for a build/dispose cycle — the menu's backdrop map goes up and comes
+   * down around every match now — read before and after N cycles in the pane, the way
+   * `npm run leak` reads the heap and the bus count on the server.
+   */
+  get gpuMemory(): { geometries: number; textures: number } {
+    const m = this.renderer.info.memory;
+    return { geometries: m.geometries, textures: m.textures };
+  }
+
   get inputState(): Input {
     return this.input;
   }
@@ -853,6 +873,13 @@ export class Game {
       enter: () => {
         this.screens.menus.show();
         this.input.clearHeld();
+        /**
+         * The map behind the menu (M15, A3): the one the solo picker names, built a chunk a
+         * frame from here. On every entry rather than once at boot, because the picker may
+         * have moved and a match may have disposed it — `buildWorld` does, so that the scene
+         * never holds two maps. Idempotent when nothing changed.
+         */
+        this.backdrop.prepare(this.selection.mapId);
       },
       exit: () => this.screens.menus.hide(),
     });
@@ -1479,6 +1506,8 @@ export class Game {
    */
   private buildWorld(): void {
     if (this.world !== null) return;
+    // One map in the scene, ever: the menu's backdrop goes before the match's map arrives.
+    this.backdrop.dispose();
     const modeEntry = this.modeEntry();
     // One cosmetic skin deck per Match, outside shared/simulation code: gameplay never depends
     // on the skin a client happened to draw. Seeded rather than `Math.random` (S2), from the
@@ -2424,9 +2453,15 @@ export class Game {
 
     const world = this.world;
     if (world === null) {
-      // No world: the menu is DOM over an empty canvas, and the canvas still has to be
-      // cleared or it holds the last frame of the previous match behind the front end.
-      this.renderer.clear();
+      /**
+       * No world: the front end is DOM over the menu's backdrop (M15, A3) — the last-played
+       * map on a slow dolly, rendered through the backdrop's own camera with no viewmodel —
+       * or over a cleared canvas while that map is still building, because a canvas that is
+       * neither drawn nor cleared holds the last frame of the previous match.
+       */
+      const backdropCam = this.backdrop.frame(dt, this.renderer.aspect);
+      if (backdropCam !== null) this.renderer.render(this.scene, backdropCam, null);
+      else this.renderer.clear();
       return;
     }
 
