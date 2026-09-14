@@ -764,3 +764,92 @@ Both fixes are client-only: `npm run check` green (116 tests), seeded harness
 normalised-identical, content probe byte-identical. **Needs a browser:** the pad at the exact
 palette red on a real display — decision 10 (too much at night?) is now a question about the
 halo alone.
+
+## Phase D — done (session of 2026-09-15): the fence, the two documents, and this record
+
+**`scripts/check-decorators.mjs`, in the chain after `check:plan`.** Text over `src/` with
+comments and string bodies blanked (the same stripper `check-boundaries` uses), a decorator
+being `@name` with or without arguments at the start of a statement, and its target whatever
+follows the stack — `class`, a method (an identifier before `(` or `<`), a field (an
+identifier before `:`, `=`, `;`, `!`, `?` or a line end), or `accessor`. Three rules: a
+decorated method named `simulate`, `step`, `onTick` or `tick` anywhere is refused; any
+decorator under `shared/net`, `shared/player`, `shared/combat` or `shared/ai` is refused; a
+decorated field or `accessor` is refused (the [[Define]] field shadows the prototype and the
+decorator silently does nothing). Parameter decorators are not looked for and the header says
+so. **Proved red before it joined:** three plants — `@timed` on `MatchInstance.step`, on the
+field `ModePanel.laneCache`, and on `ScoreSystem.dispose` under `shared/combat` — produced
+exactly three violations, each under its own rule, and the tree went green again on revert.
+**Proved not to over-count:** `@param` and `@returns` in a doc comment, `'@notADecorator'` in
+a string and `// @alsoNotOne` in a line comment planted together left the count at three
+(the tree has no `@tag` doc comments of its own, so this had to be planted to be tested). On
+the tree as it is: **3 decorator uses across 348 files** — `ModePanel.measureLanes` and the
+two in `Decorators.test.ts`.
+
+**S7 again.** The Phase B test decorated a toy `step(n)`, and the check refuses a decorated
+`step` anywhere in `src/`, tests included. The method is now `double`; the rule has no
+exemption. Same shape as `Math.sin` in `SimMath.test.ts` in Phase A.
+
+**The documents.** DEBUG.md has a "Tests" section under a new `# M14` heading: `npm test`,
+where tests live, the partition rule and the finding rule, in the two sentences the brief
+asked for. README.md's "Debugging" points at it in one line, and its stale description of
+`check` ("the target-boundary check, then a typecheck") now names the audits and the tests.
+`check:flags` and `check:plan` green.
+
+## Measured, this session
+
+| What | Number |
+|---|---|
+| `npm test` | **116 cases, 13 files**, 0.76 s in the runner, 2.4 s wall with start-up |
+| `npm run check` | green, **11 audits + test + typecheck ×3, 10.5 s** wall (8.6 s at Phase A) |
+| Decorator uses in the tree | **3** across 348 files: one product (`ModePanel.measureLanes`), two in its test |
+| C1, elapsed-time pairs | 34 subtractions in 24 files; **0** replaceable by a logging `@timed` (5 on the tick path, 3 feeding reports, 3 functions, 23 spans) |
+| C2, the subscription shape | **17 classes** (10 client, 1 server, 6 shared) onto `Disposable`; 55 `push(` → `own(`; **−28 lines net** across the 17; 7 `dispose()` methods deleted outright |
+| C3 / C4 / C5 | 83 console entries in one literal (table stays); 32 module-level loggers, 0 class-level; the receive path — all declined |
+| Sites left hand-written, and why | every C1 span (a report field or a span inside a method, not one concern); `EventCollector`'s returned list and the single-unsubscriber fields (a different shape); the 32 loggers (module level) |
+| `npm run leak`, C2 | 29 → 29 (+0) over 100 cycles, every sampled cycle identical to the pre-C2 run |
+| Skirmish, C2 | 12 invariant lines identical; flow event `subscriptions: 79` in both |
+| Seeded harness | normalised-identical to the pre-Phase-A baseline after every commit (`t`, `pid`, `simMsMean`, `heapMb` are wall-clock and stripped; everything else is the seeded outcome) |
+| Content probe | byte-identical after every commit |
+| Whole milestone, `src/` | 34 files, +1 655 / −165 (the +1 655 is 13 test files, `Decorators.ts` at 64 lines, `Disposable.ts` at 58) |
+| Between phases | vote overlay: 61.7 s on the unfixed tree (= 3 701 / 60) → hidden, `info: null`; pad centre: (255, 163, 132) Foundry / (255, 178, 142) Dunes → **(232, 96, 76)** on both |
+
+## Needs a browser
+
+Two things, both the human's, both one action on a real display:
+
+- **Phase B's button.** F1 → *Measure lane timings* → `[timed] ModePanel.measureLanes …ms` in
+  the console and nothing red beside it. Seen in the pane (`2.70ms`); not yet on a display.
+- **The pad at the palette's red.** It is now exactly `#e8604c` in every light, unlit, with the
+  halo as the glow. Whether that reads as a device on a sunlit shoulder at play speed, and
+  whether the halo alone is "too much at night" (decision 10, which is now about the halo
+  only), is a display question.
+
+## Decisions waiting on the human
+
+| # | Decision | Recommendation |
+|---|---|---|
+| 1 | ~~Accept legacy decorators, fields excluded?~~ **Taken (Phase B):** `experimentalDecorators` + `oxc.decorator.legacy`, proved in four pipelines; the TC39 form ships verbatim and Node rejects it. Revisit when oxc's `DecoratorOptions` grows past `legacy` and `emitDecoratorMetadata` | — |
+| 2 | ~~S2 amended for vitest only; no jsdom?~~ **Taken (Phase A):** `vitest@5.0.0` is the one addition; client tests cover pure functions only. 4.1.11 carries the same peer range if the fresh major misbehaves | — |
+| 3 | ~~C3, console commands by decorator?~~ **Default taken (Phase C):** the table stays; 83 entries in one literal that DEBUG.md documents as a table (S5) | — |
+| 4 | ~~`npm test` inside `check`?~~ **Default taken (Phase A):** yes, before the typechecks; the deploy host runs 116 tests on every build | — |
+| 5 | **The milestone ends with one decorator.** C2, the primary target, went to a base class on the brief's own tie-breaker, and C1 fell to zero on the count. Keep `@timed` as the seam's proof of life (its one use adds a debug log line), or remove it and keep only the transform switch and the fence for the next concern that qualifies? | Keep it. It is the working example the fence is written against, its test is the seam's regression test, and the human already said so at Phase B |
+| 6 | `simSin(-0)` returns `+0` where `Math.sin(-0)` keeps `-0` (Phase A finding). Match the native, or leave it? | Leave it. `-0 === 0`, nothing in the simulation branches on the sign of a zero, and a change moves a value the cross-runtime hash covers for no gameplay reason |
+| 7 | Decision 10 of M13, restated: the pad is now the palette's red exactly; is the **halo** (14 cm, alpha 0.55, additive) right by day and by night? | Playtest; one constant each in `ActorIndicator` |
+
+## Dependency order
+
+1. **Phase A** — the runner. Nothing depends on the tree; everything after depends on it.
+2. **Phase B** — the seam, proved before any concern was built on it.
+3. **Phase C** — C2 first (the primary target, and `leak` was already the instrument for it); C1 on its count; C3–C5 on theirs.
+4. **Phase D** — the fence last, because its rules were written against what C actually did.
+5. **M12's content**, in M12's order — unchanged by anything here.
+
+## How to start — the next brief
+
+Milestone 14 is at its gate; the human closes it. The tree a fresh session inherits: vitest in
+`check` (116 tests, co-located, partitioned), legacy decorators lowered in every pipeline with
+`check:decorators` fencing the tick path and fields, one `@timed`, one `Disposable` base under
+seventeen classes, and the two playtest reports above fixed. The next concern that qualifies
+under S4 — three hand-written sites that change together, off the tick path, no flag — gets a
+decorator or a base class on the same comparison C2 recorded, and the fence already knows
+where it may not go.

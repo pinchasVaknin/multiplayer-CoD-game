@@ -7,6 +7,9 @@ import { installLogSink, type LogLevel } from './Log';
  * The transform seam, proved in the runner (M14, Phase B): a legacy method decorator written
  * with `@` in a `.ts` file is lowered by the same oxc option the two builds use, and the
  * wrapper actually runs — the call is timed on the installed clock and reported once.
+ *
+ * The toy method is `double`, not `step`: `check:decorators` refuses a decorated `step` anywhere
+ * in `src/`, tests included, and a test is not the place to open an exemption in that rule.
  */
 
 let fakeNow = 0;
@@ -15,8 +18,8 @@ const lines: Array<{ level: LogLevel; tag: string; message: string }> = [];
 class Worker {
   factor = 2;
 
-  @timed('worker.step')
-  step(n: number): number {
+  @timed('worker.double')
+  double(n: number): number {
     fakeNow += 21;
     return n * this.factor;
   }
@@ -38,15 +41,15 @@ beforeEach(() => {
 describe('@timed', () => {
   it('runs the wrapper: the value passes through, `this` is preserved, one line is logged', () => {
     const w = new Worker();
-    expect(w.step(21)).toBe(42);
-    expect(lines).toEqual([{ level: 'info', tag: 'timed', message: 'worker.step 21.00ms' }]);
+    expect(w.double(21)).toBe(42);
+    expect(lines).toEqual([{ level: 'info', tag: 'timed', message: 'worker.double 21.00ms' }]);
   });
 
   it('logs on every call, with that call\'s own elapsed time', () => {
     const w = new Worker();
-    w.step(1);
-    w.step(2);
-    expect(lines.map((l) => l.message)).toEqual(['worker.step 21.00ms', 'worker.step 21.00ms']);
+    w.double(1);
+    w.double(2);
+    expect(lines.map((l) => l.message)).toEqual(['worker.double 21.00ms', 'worker.double 21.00ms']);
   });
 
   it('an exception propagates and is still accounted for', () => {
@@ -56,7 +59,7 @@ describe('@timed', () => {
   });
 
   it('decorates the prototype, not the instance', () => {
-    expect(Object.prototype.hasOwnProperty.call(Worker.prototype, 'step')).toBe(true);
-    expect(Object.prototype.hasOwnProperty.call(new Worker(), 'step')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(Worker.prototype, 'double')).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(new Worker(), 'double')).toBe(false);
   });
 });

@@ -1334,3 +1334,23 @@ is in the report rather than hidden in a constructor.
 If this number ever climbs into the seconds, something has started baking on demand — §4.19
 forbids it, because a lazy bake is a stall in the middle of the transition §6.5 exists to make
 seamless. The structured form is on the `bakery/boot` metric.
+
+---
+
+# M14 — the test runner
+
+## Tests
+
+```bash
+npm test
+```
+
+Vitest, over `src/**/*.test.ts`, in `check` before the typechecks — so the deploy host runs
+them on every build. A test is `X.test.ts` beside `X.ts`, compiled by that partition's tsconfig
+(a `shared/` test has no DOM lib and imports `describe/it/expect` from `vitest`; there are no
+globals) and seen by `check:boundaries` and `check:decorators` like any other file, which is
+why `SimMath.test.ts` reaches the natives through `verifyAgainstNative` rather than `Math.sin`.
+
+Tests cover pure functions; the harnesses above stay the integration instruments and are not
+ported. A test that goes red against the tree as it is reports a finding — record it, do not
+edit an audit, a harness or a probe to make it pass. `npm run test:watch` for the loop.

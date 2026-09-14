@@ -31,8 +31,9 @@ Then open <http://127.0.0.1:5173>. Click **Play**, pick a mode and a map, and pr
 npm run check
 ```
 
-`check` is the gate: the target-boundary check, then a typecheck of each of the three targets
-separately. `npm run build` runs it before building.
+`check` is the gate: the target-boundary check, the audits (`check:*` in `package.json`, each with
+the reason it exists beside it), the unit tests (`npm test`), then a typecheck of each of the
+three targets separately. `npm run build` runs it before building.
 
 ```bash
 npm run build
@@ -466,3 +467,5 @@ than filtering the picture.
 `DEBUG.md` documents every panel, harness and console tool, with a worked example of using
 each to answer a real question. The short version: **F1** opens the overlay, and
 `window.__operator` is the console surface everything is measured through.
+
+Unit tests: `npm test`; where they live and the two rules they obey are in `DEBUG.md` under "Tests".
