@@ -1588,6 +1588,24 @@ export class Game {
     this.speedo.reset();
     if (!keep) this.server = null;
     /**
+     * The ballot goes with the socket (2026-09-14, reported as "NEXT VOTE IN 447.4" over a solo
+     * match).
+     *
+     * The vote overlay is app-lifetime — one instance, built with the UI host, hidden on
+     * migration by `onMigrated` — and the arena's 4 Hz broadcast is the only writer of its
+     * state. Quitting to the menu tore the world and the session down here and left the last
+     * `PLAY` broadcast on the overlay: still on screen, still saying NEXT VOTE IN, and every
+     * frame `tick()` computed `(phaseEndsTick - syncedServerTick()) * DT` with no session behind
+     * `syncedServerTick()`, which is zero. So the clock showed `phaseEndsTick / 60` — 26 844
+     * ticks is the reported 447.4 s — through the whole of the next single-player match.
+     *
+     * Same rule as `onMigrated`'s: state from an instance you have left is discarded. A
+     * teardown that keeps the connection (a rotation, a reconnect) is not a session exit, and
+     * the arena will re-state the ballot within a broadcast anyway; a notice up during one must
+     * survive it, which is why this is under `!keep` rather than unconditional.
+     */
+    if (!keep) this.voteOverlay.hide();
+    /**
      * Leaving on purpose gives up the seat as well as the socket (round 4, F8).
      *
      * The server already refuses to hold a seat for a clean `Bye` — see `LeaveCause` — and this
