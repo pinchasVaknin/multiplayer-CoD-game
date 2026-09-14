@@ -524,10 +524,17 @@ body.op-locked #viewport {
  * The Play Solo panel. It slides 16 px and fades over `--dur-med`; the frame's side padding is
  * 64, so even the first keyframe is inside the window — which is what lets the layout probe
  * measure the panel on the frame it was inserted into without waiting for the animation.
+ *
+ * Centred in the stage and then pushed half a margin to the right (playtest, 2026-09-15:
+ * *"not in the middle of the screen — a little to the right"*). It used to sit against the
+ * frame's right edge, where the navigation stands; a panel this wide read as a wall there.
+ * A little right of centre keeps the backdrop on the left, which is the asymmetry the menu
+ * is built on, without hugging the edge.
  */
 .op-setup {
   grid-column: 1 / -1;
-  justify-self: end;
+  justify-self: center;
+  margin-left: 200px;
   width: 1380px;
   display: flex;
   flex-direction: column;
