@@ -175,6 +175,7 @@ export class BotRenderer {
     // not replay every death the roster has already had.
     const v = bot.visual;
     this.seen.set(bot.entityId, { death: v.deathSerial, spawn: v.spawnSerial, flinch: v.flinchSerial });
+    avatar.setLife(bot.entityId, v.spawnSerial);
     if (!bot.participating) avatar.beginDeath(v.deathDirX, v.deathDirZ, v.deathVariant, bot.animation);
     return avatar;
   }
@@ -206,6 +207,7 @@ export class BotRenderer {
     if (v.spawnSerial !== seen.spawn) {
       seen.spawn = v.spawnSerial;
       mesh.endDeath();
+      mesh.setLife(bot.entityId, v.spawnSerial);
       mesh.setVisible(true);
     }
     if (v.deathSerial !== seen.death) {
@@ -272,8 +274,9 @@ export class BotRenderer {
     fallback.dispose();
     this.avatars.set(bot.entityId, avatar);
     this.groupFor(bot.team).add(avatar.group);
+    const visual = bot.visual;
+    avatar.setLife(bot.entityId, visual.spawnSerial);
     if (!bot.participating) {
-      const visual = bot.visual;
       avatar.beginDeath(visual.deathDirX, visual.deathDirZ, visual.deathVariant, bot.animation);
     }
     return avatar;

@@ -17,16 +17,22 @@ import type {
  */
 
 /**
- * Check a skin against its rig profile and return the motion bone's bind position.
- *
- * The bind position is what `importClip` locks the planar root translation to, so it is
- * returned from here rather than looked up twice.
+ * What `importClip` needs to know about the skin a clip is being prepared for: the motion
+ * bone's bind position, which the planar root lock is pinned to, and the bones the skin has,
+ * which is what a clip's tracks can bind to. Both come out of one traversal in `validateSkin`
+ * rather than being looked up twice.
  */
+export interface SkinBinding {
+  readonly bindMotionPosition: THREE.Vector3;
+  readonly bones: ReadonlySet<string>;
+}
+
+/** Check a skin against its rig profile and return what clips are prepared against. */
 export function validateSkin(
   scene: THREE.Object3D,
   rig: CharacterRigProfile,
   characterId: CharacterId,
-): THREE.Vector3 {
+): SkinBinding {
   const bones = new Set<string>();
   let skinnedMeshes = 0;
   scene.traverse((node) => {
@@ -52,20 +58,27 @@ export function validateSkin(
   if (motionBone === undefined) {
     throw new Error(`Character "${characterId}" rig ${rig.id} is missing motion bone "${rig.motionBone}".`);
   }
-  return motionBone.position.clone();
+  return { bindMotionPosition: motionBone.position.clone(), bones };
 }
 
 /**
- * Turn one animation file's clips into the one clip the catalog names, prepared for this rig.
+ * Turn one animation file's clips into the one clip the catalog names, prepared for this rig
+ * and this skin.
  *
  * The result is a clone: the source clips are shared by every skin that uses the file, and
- * the unit scale and the root lock below are per rig and per skin respectively.
+ * the unit scale and the root lock below are per rig and per skin respectively. So is the
+ * track set: a clip exported on a skeleton with bones this skin lacks (the library's newer
+ * files carry a `mixamorigNeck1` six of the seven skins do not have — `scripts/
+ * animation-manifest.mjs` reports which) keeps those tracks only on a skin that can bind them.
+ * On the others they would bind to nothing and earn a console warning per track per body;
+ * the pose they carried is lost either way, and the loss is measured (PLAN.md, M13 Phase D),
+ * not hidden by dropping the track here.
  */
 export function importClip(
   definition: CharacterAnimationDefinition,
   source: readonly THREE.AnimationClip[],
   rig: CharacterRigProfile,
-  bindMotionPosition: THREE.Vector3,
+  skin: SkinBinding,
 ): THREE.AnimationClip {
   const chosen = selectSourceClip(definition, source);
   const clip = chosen.clone();
@@ -78,9 +91,10 @@ export function importClip(
       throw new Error(`Animation "${definition.id}" does not target required bone "${required}".`);
     }
   }
+  clip.tracks = clip.tracks.filter((track) => skin.bones.has(track.name.split('.')[0] ?? ''));
 
   scaleBoneTranslations(clip, rig.animationTranslationScale ?? 1);
-  lockRootTranslation(clip, rig, bindMotionPosition, definition.id);
+  lockRootTranslation(clip, rig, skin.bindMotionPosition, definition.id);
   return clip;
 }
 

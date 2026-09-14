@@ -13302,6 +13302,12 @@ because it is the tree a fresh session inherits.
   gone, and the reason it had to go is recorded on the predicate: the hitbox rig, the spectator
   camera and `Mantle.detectMantle` all read `sim.yaw`, and a `RemoteActor` never saw the
   override at all.
+- **The animation library is a folder of slots** *(Phase D, 2026-09-14)*:
+  `public/models/bots/animations/{locomotion/{stand,crouch,slide},transitions,actions,deaths,hits,incoming}/`
+  with its own README; the catalogue's `CharacterAnimationId` is a slot holding variants, dealt
+  by `variantFor` from `(entityId, spawnSerial)` and deaths by the simulation's `deathVariant`;
+  `npm run animations` reads any GLB in Node, `scripts/animation-import.mjs` moves a file out of
+  `incoming/` as one named clip, and `check:animations` is in the gate. See "Phase D — done".
 - **Skins are dealt from a seeded `Rng`** (`RandomCharacterSelector`), keyed by the save's
   lifetime match count and the session's build count. Client-local: two clients do not agree on
   a bot's skin. The end state is a server-chosen `characterId` in the snapshot (Phase B's shape,
@@ -13911,6 +13917,167 @@ v13 widening, once.
 
 Size **S** for the manifest and the check, **M** for slots and variants.
 
+## Phase D — done (session of 2026-09-14): a folder that explains itself, and a table before a name
+
+Built to the brief above, in its order: the manifest first, then the slots from its table, then
+the folder, the catalogue, the check and the browser. Two departures, both forced by what the
+manifest read and stated where they happened; the gate ran red on three planted defects before
+it was trusted green; every number is under "Measured".
+
+### The manifest, and what it read
+
+`scripts/animation-manifest.mjs` (`npm run animations`) reads a GLB's 12-byte header, its JSON
+chunk and — for one track — its BIN chunk, in Node with no three: clip names, the duration as
+the largest sampler-input `max`, channels and the bones they target, and the motion bone's
+world height through the clip (the hips' translation track taken up the armature chain, in the
+file's own metres), plus the bones the file's skeleton has that each skin lacks. Node names are
+sanitised as `GLTFLoader` sanitises them (`mixamorig:Hips` → `mixamorigHips`), so the report
+speaks the catalogue's names. Under 200 ms for the whole tree; `check-animations.mjs` and
+`animation-import.mjs` import its reader rather than carrying a second one.
+
+Three things it read that the file names did not say:
+
+1. **Every delivered file is a session export — 0 of 24 met the contract.** The brief's "the
+   `name` selector for the new files" assumed the `incoming/` thirteen were one named clip each.
+   They are cumulative `mixamo.com.NNN` exports like the original eleven, 1 to 13 clips per
+   file, only the last of them the one wanted (`Walk_Reload.glb` carries the whole session:
+   twelve other animations, 1.5 MiB, for a 4.1 s clip). So the contract needed a tool, not a
+   sentence — the first departure, below.
+2. **Two skeletons, and which skins lack what.** The original eleven are on the skins' 65-bone
+   rig. The thirteen are on a 69-bone rig whose `Neck1` and `Jaw` six of the seven skins lack
+   (Sentry has both) and whose eye bones five lack. A track for a bone a skin does not have
+   binds to nothing on that skin and the pose it carried is gone — C1's 3.4–3.8 cm at the head.
+3. **Two crouch depths, as a hips number.** The kneel family sits at 0.40–0.44 m at the hips
+   (`Crouch_Idle_Aiming` 0.420, `Crouch_Idle_Reload` 0.402, `Transition_Stand_To_Crouch_Aiming`
+   ending at 0.438); the "Pistol" family at 0.49 (`Crouch_Idle_Aiming_Pistol` 0.494, both pistol
+   transitions ending or starting there). `measure-crouch.mjs` confirms it at the crown: 1.07–
+   1.11 m against 1.23.
+
+### The slots, decided from the table
+
+| Incoming file | What the table says | Slot |
+|---|---|---|
+| `Death_Stand_01` | one-shot, 2.62 s, ends face-down at 0.09 m | `deathStand` **variant 2**, indexed by the simulation's `deathVariant` |
+| `Sprint_Relaxed` | 0.517 s loop, crown 1.52 m — `Run_Relaxed` is 0.517 s and 1.52 m; a standing body only reaches the run threshold while sprinting | `runRelaxed` **variant 2**, dealt per life |
+| `Transition_Stand_To_Crouch_Aiming` | 1.52 s, hips 0.927 → 0.438, last-frame crown 1.080 (kneel family) | **`standToCrouch`** — the authored way down; `crouchToStand` is no longer played backwards |
+| `Idle_Reload` / `Walk_Reload` / `Crouch_Idle_Reload` | 3.3 / 4.1 / 4.15 s one-shots; standing crowns 1.65 / 1.62; the kneeling one 1.07 | **`reloadStand` / `reloadWalk` / `reloadCrouch`**, keyed on `reloading` — S6.5's *"a remote player mid-reload must look mid-reload"*, which the skinned body had never honoured |
+| `Idle_Aiming_Pistol`, `Walk_Aiming_Pistol`, `Run_Aiming_Pistol`, `Sprint_Aiming_Pistol`, `Crouch_Idle_Aiming_Pistol`, both `*_Pistol` transitions | a family: the pistol crouch is a half-squat **+0.109 / +0.115 / +0.097 m** (crown / skull base / chest) above `humanoid-crouch`; the standing loops sit where the rifle ones do | **stay in `incoming/`** — decision 11 |
+
+The pistol family is the second departure: the brief said "only the slots the inputs already
+support", and the inputs do support a weapon class (the renderer has `weaponId`), but the
+*hitbox* does not — a slot whose variants need different layouts is not a slot, and a pistol
+body that stood in its own clips and knelt in the rifle's would pop 12 cm at the crouch edge.
+Half a family is worse than none. `Crouch_Idle_Reload` is admitted with its delta on record:
+**−0.050 / −0.022 / −0.034** against `humanoid-crouch`, outside the 1 cm pad — a one-shot of at
+most four seconds under a box that is 5 cm too tall, in the direction of the standing rig's
+16 cm; decision 12, not padded away.
+
+### The import tool
+
+`scripts/animation-import.mjs incoming/<File>.glb <folder>` writes `<folder>/<File>.glb` with
+exactly one clip, named `<File>`, and removes the source. It rewrites at the JSON level — keep
+one animation, walk every accessor reference (samplers, inverse bind matrices, meshes if any),
+keep those accessors and their buffer views, repack the BIN, renumber — and decodes no float,
+so it can change none. Verified under the real `GLTFLoader` on all six imported files and two
+of the originals: **one clip, same track count, same duration, same skeleton, 0 differing
+values** out of every time and value in every track. Sizes: 508 → 128, 978 → 80, 1152 → 121,
+793 → 234, 1533 → 273, 402 → 275 KiB. The six are in their folders; the seven pistol files
+wait in `incoming/`.
+
+### The library
+
+```
+public/models/bots/animations/
+  locomotion/stand/    Idle_Relaxed  Idle_Aiming  Walk_Relaxed  Walk_Aiming  Run_Relaxed  Sprint_Relaxed*
+  locomotion/crouch/   Crouch_Idle_Aiming  Crouch_Walk_Aiming  Crouch_Run_Aiming
+  locomotion/slide/    (empty — a slide draws the crouch loops)
+  transitions/         Transition_Crouch_To_Stand  Transition_Stand_To_Crouch_Aiming*
+  actions/             Idle_Reload*  Walk_Reload*  Crouch_Idle_Reload*
+  deaths/              Death_Stand  Death_Stand_01*  Death_Crouch
+  hits/                (empty — a flinch clip goes here, dealt per (entityId, flinchSerial))
+  incoming/            the seven pistol files
+  README.md            what each folder means, the five steps for adding a clip, the skeletons
+```
+`*` meets the contract (one named clip); the eleven others are still session exports read by
+the legacy `last` rule, moved by `git mv` with their LFS pointers. `CHARACTER_VERSION` is
+`2026-09-14-library-v1`.
+
+**The catalogue.** `CharacterAnimationId` is a slot; `CharacterDefinition.animations` maps each
+to a `CharacterAnimationSlot`, a non-empty tuple of `CharacterAnimationDefinition`. The table is
+one line per slot — `runRelaxed: slot('runRelaxed', 'loop', legacy('locomotion/stand/Run_Relaxed',
+0.517), named('locomotion/stand/Sprint_Relaxed'))` — with `named(path)` deriving the `name`
+selector from the file stem, and every variant of a slot sharing its kind (loop / weapon-ready
+/ one-shot), because two clips that disagree about that are two slots. `AnimationSelector`
+still returns a slot and learned nothing; it gained `selectAction`, the one-shot that stands in
+for locomotion while the input says so (a reload in the kneel, standing still, or walking —
+not running, sliding or crouch-walking, which have no clip and keep their loop).
+
+**Variants are dealt, never drawn.** `client/characters/AnimationVariant.variantFor(slot,
+entityId, serial, count)` is the splitmix hash behind `deathVariantFor` (now exposed from
+`shared/ai/BotVisualState` as `cosmeticVariantFor`) with the slot id folded into the seed, so an
+actor's idle and walk are dealt independently. Locomotion is dealt on `(entityId, spawnSerial)`
+through a new `ActorAvatar.setLife(entityId, spawnSerial)`, which `BotRenderer` calls when it
+makes a body, when it swaps a placeholder for a skin, and whenever the spawn serial moves; the
+procedural body ignores it. Deaths index the slot by the simulation's `deathVariant` modulo the
+count — `DEATH_VARIANTS` stays 4 in `shared/`, and the check keeps it a multiple of every death
+slot's size. Flinches: the rule is written on `variantFor`, and no code, because no clip exists.
+
+**The animator** plays four kinds of thing in priority order — a death, a transition at the
+crouch edge (`standToCrouch` down, `crouchToStand` up, both forward), an action one-shot, the
+locomotion loop — and caches an action per `slot/variant`. C1's reversed play of
+`crouchToStand` is gone with its `reversed` parameter: the check guarantees the slot it stood
+in for is never empty, so it was a branch nothing could reach (its trap — the cross-fade's time
+warp flipping a negative time scale — stays on record under Phase C3). A reload one-shot is **fitted to the weapon**: `ActorAnimationInput`
+gained `reloadSeconds` (a bot's exact `reloadDuration`; a remote body's weapon def
+`reloadTime`, which is what the wire supports) and the clip's time scale is `duration /
+reloadSeconds`, clamped to [⅓, 3], so a 3.3 s clip on a 2.4 s shotgun runs at ×1.38 and ends
+when the magazine does. The support-hand constraint is released for it (the left hand is on
+the magazine). When `reloading` drops, the loop cross-fades back from wherever the clip was.
+
+**`importClip` prepares per skin now**, not only per rig: `validateSkin` returns a
+`SkinBinding` (the bind position it always returned, plus the skin's bone set) and a track for a
+bone the skin lacks is dropped on that skin. Sentry keeps `Neck1`; the other six lose it, which
+is the same pose they drew before minus a `THREE.PropertyBinding` warning per track per body
+(four per clip, six clips, every skinned actor — the console is clean now). Nothing is
+retargeted; the 3–4 cm is on record, not hidden.
+
+### The check
+
+`scripts/check-animations.mjs`, in the gate as `check:animations`. Six rules: every catalogued
+file exists; every shipped file outside `incoming/` is catalogued; every slot the selector can
+return has a file, and every catalogued slot is asked for by the selector or the animator; a
+`named` file has one clip named after itself and a `legacy` file's last clip is the length the
+catalogue says; `DEATH_VARIANTS` divides evenly over every death slot; every folder is named in
+the README. It reads the catalogue and the selector by regex and the GLBs through the manifest's
+reader, and counts the legacy files left. **Red before green:** a stray `.glb` in `actions/`
+(caught: "shipped but no slot names it"); `Death_Crouch` under the `name` selector plus a slot
+naming an `incoming/` file (caught: "13 clip(s) named mixamo.com…", "nothing in incoming/ is
+loaded"); `DEATH_VARIANTS = 3` (caught: "indexed modulo 2, not dealt evenly"). Then green:
+**15 slots, 13 the selector returns, 2 with variants, 17 shipped files, 6 on the contract, 11
+legacy, 7 waiting.**
+
+### Found while here, not fixed
+
+- **The eleven originals are one command from the contract.** `animation-import.mjs` over them
+  is bit-identical track data at **7 088 → 1 387 KiB** (Death_Crouch 1 231 → 179; Transition
+  1 074 → 98), one version bump, and the legacy selector and its `expectedDuration` guard leave
+  the tree. Left alone because the plan kept them; decision 13.
+- `ActorAvatar.update` still carries `heightScale`, now read by nobody but the wire's
+  `EntitySnapshot.heightScale`; both leave with v13.
+- `docs/CHARACTER-ASSETS.md` still said the IFF layer was "emissive points on upper arms/knees"
+  — stale since C3; fixed here in passing.
+- The README in the animations folder ships with `dist/` (Vite copies `public/` whole). A few
+  kilobytes; left.
+
+### Human playtest, when Phase D is closed
+
+On a real display, at play speed: an enemy reloading standing, walking and kneeling — whether
+the fitted clip reads as one reload (×1.38 on a shotgun, ×1.73 kneeling on the same gun, ×0.75
+on an LMG) or as a body fast-forwarding; a reload cut short by a swap; the walk-reload's feet
+against a 4.6 m/s walk; the authored stand → crouch against last session's reversed one; two
+sprint gaits in one roster and whether they read as variety or as one bot running wrong; the
+second standing fall; and the kneeling reload's head 5 cm under its box (decision 12).
+
 ## Phase E — the summary screen and the main menu
 
 - **Bug 4.6, text overlap on the end-of-match screen.** `EndOfMatch` composes the result, the
@@ -13951,7 +14118,7 @@ viewmodel already owns rather than a new one.
 | B | The wire: a new message type and a per-recipient summary. `check-cosmetics` is the audit; `--leak` must stay flat with rows outliving seats |
 | C2 | Hit registration for crouched and sliding bodies, in both directions. `hit-sweep.sh` before and after, and `npm run hashes` |
 | C3 | Nothing in gameplay. The readability of an enemy at 25 m+ rests on the nameplate |
-| D | `DEATH_VARIANTS` and the catalogue disagreeing on how many deaths exist — the check is what catches it |
+| D | `DEATH_VARIANTS` and the catalogue disagreeing on how many deaths exist — the check is what catches it. *(Built; the check ran red on exactly that before it ran green.)* |
 | E | Layout at six viewports; the probe is the gate |
 
 ## Decisions waiting on the human
@@ -13964,7 +14131,10 @@ viewmodel already owns rather than a new one.
 | 10 | Pads: 10 × 6 cm at emissive 3.0 with a 14 cm halo at alpha 0.55 — right on a daylight map, too much at night? | Playtest; each is one constant in `ActorIndicator` |
 | 3 | ~~Pads: screen-space minimum size?~~ **In, after the human's read (2026-09-14): 6 px of 1080** (`PAD_MIN_SCREEN_FRACTION`). Raise it if 25 m still reads as nothing | — |
 | 4 | Goggles after the pads? | Yes, once the pads are accepted — per-skin work, and the sleeve probe says the skins differ by centimetres |
-| 5 | Which of the new clips exist — slide, throw, reload, melee, flinch, more deaths? | Run `animation-manifest` over `incoming/` first; the answer sizes Phase D and decides whether v13 is needed |
+| 5 | ~~Which of the new clips exist — slide, throw, reload, melee, flinch, more deaths?~~ **Answered by the manifest (Phase D, 2026-09-14):** three reloads, one more standing death, a sprint, the authored stand → crouch, and a seven-file pistol family. No slide, throw, melee or flinch, so v13 is not needed for the library; `heightScale` and the `throw`/`melee` bits still wait for it | — |
+| 11 | **The pistol family** — `Idle/Walk/Run/Sprint_Aiming_Pistol`, `Crouch_Idle_Aiming_Pistol`, both `*_Pistol` transitions, in `incoming/`. Their crouch is a half-squat **11 cm above the kneel layout's head box**, so admitting them means a fourth low layout keyed on the weapon class in `rigLayoutFor` (the sim knows the weapon), a class on `HeldWeaponAsset` for the selector, and a hit-sweep against it. Admit as a family, or leave them? | A phase of its own, after decision 9: both move the rig, and the pistol is a class the game already has. Not half of it — a pistol body that stands in its own clips and kneels in the rifle's pops 12 cm at the crouch edge |
+| 12 | **`Crouch_Idle_Reload`** sits −0.050 / −0.022 / −0.034 (crown / skull base / chest) under `humanoid-crouch` — outside C2's 1 cm pad, for a one-shot of at most four seconds, in the direction of the standing rig's own 16 cm. Accept it, or add a reload layout keyed on `reloading` (which the sim and the wire both have)? | Accept for now, and re-measure with decision 9's rebuild; a layout for a transient pose is a fifth layout for 5 cm |
+| 13 | **The eleven original files** are session exports read by the legacy `last` rule. `animation-import.mjs` over them is bit-identical track data at **7 088 → 1 387 KiB**, one version bump, and the legacy selector leaves the tree. Do it? | Yes, whenever the next `CHARACTER_VERSION` bump happens anyway (a new clip, the pistol family) — one command per file, and `check:animations` reports 0 legacy after |
 | 6 | Scoreboard rows: keep a departed player's row for the match, or drop it at unseat? | Keep it for the match, keyed by reconnect token; drop only when the match ends |
 | 7 | Free-for-All spectating: `SpectatorTarget.isWatchable` shows a dead player same-side bodies only, which in FFA is half the lobby. Anyone, or leave it? | Anyone — there are no team-mates to protect, and the reference games spectate the killer. One `isHostile`-shaped change in `shared/modes/SpectatorTarget.ts` plus its harness invariant ("never an enemy") rewritten for FFA |
 | 8 | A sentry's kills: credited to its owner (as the chopper's and the mortar's are), or to nobody (as today)? | The owner. `SentryGun` fires as its own entity so it can be shot down; the credit is a second question. `ScoreSystem.recordKill` could resolve a streak entity to its owner through `StreakSystem`, or the sentry's `DamageRequest.sourceId` could be the owner with the rig excluded from its own trace by id. The first keeps "who shot" honest on the feed; the human picks |
@@ -14147,6 +14317,87 @@ Node run (all 10 maths digests agree, state matches across all 3600 ticks) and t
 `__operator.determinism.fingerprint()` in the same tree. Necessary, not sufficient: the
 scenario has no rig in it. `npm run check` green.
 
+### Phase D (2026-09-14)
+
+**The manifest** (`npm run animations`, all 24 delivered files; hips in the file's own metres,
+mean over the clip or first → last for a one-shot; "off-skin" is a bone the last clip animates
+that some skins lack, with how many of the seven):
+
+| File | Clips | Last clip | Length | Off-skin tracks | Hips |
+|---|---|---|---|---|---|
+| `Idle_Relaxed` / `Idle_Aiming` / `Walk_Relaxed` / `Walk_Aiming` / `Run_Relaxed` | 6 / 9 / 3 / 2 / 5 | `mixamo.com.NNN` | 7.717 / 2.117 / 1.317 / 1.383 / 0.517 s | none (65-bone) | 0.933 / 0.890 / 0.911 / 0.882 / 0.825 |
+| `Crouch_Idle_Aiming` / `Crouch_Walk_Aiming` / `Crouch_Run_Aiming` | 8 / 4 / 11 | `mixamo.com.NNN` | 2.117 / 1.017 / 0.783 s | none | **0.420** / 0.666 / 0.838 |
+| `Transition_Crouch_To_Stand` | 12 | `mixamo.com.011` | 1.100 s | none | 0.424 → 0.914 |
+| `Death_Stand` / `Death_Crouch` | 10 / 13 | `mixamo.com.NNN` | 3.033 / 2.367 s | none | 0.914 → 0.145 / 0.424 → 0.156 |
+| `incoming/Death_Stand_01` | 3 | `mixamo.com.002` | 2.617 s | Jaw (6/7), Neck1 (6/7), eyes (5/7) | 0.949 → 0.138 |
+| `incoming/Sprint_Relaxed` | 8 | `mixamo.com.007` | 0.517 s | same | 0.855 |
+| `incoming/Transition_Stand_To_Crouch_Aiming` | 10 | `mixamo.com.009` | 1.517 s | same | 0.927 → **0.438** |
+| `incoming/Idle_Reload` / `Walk_Reload` / `Crouch_Idle_Reload` | 5 / 13 / 2 | `mixamo.com.NNN` | 3.317 / 4.100 / 4.150 s | same | 0.926 / 0.900 / **0.402** |
+| `incoming/Idle_Aiming_Pistol` / `Walk_Aiming_Pistol` / `Run_Aiming_Pistol` / `Sprint_Aiming_Pistol` | 4 / 12 / 6 / 7 | `mixamo.com.NNN` | 1.350 / 0.800 / 0.733 / 0.517 s | same | 0.916 / 0.915 / 0.824 / 0.898 |
+| `incoming/Crouch_Idle_Aiming_Pistol` | 1 | `mixamo.com` | 3.817 s | same | **0.494** |
+| `incoming/Transition_Stand_To_Crouch_Pistol` / `Transition_Crouch_To_Stand_Pistol` | 11 / 9 | `mixamo.com.NNN` | 1.017 / 1.367 s | same | 0.918 → **0.494** / 0.494 → 0.918 |
+
+0 of 24 met the contract. Hips × `modelScale` 0.975 reproduces C1's hips column to the
+millimetre (0.420 → 0.409, 0.494 → 0.481), so the manifest's number and the instrument's are
+one number.
+
+**`measure-crouch.mjs`, Echo, every incoming clip against the layout `rigLayoutFor` wears**
+(Δ = drawn − layout, crown / skull base vs head-box bottom / Spine2 vs chest centre; the
+shipped three are the C2 rows, unchanged, as a control):
+
+| Clip | Layout | Δ crown | Δ skull base | Δ chest | Admitted |
+|---|---|---|---|---|---|
+| `Crouch_Idle_Aiming` (control) | `humanoid-crouch` | −0.008 | +0.014 | +0.006 | — |
+| `Crouch_Walk_Aiming` / `Crouch_Run_Aiming` (control) | walk / run | −0.006 / −0.012 | +0.015 / +0.008 | +0.012 / +0.012 | — |
+| `Transition_Stand_To_Crouch_Aiming` (last frame) | `humanoid-crouch` | **−0.040** | −0.013 | +0.004 | yes — 3.4 cm of it is `Neck1` on the skin |
+| `Crouch_Idle_Reload` | `humanoid-crouch` | **−0.050** | −0.022 | −0.034 | yes, on record — decision 12 |
+| `Crouch_Idle_Aiming_Pistol` | `humanoid-crouch` | **+0.109** | +0.115 | +0.097 | no — decision 11 |
+| `Transition_Stand_To_Crouch_Pistol` (last frame) | `humanoid-crouch` | **+0.114** | +0.115 | +0.098 | no |
+| `Idle_Reload` / `Walk_Reload` | `humanoid` | −0.125 / −0.154 | −0.069 / −0.089 | +0.019 / −0.002 | yes — the standing rig's own 16 cm (decision 9) |
+| `Sprint_Relaxed` | `humanoid` | −0.246 | −0.194 | −0.087 | yes — `Run_Relaxed` is −0.254 / −0.187 / −0.102 |
+| `Idle_Aiming_Pistol` / `Walk_Aiming_Pistol` / `Run_Aiming_Pistol` / `Sprint_Aiming_Pistol` | `humanoid` | −0.131 / −0.143 / −0.221 / −0.160 | −0.073 / −0.077 / −0.177 / −0.112 | +0.014 / +0.010 / −0.088 / −0.023 | no (family) |
+
+Re-run after the import, from the slot folders: every row identical, as bit-identical tracks
+must be. The `--pose` table for `Crouch_Idle_Reload` and `Crouch_Idle_Aiming_Pistol` (joints in
+the actor frame) is one `measure-crouch.mjs --dir … --pose` away and was not copied here; the
+kneel's joints are what `HUMANOID_CROUCH_RIG` was built from and the reload's differ by the
+numbers above.
+
+**The import**, under the real `GLTFLoader`, source's last clip against the written file's only
+clip: `Death_Stand_01` 3 → 1 clips, 207/207 tracks, 2.6167 s, 69/69 bones, **0 differing
+values**, 508 → 128 KiB; `Sprint_Relaxed` 8 → 1, 978 → 80; `Transition_Stand_To_Crouch_Aiming`
+10 → 1, 1152 → 121; `Idle_Reload` 5 → 1, 793 → 234; `Walk_Reload` 13 → 1, 1533 → 273;
+`Crouch_Idle_Reload` 2 → 1, 402 → 275; and as a test of the originals, `Idle_Aiming` 9 → 1
+(195 tracks, 65 bones) 727 → 106 and `Death_Crouch` 13 → 1, 1231 → 179 — all identical. The
+eleven originals together: 7 088 KiB now, 1 387 if imported (decision 13). Shipped library:
+17 files, 8.0 MiB; `incoming/`: 7 files, 5.9 MiB.
+
+**The check**, red on three planted defects (a stray `.glb` in `actions/`; `Death_Crouch` moved
+under the `name` selector plus a slot naming an `incoming/` file; `DEATH_VARIANTS = 3`), each
+caught by name; green on the tree: 15 slots, 13 the selector returns, 2 with variants, 17
+shipped files, 6 on the contract, 11 legacy, 7 waiting. `npm run check` green with it in the
+chain, 332 files.
+
+**In the pane, a solo TDM on Foundry, all seven skins ready, 17 animation fetches, every one
+once, no `THREE.PropertyBinding` warning, no console error.** Over 6 s of a live match the
+slots seen on nine skinned bodies (samples at 50 ms): `walkWeaponReady` 426,
+`idleWeaponReady` 102, `runRelaxed` 70 legacy + 3 `Sprint_Relaxed`, `deathStand` 180 legacy +
+116 `Death_Stand_01`, `standToCrouch` 108, `crouchToStand` 15, `reloadStand` 30, `reloadWalk`
+26, `reloadCrouch` 3. Held bot (MARLOW, hostile), followed at 2.6 m: a reload on a 2.4 s
+shotgun played `reloadStand` at **×1.382** (3.317 s clip), support grip released, pads on both
+shoulders; crouch held: `standToCrouch` **0 → 1.38 s forward**, then `crouchIdleAiming`;
+`reloadCrouch` at **×1.729** (4.15 s clip) in the kneel; crouch released: `crouchToStand`
+forward at ×1. **Twelve deaths across the roster, clip index = `deathVariant % 2` on all
+twelve** (variants 0 and 2 → `Death_Stand`, 1 and 3 → `Death_Stand_01`). **Fourteen lives,
+one run clip per life on all fourteen**, 7 legacy / 7 `Sprint_Relaxed`; bot 106 dealt legacy
+on spawn 8 and `Sprint_Relaxed` on spawn 9. After the animator's last edit, the pane went
+hidden and the same match was stepped by hand (`loop.frame`, 1 500 frames): 9 skinned,
+`standToCrouch` 97 / `crouchToStand` 14 / `reloadWalk` 13 / `reloadCrouch` 1 samples, live.
+
+**Determinism:** `npm run hashes` **de376f8c** at 3600 ticks — identical to Phase C's;
+`node-hashes.json` unchanged. Expected: nothing here is read by the simulation (`Bot.animation`
+is a getter the renderer calls), and the scenario has no renderer.
+
 ## Needs a browser
 
 The Browser pane in this session ran with `requestAnimationFrame` suspended; everything above
@@ -14175,24 +14426,27 @@ and the hitbox overlay over a kneeling enemy *were* seen at 1.2, 5, 10 and 25 m 
 palettes, in a running match. What needs a display: the pads at play speed, and whether they
 read as equipment — see "Human playtest, when Phase C is closed".
 
-## How to start — the Phase D brief
+**From Phase D:** the pane composited for the first half (a held hostile bot followed at 2.6 m
+through a standing reload, the authored crouch, a kneeling reload and the stand-up; the pads on
+its shoulders throughout) and went hidden for the last check, which was stepped by hand. What
+needs a display is feel, not existence: whether a reload fitted to the weapon at ×1.4 or ×1.7
+reads as a reload or as a body on fast-forward; the walk-reload's feet at a 4.6 m/s walk; the
+authored stand → crouch beside last session's reversed one; two sprint gaits in one roster; the
+second fall; and the kneeling reload's head 5 cm under its box — see "Human playtest, when
+Phase D is closed".
 
-Phases A, B and C are built and at their gates (see the three "done" sections above); the human
-closes them. The next fresh session takes this file and the brief below.
+## How to start — the Phase E brief
 
-> **M13 Phase D — the animation library.** Read PLAN.md "Milestone 13", Phase D, and the three
-> "done" sections for the tree you inherit. Start with `scripts/animation-manifest.mjs` over
-> `incoming/` — clip names, durations, targeted bones, in Node without three — and make it
-> report a clip whose tracks target bones the skins lack (`mixamorigNeck1`, C1's finding) and
-> which of the two crouch depths a file is (the "Aiming" family settles at 1.08 m, the "Pistol"
-> family at 1.23; `scripts/measure-crouch.mjs` gives the number). Decide slots from that table,
-> not from file names. Then the folder layout, the catalogue's slots as variant arrays with one
-> `variantFor(slot, entityId, serial, count)`, `check-animations` in the gate, and the `name`
-> selector for the new files with the remaining `LegacyClipSelector`s counted. Only the slots
-> the inputs already support; the `throw` and `melee` bits wait for v13, with `heightScale`
-> leaving the snapshot in the same widening. A new crouch loop in a slot means re-running
-> `measure-crouch.mjs --pose` against `HUMANOID_CROUCH_*_RIG`: the deltas must stay within the
-> pads, or the layout moves with the clip. Gate: `npm run check` with `check:animations` in it;
-> the manifest table and the measure-crouch deltas under "Measured"; a match in the pane with
-> the new slots playing and the pads still on the enemies' shoulders; `npm run hashes` agreeing. STOP at
-> the gate.
+Phases A, B, C and D are built and at their gates (see the four "done" sections above); the
+human closes them. The next fresh session takes this file and the brief below.
+
+> **M13 Phase E — the summary screen and the main menu.** Read PLAN.md "Milestone 13", Phase
+> E, and the four "done" sections for the tree you inherit. Bug 4.6 first: confirm the overlap
+> against the human's `image_c323c1.jpg` before touching `EndOfMatch` — the flourish grows after
+> layout and lands on the board; put it in flow, give the board its own scrolling region, and add
+> the case to `scripts/layout-probe.mjs` (max rows, max challenge and unlock lines, six
+> viewports) so the instrument that exists for this class is the gate. Then the main menu: the
+> key card under `Settings`'s BINDINGS tab, *Reset progress* to a new DATA tab behind a two-step
+> confirmation, four buttons on the menu; `npm run layout` stays green. Neither phase touches
+> the simulation, so `npm run hashes` is a formality and `npm run check` is the gate. Decisions
+> 9–13 are the human's and are not this phase's to make. STOP at the gate.

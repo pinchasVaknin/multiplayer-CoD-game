@@ -60,6 +60,13 @@ export interface ActorAnimationInput {
   readonly aiming: boolean;
   readonly sprinting: boolean;
   readonly reloading: boolean;
+  /**
+   * How long the reload in progress takes, seconds; 0 when not reloading (M13 Phase D). The
+   * reload clip is stretched or compressed to end when the weapon does, so a 1.5 s pistol and
+   * a 4.4 s LMG both look like one whole reload. A local weapon knows its exact duration; a
+   * remote body reads its weapon def's tactical figure, which is what the wire supports.
+   */
+  readonly reloadSeconds: number;
   readonly firing: boolean;
 }
 
@@ -129,12 +136,23 @@ export function makeBotVisualState(): BotVisualState {
  * Deterministic and stateless: the same bot's third death is always the same variant, in
  * Node and in the browser, on a first run and on a replay. This is the per-event seeding
  * S4.14 asks for, applied to the one cosmetic draw that was sitting in a gameplay stream.
- *
- * Integer hash (splitmix32 finalizer), so consecutive deaths do not produce consecutive
- * variants — `(entityId, 1)` and `(entityId, 2)` land far apart.
  */
 export function deathVariantFor(entityId: number, deathSerial: number, variants: number): number {
-  let z = (Math.imul(entityId, 0x9e3779b9) + Math.imul(deathSerial, 0x85ebca6b)) >>> 0;
+  return cosmeticVariantFor(entityId, deathSerial, variants);
+}
+
+/**
+ * A cosmetic variant from two replicated integers — an entity and a serial — and a count.
+ *
+ * The hash behind `deathVariantFor`, on its own since M13 Phase D so the client can deal the
+ * variants of any animation slot the same way (`client/characters/AnimationVariant`): from
+ * facts every client shares, so two clients draw the same body the same way, and never from
+ * a stream the simulation is drawing from. Integer hash (splitmix32 finalizer), so consecutive
+ * serials do not produce consecutive variants — `(entityId, 1)` and `(entityId, 2)` land far
+ * apart.
+ */
+export function cosmeticVariantFor(entityId: number, serial: number, variants: number): number {
+  let z = (Math.imul(entityId, 0x9e3779b9) + Math.imul(serial, 0x85ebca6b)) >>> 0;
   z = Math.imul(z ^ (z >>> 16), 0x21f0aaad) >>> 0;
   z = Math.imul(z ^ (z >>> 15), 0x735a2d97) >>> 0;
   z = (z ^ (z >>> 15)) >>> 0;

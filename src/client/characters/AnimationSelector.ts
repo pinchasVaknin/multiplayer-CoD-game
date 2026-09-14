@@ -22,11 +22,12 @@ export function isLowStance(input: Pick<ActorAnimationInput, 'stance'>): boolean
 }
 
 /**
- * Pure policy: semantic game state in, semantic clip id out.
+ * Pure policy: semantic game state in, semantic slot id out.
  *
- * Files, Three.js actions, and cross-fades intentionally do not appear here. Missing authored
- * states (reload/fire/slide/mantle) use the closest safe locomotion pose rather than inventing
- * a new branch in the renderer.
+ * Files, Three.js actions, and cross-fades intentionally do not appear here — a slot is a
+ * pose, and how many clips stand behind it is the catalogue's business (M13 Phase D). Missing
+ * authored states (fire/slide/mantle) use the closest safe locomotion pose rather than
+ * inventing a new branch in the renderer.
  */
 export function selectLocomotion(
   input: ActorAnimationInput,
@@ -51,4 +52,20 @@ export function selectLocomotion(
 
 export function selectDeath(input: Pick<ActorAnimationInput, 'stance'>): CharacterAnimationId {
   return isLowStance(input) ? 'deathCrouch' : 'deathStand';
+}
+
+/**
+ * The one-shot that overrides locomotion while the actor is doing something, or null when it
+ * is not (M13 Phase D). Today that is the reload — *"a remote player mid-reload must look
+ * mid-reload"* (S6.5) — in the pose the body is in: kneeling and still, standing and still,
+ * or walking. A reload while running, sliding or crouch-walking has no clip and is not drawn;
+ * the body keeps its locomotion loop, as it did before the slot existed. `throw` and `melee`
+ * wait for their snapshot bits (v13).
+ */
+export function selectAction(input: ActorAnimationInput, planarSpeed: number): CharacterAnimationId | null {
+  if (!input.reloading) return null;
+  if (isLowStance(input)) return planarSpeed <= IDLE_SPEED ? 'reloadCrouch' : null;
+  if (planarSpeed <= IDLE_SPEED) return 'reloadStand';
+  if (!input.sprinting && planarSpeed < RUN_SPEED) return 'reloadWalk';
+  return null;
 }

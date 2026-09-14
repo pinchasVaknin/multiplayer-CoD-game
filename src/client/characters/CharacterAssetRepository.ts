@@ -3,11 +3,16 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { CharacterAnimationId, CharacterDefinition } from './CharacterCatalog';
 import { importClip, validateSkin } from './CharacterAssetImport';
 
-/** Parsed, shared templates. They are immutable from the perspective of an avatar instance. */
+/**
+ * Parsed, shared templates. They are immutable from the perspective of an avatar instance.
+ *
+ * `clips` holds one prepared clip per catalogue variant, in the slot's order, so
+ * `clips.get(slot)[variant]` is the clip `variantFor` names (M13 Phase D).
+ */
 export interface CharacterAssetBundle {
   readonly definition: CharacterDefinition;
   readonly skinTemplate: THREE.Object3D;
-  readonly clips: ReadonlyMap<CharacterAnimationId, THREE.AnimationClip>;
+  readonly clips: ReadonlyMap<CharacterAnimationId, readonly THREE.AnimationClip[]>;
 }
 
 /** The I/O/cache seam. Factories consume a `CharacterAssetBundle`, never a loader. */
@@ -69,7 +74,7 @@ export class GltfCharacterAssetRepository implements CharacterAssetRepository {
   }
 
   private async load(definition: CharacterDefinition): Promise<CharacterAssetBundle> {
-    const animationDefinitions = Object.values(definition.animations);
+    const animationDefinitions = Object.values(definition.animations).flat();
     const loaded = await Promise.allSettled([
       this.loader.loadAsync(definition.skinUrl),
       ...animationDefinitions.map((animation) => this.animationSource(animation.url)),
@@ -93,16 +98,18 @@ export class GltfCharacterAssetRepository implements CharacterAssetRepository {
     const skin = skinResult.value.scene;
     try {
       if (this.disposed) throw new Error('Character asset repository was disposed while assets were loading.');
-      const bindMotionPosition = validateSkin(skin, definition.rig, definition.id);
+      const binding = validateSkin(skin, definition.rig, definition.id);
 
-      const clips = new Map<CharacterAnimationId, THREE.AnimationClip>();
+      const clips = new Map<CharacterAnimationId, THREE.AnimationClip[]>();
       for (let index = 0; index < animationDefinitions.length; index++) {
         const animation = animationDefinitions[index];
         const source = sourceResults[index];
         if (animation === undefined || source === undefined || source.status !== 'fulfilled') {
           throw new Error(`Character "${definition.id}" animation manifest was not loaded completely.`);
         }
-        clips.set(animation.id, importClip(animation, source.value, definition.rig, bindMotionPosition));
+        const variants = clips.get(animation.id) ?? [];
+        variants.push(importClip(animation, source.value, definition.rig, binding));
+        clips.set(animation.id, variants);
       }
 
       this.loadedSkins.add(skin);

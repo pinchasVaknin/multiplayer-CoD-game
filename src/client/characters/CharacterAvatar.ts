@@ -50,6 +50,10 @@ export class CharacterAvatar implements ActorAvatar {
     this.group.visible = on;
   }
 
+  setLife(entityId: number, spawnSerial: number): void {
+    this.animator.setLife(entityId, spawnSerial);
+  }
+
   getIndicatorAnchor(anchor: ActorIndicatorAnchor, target: THREE.Vector3): boolean {
     return this.skin.getIndicatorAnchor(anchor, target);
   }
@@ -63,14 +67,13 @@ export class CharacterAvatar implements ActorAvatar {
   }
 
   beginDeath(dx: number, dz: number, variant: number, animation: ActorAnimationInput): void {
-    // `variant` remains part of the replicated cosmetic event. The supplied asset pack has
-    // only stand/crouch deaths, so selection is posture-driven until additional authored
-    // variants are added to the catalog; never reinterpret the shared serial as a clip index.
+    // The posture picks the slot and the replicated `variant` picks the clip within it (M13
+    // Phase D), so the fall a body takes is the same on every client. The direction only the
+    // procedural body uses: a skinned fall is authored.
     void dx;
     void dz;
-    void variant;
     this.flinchTime = 0;
-    this.animator.beginDeath(animation);
+    this.animator.beginDeath(animation, variant);
   }
 
   endDeath(): void {

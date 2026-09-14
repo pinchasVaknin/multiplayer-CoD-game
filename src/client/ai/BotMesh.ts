@@ -319,6 +319,9 @@ export class BotMesh implements ActorAvatar {
     this.group.visible = on;
   }
 
+  /** A placeholder has one of everything; there is no variant to deal. */
+  setLife(_entityId: number, _spawnSerial: number): void {}
+
   getIndicatorAnchor(anchor: ActorIndicatorAnchor, target: THREE.Vector3): boolean {
     switch (anchor) {
       case 'head':

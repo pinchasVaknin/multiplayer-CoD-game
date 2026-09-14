@@ -14,6 +14,7 @@ import {
 } from '../../shared/net/Interpolation';
 import { EFlag, weaponIdAt, type EntitySnapshot } from '../../shared/net/Snapshot';
 import type { StanceId } from '../../shared/player/Stance';
+import { WEAPON_DEFS } from '../../shared/weapons/WeaponDefs';
 
 /**
  * Another player, drawn from snapshots (M10, S6.5).
@@ -66,6 +67,7 @@ export class RemoteActor implements RenderableActor {
     aiming: false,
     sprinting: false,
     reloading: false,
+    reloadSeconds: 0,
     firing: false,
   };
 
@@ -132,6 +134,9 @@ export class RemoteActor implements RenderableActor {
     this.animation_.aiming = this.ads;
     this.animation_.sprinting = this.sprinting;
     this.animation_.reloading = this.reloading;
+    // The wire carries the flag, not the duration: the def's tactical reload is the estimate.
+    this.animation_.reloadSeconds =
+      this.reloading && this.weaponId !== null ? (WEAPON_DEFS[this.weaponId]?.reloadTime ?? 0) : 0;
     this.animation_.firing = this.firing;
     return this.animation_;
   }

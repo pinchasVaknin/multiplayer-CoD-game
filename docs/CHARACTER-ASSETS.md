@@ -62,11 +62,23 @@ and textures no larger than 2048px. `Hazard` is the largest at 37.56 MiB; `Echo`
   multiplayer clients will not agree on it until the server replicates a `characterId`.
 - The animation set is shared by every Mixamo-rigged skin, and the repository caches it that
   way: one fetch and one parse per animation URL, for the page lifetime. What is per skin — the
-  Apex unit scale and the root lock against that skin's bind pose — is done on a clone by
+  Apex unit scale, the root lock against that skin's bind pose, and the track set (a track for
+  a bone the skin lacks is dropped rather than left to bind to nothing) — is done on a clone by
   `CharacterAssetImport.importClip`, which is cheap. Before this, each of the seven skins
   re-fetched and re-parsed all eleven files and held its own copy of every clip.
-- Each nominal animation file contains multiple cumulative clips named `mixamo.com` rather than
-  one semantic clip. The first clip is a 0.017s placeholder, so `animations[0]` is incorrect.
+- **The library is a folder of slots** (M13 Phase D): `public/models/bots/animations/` is
+  `locomotion/{stand,crouch,slide}/`, `transitions/`, `actions/`, `deaths/`, `hits/` and
+  `incoming/`, with a README that says what each means. The catalogue names a **slot**
+  (`CharacterAnimationId`) as an array of **variants**; the selector returns a slot and never
+  learns how many clips stand behind it. Variants are dealt by `AnimationVariant.variantFor`
+  from `(entityId, spawnSerial)` for a life, and deaths by the simulation's own `deathVariant`
+  modulo the slot's count — never at random, so every client draws the same body the same way.
+  `npm run check:animations` holds the catalogue and the folder to each other in the gate.
+- The eleven original files contain multiple cumulative clips named `mixamo.com` rather than
+  one semantic clip (the first is a 0.017 s placeholder, so `animations[0]` is incorrect); the
+  catalogue reads them with the legacy `last` selector. Newer files are passed through
+  `scripts/animation-import.mjs`, which keeps the one clip the file is named for and meets the
+  contract below; `scripts/animation-manifest.mjs` reads what is actually in any file first.
 - All clips include `mixamorigHips.position` root motion. The loader locks only the configured
   planar components to the skin bind pose so it cannot drift relative to the network pose. For
   the current Mixamo export, local `Z` maps to rendered vertical height and must remain live for
@@ -79,18 +91,25 @@ and textures no larger than 2048px. `Hazard` is the largest at 37.56 MiB; `Echo`
   server-validated, replicated `characterId`; it must not be chosen locally from an arbitrary
   URL. That future value can override the deterministic fallback at the composition root without
   making the renderer know about profiles or networking.
-- The old procedural body had four directional death variants. This supplied pack has only
-  stand/crouch deaths, so the GLB path deliberately retains posture but not that visual variant
-  until matching authored clips exist.
+- The procedural body has four directional death variants, dealt by the simulation as
+  `deathVariant`. The skinned body indexes its death slot by the same number: two standing falls
+  today (`deathStand` has two variants), one crouched. `check:animations` keeps `DEATH_VARIANTS`
+  a multiple of every death slot's count so the variants are dealt evenly.
+- A reload is drawn (`reloadStand` / `reloadWalk` / `reloadCrouch`, keyed on
+  `ActorAnimationInput.reloading`) and fitted to the weapon's reload time through
+  `reloadSeconds`; the support-hand constraint is released for it. Throws and melee wait for
+  their snapshot bits.
 
-The catalog temporarily records a reviewed legacy `last` selector plus expected duration. That
-is an adapter for the current files, not a file-format convention to extend.
+The legacy `last` selector plus expected duration is an adapter for the eleven original files,
+not a file-format convention to extend; `check:animations` counts how many are left.
 
 ## Required export contract
 
-Before adding more skins, export each animation as an animation-only GLB containing exactly one
-named semantic clip, for example `walk_relaxed`. Update `CharacterCatalog` to use the `name`
-selector. Every skin must satisfy its `CharacterRigProfile`:
+Export each animation as an animation-only GLB containing exactly one clip, **named after the
+file** — `deaths/Death_Stand_01.glb` holds one clip called `Death_Stand_01` — on the skins'
+65-bone skeleton where possible. `scripts/animation-import.mjs` turns a Mixamo session export
+into that shape; the catalogue then names the file with `named('deaths/Death_Stand_01')`, which
+is the `name` selector. Every skin must satisfy its `CharacterRigProfile`:
 
 - the required named bones and compatible bind/rest pose;
 - an explicit weapon hand/socket and calibrated transform;
@@ -116,10 +135,10 @@ and upgrades its fallback body on the renderer's normal frame budget.
 
 ## Animation policy
 
-`AnimationSelector` maps semantic state to semantic clip IDs; it has no file paths or Three.js
-objects. A clip that does not exist must fall back to a known locomotion pose. Do not introduce
-type checks such as `actor instanceof Bot`: both local bots and remote players satisfy the same
-`RenderableActor` contract.
+`AnimationSelector` maps semantic state to slot ids; it has no file paths or Three.js objects,
+and it does not know how many variants a slot holds. A slot that does not exist must fall back
+to a known locomotion pose. Do not introduce type checks such as `actor instanceof Bot`: both
+local bots and remote players satisfy the same `RenderableActor` contract.
 
 The supplied `Idle_Relaxed` and `Walk_Relaxed` clips are not firearm-holding poses. Until
 dedicated hip-ready exports arrive, the catalog names the reviewed armed clips
@@ -130,8 +149,8 @@ keeps weapon-class geometry and character-rig alignment independent.
 
 `AnimationMixer` and `AnimationAction` are per avatar. Parsed clips, source geometry, source
 materials, and textures are shared and remain authored: teams never recolour a skin. Viewer-
-relative IFF lives in the separate client-only actor-indicator layer instead — emissive points
-on hostile upper arms/knees, plus a nameplate and continuous segmented health bar above the
+relative IFF lives in the separate client-only actor-indicator layer instead — two lit shoulder
+pads on a hostile body (M13 C3), plus a nameplate and continuous segmented health bar above the
 visible body. Every colour in that layer comes from `ui/Palette` and repaints when the palette
 changes, so a colourblind mode reaches the body in front of the player the same way it reaches
 the minimap dot; none is written in the indicator itself. This keeps a future skin pack

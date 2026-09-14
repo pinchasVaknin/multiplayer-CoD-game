@@ -3,7 +3,8 @@
  *
  * Files in public/ are deliberately not discovered at runtime. An explicit
  * catalogue gives a newly added asset a review point for scale, rig and memory
- * cost before it becomes eligible for a match.
+ * cost before it becomes eligible for a match. `scripts/check-animations.mjs`
+ * holds the animation half of it to the folder it names, in the gate.
  */
 export type CharacterId =
   | 'apex'
@@ -14,6 +15,12 @@ export type CharacterId =
   | 'sentry'
   | 'viper';
 
+/**
+ * A **slot** (M13 Phase D): the semantic pose `AnimationSelector` asks for. A slot holds one
+ * or more clips — variants — and the selector never learns how many, which is why it has never
+ * had to know about files. Which variant a body wears is dealt by `variantFor` from facts every
+ * client shares, never drawn at random.
+ */
 export type CharacterAnimationId =
   | 'idleRelaxed'
   | 'idleWeaponReady'
@@ -24,13 +31,19 @@ export type CharacterAnimationId =
   | 'crouchWalkAiming'
   | 'crouchRunAiming'
   | 'crouchToStand'
+  | 'standToCrouch'
+  | 'reloadStand'
+  | 'reloadWalk'
+  | 'reloadCrouch'
   | 'deathStand'
   | 'deathCrouch';
 
 export type LegacyClipSelector = {
   /**
-   * The current source files contain cumulative, unnamed Mixamo clips. `last` isolates that
-   * export accident here until the assets are re-exported with one named clip per file.
+   * The original eleven files contain cumulative, unnamed Mixamo clips. `last` isolates that
+   * export accident here until those files are passed through `scripts/animation-import.mjs`,
+   * which writes the one clip the file is named for and nothing else. `check:animations`
+   * counts how many are left.
    */
   readonly kind: 'last';
   /** A cheap guard against an artist overwriting the file with a different last clip. */
@@ -49,13 +62,17 @@ export interface CharacterAnimationDefinition {
   readonly loop: boolean;
   /**
    * Whether the clip holds a firearm in both hands, so the presentation-only support-hand
-   * constraint may pull the left palm onto the weapon. Relaxed loops, the crouch-to-stand
-   * transition and the deaths do not: forcing a second hand onto a rifle there bends the arm
-   * into a pose the source animation never authored. A fact about the clip, so it lives with
-   * the clip rather than as a list of ids inside `CharacterAnimator`.
+   * constraint may pull the left palm onto the weapon. Relaxed loops, the transitions, the
+   * reloads (the left hand is on the magazine) and the deaths do not: forcing a second hand
+   * onto a rifle there bends the arm into a pose the source animation never authored. A fact
+   * about the clip, so it lives with the clip rather than as a list of ids inside
+   * `CharacterAnimator`. Every variant of a slot shares it — see `slot`.
    */
   readonly weaponReady: boolean;
 }
+
+/** One or more variants; the selector's answer is never empty. */
+export type CharacterAnimationSlot = readonly [CharacterAnimationDefinition, ...CharacterAnimationDefinition[]];
 
 /**
  * Bone landmarks and a palm marker used by the presentation-only support-hand constraint.
@@ -129,10 +146,10 @@ export interface CharacterDefinition {
   readonly version: string;
   readonly skinUrl: string;
   readonly rig: CharacterRigProfile;
-  readonly animations: Readonly<Record<CharacterAnimationId, CharacterAnimationDefinition>>;
+  readonly animations: Readonly<Record<CharacterAnimationId, CharacterAnimationSlot>>;
 }
 
-const CHARACTER_VERSION = '2026-09-10-skins-v2';
+const CHARACTER_VERSION = '2026-09-14-library-v1';
 const ANIMATION_ROOT = '/models/bots/animations';
 
 /**
@@ -232,35 +249,78 @@ function versionedAssetUrl(path: string, version: string): string {
 
 type ClipKind = 'loop' | 'weaponReadyLoop' | 'oneShot';
 
-function animation(
-  id: CharacterAnimationId,
-  fileName: string,
-  expectedDuration: number,
-  kind: ClipKind,
-): CharacterAnimationDefinition {
-  return {
-    id,
-    url: versionedAssetUrl(`${ANIMATION_ROOT}/${fileName}.glb`, CHARACTER_VERSION),
-    selector: { kind: 'last', expectedDuration },
-    loop: kind !== 'oneShot',
-    weaponReady: kind === 'weaponReadyLoop',
-  };
+/**
+ * A file in the library, named by its path under `public/models/bots/animations/` without the
+ * extension. The folder is the slot family (`locomotion/stand`, `deaths`, …); the README there
+ * says what each folder means. `check:animations` holds this table and that folder to each
+ * other, so a file nobody catalogued and a catalogue entry nobody shipped both fail the gate.
+ */
+type ClipFile =
+  /** A file that meets the export contract: one clip, named after the file. */
+  | { readonly path: string; readonly legacyDuration?: undefined }
+  /** One of the original session exports, still read by the legacy "last clip" rule. */
+  | { readonly path: string; readonly legacyDuration: number };
+
+function named(path: string): ClipFile {
+  return { path };
 }
 
-const MIXAMO_ANIMATIONS: Readonly<
-  Record<CharacterAnimationId, CharacterAnimationDefinition>
-> = {
-  idleRelaxed: animation('idleRelaxed', 'Idle_Relaxed', 7.717, 'loop'),
-  idleWeaponReady: animation('idleWeaponReady', 'Idle_Aiming', 2.117, 'weaponReadyLoop'),
-  walkRelaxed: animation('walkRelaxed', 'Walk_Relaxed', 1.317, 'loop'),
-  walkWeaponReady: animation('walkWeaponReady', 'Walk_Aiming', 1.383, 'weaponReadyLoop'),
-  runRelaxed: animation('runRelaxed', 'Run_Relaxed', 0.517, 'loop'),
-  crouchIdleAiming: animation('crouchIdleAiming', 'Crouch_Idle_Aiming', 2.117, 'weaponReadyLoop'),
-  crouchWalkAiming: animation('crouchWalkAiming', 'Crouch_Walk_Aiming', 1.017, 'weaponReadyLoop'),
-  crouchRunAiming: animation('crouchRunAiming', 'Crouch_Run_Aiming', 0.783, 'weaponReadyLoop'),
-  crouchToStand: animation('crouchToStand', 'Transition_Crouch_To_Stand', 1.1, 'oneShot'),
-  deathStand: animation('deathStand', 'Death_Stand', 3.033, 'oneShot'),
-  deathCrouch: animation('deathCrouch', 'Death_Crouch', 2.367, 'oneShot'),
+function legacy(path: string, legacyDuration: number): ClipFile {
+  return { path, legacyDuration };
+}
+
+/**
+ * A slot's variants, in the order `variantFor` indexes them. They share the kind: two clips
+ * that disagree about looping or about holding a weapon are two slots, not two variants.
+ */
+function slot(id: CharacterAnimationId, kind: ClipKind, first: ClipFile, ...rest: readonly ClipFile[]): CharacterAnimationSlot {
+  const define = (file: ClipFile): CharacterAnimationDefinition => ({
+    id,
+    url: versionedAssetUrl(`${ANIMATION_ROOT}/${file.path}.glb`, CHARACTER_VERSION),
+    selector:
+      file.legacyDuration === undefined
+        ? { kind: 'name', name: file.path.slice(file.path.lastIndexOf('/') + 1) }
+        : { kind: 'last', expectedDuration: file.legacyDuration },
+    loop: kind !== 'oneShot',
+    weaponReady: kind === 'weaponReadyLoop',
+  });
+  return [define(first), ...rest.map(define)];
+}
+
+/**
+ * The library (M13 Phase D). Slots were decided from `scripts/animation-manifest.mjs` and
+ * `scripts/measure-crouch.mjs` over the delivered files, not from their names:
+ *
+ * - `runRelaxed` has two variants, dealt per life. Both are 0.517 s relaxed sprints whose
+ *   crown sits 1.52 m up, and a standing body only reaches the run threshold while sprinting.
+ * - `deathStand` has two; the simulation's `deathVariant` indexes them, so the server and
+ *   every client agree which one a body fell with.
+ * - `standToCrouch` is the authored transition into the kneel (its last frame is 4 cm under
+ *   the kneel's crown, 3.4 of them the `Neck1` the skins lack). With it, `crouchToStand` is
+ *   no longer played backwards.
+ * - The three reloads are one-shots keyed on `ActorAnimationInput.reloading`, fitted to the
+ *   weapon's reload time by `CharacterAnimator`. `Crouch_Idle_Reload` sits 5 cm under the
+ *   kneel layout's head box — recorded in PLAN.md, not padded away.
+ * - The seven pistol-family files stay in `incoming/`: their crouch is a half-squat 11 cm
+ *   taller than the kneel layout, and a slot whose variants need different hitboxes is not a
+ *   slot. PLAN.md carries the decision.
+ */
+const MIXAMO_ANIMATIONS: Readonly<Record<CharacterAnimationId, CharacterAnimationSlot>> = {
+  idleRelaxed: slot('idleRelaxed', 'loop', legacy('locomotion/stand/Idle_Relaxed', 7.717)),
+  idleWeaponReady: slot('idleWeaponReady', 'weaponReadyLoop', legacy('locomotion/stand/Idle_Aiming', 2.117)),
+  walkRelaxed: slot('walkRelaxed', 'loop', legacy('locomotion/stand/Walk_Relaxed', 1.317)),
+  walkWeaponReady: slot('walkWeaponReady', 'weaponReadyLoop', legacy('locomotion/stand/Walk_Aiming', 1.383)),
+  runRelaxed: slot('runRelaxed', 'loop', legacy('locomotion/stand/Run_Relaxed', 0.517), named('locomotion/stand/Sprint_Relaxed')),
+  crouchIdleAiming: slot('crouchIdleAiming', 'weaponReadyLoop', legacy('locomotion/crouch/Crouch_Idle_Aiming', 2.117)),
+  crouchWalkAiming: slot('crouchWalkAiming', 'weaponReadyLoop', legacy('locomotion/crouch/Crouch_Walk_Aiming', 1.017)),
+  crouchRunAiming: slot('crouchRunAiming', 'weaponReadyLoop', legacy('locomotion/crouch/Crouch_Run_Aiming', 0.783)),
+  crouchToStand: slot('crouchToStand', 'oneShot', legacy('transitions/Transition_Crouch_To_Stand', 1.1)),
+  standToCrouch: slot('standToCrouch', 'oneShot', named('transitions/Transition_Stand_To_Crouch_Aiming')),
+  reloadStand: slot('reloadStand', 'oneShot', named('actions/Idle_Reload')),
+  reloadWalk: slot('reloadWalk', 'oneShot', named('actions/Walk_Reload')),
+  reloadCrouch: slot('reloadCrouch', 'oneShot', named('actions/Crouch_Idle_Reload')),
+  deathStand: slot('deathStand', 'oneShot', legacy('deaths/Death_Stand', 3.033), named('deaths/Death_Stand_01')),
+  deathCrouch: slot('deathCrouch', 'oneShot', legacy('deaths/Death_Crouch', 2.367)),
 };
 
 function character(

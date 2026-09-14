@@ -47,6 +47,14 @@ export interface ActorAvatar {
   setWeapon(weapon: HeldWeaponAsset | null): void;
   setVisible(on: boolean): void;
   /**
+   * Which life this body is on (M13 Phase D): the entity and its replicated spawn serial.
+   * A skinned body deals the variants of its locomotion slots from the pair, so every client
+   * draws the same variant for the same life and a respawn re-deals it; the procedural body
+   * has no variants and ignores it. Called when the avatar is made and whenever the spawn
+   * serial moves.
+   */
+  setLife(entityId: number, spawnSerial: number): void;
+  /**
    * Write an animated, world-space landmark to `target`.
    *
    * The renderer owns the viewer-relative IFF policy. Avatars expose only geometry landmarks,

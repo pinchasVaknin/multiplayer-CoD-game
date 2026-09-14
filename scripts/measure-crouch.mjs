@@ -36,8 +36,13 @@
  * This is an instrument. It changes nothing; Phase C2 decides from its table.
  *
  *   node scripts/measure-crouch.mjs
- *   node scripts/measure-crouch.mjs --dir public/models/bots/animations --skin all
+ *   node scripts/measure-crouch.mjs --dir public/models/bots/animations/locomotion/crouch --skin all
  *   node scripts/measure-crouch.mjs --skin path/to/other.glb --match 'crouch|slide|idle'
+ *
+ * Since M13 Phase D the library is a tree of slot folders (`locomotion/stand`, `deaths`, …)
+ * and `--dir` is one folder, not recursive; the default is still `incoming/`, where a clip
+ * waits to be measured. `scripts/animation-manifest.mjs` is the cheaper first look — clip
+ * names, durations, bones — and this is the one that plays the clip on a skin.
  */
 
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
@@ -353,8 +358,8 @@ async function main() {
 async function measureSkin(skin, sources, fps, game) {
   const gltf = await parseGlb(skin.file);
   const scene = gltf.scene;
-  const bindMotion = game.validateSkin(scene, skin.rig, skin.id);
-  const skinBones = boneNames(scene);
+  const binding = game.validateSkin(scene, skin.rig, skin.id);
+  const skinBones = binding.bones;
 
   // The real skin wrapper: `modelYaw` and `modelScale` are applied where the game applies them.
   const wrapped = new game.CharacterSkin(scene, skin.rig);
@@ -383,17 +388,14 @@ async function measureSkin(skin, sources, fps, game) {
       loop: true,
       weaponReady: true,
     };
-    const prepared = game.importClip(definition, source.gltf.animations, skin.rig, bindMotion);
-
-    // Tracks for bones this skin does not have would only earn a bind warning; drop them and
-    // report them, because a bone the clip has and the skin lacks is a height difference.
+    // `importClip` drops the tracks for bones this skin does not have (Phase D); which ones
+    // is worth a column, because a bone the clip has and the skin lacks is a height difference.
+    const prepared = game.importClip(definition, source.gltf.animations, skin.rig, binding);
     const offSkin = new Set();
-    prepared.tracks = prepared.tracks.filter((track) => {
+    for (const track of source.clip.tracks) {
       const bone = track.name.split('.')[0] ?? '';
-      if (skinBones.has(bone)) return true;
-      offSkin.add(bone);
-      return false;
-    });
+      if (!skinBones.has(bone)) offSkin.add(bone);
+    }
 
     restoreBindPose(bindPose);
     const frames = sampleClip(root, prepared, fps);
@@ -410,7 +412,10 @@ async function measureSkin(skin, sources, fps, game) {
       const ownMotion = own.getObjectByName(skin.rig.motionBone);
       if (ownMotion === undefined) throw new Error(`${source.name} has no ${skin.rig.motionBone}`);
       const ownBindPose = captureBindPose(own);
-      const ownPrepared = game.importClip(definition, source.gltf.animations, skin.rig, ownMotion.position.clone());
+      const ownPrepared = game.importClip(definition, source.gltf.animations, skin.rig, {
+        bindMotionPosition: ownMotion.position.clone(),
+        bones: boneNames(own),
+      });
       const ownFrames = sampleClip(ownRoot, ownPrepared, fps);
       restoreBindPose(ownBindPose);
       ownRoot.remove(own);

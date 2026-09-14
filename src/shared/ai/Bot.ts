@@ -104,12 +104,14 @@ export class Bot implements Combatant, PathClient {
     aiming: boolean;
     sprinting: boolean;
     reloading: boolean;
+    reloadSeconds: number;
     firing: boolean;
   } = {
     stance: 'STAND',
     aiming: false,
     sprinting: false,
     reloading: false,
+    reloadSeconds: 0,
     firing: false,
   };
   readonly rng: Rng;
@@ -284,6 +286,7 @@ export class Bot implements Combatant, PathClient {
     state.aiming = weapon.adsFraction > 0.5;
     state.sprinting = sim.sprintActive || sim.tacSprintActive;
     state.reloading = weapon.reloading;
+    state.reloadSeconds = weapon.reloading ? weapon.reloadDuration : 0;
     state.firing = isDown(this.cmd.buttons, Btn.Fire);
     return state;
   }
