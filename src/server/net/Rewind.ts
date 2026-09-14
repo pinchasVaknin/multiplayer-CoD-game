@@ -86,7 +86,7 @@ export interface RewindRecord {
   serverTick: number;
 }
 
-export function makeRewindRecord(): RewindRecord {
+function makeRewindRecord(): RewindRecord {
   return {
     requestedMs: 0,
     appliedMs: 0,

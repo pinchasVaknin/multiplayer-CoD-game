@@ -39,7 +39,7 @@ import { buildDummyMaterials, TargetDummy, type DummyMaterials, type DummySpec }
  */
 const DUMMY_ID_BASE = 10_000;
 
-export const DUMMY_IDS = {
+const DUMMY_IDS = {
   r5: DUMMY_ID_BASE + 1,
   r15: DUMMY_ID_BASE + 2,
   r25: DUMMY_ID_BASE + 3,
@@ -58,7 +58,7 @@ export const DUMMY_IDS = {
 const FACING_WEST = Math.PI / 2;
 
 /** Where the player stands to shoot. The grey-box room's marked firing line. */
-export const FIRING_LINE = { x: -20, z: -14 } as const;
+const FIRING_LINE = { x: -20, z: -14 } as const;
 
 /**
  * The four measurement ranges the balance table is authored at (S6.5, S7).

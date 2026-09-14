@@ -46,7 +46,7 @@ const log = logger('Loop');
  * on a two-second stall and delivers nothing on time while it does.
  */
 
-export const TICK_MS = 1000 / SIM_HZ;
+const TICK_MS = 1000 / SIM_HZ;
 
 /**
  * How early to ask the timer to wake, in ms.

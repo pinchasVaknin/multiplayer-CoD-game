@@ -65,7 +65,7 @@ import type { SaveV2, WeaponSaveData } from './SaveData';
  */
 
 /** Kills with a weapon that unlock each of its attachments, in unlock order. */
-export const ATTACHMENT_KILL_THRESHOLDS: Readonly<Record<AttachmentId, number>> = {
+const ATTACHMENT_KILL_THRESHOLDS: Readonly<Record<AttachmentId, number>> = {
   laser_tactical: 5,
   optic_reflex: 12,
   mag_extended: 25,
@@ -81,7 +81,7 @@ export const ATTACHMENT_KILL_THRESHOLDS: Readonly<Record<AttachmentId, number>> 
  * up. It stays here — this file is the one about gates — and `equipmentUnlockLevel` below is
  * the only reader, so the lookup has exactly one place to be wrong.
  */
-export const EQUIPMENT_UNLOCK_LEVEL: Readonly<Record<EquipmentId, number>> = {
+const EQUIPMENT_UNLOCK_LEVEL: Readonly<Record<EquipmentId, number>> = {
   frag: 1,
   flashbang: 1,
   smoke: 3,
@@ -97,7 +97,7 @@ export const EQUIPMENT_UNLOCK_LEVEL: Readonly<Record<EquipmentId, number>> = {
  * failure for a progression system. `noUncheckedIndexedAccess` forces *something* to be
  * written there; this is the version that is loud, in the same shape as `requireWeapon`.
  */
-export function equipmentUnlockLevel(id: EquipmentId): number {
+function equipmentUnlockLevel(id: EquipmentId): number {
   const level = EQUIPMENT_UNLOCK_LEVEL[id];
   if (level === undefined) {
     throw new Error(`Equipment "${id}" has no row in EQUIPMENT_UNLOCK_LEVEL.`);
@@ -111,7 +111,7 @@ export function equipmentUnlockLevel(id: EquipmentId): number {
  * Flatter than the account curve on purpose: a weapon should reach its ceiling inside a
  * few sessions of using it, or nobody ever tries the eleventh gun.
  */
-export const WEAPON_LEVEL_XP: readonly number[] = [
+const WEAPON_LEVEL_XP: readonly number[] = [
   400, 700, 1100, 1600, 2200, 2900, 3700, 4600, 5600,
 ];
 
@@ -308,7 +308,7 @@ export class UnlockState {
 }
 
 /** Attachments are unlocked per weapon, so a token has to name the pair. */
-export function attachmentKey(weaponId: string, attachment: AttachmentId): string {
+function attachmentKey(weaponId: string, attachment: AttachmentId): string {
   return `${weaponId}:${attachment}`;
 }
 

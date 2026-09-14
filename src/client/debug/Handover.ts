@@ -31,7 +31,7 @@ import type { MatchHarness } from './MatchHarness';
  * target or prints a pass. It reports, and the human judges.
  */
 
-export interface ExportEnvelope {
+interface ExportEnvelope {
   /** Which tool produced this. */
   tool: string;
   /** ISO timestamp, so two exports can be ordered. */
@@ -89,7 +89,7 @@ export interface LatencyExport extends ExportEnvelope {
   caveat: string;
 }
 
-export interface RenderScaleRow {
+interface RenderScaleRow {
   renderScale: number;
   pixelRatio: number;
   /** Backing-buffer pixels, which is the number that actually drives fill cost. */

@@ -40,7 +40,7 @@ export interface ZoneConfig {
   readonly heightTolerance: number;
 }
 
-export const DEFAULT_ZONE_CONFIG: ZoneConfig = {
+const DEFAULT_ZONE_CONFIG: ZoneConfig = {
   captureSeconds: 6,
   stackFalloff: 0.6,
   decayRate: 0.5,

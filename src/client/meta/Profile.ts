@@ -69,7 +69,7 @@ export interface ProfileDeps {
 }
 
 /** Slot index reported for the range class. Outside the five, so nothing collides. */
-export const RANGE_SLOT_INDEX = 99;
+const RANGE_SLOT_INDEX = 99;
 
 export class Profile implements ProgressionStore {
   readonly store: SaveStore<SaveV2>;

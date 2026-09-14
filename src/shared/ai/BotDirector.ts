@@ -825,7 +825,7 @@ export class BotDirector {
   }
 }
 
-export interface TierReport {
+interface TierReport {
   bots: number;
   shotsFired: number;
   shotsHit: number;

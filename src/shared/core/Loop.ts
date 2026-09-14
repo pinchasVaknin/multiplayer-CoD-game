@@ -23,7 +23,7 @@ export const MAX_STEPS_PER_FRAME = 5;
  * A frame longer than this (alt-tab, breakpoint, GC pause) is treated as a stall:
  * the wall-clock gap is not owed to the simulation.
  */
-export const MAX_FRAME_SECONDS = 0.25;
+const MAX_FRAME_SECONDS = 0.25;
 
 export interface FrameSample {
   /** Wall-clock time between this frame and the previous one, ms. */

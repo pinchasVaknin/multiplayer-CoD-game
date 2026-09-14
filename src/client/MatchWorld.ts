@@ -85,7 +85,7 @@ import { Particulate } from './world/Particulate';
  * Seed for everything in `ai/`. Fixed, so two runs of the harness with the same roster
  * produce the same firefight and a regression in bot behaviour is reproducible.
  */
-export const AI_SEED = 0x0fe7_a105;
+const AI_SEED = 0x0fe7_a105;
 
 const netLog = logger('world');
 

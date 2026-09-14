@@ -24,7 +24,7 @@ import type { DebugOverlay } from './DebugOverlay';
  * intended rather than the distance a player walks around the cover the author placed.
  */
 
-export interface LaneTiming {
+interface LaneTiming {
   lane: string;
   /** 'A' walks from the south home spawn, 'B' from the north one. */
   team: ScoreTeam;

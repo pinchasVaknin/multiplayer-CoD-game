@@ -75,7 +75,7 @@ export const AVERAGE_MATCH: SimulatedMatch = {
   challengeXp: 350,
 };
 
-export interface SimulatedLevel {
+interface SimulatedLevel {
   readonly level: number;
   /** Matches played by the time this level was reached. */
   readonly matches: number;

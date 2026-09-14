@@ -96,7 +96,7 @@ export const DETERMINISM_DEFAULTS: DeterminismRunOptions = {
  * runtimes before a single simulation step has run — if the harness disagreed about its own
  * inputs, a state divergence would be meaningless.
  */
-export function buildCommandSequence(ticks: number, seed: number): MutableInputCommand[] {
+function buildCommandSequence(ticks: number, seed: number): MutableInputCommand[] {
   const rng = new Rng(seed);
   const out: MutableInputCommand[] = [];
   let yaw = 0;

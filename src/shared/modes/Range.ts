@@ -39,7 +39,7 @@ export interface RangeConfig {
   readonly pointsPerTarget: number;
 }
 
-export const RANGE_CONFIG: RangeConfig = {
+const RANGE_CONFIG: RangeConfig = {
   timeLimitSeconds: 900,
   pointsPerTarget: 10,
 };

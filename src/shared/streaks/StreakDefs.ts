@@ -28,7 +28,7 @@ export type StreakId = 'uav' | 'counter_uav' | 'care_package' | 'mortar' | 'sent
  * every other tuning number in this file is: the next streak added has to answer the question,
  * and a `switch` on the id is a place to forget to.
  */
-export type StreakEffectEnd = 'activation' | 'expiry';
+type StreakEffectEnd = 'activation' | 'expiry';
 
 export interface StreakDef {
   readonly id: StreakId;

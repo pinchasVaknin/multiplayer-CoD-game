@@ -26,14 +26,14 @@ import { aimWarning, playability, type DeviceCapabilities } from '../ui/Capabili
  * `lockRefused` is true and `wantsPointerLock` is false and assert silence.
  */
 
-export interface DeviceRow {
+interface DeviceRow {
   readonly shape: string;
   readonly caps: DeviceCapabilities;
   readonly id: string;
   readonly ok: boolean;
 }
 
-export interface WarningRow {
+interface WarningRow {
   readonly wantsPointerLock: boolean;
   readonly pointerLocked: boolean;
   readonly lockRefused: boolean;

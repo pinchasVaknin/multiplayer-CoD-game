@@ -44,7 +44,7 @@ export interface AoSettings {
   bias: number;
 }
 
-export const DEFAULT_AO: AoSettings = { distance: 2.2, samples: 6, floor: 0.32, bias: 0.02 };
+const DEFAULT_AO: AoSettings = { distance: 2.2, samples: 6, floor: 0.32, bias: 0.02 };
 
 interface Build {
   positions: number[];

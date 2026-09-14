@@ -206,7 +206,7 @@ function poseLayout(id: string, j: PoseJoints): RigLayout {
  * `Crouch_Idle_Aiming`: a kneel. Right knee on the floor, left foot forward, torso upright
  * over hips at 0.41 m, head leaning 0.2 m forward with the crown at 1.11 m.
  */
-export const HUMANOID_CROUCH_RIG: RigLayout = poseLayout('humanoid-crouch', {
+const HUMANOID_CROUCH_RIG: RigLayout = poseLayout('humanoid-crouch', {
   headTop: [0.15, 1.11, -0.27],
   head: [0.06, 0.93, -0.12],
   neck: [0.03, 0.9, -0.07],
@@ -231,7 +231,7 @@ export const HUMANOID_CROUCH_RIG: RigLayout = poseLayout('humanoid-crouch', {
  * metre in front of the feet. Also what a slide draws once it has slowed below the run
  * threshold.
  */
-export const HUMANOID_CROUCH_WALK_RIG: RigLayout = poseLayout('humanoid-crouch-walk', {
+const HUMANOID_CROUCH_WALK_RIG: RigLayout = poseLayout('humanoid-crouch-walk', {
   headTop: [0.2, 1.26, -0.47],
   head: [0.13, 1.09, -0.3],
   neck: [0.1, 1.07, -0.25],
@@ -257,7 +257,7 @@ export const HUMANOID_CROUCH_WALK_RIG: RigLayout = poseLayout('humanoid-crouch-w
  * the pose a **slide** is drawn with while it is fast, and the one the 0.54 m slide rig was
  * furthest from.
  */
-export const HUMANOID_CROUCH_RUN_RIG: RigLayout = poseLayout('humanoid-crouch-run', {
+const HUMANOID_CROUCH_RUN_RIG: RigLayout = poseLayout('humanoid-crouch-run', {
   headTop: [0.12, 1.38, -0.56],
   head: [0.08, 1.22, -0.38],
   neck: [0.07, 1.2, -0.32],

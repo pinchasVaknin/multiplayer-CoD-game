@@ -29,7 +29,7 @@
 
 import { STREAK_COOLDOWN_SECONDS } from '../../shared/streaks/StreakDefs';
 
-export interface StreakSlotState {
+interface StreakSlotState {
   /** Empty string for an unused slot. */
   name: string;
   /** '3', '4' or '5'. */

@@ -85,7 +85,7 @@ export interface Brush {
 }
 
 /** One box of an authored prop shape, in the prop's local space. */
-export interface PropPart {
+interface PropPart {
   offset: Vec3Lit;
   size: Vec3Lit;
   material: MaterialKey;
@@ -129,7 +129,7 @@ export interface PropDef {
   rotationY: number;
 }
 
-export type TeamId = 'A' | 'B' | 'FFA';
+type TeamId = 'A' | 'B' | 'FFA';
 
 export interface SpawnZone {
   team: TeamId;
@@ -181,7 +181,7 @@ export type LightDef =
       decay: number;
     };
 
-export interface AmbientDef {
+interface AmbientDef {
   /**
    * The **hemisphere light's** upper term. This is a lighting number, not a picture of the
    * sky: it is chosen for what it does to surfaces facing up. `sky.zenith` below is the
@@ -210,7 +210,7 @@ export interface AmbientDef {
  * noon want different answers, and a constant in the renderer would be wrong for at least
  * three of the four maps.
  */
-export interface SkyDef {
+interface SkyDef {
   /**
    * Straight up.
    *
@@ -244,7 +244,7 @@ export interface SkyDef {
  * map with shadows pointing one way and a sun sitting the other is the specific failure this
  * omission makes unrepresentable. A map with no directional light draws no disc.
  */
-export interface SkyDiscDef {
+interface SkyDiscDef {
   color: number;
   /** Angular radius of the disc itself, degrees. The real sun is 0.27; these are stylised. */
   sizeDeg: number;
@@ -400,7 +400,7 @@ export interface MapDef {
  * A room, as the audio graph hears it. Consumed by `buildImpulseResponse` at load and
  * swapped into the one `ConvolverNode` — never a second convolver (S4.5).
  */
-export interface ReverbDef {
+interface ReverbDef {
   /** Tail length, seconds. */
   seconds: number;
   /** Decay exponent. Higher is a faster, drier fall-off. */

@@ -50,7 +50,7 @@ interface NoiseRecord {
 /** Recent noises. A ring, because a firefight makes a lot of them and none last long. */
 const NOISE_CAPACITY = 96;
 
-export class NoiseField {
+class NoiseField {
   private readonly records: NoiseRecord[] = [];
   private head = 0;
   private serial = 0;
@@ -149,7 +149,7 @@ export interface SightOccluder {
  * Below it the bot still sees but shoots badly — `CombatBehaviour` widens the aim cone by
  * the same figure — so a partial flash degrades rather than switching the bot off.
  */
-export const BLIND_SIGHT_THRESHOLD = 0.35;
+const BLIND_SIGHT_THRESHOLD = 0.35;
 
 /** What the flash field looks like from in here. Same reasoning as `SightOccluder`. */
 export interface BlindSource {

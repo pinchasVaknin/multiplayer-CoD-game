@@ -102,7 +102,7 @@ export interface ReconnectStats {
 }
 
 /** Why a claim did not produce a seat. Each one is a different thing to tell the player. */
-export type ClaimFailure = 'unknown' | 'expired';
+type ClaimFailure = 'unknown' | 'expired';
 
 export type ClaimResult =
   | { readonly ok: true; readonly reservation: Reservation }

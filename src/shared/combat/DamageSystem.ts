@@ -137,7 +137,7 @@ const evKilled = { targetId: 0, sourceId: 0, weaponId: '', zone: 'torso' as HitZ
  * weapon but the two snipers — is unaffected, which is what keeps M2's verified numbers
  * verified.
  */
-export function zoneMultiplier(def: WeaponDef, zone: HitZone, upperTorso: boolean): number {
+function zoneMultiplier(def: WeaponDef, zone: HitZone, upperTorso: boolean): number {
   switch (zone) {
     case 'head':
       return def.headshotMult;

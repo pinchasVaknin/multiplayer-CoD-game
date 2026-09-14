@@ -104,7 +104,7 @@ export const MAX_SWING = 0.62;
  * rather than freezing it mid-stride: the phase stops advancing when the body stops, so
  * without this the legs would simply stick wherever the last step left them.
  */
-export const FULL_SWING_SPEED = 4.0;
+const FULL_SWING_SPEED = 4.0;
 
 /** How fast the drawn amplitude chases the measured one, per second. */
 export const AMPLITUDE_RESPONSE = 9;

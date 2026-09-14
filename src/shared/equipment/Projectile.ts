@@ -17,7 +17,7 @@ import type { EquipmentDef } from './EquipmentDefs';
  * and each one is a fixed record written in place, so the per-tick path allocates nothing.
  */
 
-export type ProjectilePhase =
+type ProjectilePhase =
   /** In the air or rolling. */
   | 'LIVE'
   /** Stuck to geometry or to somebody (semtex). */

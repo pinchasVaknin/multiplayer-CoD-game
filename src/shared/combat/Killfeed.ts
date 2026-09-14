@@ -40,7 +40,7 @@ export interface CombatantDirectory {
 }
 
 /** The local roster as a directory. The single-player and server-side path, unchanged. */
-export function rosterDirectory(roster: readonly Combatant[]): CombatantDirectory {
+function rosterDirectory(roster: readonly Combatant[]): CombatantDirectory {
   return {
     nameOf(entityId) {
       for (const c of roster) if (c.entityId === entityId) return c.displayName;

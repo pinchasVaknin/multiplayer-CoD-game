@@ -20,7 +20,7 @@ import type { Combatant } from './Combatant';
  */
 
 /** What a bot should do with the point it has been sent to. */
-export type ObjectiveAction = 'capture' | 'defend' | 'plant' | 'defuse' | 'collect';
+type ObjectiveAction = 'capture' | 'defend' | 'plant' | 'defuse' | 'collect';
 
 export interface ObjectiveTarget {
   /** Stable id, so the debug panel can name what each bot is pursuing. */

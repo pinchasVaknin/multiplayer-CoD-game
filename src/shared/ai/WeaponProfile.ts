@@ -47,7 +47,7 @@ export interface WeaponCombatProfile {
  * shotgun's 0.3 `engageScale` is the load-bearing number: at Veteran that is a 46 m engage
  * range cut to 14, which is the difference between a shotgun bot and a bot with a shotgun.
  */
-export const WEAPON_PROFILES: Readonly<Record<WeaponClass, WeaponCombatProfile>> = {
+const WEAPON_PROFILES: Readonly<Record<WeaponClass, WeaponCombatProfile>> = {
   SHOTGUN: { preferredRange: 6, minComfortRange: 0, pushScale: 1.9, engageScale: 0.3, adsScale: 2.5 },
   SMG: { preferredRange: 11, minComfortRange: 0, pushScale: 1.55, engageScale: 0.62, adsScale: 1.5 },
   PISTOL: { preferredRange: 9, minComfortRange: 0, pushScale: 1.4, engageScale: 0.5, adsScale: 1.3 },

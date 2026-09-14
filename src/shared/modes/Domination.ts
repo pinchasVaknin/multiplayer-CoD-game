@@ -69,7 +69,7 @@ export interface DominationConfig {
   readonly maxAttackersPerFlag: number;
 }
 
-export const DOMINATION_CONFIG: DominationConfig = {
+const DOMINATION_CONFIG: DominationConfig = {
   scoreLimit: 200,
   timeLimitSeconds: 600,
   tickSeconds: 5,

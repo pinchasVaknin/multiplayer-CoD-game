@@ -47,24 +47,24 @@ import type { LightDef, MapDef } from './maps/types';
  */
 
 /** One channel, sRGB 0..255, to linear 0..1. The IEC 61966-2-1 curve, as three.js uses it. */
-export function srgbChannelToLinear(c8: number): number {
+function srgbChannelToLinear(c8: number): number {
   const c = c8 / 255;
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 }
 
 /** The inverse, for reporting a linear result as something an editor would show. */
-export function linearChannelToSrgb(v: number): number {
+function linearChannelToSrgb(v: number): number {
   const c = v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
   return Math.max(0, Math.min(255, Math.round(c * 255)));
 }
 
-export interface LinearRgb {
+interface LinearRgb {
   r: number;
   g: number;
   b: number;
 }
 
-export function linearRgb(hex: number): LinearRgb {
+function linearRgb(hex: number): LinearRgb {
   return {
     r: srgbChannelToLinear((hex >> 16) & 0xff),
     g: srgbChannelToLinear((hex >> 8) & 0xff),
@@ -73,7 +73,7 @@ export function linearRgb(hex: number): LinearRgb {
 }
 
 /** Rec. 709 relative luminance of a linear triple. */
-export function luminanceOf(c: LinearRgb): number {
+function luminanceOf(c: LinearRgb): number {
   return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 }
 
@@ -88,7 +88,7 @@ export function linearLuminance(hex: number): number {
   return luminanceOf(linearRgb(hex));
 }
 
-export interface Sample {
+interface Sample {
   /** Where, in world metres. */
   x: number;
   y: number;
@@ -100,7 +100,7 @@ export interface Sample {
 }
 
 /** Irradiance arriving at one point on one surface, per channel, in linear units. */
-export function irradianceAt(lights: readonly LightDef[], s: Sample): LinearRgb {
+function irradianceAt(lights: readonly LightDef[], s: Sample): LinearRgb {
   const out: LinearRgb = { r: 0, g: 0, b: 0 };
   for (const light of lights) addLight(out, light, s);
   return out;
@@ -177,7 +177,7 @@ function addLight(out: LinearRgb, light: LightDef, s: Sample): void {
  * `MeshLambertMaterial` is `BRDF_Lambert`, which is that and nothing else, so this is the
  * whole of the material response. Returned per channel because the tone mapper is per channel.
  */
-export function lambertRadiance(baseColor: number, irradiance: LinearRgb): LinearRgb {
+function lambertRadiance(baseColor: number, irradiance: LinearRgb): LinearRgb {
   const a = linearRgb(baseColor);
   const k = 1 / Math.PI;
   return {
@@ -188,7 +188,7 @@ export function lambertRadiance(baseColor: number, irradiance: LinearRgb): Linea
 }
 
 /** Exposure the client renders at. `Renderer` sets `toneMappingExposure` to this. */
-export const TONE_MAPPING_EXPOSURE = 1.25;
+const TONE_MAPPING_EXPOSURE = 1.25;
 
 /**
  * three.js' ACES filmic approximation, per channel.
@@ -199,7 +199,7 @@ export const TONE_MAPPING_EXPOSURE = 1.25;
  * sides, so a value that comes out of here matches what the renderer would produce for the
  * same input to within the fit's own error.
  */
-export function acesFilmic(v: number): number {
+function acesFilmic(v: number): number {
   const x = Math.max(0, v * 0.6);
   const out = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
   return Math.max(0, Math.min(1, out));
@@ -211,7 +211,7 @@ export function acesFilmic(v: number): number {
  * This is the number to quote at a human, because it is the only one in this file that is in
  * units they have an opinion about. 20/255 is "I cannot see anything"; 79/255 is a lit floor.
  */
-export function screenValue(baseColor: number, irradiance: LinearRgb): number {
+function screenValue(baseColor: number, irradiance: LinearRgb): number {
   const radiance = lambertRadiance(baseColor, irradiance);
   const l = luminanceOf(radiance);
   return linearChannelToSrgb(acesFilmic(l * TONE_MAPPING_EXPOSURE));

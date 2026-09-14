@@ -38,7 +38,7 @@ import {
  * harness run.
  */
 
-export interface UrlFlagRow {
+interface UrlFlagRow {
   readonly shape: string;
   /** `?name=` as it appeared on the URL, or null for absent. */
   readonly urlName: string | null;
@@ -47,7 +47,7 @@ export interface UrlFlagRow {
   readonly resolved: string;
 }
 
-export interface RewindRow {
+interface RewindRow {
   readonly shape: string;
   readonly name: string;
   /** What the client puts on the wire. */

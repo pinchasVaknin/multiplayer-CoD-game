@@ -161,7 +161,7 @@ export function cloneLoadout(src: LoadoutSlot): LoadoutSlot {
 }
 
 /** The perks a slot actually carries, with the empty tiers dropped. */
-export function activePerks(slot: LoadoutSlot): PerkId[] {
+function activePerks(slot: LoadoutSlot): PerkId[] {
   const out: PerkId[] = [];
   for (const id of slot.perks) {
     if (id !== null) out.push(id);

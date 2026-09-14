@@ -48,7 +48,7 @@ export type WeaponNumberKey =
   | ScopeKey;
 
 /** Keys that only mean anything on a weapon with a `scope`. */
-export const SCOPE_KEY_PREFIX = 'scope.';
+const SCOPE_KEY_PREFIX = 'scope.';
 
 export const WEAPON_TUNABLES: Readonly<Record<WeaponNumberKey, TunableMeta>> = {
   'damage.near': { label: 'Near', group: 'Damage', min: 5, max: 120, step: 1, unit: '' },

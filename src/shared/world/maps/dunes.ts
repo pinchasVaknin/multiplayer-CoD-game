@@ -112,7 +112,7 @@ const STREET_X = 26;
 /** Alley centre lines, between the building columns. */
 const ALLEY_X = 7.5;
 
-export const DUNES_LANES: readonly LaneDef[] = [
+const DUNES_LANES: readonly LaneDef[] = [
   {
     name: 'WEST',
     center: { x: -STREET_X, y: 0, z: 0 },

@@ -59,7 +59,7 @@ const SHOOTER_Z = 0;
 const TARGET_ID = 900;
 
 /** The four ranges S6.5 fixes the table at, metres. */
-export const BALANCE_RANGES: readonly number[] = [5, 15, 25, 40];
+const BALANCE_RANGES: readonly number[] = [5, 15, 25, 40];
 
 /** Give up after this long. Longer than any honest kill and shorter than a hang. */
 const MAX_SECONDS = 6;

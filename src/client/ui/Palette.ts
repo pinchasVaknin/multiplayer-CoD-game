@@ -118,7 +118,7 @@ const PALETTES: Readonly<Record<ColorblindMode, GameplayPalette>> = {
   tritanopia: BLUE_YELLOW_SAFE,
 };
 
-export function paletteFor(mode: ColorblindMode): GameplayPalette {
+function paletteFor(mode: ColorblindMode): GameplayPalette {
   return PALETTES[mode] ?? BASE;
 }
 

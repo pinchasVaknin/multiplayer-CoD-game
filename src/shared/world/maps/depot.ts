@@ -175,7 +175,7 @@ const SHED_TOP = 6.0;
 /** Loading dock inside the shed: the map's one raised surface you simply walk onto. */
 const DOCK_H = 1.2;
 
-export const DEPOT_LANES: readonly LaneDef[] = [
+const DEPOT_LANES: readonly LaneDef[] = [
   {
     name: 'WEST',
     center: { x: -LANE_X, y: 0, z: 0 },

@@ -32,7 +32,7 @@ import { simCos, simSin } from '../core/SimMath';
  * usable points instead of one broken one. M4 keeps this code and changes only the data.
  */
 
-export const MIN_ENEMY_DISTANCE = 15;
+const MIN_ENEMY_DISTANCE = 15;
 
 /**
  * Jittered points generated per authored zone.
@@ -51,7 +51,7 @@ export const MIN_ENEMY_DISTANCE = 15;
  */
 const SAMPLES_PER_ZONE = 14;
 
-export type SpawnTier = 'safe' | 'hidden' | 'leastBad';
+type SpawnTier = 'safe' | 'hidden' | 'leastBad';
 
 export interface SpawnChoice {
   x: number;

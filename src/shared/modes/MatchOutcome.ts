@@ -30,7 +30,7 @@ import type { MatchResult } from './GameMode';
  * cosmetic oddity; a summary that shows two players "1ST" is a lie, and the pin is what stops it.
  */
 
-export type OutcomeKind = 'WIN' | 'LOSS' | 'DRAW';
+type OutcomeKind = 'WIN' | 'LOSS' | 'DRAW';
 
 export interface PersonalOutcome {
   readonly kind: OutcomeKind;
@@ -84,7 +84,7 @@ export function personalOutcome(
  * A reader with no row — a spectator, a client whose replicated rows never arrived — is last
  * plus one, which is honest about what the reader knows rather than a guess at a place.
  */
-export function placeOf(rows: readonly PlaceableRow[], entityId: number, winnerId: number): number {
+function placeOf(rows: readonly PlaceableRow[], entityId: number, winnerId: number): number {
   let mine: PlaceableRow | undefined;
   for (const row of rows) if (row.entityId === entityId) mine = row;
   if (mine === undefined) return rows.length + 1;
@@ -116,7 +116,7 @@ export function isMvp(rows: readonly PlaceableRow[], entityId: number): boolean 
 }
 
 /** `1ST`, `2ND`, `3RD`, `4TH` ... `11TH`, `12TH`, `13TH`, `21ST`. */
-export function ordinal(place: number): string {
+function ordinal(place: number): string {
   const n = Math.max(1, Math.round(place));
   const tens = n % 100;
   const suffix =

@@ -78,7 +78,7 @@ const ARRIVE_M = 1.5;
  */
 const AHEAD_PROBE_M = 0.75;
 
-export interface SnagFinding {
+interface SnagFinding {
   /** Face midpoint, so a finding can be walked to. */
   x: number;
   y: number;

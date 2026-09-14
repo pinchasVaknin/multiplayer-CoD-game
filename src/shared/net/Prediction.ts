@@ -85,7 +85,7 @@ import {
 export const POSITION_EPSILON = 0.001;
 
 /** Velocity divergence that counts as a misprediction, m/s. */
-export const VELOCITY_EPSILON = 0.01;
+const VELOCITY_EPSILON = 0.01;
 
 /**
  * Ticks over which a correction is eased out visually.
@@ -118,7 +118,7 @@ export const MAX_SMOOTHED_DISTANCE = 2;
  * shortest distance between two spawn points on any of the three maps. See the branch in
  * `reconcile` that uses it.
  */
-export const TELEPORT_DISTANCE = 5;
+const TELEPORT_DISTANCE = 5;
 
 /** Commands held awaiting acknowledgement. Two seconds at 60 Hz. */
 const RING = 128;

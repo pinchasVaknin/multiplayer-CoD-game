@@ -110,7 +110,7 @@ export type ShadowQuality = (typeof SHADOW_QUALITIES)[number];
 export const COLORBLIND_MODES = ['off', 'deuteranopia', 'protanopia', 'tritanopia'] as const;
 export type ColorblindMode = (typeof COLORBLIND_MODES)[number];
 
-export interface ProfileData {
+interface ProfileData {
   level: number;
   xp: number;
   prestige: number;
@@ -223,7 +223,7 @@ export function defaultSettings(modeId: string, mapId: string, fov: number): Set
  * gameplay, a second rule about where the ban applies is a rule somebody will get wrong. The
  * clock is the entropy, and a collision only means two players share a name for one session.
  */
-export function generateCallsign(): string {
+function generateCallsign(): string {
   const suffix = (Date.now() % 1000).toString().padStart(3, '0');
   return `OPERATOR-${suffix}`;
 }

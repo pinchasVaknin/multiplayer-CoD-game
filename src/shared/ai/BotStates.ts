@@ -11,7 +11,7 @@
  * single door back into the machine.
  */
 
-export const BOT_STATES = [
+const BOT_STATES = [
   'IDLE',
   'PATROL',
   'INVESTIGATE',

@@ -41,7 +41,7 @@ export interface TdmConfig {
   readonly teamKillPenalty: number;
 }
 
-export const TDM_CONFIG: TdmConfig = {
+const TDM_CONFIG: TdmConfig = {
   scoreLimit: 75,
   timeLimitSeconds: 600,
   pointsPerKill: 100,

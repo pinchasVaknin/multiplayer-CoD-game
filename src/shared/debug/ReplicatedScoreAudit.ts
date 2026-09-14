@@ -55,7 +55,7 @@ const KILLS = 12;
 const SERVER_SCORE_A = 69;
 const SERVER_SCORE_B = 75;
 
-export interface ReplicatedScoreRow {
+interface ReplicatedScoreRow {
   readonly modeId: string;
   readonly mapId: string;
   /** What the server said, on the header. */
@@ -68,7 +68,7 @@ export interface ReplicatedScoreRow {
   readonly localCopyTracks: boolean;
 }
 
-export interface ReplicaRow {
+interface ReplicaRow {
   readonly step: string;
   readonly rows: number;
   readonly detail: string;

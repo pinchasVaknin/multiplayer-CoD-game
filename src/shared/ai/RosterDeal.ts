@@ -149,7 +149,7 @@ export interface RosterDealAudit {
   readonly rows: readonly RosterDealRow[];
 }
 
-export interface RosterDealRow {
+interface RosterDealRow {
   readonly id: string;
   readonly teamA: number;
   readonly teamB: number;

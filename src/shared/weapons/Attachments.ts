@@ -193,7 +193,7 @@ export function resolveWeaponDef(
  * a def without re-deriving the rules; the *only* writer of a `WeaponDef` field in this
  * project is this function.
  */
-export function applyEffects(def: WeaponDef, fx: AttachmentEffects): void {
+function applyEffects(def: WeaponDef, fx: AttachmentEffects): void {
   if (fx.adsTimeMult !== undefined) def.adsTime *= fx.adsTimeMult;
   if (fx.reloadMult !== undefined) {
     def.reloadTime *= fx.reloadMult;

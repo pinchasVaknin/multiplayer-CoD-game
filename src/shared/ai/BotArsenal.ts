@@ -32,7 +32,7 @@ import type { BotTier } from './DifficultyTiers';
  * shotgun" and cannot silently fail to sum to one.
  */
 
-export interface BotWeaponEntry {
+interface BotWeaponEntry {
   readonly weaponId: string;
   /** Relative likelihood inside this tier's pool. */
   readonly weight: number;
@@ -45,7 +45,7 @@ export interface BotWeaponEntry {
  * `ai/` understands a projectile arc, and a bot that fires a rocket at its own feet is worse
  * than a bot with a rifle.
  */
-export const BOT_ARSENAL: Readonly<Record<BotTier, readonly BotWeaponEntry[]>> = {
+const BOT_ARSENAL: Readonly<Record<BotTier, readonly BotWeaponEntry[]>> = {
   RECRUIT: [
     { weaponId: 'ar_carbine', weight: 4 },
     { weaponId: 'smg_wasp', weight: 3 },

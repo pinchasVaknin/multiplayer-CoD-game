@@ -54,7 +54,7 @@ export function applyEquippedLoadout(
  * destination shares nothing with the loadout it came from — writing to a live weapon must
  * never reach back into the registry.
  */
-export function copyWeaponDefInto(src: WeaponDef, dst: WeaponDef): void {
+function copyWeaponDefInto(src: WeaponDef, dst: WeaponDef): void {
   const nested = cloneWeaponDef(src);
   Object.assign(dst, nested);
   dst.damage = nested.damage;

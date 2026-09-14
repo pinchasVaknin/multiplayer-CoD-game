@@ -13,9 +13,9 @@
  * right corner of a screen, while both are moving.
  */
 
-export type StockKind = 'full' | 'folding' | 'skeleton' | 'none';
-export type MagazineKind = 'curved' | 'box' | 'drum' | 'tube' | 'grip';
-export type OpticKind = 'irons' | 'reddot' | 'scope';
+type StockKind = 'full' | 'folding' | 'skeleton' | 'none';
+type MagazineKind = 'curved' | 'box' | 'drum' | 'tube' | 'grip';
+type OpticKind = 'irons' | 'reddot' | 'scope';
 
 export interface WeaponModelSpec {
   /** Receiver: the block everything else hangs off. */
@@ -93,7 +93,7 @@ const AR_BASE: WeaponModelSpec = {
   adsOffsetZ: 0,
 };
 
-export const WEAPON_MODEL_SPECS: Readonly<Record<string, WeaponModelSpec>> = {
+const WEAPON_MODEL_SPECS: Readonly<Record<string, WeaponModelSpec>> = {
   // -- assault rifles ------------------------------------------------------
   ar_carbine: AR_BASE,
   /** Longer receiver, stubby handguard, a visibly fatter magazine: the AK read. */

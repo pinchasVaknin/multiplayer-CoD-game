@@ -261,7 +261,7 @@ export interface MatchDeps {
 }
 
 /** The player's side. Bots added to 'A' fight alongside them, 'B' against. */
-export const PLAYER_TEAM: BotTeam = 'A';
+const PLAYER_TEAM: BotTeam = 'A';
 
 /** Reused every frame by the objective-bearing bridge below (S4.7: no render allocation). */
 const bombBearingScratch = { active: false, x: 0, z: 0 };
@@ -277,7 +277,7 @@ const DEFAULT_EYE_HEIGHT = 1.65;
 /** Reused by `bodyAt`; the callers read it during the call and never keep it. */
 const bodyScratch: BodyPose = { x: 0, y: 0, z: 0, eyeHeight: DEFAULT_EYE_HEIGHT };
 
-export const PLAYER_NAME = 'OPERATOR';
+const PLAYER_NAME = 'OPERATOR';
 
 /**
  * Seconds the player spends dead.

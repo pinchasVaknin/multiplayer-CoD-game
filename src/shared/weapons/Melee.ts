@@ -60,7 +60,7 @@ const COOLDOWN_SECONDS = 0.72;
  * knifing a decision rather than a ranged option — at 3 m it starts winning fights the rifle
  * should have won.
  */
-export const MELEE_RANGE = 2.0;
+const MELEE_RANGE = 2.0;
 
 /**
  * Damage. Lethal against a full-health operator with a wide margin, and it stays lethal
@@ -80,7 +80,7 @@ let knifeDef: WeaponDef | null = null;
  * does and for the same reason: it guarantees every field the schema requires is present, so
  * adding one cannot leave the knife half-initialised. The killfeed reads `name` off this.
  */
-export function meleeWeapon(): WeaponDef {
+function meleeWeapon(): WeaponDef {
   if (knifeDef !== null) return knifeDef;
   const def = cloneWeaponDef(AR_DEFAULT);
   def.id = 'melee_knife';

@@ -20,7 +20,7 @@ import { simCos, simSin } from '../../core/SimMath';
  * looking at.
  */
 
-export interface CoverProfile {
+interface CoverProfile {
   /** Half-depth along each offered face direction, metres. */
   readonly halfDepth: number;
   readonly height: CoverPoint['height'];
@@ -28,14 +28,14 @@ export interface CoverProfile {
   readonly faces: readonly Readonly<{ x: number; z: number }>[];
 }
 
-export const FOUR_SIDES = [
+const FOUR_SIDES = [
   { x: 0, z: -1 },
   { x: 0, z: 1 },
   { x: -1, z: 0 },
   { x: 1, z: 0 },
 ] as const;
 
-export const BROAD_FACES = [
+const BROAD_FACES = [
   { x: 0, z: -1 },
   { x: 0, z: 1 },
 ] as const;
@@ -47,7 +47,7 @@ export const BROAD_FACES = [
  * room derives exactly the cover it derived before. `lightBox` is wall trim four metres up
  * and is deliberately absent.
  */
-export const COVER_PROFILES: Partial<Record<PropShapeId, CoverProfile>> = {
+const COVER_PROFILES: Partial<Record<PropShapeId, CoverProfile>> = {
   crate: { halfDepth: 0.5, height: 'low', faces: FOUR_SIDES },
   crateTall: { halfDepth: 0.55, height: 'high', faces: FOUR_SIDES },
   pillar: { halfDepth: 0.35, height: 'high', faces: FOUR_SIDES },
@@ -86,7 +86,7 @@ export const COVER_PROFILES: Partial<Record<PropShapeId, CoverProfile>> = {
 };
 
 /** How far clear of the object's face a bot stands. Capsule radius plus breathing room. */
-export const COVER_STANDOFF = 0.62;
+const COVER_STANDOFF = 0.62;
 
 /**
  * One cover point beside an object, facing back through it.

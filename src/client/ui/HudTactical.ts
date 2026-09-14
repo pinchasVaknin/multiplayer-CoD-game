@@ -17,7 +17,7 @@ import { BearingIndicator } from './BearingIndicator';
  * The transition is deliberately non-linear: the weapon is visibly up before the vignette
  * arrives, so scoping reads as raising a rifle rather than as a screen effect.
  */
-export const SCOPE_OVERLAY_START = 0.55;
+const SCOPE_OVERLAY_START = 0.55;
 
 /**
  * ADS fraction past which the *weapon* stops being drawn (M7).

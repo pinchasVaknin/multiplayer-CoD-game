@@ -23,7 +23,7 @@ export type EquipmentSlot = 'lethal' | 'tactical';
 export type EquipmentId = 'frag' | 'semtex' | 'flashbang' | 'smoke' | 'claymore';
 
 /** How a thrown object behaves when it meets geometry. */
-export type ImpactBehaviour =
+type ImpactBehaviour =
   /** Loses energy and keeps going: a frag rolls around a corner and that is the point. */
   | 'bounce'
   /** Stops dead where it lands, on a wall or on a person. */
@@ -198,7 +198,7 @@ const BASE = {
   minBotTier: 1,
 };
 
-export const FRAG: EquipmentDef = {
+const FRAG: EquipmentDef = {
   ...BASE,
   id: 'frag',
   name: 'FRAG',
@@ -212,7 +212,7 @@ export const FRAG: EquipmentDef = {
   minBotTier: 1,
 };
 
-export const SEMTEX: EquipmentDef = {
+const SEMTEX: EquipmentDef = {
   ...BASE,
   id: 'semtex',
   name: 'SEMTEX',
@@ -231,7 +231,7 @@ export const SEMTEX: EquipmentDef = {
   minBotTier: 2,
 };
 
-export const FLASHBANG: EquipmentDef = {
+const FLASHBANG: EquipmentDef = {
   ...BASE,
   id: 'flashbang',
   name: 'FLASHBANG',
@@ -261,7 +261,7 @@ export const SMOKE: EquipmentDef = {
   minBotTier: 2,
 };
 
-export const CLAYMORE: EquipmentDef = {
+const CLAYMORE: EquipmentDef = {
   ...BASE,
   id: 'claymore',
   name: 'CLAYMORE',

@@ -25,7 +25,7 @@ import { HUMANOID_RIG, type HitboxRig, type RigLayout } from '../../shared/comba
  */
 
 /** Ticks retained. 60 at 60 Hz is the 1.0 s S4.13 asks for. */
-export const HISTORY_TICKS = 60;
+const HISTORY_TICKS = 60;
 
 export class RigHistory {
   private readonly x = new Float32Array(HISTORY_TICKS);

@@ -20,7 +20,7 @@ const log = logger('hardening');
  * was sent on, and reusing it would test nothing after the first.
  */
 
-export interface ProbeResult {
+interface ProbeResult {
   readonly name: string;
   /** What the probe sent, in words. Goes into the report. */
   readonly sent: string;

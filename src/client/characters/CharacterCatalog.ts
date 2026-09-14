@@ -61,7 +61,7 @@ export interface CharacterAnimationDefinition {
 }
 
 /** One or more variants; the selector's answer is never empty. */
-export type CharacterAnimationSlot = readonly [CharacterAnimationDefinition, ...CharacterAnimationDefinition[]];
+type CharacterAnimationSlot = readonly [CharacterAnimationDefinition, ...CharacterAnimationDefinition[]];
 
 /**
  * Bone landmarks and a palm marker used by the presentation-only support-hand constraint.
@@ -96,14 +96,14 @@ export interface CharacterIndicatorPadProfile {
  * skeleton without making the roster reconciler know about imported bone names. The knee
  * bones the emissive IFF spheres hung off left with them (M13 C3).
  */
-export interface CharacterIndicatorProfile {
+interface CharacterIndicatorProfile {
   readonly headBone: string;
   readonly leftShoulder: CharacterIndicatorPadProfile;
   readonly rightShoulder: CharacterIndicatorPadProfile;
 }
 
 /** A component of a bone-local translation. */
-export type RootTranslationAxis = 'x' | 'y' | 'z';
+type RootTranslationAxis = 'x' | 'y' | 'z';
 
 export interface CharacterRigProfile {
   readonly id: string;

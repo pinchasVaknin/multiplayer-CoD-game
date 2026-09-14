@@ -27,7 +27,7 @@ import { MAPS, MODES, modesForMap } from '../modes/ModeRegistry';
  * Pure: a throwaway bus, score and mode per row, no clock, no wire, no DOM. One run is a fact.
  */
 
-export interface HeaderRow {
+interface HeaderRow {
   readonly modeId: string;
   readonly mapId: string;
   readonly slots: readonly HeaderSlot[];

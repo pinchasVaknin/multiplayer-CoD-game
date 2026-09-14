@@ -26,7 +26,7 @@
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-export const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
+const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
 export interface LogSink {
   /**
@@ -54,7 +54,7 @@ interface ConsoleLike {
 
 const hostConsole = (globalThis as { console?: ConsoleLike }).console;
 
-export const consoleSink: LogSink = {
+const consoleSink: LogSink = {
   log(level: LogLevel, tag: string, message: string): void {
     if (hostConsole === undefined) return;
     const line = `[${tag}] ${message}`;

@@ -53,11 +53,11 @@ export function barrelY(spec: WeaponModelSpec): number {
 }
 
 /** Front of the receiver. */
-export function receiverFront(spec: WeaponModelSpec): number {
+function receiverFront(spec: WeaponModelSpec): number {
   return -spec.receiverLength * 0.5;
 }
 
-export function handguardEnd(spec: WeaponModelSpec): number {
+function handguardEnd(spec: WeaponModelSpec): number {
   return receiverFront(spec) - spec.handguardLength;
 }
 

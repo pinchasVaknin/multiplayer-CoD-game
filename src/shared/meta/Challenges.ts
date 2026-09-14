@@ -26,7 +26,7 @@ import { CAMO_PREREQUISITES, type CamoId } from './Camos';
 
 export type ChallengeId = string;
 
-export type ChallengeCategory = 'COMBAT' | 'PRECISION' | 'MOVEMENT' | 'TACTICAL' | 'MASTERY' | 'CAMO';
+type ChallengeCategory = 'COMBAT' | 'PRECISION' | 'MOVEMENT' | 'TACTICAL' | 'MASTERY' | 'CAMO';
 
 /** Everything known about one kill, assembled by `MatchProgression`. */
 export interface KillFact {
@@ -64,7 +64,7 @@ export interface MatchFact {
 /** The per-weapon counters a camo challenge measures. */
 export type WeaponStatKey = 'kills' | 'headshots' | 'longshots' | 'multikills';
 
-export type ChallengeRule =
+type ChallengeRule =
   | { readonly kind: 'kill'; readonly test: (k: KillFact) => boolean }
   /** One enemy blinded by your flashbang. */
   | { readonly kind: 'flash' }
@@ -95,10 +95,10 @@ export const MULTIKILL_WINDOW = 5;
 export const SLIDE_KILL_GRACE = 1.5;
 
 /** Metres beyond which a kill is a longshot. Mirrors `XpRules.LONGSHOT_METRES`. */
-export const LONGSHOT_METRES = 38;
+const LONGSHOT_METRES = 38;
 
 /** Metres inside which a kill is point blank. */
-export const POINT_BLANK_METRES = 5;
+const POINT_BLANK_METRES = 5;
 
 function killsOfClass(cls: WeaponClass) {
   return (k: KillFact): boolean => k.weaponClass === cls && !k.equipment;

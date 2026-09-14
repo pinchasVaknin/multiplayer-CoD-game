@@ -387,7 +387,7 @@ function addOpticSurfaces(out: Map<SurfaceKey, THREE.MeshStandardMaterial>): voi
  * because they are never asked for — `handBoxes` is a part group the viewmodel alone reads, and
  * a body that already has hands does not need a second pair floating beside them.
  */
-export function buildHeldWeaponGeometry(weaponId: string): THREE.BufferGeometry {
+function buildHeldWeaponGeometry(weaponId: string): THREE.BufferGeometry {
   const spec = modelSpecFor(weaponId);
   const parts: THREE.BufferGeometry[] = [];
 

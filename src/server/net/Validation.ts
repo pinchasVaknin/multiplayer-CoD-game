@@ -76,7 +76,7 @@ export const Reject = {
 
 export type RejectReason = (typeof Reject)[keyof typeof Reject];
 
-export const REJECT_NAMES: Readonly<Record<number, string>> = {
+const REJECT_NAMES: Readonly<Record<number, string>> = {
   [Reject.None]: 'none',
   [Reject.TickSkew]: 'tick-skew',
   [Reject.NotFinite]: 'not-finite',

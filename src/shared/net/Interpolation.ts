@@ -36,7 +36,7 @@ import { copyEntitySnapshot, makeEntitySnapshot, type EntitySnapshot } from './S
 export const DEFAULT_INTERPOLATION_DELAY_MS = 100;
 
 /** Longest extrapolation past the newest sample before the entity freezes, ms (S4.12). */
-export const MAX_EXTRAPOLATION_MS = 250;
+const MAX_EXTRAPOLATION_MS = 250;
 
 /** Samples retained per entity. At 20 Hz this is 1.6 s of history. */
 const SAMPLES = 32;

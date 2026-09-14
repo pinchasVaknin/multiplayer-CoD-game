@@ -130,7 +130,7 @@ export type CheatKind = 'toggle' | 'instant' | 'surface';
  * second kind of payment would add a field here rather than a branch anywhere downstream. A
  * surface carries nothing: which surface is the client's business, and there is exactly one.
  */
-export type CheatEffect =
+type CheatEffect =
   | { readonly kind: 'toggle'; readonly bits: number }
   | { readonly kind: 'instant'; readonly kills: number }
   | { readonly kind: 'surface' };
@@ -148,7 +148,7 @@ export interface CheatCode {
  * a class affordable so the three-slot strip, the price list and the cooldowns can all
  * be exercised in one match without staging a twelve-kill streak first.
  */
-export const CHEAT_WALLET_KILLS = 30;
+const CHEAT_WALLET_KILLS = 30;
 
 /**
  * The table. Nothing outside this file may name a code string.

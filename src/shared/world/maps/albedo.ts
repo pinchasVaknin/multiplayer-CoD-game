@@ -31,7 +31,7 @@ import { MATERIAL_KEYS, type MaterialKey } from './types';
  * multiplies in. `MapLuminance.linearLuminance` is the function that says so, and F9's whole
  * finding is the gap between those two readings.
  */
-export const MATERIAL_BASE_COLOR: Readonly<Record<MaterialKey, number>> = {
+const MATERIAL_BASE_COLOR: Readonly<Record<MaterialKey, number>> = {
   concrete: 0x6a6f78,
   concreteDark: 0x3d424b,
   floor: 0x555a63,

@@ -46,7 +46,7 @@ function write(level: LogLevel, line: string): void {
   else process.stdout.write(line + '\n');
 }
 
-export function makeTextSink(): LogSink {
+function makeTextSink(): LogSink {
   return {
     log(level, tag, message) {
       const t = elapsedSeconds().toFixed(3).padStart(9);
@@ -55,7 +55,7 @@ export function makeTextSink(): LogSink {
   };
 }
 
-export function makeJsonSink(): LogSink {
+function makeJsonSink(): LogSink {
   return {
     log(level, tag, message) {
       write(level, JSON.stringify({ t: +elapsedSeconds().toFixed(3), level, tag, msg: message }));

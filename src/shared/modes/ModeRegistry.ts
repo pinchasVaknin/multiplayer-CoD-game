@@ -315,7 +315,7 @@ export function auditModeBriefs(): ModeBriefAudit {
   return { rows, problems };
 }
 
-export interface ModeBriefRow {
+interface ModeBriefRow {
   readonly id: GameModeId;
   /** The map it was built on, because three of the briefs name that map's objectives. */
   readonly mapId: string;

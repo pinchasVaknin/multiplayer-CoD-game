@@ -18,7 +18,7 @@ import { simCos } from '../core/SimMath';
  * Every entry point here is allocation free.
  */
 
-export const MAX_CONTACTS = 8;
+const MAX_CONTACTS = 8;
 const MAX_SUBSTEPS = 16;
 const RESOLUTION_ITERATIONS = 4;
 const CANDIDATE_CAP = 512;

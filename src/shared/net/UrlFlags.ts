@@ -146,7 +146,7 @@ export const MAX_NAME_LENGTH = 20;
  * more than a wire convention should. It is here so the two halves of the convention cannot
  * drift apart, and so the interaction below is stated once rather than discovered again.
  */
-export const REWIND_DEBUG_SUFFIX = '#rw';
+const REWIND_DEBUG_SUFFIX = '#rw';
 
 /**
  * A display name safe to put on a scoreboard.
@@ -159,7 +159,7 @@ export const REWIND_DEBUG_SUFFIX = '#rw';
  * copies of this function disagreed about: the client returned `'OPERATOR'` and the server
  * returned `''` and left the substitution to its caller.
  */
-export function sanitiseName(raw: string | null | undefined, fallback: string): string {
+function sanitiseName(raw: string | null | undefined, fallback: string): string {
   if (raw === null || raw === undefined) return fallback;
   let out = '';
   for (const ch of raw) {

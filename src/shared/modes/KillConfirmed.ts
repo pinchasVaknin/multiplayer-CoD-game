@@ -62,7 +62,7 @@ export interface KillConfirmedConfig {
   readonly pointsPerDeny: number;
 }
 
-export const KILL_CONFIRMED_CONFIG: KillConfirmedConfig = {
+const KILL_CONFIRMED_CONFIG: KillConfirmedConfig = {
   scoreLimit: 65,
   timeLimitSeconds: 600,
   tagLifetimeSeconds: 20,

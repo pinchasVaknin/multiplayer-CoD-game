@@ -148,7 +148,7 @@ export interface HudState {
  * gun would be worse than silence. The order is fixed so the eye lands in the same place every
  * time — this is read in a second and a half, three or four times a minute.
  */
-export function describeDeath(report: DeathReport | null): string {
+function describeDeath(report: DeathReport | null): string {
   if (report === null || report.killerName === '') return '';
   const parts: string[] = [report.killerName.toUpperCase()];
   if (report.weaponName !== '') parts.push(report.weaponName.toUpperCase());

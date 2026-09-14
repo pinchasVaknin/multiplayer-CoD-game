@@ -79,7 +79,7 @@ function smoothMix(a: number, b: number, t: number): number {
  * that equality exactly rather than approximately. `npm run readability` compares the two,
  * with no threshold in the comparison and none needed.
  */
-export function skylineAt(def: SkylineDef, index: number, samples = SKY_PROFILE_SAMPLES): number {
+function skylineAt(def: SkylineDef, index: number, samples = SKY_PROFILE_SAMPLES): number {
   const peak = (def.heightDeg * Math.PI) / 180;
   const count = Math.max(1, Math.round(def.count));
   const hardness = Math.min(1, Math.max(0, def.hardness));

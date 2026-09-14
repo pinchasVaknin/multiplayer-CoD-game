@@ -177,7 +177,7 @@ export const MODE_BALLOT: readonly GameModeId[] = ['TDM', 'DOM', 'KC', 'FFA', 'S
 /** The three real maps. The greybox room is the arena you vote *from*, never a destination. */
 export const MAP_BALLOT: readonly string[] = ['mp_foundry', 'mp_dunes', 'mp_depot'];
 
-export interface VoteTallyEntry {
+interface VoteTallyEntry {
   /** Index into `MODE_BALLOT` or `MAP_BALLOT` for the current phase. */
   readonly option: number;
   readonly count: number;
@@ -224,7 +224,7 @@ export interface ObjectiveState {
 }
 
 /** Owner codes on the wire. `BotTeam` is a string and this is two bits. */
-export const OBJ_NEUTRAL = 0;
+const OBJ_NEUTRAL = 0;
 export const OBJ_TEAM_A = 1;
 export const OBJ_TEAM_B = 2;
 
@@ -556,10 +556,10 @@ export interface NetLoadout {
 }
 
 /** Caps, so a hostile client cannot make the server allocate on its say-so (S4.16). */
-export const MAX_ATTACHMENTS_PER_WEAPON = 5;
+const MAX_ATTACHMENTS_PER_WEAPON = 5;
 /** Perk slots on a class: one per tier. Named for the slot count, not the tier list. */
-export const PERK_SLOTS = 3;
-export const STREAK_SLOTS = 3;
+const PERK_SLOTS = 3;
+const STREAK_SLOTS = 3;
 
 /**
  * A local `LoadoutSlot`, flattened to the ids that cross the wire (Tier 1 #20, rule 1).

@@ -41,7 +41,7 @@ export const CROSSHAIR_LINE_LENGTH = 7;
 export const CROSSHAIR_MIN_GAP = 3;
 
 /** Beyond this the cross has left the screen and there is nothing more to say. */
-export const CROSSHAIR_MAX_GAP = 220;
+const CROSSHAIR_MAX_GAP = 220;
 
 /**
  * Half-width of the crosshair gap in CSS pixels.

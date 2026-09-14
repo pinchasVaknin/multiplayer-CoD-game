@@ -40,7 +40,7 @@ export type AttachmentSlot =
   | 'rearGrip';
 
 /** One authored recoil step, degrees. +y is up, +x is right. */
-export interface RecoilKick {
+interface RecoilKick {
   readonly x: number;
   readonly y: number;
 }

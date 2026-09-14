@@ -143,7 +143,7 @@ class ScratchStore implements ProgressionStore {
   }
 }
 
-export interface MatchXpRow {
+interface MatchXpRow {
   readonly shape: string;
   /** Simulated seconds the match ran. */
   readonly seconds: number;
@@ -158,7 +158,7 @@ export interface MatchXpRow {
 }
 
 /** The second half's row: the same fight, counted twice (M13 Phase B). */
-export interface LedgerAgreementRow {
+interface LedgerAgreementRow {
   readonly shape: string;
   /** Every priced line, `label x count = xp`, from the solo progression. */
   readonly solo: readonly string[];

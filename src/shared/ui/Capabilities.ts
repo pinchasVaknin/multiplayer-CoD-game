@@ -49,7 +49,7 @@ export interface DeviceCapabilities {
   readonly hasPointerLock: boolean;
 }
 
-export type PlayabilityId = 'ok' | 'no-pointer-lock' | 'no-fine-pointer';
+type PlayabilityId = 'ok' | 'no-pointer-lock' | 'no-fine-pointer';
 
 export interface Playability {
   readonly id: PlayabilityId;

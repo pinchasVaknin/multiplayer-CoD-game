@@ -66,7 +66,7 @@ const FLOOR_HALF = 300;
 /** Nothing here may die: a dead target stops absorbing rounds and truncates the sample. */
 const INDESTRUCTIBLE = { max: 1_000_000, regenDelay: 999, regenRate: 0 };
 
-export interface AccuracyRow {
+interface AccuracyRow {
   /** Which of the three shapes this is. */
   readonly shape: string;
   readonly weaponId: string;

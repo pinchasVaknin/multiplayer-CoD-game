@@ -14,8 +14,8 @@ import type { CharacterAnimationId } from './CharacterCatalog';
  * from rendered pose deltas cannot flicker on the boundary. An authoritative sprint flag
  * still chooses run immediately.
  */
-export const IDLE_SPEED = LOCOMOTION_IDLE_SPEED;
-export const RUN_SPEED = LOCOMOTION_RUN_SPEED;
+const IDLE_SPEED = LOCOMOTION_IDLE_SPEED;
+const RUN_SPEED = LOCOMOTION_RUN_SPEED;
 
 export function isLowStance(input: Pick<ActorAnimationInput, 'stance'>): boolean {
   return isLowStanceId(input.stance);

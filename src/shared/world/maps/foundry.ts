@@ -121,7 +121,7 @@ const DECK_GIRDERS: readonly Readonly<{ x: number; z: number; along: 'x' | 'z' }
  * `LaneDef` moved to `types.ts` in M8 so Dunes and Depot are timed by the same harness
  * code rather than by a branch on this map's id.
  */
-export const FOUNDRY_LANES: readonly LaneDef[] = [
+const FOUNDRY_LANES: readonly LaneDef[] = [
   {
     name: 'WEST',
     center: { x: -22, y: 0, z: 0 },
