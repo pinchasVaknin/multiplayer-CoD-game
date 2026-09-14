@@ -2243,5 +2243,3 @@ function round(v: number): number {
   return Math.round(v * 10000) / 10000;
 }
 
-/** Seconds one headless tick represents. Exported so the harness paces itself honestly. */
-export const HEADLESS_DT = DT;

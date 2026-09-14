@@ -49,11 +49,6 @@ import {
  * defender sees them, bounded by the cap and the interpolation delay.
  */
 
-/** The cap in ticks, which is what the history is indexed by. */
-export const MAX_REWIND_TICKS = Math.floor(MAX_REWIND_MS / (DT * 1000));
-
-export { MAX_REWIND_MS };
-
 /**
  * One entity's rewindable state.
  *

@@ -1,4 +1,3 @@
-import { DEG2RAD } from '../../shared/core/MathUtil';
 import type { TunableMeta } from '../../shared/player/MovementConfig';
 
 /**
@@ -128,6 +127,3 @@ export function cameraConfigToSource(cfg: CameraConfig): string {
   return lines.join('\n');
 }
 
-export function degToRad(v: number): number {
-  return v * DEG2RAD;
-}

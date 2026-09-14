@@ -3,7 +3,6 @@ import { Btn, type MutableInputCommand } from '../../shared/core/InputCommand';
 import { DT } from '../../shared/core/Loop';
 import type { Loop } from '../engine/FrameLoop';
 import type { FrameStats } from './FrameStats';
-import { HISTORY_LENGTH } from './FrameStats';
 import type { MatchHarness } from './MatchHarness';
 
 /**
@@ -478,5 +477,3 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-/** Exported so `DEBUG.md`'s worked example can quote the real numbers. */
-export const HANDOVER_CONSTANTS = { SWEEP_SCALES, SWEEP_SECONDS, HISTORY_LENGTH, DT };

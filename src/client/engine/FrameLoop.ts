@@ -1,6 +1,4 @@
 import {
-  DT,
-  MAX_STEPS_PER_FRAME,
   TickAccumulator,
   type FrameSample,
   type LoopHandlers,
@@ -120,7 +118,6 @@ export class Loop {
   };
 }
 
-export { DT, MAX_STEPS_PER_FRAME };
 export type { FrameSample, LoopHandlers };
 
 function busyWait(ms: number): void {

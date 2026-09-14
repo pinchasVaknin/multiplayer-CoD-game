@@ -4,7 +4,6 @@ import {
   MAP_BALLOT,
   ballotOpened,
   MODE_BALLOT,
-  VOTE_CYCLE_CONFIG,
   VotePhase,
 } from '../../shared/net/Skirmish';
 import type { ProceduralAudio } from '../engine/ProceduralAudio';
@@ -409,10 +408,6 @@ interface OptionView {
   readonly pct: number;
   readonly self: boolean;
 }
-
-/** Total cycle length, for a caller that wants to size a progress bar. */
-export const VOTE_CYCLE_SECONDS =
-  VOTE_CYCLE_CONFIG.playSeconds + VOTE_CYCLE_CONFIG.modeVoteSeconds + VOTE_CYCLE_CONFIG.mapVoteSeconds;
 
 function modeName(id: GameModeId): string {
   try {

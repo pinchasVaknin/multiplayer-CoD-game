@@ -53,17 +53,6 @@ export function disposeCamoTextures(): void {
   cache.clear();
 }
 
-/** A small swatch for the loadout editor, as a data URL. Cached alongside the textures. */
-const swatchCache = new Map<CamoId, string>();
-
-export function camoSwatchUrl(id: CamoId): string {
-  const existing = swatchCache.get(id);
-  if (existing !== undefined) return existing;
-  const url = draw(id).canvas.toDataURL('image/png');
-  swatchCache.set(id, url);
-  return url;
-}
-
 function makeCanvas(): CanvasRenderingContext2D {
   const canvas = document.createElement('canvas');
   canvas.width = TEX;

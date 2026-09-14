@@ -1,7 +1,6 @@
 import { logger } from '../../shared/core/Log';
 import { DEFAULT_INTERPOLATION_DELAY_MS } from '../../shared/net/Interpolation';
 import { describeConditions, type NetConditions } from '../../shared/net/NetSim';
-import { EFlag } from '../../shared/net/Snapshot';
 import { HeadlessClient } from './HeadlessClient';
 
 const log = logger('hittest');
@@ -116,5 +115,3 @@ function drive(clients: readonly HeadlessClient[], ms: number): Promise<void> {
     }, 4);
   });
 }
-
-export { EFlag };

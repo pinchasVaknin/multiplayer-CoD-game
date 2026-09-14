@@ -14,7 +14,6 @@ import { AudioGraph } from './AudioGraph';
  * The bus architecture, the single convolver and the voice pool are all inherited from
  * `AudioGraph`, unchanged since M1.
  */
-export type { BusName, NoiseSpec, OcclusionTest, OscSpec, ReverbSpec } from './AudioSpecs';
 
 /** One formant-shaped noise band. `at` is seconds from the start of the phrase. */
 interface Syllable {

@@ -108,11 +108,3 @@ export const MIX = {
   announcer: 1.0,
 } as const;
 
-/**
- * Seconds the world is ducked under an announcer sting.
- *
- * Long enough to cover a two-syllable cue and its tail, short enough that two cues in a
- * busy round do not leave the world quiet between them — `AudioGraph.duckWorld` extends an
- * existing duck rather than restarting it, so overlapping cues are one duck.
- */
-export const ANNOUNCER_DUCK_SECONDS = 0.85;

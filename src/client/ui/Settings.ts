@@ -1,7 +1,6 @@
 import {
   ACTIONS,
   inputLabel,
-  isPointerInput,
   mouseInput,
   type ActionDef,
   type ActionId,
@@ -589,6 +588,3 @@ function title(text: string): HTMLElement {
   h.textContent = text;
   return h;
 }
-
-/** Re-exported so the controls card on the main menu can name keys the player chose. */
-export { inputLabel, isPointerInput };

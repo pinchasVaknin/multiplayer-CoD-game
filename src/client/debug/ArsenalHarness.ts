@@ -1,4 +1,4 @@
-import { DamageSystem, PLAYER_ENTITY_ID } from '../../shared/combat/DamageSystem';
+import { DamageSystem } from '../../shared/combat/DamageSystem';
 import { HUMANOID_RIG, type HitZone } from '../../shared/combat/HitboxRig';
 import { TargetDummy, buildDummyMaterials, type DummyMaterials } from '../combat/TargetDummy';
 import { EventBus } from '../../shared/core/EventBus';
@@ -15,7 +15,6 @@ import {
   resolveWeaponDef,
   verifyAttachmentPurity,
   type AttachmentDelta,
-  type AttachmentId,
   type PurityFinding,
 } from '../../shared/weapons/Attachments';
 import { ALL_WEAPONS, cloneWeaponDef, type WeaponDef } from '../../shared/weapons/WeaponDefs';
@@ -683,6 +682,3 @@ function cell(c: TtkCell): string {
   const shots = c.hits === c.pulls ? `${c.pulls}` : `${c.pulls} (${c.hits}p)`;
   return `${c.seconds.toFixed(3)} / ${shots}`;
 }
-
-export { PLAYER_ENTITY_ID };
-export type { AttachmentId };
