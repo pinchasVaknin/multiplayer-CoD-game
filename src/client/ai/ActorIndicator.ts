@@ -11,7 +11,7 @@ import { cssHex, palette, type GameplayPalette } from '../ui/Palette';
 
 /**
  * The enemy tell is two shoulder pads (M13 C3): small flat red pads on the outer upper arm,
- * flush with the sleeve, lit, each with a soft halo — Call of Duty Mobile's enemy dress,
+ * flush with the sleeve, each with a soft halo — Call of Duty Mobile's enemy dress,
  * equipment rather than a marker. They replaced four emissive spheres on the arms and knees
  * that read as a rash: geometry floating at the centre of a bone, the same from every angle.
  *
@@ -19,7 +19,7 @@ import { cssHex, palette, type GameplayPalette } from '../ui/Palette';
  * ~2 px at 25 m and ~1 px at 50 m — and the first cut, at exactly that size and a 0.3 halo,
  * was read on a real display as part of the skin at 1.5 m (M13 C3 gate, 2026-09-14): 24 px
  * across a 2000 px frame at 5 m, on a shoulder that has red details of its own. So the pad is
- * twice the plan's size, lit as the spheres were, its halo doubled, and it has the plan's
+ * twice the plan's size, the palette's red exactly (see the pad note below), its halo doubled, and it has the plan's
  * screen-space floor: below `PAD_MIN_SCREEN_FRACTION` of the frame height the whole frame is
  * scaled up so the pad holds ~6 px at 1080p. At range that is a red dot on the shoulder rather
  * than nothing, and the nameplate (1.28 m wide, ~25 px at 50 m) remains the tell.
@@ -31,8 +31,25 @@ const PAD_LENGTH = 0.1;
 const PAD_WIDTH = 0.06;
 const PAD_THICKNESS = 0.01;
 const PAD_CORNER = 0.006;
-/** The spheres ran 3.2; 1.5 read as paint on the sleeve. */
-const PAD_EMISSIVE_INTENSITY = 3.0;
+/**
+ * The pad is unlit and exactly the palette's hostile colour (2026-09-14, reported from a
+ * networked match as "yellow instead of red").
+ *
+ * It was a `MeshStandardMaterial` at emissive 3.0 — the spheres had run 3.2 and 1.5 "read as
+ * paint on the sleeve" — with `toneMapped: false` so the palette colour would reach the screen
+ * unchanged. Those two choices cancel: without tone mapping there is no headroom above 1.0 per
+ * channel, so an emissive of three times (0.80, 0.12, 0.07) clips red at 1.0 while green and
+ * blue keep their headroom, and the sun's diffuse on top pushes it further. Measured in the
+ * pane on Dunes: the pad's centre rendered **(255, 178, 142)** — salmon, and on a sunlit
+ * shoulder paler still — for a palette colour of (232, 96, 76). Brighter than the palette's
+ * red is not a colour this pipeline can show; it can only show a less red one.
+ *
+ * So the pad is a `MeshBasicMaterial`: no lighting term to add to, no emissive to clip, and
+ * the rendered pixel is the palette's hex in every map and every light. That is also what
+ * keeps it from reading as paint — paint shades with the light and an emitter does not, and
+ * a patch that holds one colour on a shoulder that is otherwise lit reads as a device. The
+ * halo below is still the glow.
+ */
 /** The halo: an additive sprite behind the pad. There is no bloom pass; this is the glow. */
 const HALO_RADIUS = 0.14;
 const HALO_ALPHA = 0.55;
@@ -88,7 +105,7 @@ function relationColours(p: GameplayPalette): Readonly<Record<TeamRelation, Rela
  */
 export interface ActorIndicatorAssets {
   readonly padGeometry: THREE.BufferGeometry;
-  readonly padMaterial: THREE.MeshStandardMaterial;
+  readonly padMaterial: THREE.MeshBasicMaterial;
   readonly haloMaterial: THREE.SpriteMaterial;
   readonly colours: Readonly<Record<TeamRelation, RelationColours>>;
   /** Bumped on every palette change. Compared, never interpreted. */
@@ -98,12 +115,7 @@ export interface ActorIndicatorAssets {
 
 export function buildActorIndicatorAssets(): ActorIndicatorAssets {
   const padGeometry = new RoundedBoxGeometry(PAD_LENGTH, PAD_WIDTH, PAD_THICKNESS, 2, PAD_CORNER);
-  const padMaterial = new THREE.MeshStandardMaterial({
-    emissiveIntensity: PAD_EMISSIVE_INTENSITY,
-    roughness: 0.35,
-    metalness: 0.1,
-    toneMapped: false,
-  });
+  const padMaterial = new THREE.MeshBasicMaterial({ toneMapped: false });
   const haloTexture = buildHaloTexture();
   const haloMaterial = new THREE.SpriteMaterial({
     map: haloTexture,
@@ -133,7 +145,6 @@ export function buildActorIndicatorAssets(): ActorIndicatorAssets {
   // Called once immediately, which is what paints the materials in the first place.
   const unsubscribe = palette.onChange((p) => {
     padMaterial.color.setHex(p.hostile);
-    padMaterial.emissive.setHex(p.hostile);
     haloMaterial.color.setHex(p.hostile);
     assets.colours = relationColours(p);
     assets.paletteSerial++;
