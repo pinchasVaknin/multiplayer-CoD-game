@@ -723,3 +723,44 @@ constant, so there is nothing for one to replace here. Recorded so nobody re-der
 the receive path the contract froze (S3: `shared/net`, and the server's decode of it); a
 wrapper per message is an allocation per message. Rejected without a count, because the count
 does not matter there.
+
+## Between phases — two reports from the multiplayer playtest (2026-09-15)
+
+Raised by the human between Phases C and D, both from a networked session; both reproduced in
+the pane against a local dedicated server on the unfixed tree, fixed, and measured again.
+
+**The ballot outlived the socket** (`5bc40ac`). *"Quit a multiplayer match, start a solo one:
+NEXT VOTE IN stays up with a clock of 447.4 s."* `VoteOverlay` is app-lifetime — one instance
+on the UI host — and the arena's 4 Hz broadcast is its only writer; `onMigrated` hid it on a
+move between instances, but `teardownWorld`, the session boundary, did not. So the last
+`PLAY` broadcast stayed applied, and every frame `tick()` computed `(phaseEndsTick −
+syncedServerTick()) × DT` with no session behind `syncedServerTick()`, which is zero: the
+clock showed `phaseEndsTick / 60`, and 26 844 ticks is 447.4 s. **Measured before:** joined
+the arena at `phaseEndsTick 3701`, quit, started solo — overlay visible, `NEXT VOTE IN 61.7`
+(= 3701 / 60), `syncedTick 0`. **After:** `teardownWorld` calls `voteOverlay.hide()` under
+`!keep` (a rotation or a reconnect is not a session exit, and a notice up during one must
+survive it) — overlay hidden, `info: null`, in a solo match on Foundry and on Dunes.
+`VoteOverlay` holds no bus subscription, so C2's `Disposable` has nothing to own there; the
+session hook is the teardown, and it is the same rule `onMigrated` already applied.
+
+**The pad that was never red** (`c03a37e`). *"Enemy markers on the server appear yellow
+instead of red."* First suspected a team-state desync; it was not one — in the pane the
+viewer context, every actor's team and the palette lookup were right (hostile `#e8604c`; a
+first reading that said otherwise was a seat the vote cycle had already migrated into an SND
+match, where team A *is* the viewer's). The pad was a `MeshStandardMaterial` at
+`emissiveIntensity 3.0` with `toneMapped: false`: without tone mapping there is no headroom
+above 1.0 per channel, so three times (0.80, 0.12, 0.07) linear clips red at 1.0 while green
+and blue keep theirs, and the sun's diffuse adds on top. **Measured at the pad's centre,
+before:** (255, 163, 132) on Foundry, (255, 178, 142) on Dunes — salmon, paler under the
+brighter sun, for a palette of (232, 96, 76); the server's maps are the bright ones, which is
+where it was noticed. The 3.0 had been chosen because 1.5 "read as paint on the sleeve", but
+brighter than the palette's red is not a colour this pipeline can show — only a less red one.
+**After:** an unlit `MeshBasicMaterial` at the hostile hex, `toneMapped: false` — nothing to
+add, nothing to clip — (232, 96, 76) on Foundry and on three pads on Dunes. The halo is
+still the glow, and a patch that holds one colour on a lit shoulder reads as a device rather
+than as paint, which is what the 3.0 was reaching for.
+
+Both fixes are client-only: `npm run check` green (116 tests), seeded harness
+normalised-identical, content probe byte-identical. **Needs a browser:** the pad at the exact
+palette red on a real display — decision 10 (too much at night?) is now a question about the
+halo alone.
