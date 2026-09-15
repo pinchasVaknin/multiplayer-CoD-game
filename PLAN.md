@@ -1391,16 +1391,22 @@ report that a screen "looks cut off" is answered by running it.
 Phases A, B and C are done — recorded above, Gate A closed, Gate B's layout and audits green
 (`PASS` at 22 surfaces × 8 viewports), Gate C's harness green (`INTRO CHECK PASSED — 299
 plans`), 125 tests — with **B6**, the wire step, deliberately not taken. **The human's call,
-taken 2026-09-15: D first, then B6, then E.** A fresh session starts at **D**, the end of the
+taken 2026-09-15 (revised the same day): the two spawn zones first, then D, then E; B6 is
+deferred past this milestone** — the picker stays local-first, as decision 2 allowed. A
+fresh session starts with the **spawn fix**: Foundry B (−27, 2) and Depot B (−28, −19) are
+authored inside a rotated crate (found by `npm run intro`); move the zones in the map data,
+its own `B:` commit — and note that moving a spawn zone changes what `npm run content`
+prints and what the seeded harness does, so that commit is the one place in this milestone
+where "byte-identical" is *not* the claim: print both before and after, and the diff should
+be those two zones and what follows from them, nothing else. Then **D**, the end of the
 match — D1 the lineup on B1's `CharacterStage` (five bodies, the winning team, MVP a step
 forward, each wearing the body the match dealt it, the local player in their picked skin),
 D2 the accordion in a bottom-anchored band with S6.1's cadence kept, the scoreboard as a
 toggle over the lineup; Gate D is `npm run layout` green on the summary at eight viewports,
 collapsed and expanded, with 2, 6 and 10 players, and `progression` byte-identical. Then
-**B6**: `characterIndex: u8` on `EntitySnapshot` and the join, `RandomCharacterSelector` as
-the fallback for a body that declared none, `check:authority` and the netharness over it —
-the milestone's one `shared/net` change. Then **E**, on its three numbers. `npm run layout`
-and `npm run intro` first, to see both green before touching anything. Each phase closes
-with its gate's numbers in a "done" subsection here, in the order above, and the milestone
-closes the way M13 and M14 did: this section moves to the archive in the session that closes
-it.
+**E**, on its three numbers. B6 — `characterIndex: u8` on `EntitySnapshot` and the join,
+`RandomCharacterSelector` as the fallback, `check:authority` and the netharness over it —
+is the first item of whatever milestone follows. `npm run layout` and `npm run intro`
+first, to see both green before touching anything. Each phase closes with its gate's
+numbers in a "done" subsection here, in the order above, and the milestone closes the way
+M13 and M14 did: this section moves to the archive in the session that closes it.
