@@ -10,6 +10,7 @@ import {
   MODES,
   modesForMap,
 } from '../../shared/modes/ModeRegistry';
+import { CharacterAssetService } from '../characters/CharacterAssetService';
 import { Profile } from '../meta/Profile';
 import { DEFAULT_CAMERA_CONFIG } from '../player/CameraConfig';
 import { EndOfMatch } from '../ui/EndOfMatch';
@@ -43,9 +44,11 @@ import { PROBE_VIEWPORTS, type Viewport } from './Viewports';
  *   content fits it: `scrollHeight <= clientHeight` and `scrollWidth <= clientWidth`. This is
  *   the rule that sees a scroller — `.op-settings`' binding list, the editor's option list —
  *   and the one that sees the frame itself clip a screen that is over height, which is how
- *   A1's first measurement was taken. B3's *sideways* is the x-axis case of it. One
- *   exemption: a single-line ellipsis (`text-overflow: ellipsis` with `white-space: nowrap`)
- *   is a designed truncation of one string, not a scroll, and is not reported.
+ *   A1's first measurement was taken. B3's *sideways* is the x-axis case of it. Two
+ *   exemptions, both designed truncations of one string rather than a scroll: a single-line
+ *   ellipsis (`text-overflow: ellipsis` with `white-space: nowrap`) on the x axis, and a line
+ *   clamp (`-webkit-line-clamp`) on the y axis — the editor's tile blurbs are cut at two
+ *   lines on purpose, and the cut is the design.
  *
  * One finding per cause. `getBoundingClientRect()` does not know about clipping, so every row
  * a scroller has scrolled past is also "outside the window" by the first rule — the first run
@@ -209,7 +212,8 @@ function measure(screen: string, layer: HTMLElement, scale: number): ScreenRepor
     // comparison holds at any scale and the numbers in the message are frame pixels.
     const spillY = el.scrollHeight - el.clientHeight;
     const spillX = el.scrollWidth - el.clientWidth;
-    if (style.overflowY !== 'visible' && spillY > 1) {
+    const clamped = style.webkitLineClamp !== 'none' && style.webkitLineClamp !== '';
+    if (style.overflowY !== 'visible' && spillY > 1 && !clamped) {
       violations.push({
         rule: 'overflow',
         axis: 'y',
@@ -309,6 +313,12 @@ const loadout = new LoadoutEditor({
   onSaveAndExit: noop,
   unrestricted: () => false,
   anisotropy: () => 1,
+  /**
+   * A skin service whose repository never answers: the stage asks for a body when the editor
+   * is shown, and this page measures layout — a 4 MB fetch per surface would be a download
+   * with no reader, and a body that arrived would change nothing the probe measures.
+   */
+  characterAssets: new CharacterAssetService({ preload: () => new Promise(() => undefined), dispose: noop }),
 });
 
 /**
@@ -523,18 +533,31 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
     },
     hide: () => loadout.hide(),
   },
-  {
-    name: 'create-a-class/open-row',
-    show: () => {
+  /**
+   * Every box open, and the weapon box on each of its tabs (M15, B3): a probe that measures
+   * only the closed editor measures the easy state. The zone is docked in one place, so these
+   * are nine measurements of one layout with different contents — which is the claim.
+   */
+  ...(
+    [
+      ['primary', 0],
+      ['primary', 1],
+      ['primary', 2],
+      ['secondary', 0],
+      ['equipment', 0],
+      ['perks', 0],
+      ['streaks', 0],
+      ['field', 0],
+    ] as const
+  ).map(([box, tab]) => ({
+    name: `create-a-class/${box}${tab > 0 ? `/${tab}` : ''}`,
+    show: (): HTMLElement => {
       loadout.show();
-      const layer = layerOf('.lo');
-      const head = layer.querySelector<HTMLElement>('.lo-row__head');
-      if (head === null) throw new Error('layout probe: the loadout editor has no rows');
-      head.click();
-      return layer;
+      loadout.openBox(box, tab);
+      return layerOf('.lo');
     },
-    hide: () => loadout.hide(),
-  },
+    hide: (): void => loadout.hide(),
+  })),
 ];
 
 function run(): ProbeRun {

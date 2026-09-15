@@ -593,6 +593,7 @@ export class Game {
       pauseStatusLine: () => this.pauseStatusLine(),
       unrestricted: () => findMode(this.selection.modeId).unrestricted,
       anisotropy: () => this.textures.anisotropy,
+      characterAssets: this.characterAssets,
     });
 
     this.input = new Input({

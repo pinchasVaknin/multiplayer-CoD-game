@@ -2,6 +2,7 @@ import type { ProceduralAudio } from './engine/ProceduralAudio';
 import { profileLine } from './GameLoadout';
 import type { Match } from './ClientMatch';
 import type { Profile } from './meta/Profile';
+import type { CharacterAssetService } from './characters/CharacterAssetService';
 import type { XpReport } from '../shared/meta/XpRules';
 import type { MatchResult } from '../shared/modes/GameMode';
 import { EndOfMatch } from './ui/EndOfMatch';
@@ -76,6 +77,8 @@ export interface GameScreensDeps {
    * the first caller decides, so passing a different one here would be a silent second answer.
    */
   readonly anisotropy: () => number;
+  /** The skins, for the editor's stage (M15, B1). The same service the match draws bodies from. */
+  readonly characterAssets: CharacterAssetService;
 }
 
 export class GameScreens {
@@ -106,6 +109,7 @@ export class GameScreens {
       onSaveAndExit: deps.onLoadoutSaveAndExit,
       anisotropy: deps.anisotropy,
       unrestricted: deps.unrestricted,
+      characterAssets: deps.characterAssets,
     });
 
     this.xpSummary = new XpSummary({ audio: deps.audio });

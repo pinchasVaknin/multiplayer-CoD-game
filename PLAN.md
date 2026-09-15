@@ -991,6 +991,79 @@ only the closed state measures the easy state; `check:unlocks` and `check:cosmet
 this phase must not have moved it); the pane, 50 cycles of MENU → LOADOUT → MENU with
 `renderer.info.memory.geometries`, `.textures` and the bus's live count flat.
 
+### B1–B4 — done (session of 2026-09-15): the stage, six boxes, the docked zone, the tooltip
+
+**The stage** (`ui/CharacterStage.ts`, 300 lines). The figure is an `ActorAvatar` from
+`CharacterAssetService.avatarProvider(def).create()` — the object `BotRenderer` makes for a
+body in a match — driven each tick by `update` with a standing, armed, idle
+`ActorAnimationInput`, which the selector answers with `idleWeaponReady`; the weapon in its
+hands is `buildHeldWeapon` with the shared gunmetal, a bot's own asset. So the operator on
+this screen is the one other players see, by construction. It stands on a plinth with an
+accent ring (two primitives, no texture), turns at 0.1 rad/s, can be dragged, and the two
+arrows nudge it an eighth of a turn with an ease. Its own `WebGLRenderer` on its own
+860×800 canvas, built on the first tick as `WeaponPreview`'s is, its backing store sized
+from the on-screen rect so a frame at 0.58 does not rasterise 860×800 to show 500×464. The
+first paint faced the camera at its back — a body at yaw 0 faces −Z — so the turntable starts
+at a half turn. `LOADING OPERATOR…` is written from `tick`, because the body arrives between
+edits and a refresher only runs on one.
+
+**Six boxes** (`LoadoutEditor.ts`, 864 → 1 010 lines with the zone, the pager and the tooltip
+in it): PRIMARY and SECONDARY (the weapon's own silhouette from `iconFor`, its name, its
+finish, its attachments as chips), EQUIPMENT (lethal + tactical), PERKS (three chips, `—`
+for an empty tier), KILLSTREAKS (three, the box's tab labels carry the keys), FIELD UPGRADE.
+70 px each: six of them, the 16 px gap and the 430 px zone are 916 of the column's 928. The
+five class slots are tabs across the header with the equipped one marked, the name field
+and Equip beside them, the level and *Save and exit* at the right; the frame's padding is
+32/48 here rather than 48/72 because this screen has the most on it.
+
+**The zone is docked, not dropped.** A box's options open in one place, under the column,
+with tabs where a box holds more than one list — WEAPON / ATTACHMENTS / SKIN, LETHAL /
+TACTICAL, PERK 1 / 2 / 3, KEY 3 / 4 / 5. The reference drops the strip directly under the box;
+under a rule that nothing may leave the frame, a strip under KILLSTREAKS would push FIELD
+UPGRADE off the bottom or cover it, and one that flips above its box for the last two rows is
+a strip in two places. So opening PERKS does not move KILLSTREAKS, and the frame never grows.
+Tiles are four across, two rows over the stat band or three without, and a longer list is
+**paged** — the pager shares the tabs' row, because a row of its own was 28 px the zone did
+not have. The **stat band** is `LoadoutStats` restyled to five columns of four lines (the
+reference has no stat panel; M6 called this one *"the point of the screen"*, and it stays);
+the **SKIN** tab shows the finish on the `WeaponPreview` in the band, because a held weapon
+is one shared material and does not carry a camo. B11's mechanism is kept whole — one
+`paint()` per `show()`, refreshers, truncation on close — and its test is now that the open
+zone's *page* survives an edit: picking VULCAN 74 on page 1 of 2 changed the box, the
+profile and the operator's hands and left the pager at 1 / 2.
+
+**The tooltip** (B4): one `.lo-tip` on the frame, moved to whichever chip is hovered or
+focused, filled from the def's `blurb`, positioned in frame pixels (window rects divided by
+the frame's scale) and flipped above when below would leave the frame. `+7% movement speed`
+under LIGHTWEIGHT, measured at (1058, 429).
+
+**Measured.** `npm run layout`, now 21 surfaces × 8 viewports — the editor closed, every box
+open, the weapon box on each of its three tabs: **`PASS — every surface fits its frame`**,
+the first green run under the no-scroll rule. Getting there was four probe runs: the first
+zone at 400 px held 575 of content (the pager on its own row, the stats in four columns, and
+`openBox` not refreshing so twelve tiles showed instead of eight); the third fit by one pixel
+at 1920×1080 and was over by 4–15 at every smaller viewport — text zoomed to a fraction
+rasterises to whole pixels, so a screen that fits by a pixel at scale 1 does not fit at 0.6,
+and the zone now carries **5 % of slack** by design. Two tile-level findings on the way: the
+heavy capitals overran their line box by two pixels under `overflow: hidden` (`line-height:
+1.45`, `flex: none`), and the probe learned that a `-webkit-line-clamp` is a designed
+truncation like an ellipsis. `npm run check` green (119 tests; `check:unlocks` still finds
+all six requirement accessors in the picker). **Pane**, 1920×1080: the operator on the disc
+holding the M4, the six boxes with their chips, the zone with eight weapon tiles and the
+band; SKIN with seven camo tiles and the preview; no console error.
+
+**Found while here — the +2 textures per match cycle, closed.** The stage's show/hide cycle
+grew *its* renderer's texture count by two per cycle (15 → 73 over 30). `SkeletonUtils.clone`
+gives every skinned mesh its own `Skeleton`, a `Skeleton` uploads its bone matrices as a
+`DataTexture`, and `CharacterSkin.dispose` never disposed them — which is also where A3's
+unattributed +2 per MATCH ↔ MENU cycle came from, every retired body leaving two behind.
+Fixed in `CharacterSkin.dispose` (`cb4399a`, its own commit): stage **5 g / 11 t flat over
+30 cycles**, MATCH ↔ MENU **35 g / 25 t flat over 6**. Two GPU leaks in one milestone, both
+found by an instrument that did not exist a day ago.
+
+**Needs a browser:** the stage's key light on the darker skins; whether 0.1 rad/s is the
+right idle turn; the tile blurbs at two lines on a real display.
+
 ## Phase C — the match intro: a camera the freeze already pays for
 
 **Where it plays, and what it hides.** The brief calls this a hidden loading screen. In this
