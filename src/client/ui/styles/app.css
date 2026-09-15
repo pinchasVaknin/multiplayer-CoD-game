@@ -305,6 +305,131 @@ body.op-locked #viewport {
   gap: var(--s-5);
 }
 
+/* ---- the emblem (Emblem.ts) ------------------------------------------------ */
+
+/*
+ * The skull mark's parts. The halves are the type's white, the right one a step darker so the
+ * ridge reads; the cuts are the ground showing through; the eyes and the light are the accent
+ * and *breathe* — opacity and glow on a slow ease, the light on a different period from the
+ * eyes so the two never lock into one beat. `prefers-reduced-motion` holds them lit.
+ */
+.op-emblem {
+  display: block;
+  overflow: visible;
+  flex: none;
+}
+
+.op-emblem__half {
+  fill: #e8eaee;
+}
+
+.op-emblem__half--right {
+  fill: #cfd4dc;
+}
+
+.op-emblem__cut {
+  fill: var(--c-void);
+}
+
+.op-emblem__stroke {
+  fill: #b9c0cb;
+  opacity: 0.8;
+}
+
+.op-emblem__eye {
+  fill: var(--c-accent);
+  animation: op-emblem-breathe 2.8s ease-in-out infinite;
+}
+
+.op-emblem__slash {
+  fill: var(--c-accent);
+  opacity: 0.7;
+  animation: op-emblem-breathe 3.7s ease-in-out infinite;
+  animation-delay: -1.1s;
+}
+
+@keyframes op-emblem-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    filter: drop-shadow(0 0 1px rgba(63, 169, 199, 0.6));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 5px rgba(63, 169, 199, 0.95)) drop-shadow(0 0 14px rgba(63, 169, 199, 0.55));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .op-emblem__eye,
+  .op-emblem__slash {
+    animation: none;
+    opacity: 1;
+    filter: drop-shadow(0 0 5px rgba(63, 169, 199, 0.9));
+  }
+}
+
+/* The mark beside the wordmark: the wordmark's own height, and a little air before it. */
+.op-menu__emblem {
+  width: 56px;
+  height: 56px;
+  margin-right: var(--s-2);
+}
+
+/*
+ * The lockup: the logo's arrangement — the mark, then PROTOCOL over a cyan rule over SEVEN
+ * with its V in the accent — for the boot screen and the device gate. `.op-boot` centres it
+ * on the frame with the status line beneath, on the black the canvas clears to.
+ */
+.op-boot {
+  justify-content: center;
+  gap: var(--s-8);
+}
+
+.op-lockup {
+  display: flex;
+  align-items: center;
+  gap: 64px;
+}
+
+.op-lockup__emblem {
+  width: 340px;
+  height: 340px;
+}
+
+.op-lockup__words {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 0.9;
+  font-weight: var(--w-heavy);
+  text-transform: uppercase;
+  color: #e8eaee;
+}
+
+.op-lockup__protocol {
+  font-size: 96px;
+  letter-spacing: 0.1em;
+}
+
+.op-lockup__rule {
+  display: block;
+  width: 100%;
+  height: 6px;
+  background: linear-gradient(90deg, var(--c-accent) 0%, var(--c-accent) 72%, rgba(63, 169, 199, 0) 100%);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 40px) 100%, 0 100%);
+}
+
+.op-lockup__seven {
+  font-size: 150px;
+  letter-spacing: 0.06em;
+}
+
+.op-lockup__v {
+  color: var(--c-accent);
+}
+
 .op-menu__wordmark {
   margin: 0;
   font-size: 40px;
@@ -392,18 +517,19 @@ body.op-locked #viewport {
 }
 
 /*
- * A navigation button is cut, not boxed.
+ * A navigation button is cut, not boxed — and broken, not whole (2026-09-15, the human's
+ * torn-bar reference).
  *
- * Three things make it read as the brief's "smeared" stroke rather than a rectangle with a
- * label in it, and none of them is an image:
+ * Three things make it read as a stroke rather than a rectangle with a label in it, and none
+ * of them is an image:
  *
- *  - `clip-path` skews the leading edge (26 px over the button's height) and pulls the
- *    trailing corner in by 10, so the shape leans into the reading direction.
- *  - On the primary, `mask-image` dissolves the leading end into the backdrop over its first
- *    11 % instead of ending it on a line — the "torn" edge of the reference's PLAY button, as
- *    close as a gradient gets without a texture.
+ *  - `clip-path` is a jagged polygon: the leading edge is torn in seven irregular steps, the
+ *    trailing top corner is chipped off on a diagonal, and a notch is bitten from the trailing
+ *    bottom. The same cut on every button; the eye reads them as one set of damaged plates.
+ *  - The palette is the Create-a-Class bars' — the same dark gradient, the same left rule, the
+ *    same grey-white type — so the two screens are one material.
  *  - `::after` is a skewed band of light that sweeps the length of the button on hover and on
- *    keyboard focus, along the same lean.
+ *    keyboard focus.
  *
  * `overflow: hidden` keeps the sweep inside the clip. `grid` places the glyph, the label and
  * the chevron on one line without a flex gap that would change with the label's length.
@@ -420,17 +546,35 @@ body.op-locked #viewport {
   margin: 0;
   padding: 0 30px 0 48px;
   border: 0;
-  background: rgba(20, 23, 28, 0.78);
-  color: var(--c-text-dim);
+  border-left: 3px solid var(--c-line-hi);
+  background: linear-gradient(180deg, rgba(28, 32, 39, 0.92), rgba(16, 19, 24, 0.92));
+  color: #c9cfd8;
   font-family: var(--font-ui);
   font-size: 20px;
   font-weight: var(--w-heavy);
   letter-spacing: 0.24em;
   text-transform: uppercase;
   text-align: left;
-  clip-path: polygon(26px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  clip-path: polygon(
+    0 0,
+    calc(100% - 22px) 0,
+    100% 20px,
+    100% 66%,
+    calc(100% - 9px) 74%,
+    100% 82%,
+    100% 100%,
+    14px 100%,
+    9px 90%,
+    3px 84%,
+    11px 72%,
+    2px 60%,
+    7px 46%,
+    0 34%,
+    9px 22%,
+    4px 12%
+  );
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
 
 /* The hairline along the top: the one edge that stays crisp on the dark buttons. */
@@ -457,9 +601,14 @@ body.op-locked #viewport {
 
 .op-nav:hover,
 .op-nav:focus-visible {
-  background: rgba(28, 32, 39, 0.94);
-  color: var(--c-text);
+  background: linear-gradient(180deg, rgba(40, 45, 54, 0.96), rgba(22, 26, 32, 0.96));
+  border-left-color: var(--c-text-dim);
+  color: #f4f6f8;
   outline: none;
+}
+
+.op-nav:active:not(:disabled) {
+  background: linear-gradient(180deg, rgba(30, 60, 70, 0.96), rgba(18, 34, 40, 0.96));
 }
 
 .op-nav:hover::after,
@@ -496,14 +645,13 @@ body.op-locked #viewport {
 }
 
 .op-nav--primary {
-  background: var(--c-text);
-  color: var(--c-void);
-  mask-image: linear-gradient(to right, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.45) 5%, #000 11%, #000 100%);
+  border-left-color: var(--c-accent);
+  background: linear-gradient(90deg, var(--c-accent-glow), rgba(16, 19, 24, 0.92) 60%);
+  color: #f4f6f8;
 }
 
 .op-nav--primary::before {
-  border-top: 0;
-  border-bottom: 2px solid var(--c-accent);
+  border-top: 1px solid var(--c-accent-dim);
 }
 
 .op-nav--primary::after {
@@ -512,8 +660,8 @@ body.op-locked #viewport {
 
 .op-nav--primary:hover,
 .op-nav--primary:focus-visible {
-  background: #ffffff;
-  color: var(--c-void);
+  background: linear-gradient(90deg, rgba(63, 169, 199, 0.3), rgba(22, 26, 32, 0.96) 60%);
+  color: #ffffff;
 }
 
 .op-nav--primary .op-nav__chevron {

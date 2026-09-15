@@ -501,6 +501,15 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
     },
     hide: () => menus.hide(),
   },
+  /** The boot screen: the logo lockup (2026-09-15) with the status line under it. */
+  {
+    name: 'boot',
+    show: () => {
+      menus.showBoot('LOADING…');
+      return layerOf(PLAIN_SCREEN);
+    },
+    hide: () => menus.hide(),
+  },
   {
     /**
      * The device gate (playtest round 5, F1).

@@ -6,6 +6,7 @@ import {
 import type { GameModeId } from '../../shared/modes/GameMode';
 import { MAPS, MODES, modesForMap } from '../../shared/modes/ModeRegistry';
 import { createScreen } from './Frame';
+import { makeEmblem, makeLockup } from './Emblem';
 import { makeIconSvg } from './WeaponIcons';
 
 /**
@@ -128,7 +129,9 @@ export class Menus {
     this.page = 'MAIN';
     this.screen.hidden = false;
     this.frame.classList.remove('op-menu');
-    this.frame.replaceChildren(title('PROTOCOL SEVEN'), subtitle(message));
+    this.frame.classList.add('op-boot');
+    // The logo, on the black the canvas clears to until the map lands: the game opens on it.
+    this.frame.replaceChildren(makeLockup(), subtitle(message));
   }
 
   /**
@@ -147,10 +150,11 @@ export class Menus {
     this.page = 'MAIN';
     this.screen.hidden = false;
     this.frame.classList.remove('op-menu');
+    this.frame.classList.add('op-boot');
     const body = document.createElement('p');
     body.className = 'op-screen__note';
     body.textContent = detail;
-    this.frame.replaceChildren(title('PROTOCOL SEVEN'), subtitle(headline), body);
+    this.frame.replaceChildren(makeLockup(), subtitle(headline), body);
   }
 
   /** Open the front end at its main page. */
@@ -175,6 +179,7 @@ export class Menus {
   // -- pages -----------------------------------------------------------------
 
   private paint(): void {
+    this.frame.classList.remove('op-boot');
     this.frame.classList.add('op-menu');
     const stage = document.createElement('div');
     stage.className = 'op-menu__stage';
@@ -198,7 +203,8 @@ export class Menus {
     const tag = document.createElement('span');
     tag.className = 'op-menu__tag';
     tag.textContent = 'ARENA FPS';
-    brand.append(wordmark, rule, tag);
+    // The mark to the left of the name, its eyes breathing (`Emblem.ts`).
+    brand.append(makeEmblem('op-menu__emblem'), wordmark, rule, tag);
 
     head.append(brand, this.playerCard());
     return head;
@@ -442,13 +448,6 @@ export class Menus {
     b.addEventListener('click', onClick);
     return b;
   }
-}
-
-function title(text: string): HTMLElement {
-  const h = document.createElement('h1');
-  h.className = 'op-screen__title';
-  h.textContent = text;
-  return h;
 }
 
 function subtitle(text: string): HTMLElement {
