@@ -1422,6 +1422,55 @@ sim's ms per frame in the pane, and the bundle delta. If the numbers are wrong, 
 the menu — and that is a menu that already meets the brief's *"edges blend and fade"* clause
 in full.
 
+### E — done (session of 2026-09-15): the fight, on its three numbers
+
+**What it is** (`client/world/MenuSkirmish.ts`, 275 lines). The shape `server/Match.ts` has
+for a match with nobody at the keyboard: the map's own `CollisionWorld`, a `BotDirector`
+over a navmesh, `DamageSystem`, `ScoreSystem`, Team Deathmatch, `MatchFlow`, and an empty
+seat in the player's place — thirty lines restating the server's `Spectator`, the boundary's
+price — with a full roster (the map's team size a side, nobody's seat held back). On top, the
+two things a fight needs to be seen: `BotRenderer` with its indicators off (one new switch)
+and `Fx` for the muzzle light, tracers and impacts, on a **`GameBus` of its own**, so no HUD,
+announcer or audio hears a shot fired behind the menu. `Game.simulate`'s no-world branch
+hands the loop's fixed step to `MenuBackdrop.simulate`; `frame` gets the loop's `alpha` and
+poses the bodies between steps through the dolly's camera. The round-one freeze is taken at
+eight sim steps per loop step — the bots are frozen in it, so nothing is seen to hurry — and
+a finished match is replaced by the next seed on the step that found it over. **The navmesh
+is baked in `prepare`**, once per map per page, before the map's first frame: in the frame
+the map landed it was a 475 ms hitch (bake 228 of it; the second build on a cached grid is
+5.5 ms). `backdrop.combat = false` is Phase A's dolly alone, and it is the switch the phase
+ships behind. `__operator.leaks()` (DEBUG.md) reads live bus subscriptions, the GPU counts
+and the JS heap in one call.
+
+**The three numbers, in the pane** (Foundry, 5 v 5, 1920×1080):
+
+| Number | Measured |
+|---|---|
+| Leak, **100 MENU ↔ MATCH cycles** | 19 under rAF and 81 with `loop.frame` driven by hand once the pane hid rAF. Bus subscriptions **12 at the menu, 124 in the match, on every cycle**; match geometries **66 every cycle**; textures in an 80–86 band once the first cycle had cached the seven skins (56 → 82). Then, sampled *quietly* — the skirmish disposed at the menu after those cycles — **51 geometries / 63 textures / 0 subscriptions, identical across nine samples**; heap 100–154 MB, GC noise, no trend. Nothing the fight allocates outlives its `dispose` |
+| Sim, ms per frame | **0.269 mean, 1.0 max** with the fight on, 0.011 off (300 frames each, the pane at its 30 Hz — two steps a frame, so ~0.13 ms a step); render 2.93 ms against 0.97 for the bodies and their shadows |
+| Bundle | **1 555.81 kB raw / 449.42 gzip** (D left it at 1 551.83 / 447.57): **+3.98 / +1.85 kB**, CSS unchanged at 60.22 |
+
+The picture, through the sink: a body in the hall firing with the tracer crossing the lens,
+another in the yard, the impacts on the crate — the map the menu's picker names, fighting.
+Sixteen kills in the first 45 s of sim.
+
+**Found while measuring — two one-time hitches on the page's first menu.** Hand-driven
+frames, which are honest for CPU work: the map's adopt frame **153 ms** (A3's, the mesh
+uploads — unchanged by E), and, some seconds later, a **~500 ms frame as the seven skins
+land** — the same parse-and-upload the first match has always paid under its intro, now paid
+where the menu can show it, once per page. The bake was the third and is gone from the
+frame. Whether half a second on the first menu is acceptable is the human's; the alternative
+is to preload the skins the way `echo` is preloaded at boot, which is a line, or to hold
+the skirmish until the first match has warmed them, which is a rule.
+
+`npm run check` green (134 tests; boundaries 361 files); `npm run layout` PASS, `npm run
+intro` 299 PASSED; nothing in `shared/` or `server/`.
+
+**Needs a browser:** whether bodies crossing the dolly's lane at eye height read as a fight or
+as a collision; the tracers' brightness against the fade; whether the fight should be
+silent — it is — or carry the gunshots at the menu's mix; the first-menu hitch on a real
+machine.
+
 ## What each item breaks
 
 - **B1/B2's fix is replaced, not removed.** The `safe center` + `overflow: auto` reasoning in
@@ -1477,19 +1526,15 @@ report that a screen "looks cut off" is answered by running it.
 
 ## How to start — the next brief
 
-Phases A, B, C and D are done — recorded above, Gate A closed, Gate B's layout and audits
-green, Gate C's harness green (`INTRO CHECK PASSED — 299 plans`), Gate D's probe green
-(`PASS` at 28 surfaces × 8 viewports) with `progression` byte-identical, 134 tests — and
-the seven spawn zones moved (the section between C and D). **B6 is deferred past this
-milestone** (the human's call, 2026-09-15): the picker stays local-first, as decision 2
-allowed. What is left is **E**, on its three numbers: a solo `Match` on the backdrop map
-with a full roster of bots and no player entity, stepped by the frame loop in `MENU`, the
-camera on A3's dolly — shipped only if the leak count is flat over 100 MENU ↔ MATCH
-cycles, the sim's ms per frame in the pane is a number a laptop on battery can carry, and
-the bundle delta is recorded; if any of the three is wrong, A3's dolly *is* the menu and E
-closes as "measured, not taken". `npm run layout` and `npm run intro` first, to see both
-green before touching anything. E closes with its numbers in a "done" subsection here, and
-the milestone closes the way M13 and M14 did: this section moves to the archive in the
-session that closes it, and B6 — `characterIndex: u8` on `EntitySnapshot` and the join,
-`RandomCharacterSelector` as the fallback, `check:authority` and the netharness over it —
-is the first item of whatever milestone follows.
+**Every phase of Milestone 15 is done** — A, B, C, D and E, each recorded above with its
+gate's numbers, plus the seven spawn zones between C and D. E shipped on its three numbers
+(the leak flat over 100 cycles, 0.27 ms of sim a frame, +4 kB) and stopped at its gate, as
+asked, with one thing for the human: the page's first menu now pays the skins' ~500 ms
+parse once, where the first match used to pay it under the intro. **B6 is deferred past
+this milestone** (the human's call, 2026-09-15). What is left is the close: the human's
+verdict on E's numbers and its hitch, then this section moves verbatim to
+`docs/archive/plan/22-m15-front-end.md` with the provenance line the other files carry and
+a row in the index, the way M13 and M14 closed — `npm run check:plan` holds the file to it.
+The milestone after opens on B6: `characterIndex: u8` on `EntitySnapshot` and the join,
+`RandomCharacterSelector` as the fallback for a body that declared none, `check:authority`
+and the netharness over it — the one `shared/net` change M15 deliberately did not make.
