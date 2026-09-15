@@ -385,7 +385,10 @@ function spawnHalf(): SpawnZone[] {
   put(0, 21.5, 3.0);
   put(22, 21, 3.0);
   put(-26.5, 14, 2.5);
-  put(26.5, 14, 2.5);
+  // 11.5, not 14: the east spine's container at (25, 17) runs z 14 to 20, and at z = 14 the
+  // standing capsule stood on its corner, 10 cm in — the same asymmetry as the flip zone
+  // below. Between the spool at z 8 and the container, with the west twin's 2.2 m to the wall.
+  put(26.5, 11.5, 2.5);
   put(0, 16, 2.5);
   // Flip side: past the centre line, for when team A has been pushed off the map.
   put(-26.5, -2, 2.5);

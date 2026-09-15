@@ -425,7 +425,9 @@ function spawns(): SpawnZone[] {
     { team: 'B', position: { x: 20, y: 0.05, z: -14 }, facingYaw: Math.PI / 2, radius: 1.5 },
     { team: 'FFA', position: { x: -20, y: 0.05, z: 14 }, facingYaw: -Math.PI / 2, radius: 2 },
 
-    { team: 'A', position: { x: -22, y: 0.05, z: -10 }, facingYaw: -Math.PI / 2, radius: 2 },
+    // z -11.5, not -10: the bay divider at z = -9.6 runs to x = -22, and at z = -10 the standing
+    // capsule was 15 cm into its west end (M15 C's spawn audit). 1.4 m clear of it now.
+    { team: 'A', position: { x: -22, y: 0.05, z: -11.5 }, facingYaw: -Math.PI / 2, radius: 2 },
     { team: 'A', position: { x: -22.5, y: 0.05, z: 12 }, facingYaw: -Math.PI / 2, radius: 2 },
     { team: 'A', position: { x: -14, y: 0.05, z: 16 }, facingYaw: Math.PI, radius: 2.2 },
     { team: 'A', position: { x: -8, y: 0.05, z: -16 }, facingYaw: 0, radius: 2.2 },
