@@ -1518,6 +1518,36 @@ SAVE → the category bar reads WASP 9. The stage's renderer **5 g / 11 t** and 
 reference's growth; the cyan on the PLAY button against the backdrop; whether a locked bar
 at 55 % is dim enough to read as locked and bright enough to read at all.
 
+### Playtest report (2026-09-15), built the same day: the brand — the mark, the lockup, the plates
+
+The human's logo (a split skull mask with cyan eye slits and a light through them, PROTOCOL
+over a cyan rule over SEVEN with its V in cyan) and a torn weapon-bar reference, with four
+asks: the logo as the screen the game opens on; the menu's buttons in the Create-a-Class
+bars' colours and "a little broken" like the reference; the skull alone as the mark to the
+left of the name; its eyes breathing.
+
+**Built** (`8ddb535`; `Emblem.ts` 100 lines new). An attached image never reaches the disk
+and the project ships no raster (M12's first paragraph), so the mask is **paths** — crown
+corners, angry slits, the light past the mask, vents, brush damage, strokes — with the eyes
+and the light as their own shapes so `app.css` can breathe through them: opacity 0.55 → 1
+with a drop-shadow glow, **2.8 s on the eyes, 3.7 s on the light** so the two never lock
+into one beat; `prefers-reduced-motion` holds them lit. The mark is 56 px beside the
+wordmark; `makeLockup` is the logo's arrangement at 340 / 96 / 150 px, and `showBoot` and
+the device gate stand on it (`.op-boot`) on the black the canvas clears to until the map
+lands — the game opens on the logo. The nav plates carry the bars' gradient, left rule and
+grey-white type, and one jagged `clip-path` — seven irregular steps down the leading edge,
+a chipped trailing top corner, a notch in the trailing bottom; PLAY is the accent rule and
+glow an equipped bar has, not a white slab.
+
+**Measured.** `npm run layout` PASS with a new `boot` surface (lockup 1003 × 415; the device
+gate 1003 × 571 on it); `npm run check` green, 134 tests. Pane: the eyes at opacity
+0.56 → 0.98 → 0.76 across one cycle, the animation `op-emblem-breathe` at 2.8 s.
+
+**Needs a browser, and one decision:** whether the vector mask is the logo or a cousin of
+it — the raster's grain is what the paths cannot be. If the exact PNG is wanted behind the
+boot screen, `public/brand/protocol-seven.png` becomes the project's one image asset and
+the lockup's background is a line of CSS; the mark by the name stays vector, for the eyes.
+
 ## What each item breaks
 
 - **B1/B2's fix is replaced, not removed.** The `safe center` + `overflow: auto` reasoning in
