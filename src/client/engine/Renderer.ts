@@ -483,13 +483,29 @@ const previousClear = new THREE.Color();
  * yard with a knot of geometry in the middle of it. `mat3(instanceMatrix)` is a pure
  * rotation here — placements are yaw-and-translate, never scaled — so it composes with the
  * normal matrix directly.
+ *
+ * **Skinning has to be applied the same way** (M15, reported after Phase B put rigged bodies
+ * on the bots: *"the character bodies are completely invisible — I can only see their
+ * weapons floating in the air"*). A `SkinnedMesh`'s `position` attribute is its bind pose in
+ * the rig's own space, and three sets `USE_SKINNING` from the object — so an override stage
+ * that reads `position` raw draws every body unposed, at the rig's scale, wherever its bind
+ * pose happens to sit, which for a Mixamo export is nowhere the optic is looking. The held
+ * weapons are plain meshes in the hand bone's frame, so they were drawn exactly right, which
+ * is what made the report read the way it did. three's own chunks do the work: they are
+ * empty outside `USE_SKINNING`, so the map's meshes compile to what they compiled to before.
+ * Measured on Dunes from the chopper: 15 hot pixels of 1.44 M before, the bodies after.
  */
 const GUNSHIP_VERT = `
+#include <skinning_pars_vertex>
 varying float vViewDepth;
 varying vec3 vViewNormal;
 void main() {
-  vec3 objectNormal = normal;
-  vec4 localPosition = vec4(position, 1.0);
+  vec3 objectNormal = vec3(normal);
+  vec3 transformed = vec3(position);
+  #include <skinbase_vertex>
+  #include <skinnormal_vertex>
+  #include <skinning_vertex>
+  vec4 localPosition = vec4(transformed, 1.0);
   #ifdef USE_INSTANCING
     localPosition = instanceMatrix * localPosition;
     objectNormal = mat3(instanceMatrix) * objectNormal;
