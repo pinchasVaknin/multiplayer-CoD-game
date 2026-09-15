@@ -6,6 +6,8 @@
  * cost before it becomes eligible for a match. `scripts/check-animations.mjs`
  * holds the animation half of it to the folder it names, in the gate.
  */
+import { DEFAULT_SKIN_ID } from '../../shared/meta/SaveData';
+
 export type CharacterId =
   | 'apex'
   | 'echo'
@@ -132,8 +134,12 @@ export interface CharacterRigProfile {
 
 export interface CharacterDefinition {
   readonly id: CharacterId;
+  /** The name on the picker: the file's, which is the artist's. */
+  readonly name: string;
   readonly version: string;
   readonly skinUrl: string;
+  /** `scripts/skin-thumbs.mjs`'s render of this skin, for the picker (M15, B5). */
+  readonly thumbUrl: string;
   readonly rig: CharacterRigProfile;
   readonly animations: Readonly<Record<CharacterAnimationId, CharacterAnimationSlot>>;
 }
@@ -302,8 +308,10 @@ function character(
 ): CharacterDefinition {
   return {
     id,
+    name: fileName.replace(/\.glb$/, '').toUpperCase(),
     version: CHARACTER_VERSION,
     skinUrl: versionedAssetUrl(`/models/bots/skins/${fileName}`, CHARACTER_VERSION),
+    thumbUrl: versionedAssetUrl(`/models/bots/skins/thumbs/${fileName.replace(/\.glb$/, '.png')}`, CHARACTER_VERSION),
     rig,
     animations: MIXAMO_ANIMATIONS,
   };
@@ -335,7 +343,17 @@ export const BOT_CHARACTER_IDS = [
   'viper',
 ] as const satisfies readonly CharacterId[];
 
-export const DEFAULT_CHARACTER_ID: CharacterId = 'echo';
+/**
+ * The default skin is `shared/`'s `DEFAULT_SKIN_ID`, checked here to be a real one: the save
+ * layer knows the name and this file knows the skins, and one of them has to say so if they
+ * ever disagree. A throw at module load is the loudest available place.
+ */
+export const DEFAULT_CHARACTER_ID: CharacterId = (() => {
+  if (!(DEFAULT_SKIN_ID in CHARACTER_DEFINITIONS)) {
+    throw new Error(`DEFAULT_SKIN_ID "${DEFAULT_SKIN_ID}" is not a character in the catalogue.`);
+  }
+  return DEFAULT_SKIN_ID as CharacterId;
+})();
 
 export function characterDefinition(id: CharacterId): CharacterDefinition {
   return CHARACTER_DEFINITIONS[id];

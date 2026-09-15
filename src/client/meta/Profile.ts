@@ -1,4 +1,5 @@
 import { SaveStore } from './SaveStore';
+import { BOT_CHARACTER_IDS, DEFAULT_CHARACTER_ID, type CharacterId } from '../characters/CharacterCatalog';
 import type { AttachmentId } from '../../shared/weapons/Attachments';
 import { CAMO_PREREQUISITES, type CamoId } from '../../shared/meta/Camos';
 import { CHALLENGES, challengeDef, type ChallengeId } from '../../shared/meta/Challenges';
@@ -125,6 +126,22 @@ export class Profile implements ProgressionStore {
 
   get settings(): SettingsV1 {
     return this.save.settings;
+  }
+
+  /**
+   * The operator's skin (M15, B5), checked against the catalogue.
+   *
+   * `shared/` keeps the name; this is the one reader that knows which names are skins. A name
+   * the catalogue does not carry — a skin renamed, a save edited by hand — falls back to the
+   * default rather than to a 404 and a procedural body, and is written back on the next pick.
+   */
+  get skinId(): CharacterId {
+    const stored = this.save.settings.skin;
+    return (BOT_CHARACTER_IDS as readonly string[]).includes(stored) ? (stored as CharacterId) : DEFAULT_CHARACTER_ID;
+  }
+
+  setSkin(id: CharacterId): void {
+    this.patchSettings({ skin: id });
   }
 
   /** Writes to storage since the page loaded. Acceptance criterion 8 reads this. */

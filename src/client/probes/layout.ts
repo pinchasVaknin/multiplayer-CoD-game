@@ -558,6 +558,15 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
     },
     hide: (): void => loadout.hide(),
   })),
+  {
+    name: 'create-a-class/skins',
+    show: () => {
+      loadout.show();
+      loadout.openSkins();
+      return layerOf('.lo');
+    },
+    hide: () => loadout.hide(),
+  },
 ];
 
 function run(): ProbeRun {

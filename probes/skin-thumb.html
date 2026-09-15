@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OPERATOR — skin thumbnail</title>
+    <!--
+      Driven by scripts/skin-thumbs.mjs (M15, B5): one skin per load, rendered on the
+      Create-a-Class stage at a held pose, read back as a PNG. The stylesheets are the
+      client's so the canvas is sized the way meta.css sizes it — then overridden to the
+      thumbnail's portrait box below.
+    -->
+    <link rel="stylesheet" href="/src/client/ui/styles/tokens.css" />
+    <link rel="stylesheet" href="/src/client/ui/styles/app.css" />
+    <link rel="stylesheet" href="/src/client/ui/styles/meta.css" />
+    <style>
+      body { background: transparent; }
+      .lo-stage__canvas { width: 320px; height: 400px; background: none; border-radius: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="ui-root"></div>
+    <script type="module" src="/src/client/probes/skinThumb.ts"></script>
+  </body>
+</html>

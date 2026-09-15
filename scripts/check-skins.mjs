@@ -16,6 +16,9 @@
  *      and the heaviest is 4.0 MB after the pass.
  *   3. **No texture is over 1024 on a side, and none is a PNG.** The cause of rule 2 failing,
  *      named so the message says what to run rather than what went wrong.
+ *   4. **Every skin has its thumbnail** — `thumbs/<File>.png`, `scripts/skin-thumbs.mjs`'s
+ *      render (B5). The picker's strip shows every skin at once from these; a skin without
+ *      one is a blank tile.
  *
  * The images are read with `glb-images.mjs`; nothing here decodes a pixel. Exit code 1 on any
  * violation.
@@ -31,6 +34,7 @@ const CATALOG = 'src/client/characters/CharacterCatalog.ts';
 const MAX_SKIN_BYTES = 5 * 1024 * 1024;
 const MAX_TEXTURE_SIDE = 1024;
 const FIX = 'run `node scripts/skin-compress.mjs`, then bump CHARACTER_VERSION';
+const THUMBS_DIR = `${SKINS_DIR}/thumbs`;
 
 const problems = [];
 
@@ -73,6 +77,14 @@ for (const file of shipped) {
   }
 }
 
+// ---- 4. every skin has its thumbnail --------------------------------------------------
+for (const file of shipped) {
+  const thumb = path.join(ROOT, THUMBS_DIR, file.replace(/\.glb$/, '.png'));
+  if (!existsSync(thumb)) {
+    problems.push(`${SKINS_DIR}/${file} has no ${THUMBS_DIR}/${file.replace(/\.glb$/, '.png')} — run \`node scripts/skin-thumbs.mjs\`.`);
+  }
+}
+
 if (problems.length > 0) {
   console.error('skin audit FAILED:\n');
   for (const p of problems) console.error(`  ${p}\n`);
@@ -82,5 +94,5 @@ if (problems.length > 0) {
 
 console.log(
   `skin audit ok — ${shipped.length} skins, ${(totalBytes / 1048576).toFixed(1)} MB in all, ${textures} textures, ` +
-    `none over ${MAX_SKIN_BYTES / 1048576} MB or ${MAX_TEXTURE_SIDE} px, every one catalogued.`,
+    `none over ${MAX_SKIN_BYTES / 1048576} MB or ${MAX_TEXTURE_SIDE} px, every one catalogued, every one with a thumbnail.`,
 );

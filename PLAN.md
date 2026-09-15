@@ -1064,6 +1064,60 @@ found by an instrument that did not exist a day ago.
 **Needs a browser:** the stage's key light on the darker skins; whether 0.1 rad/s is the
 right idle turn; the tile blurbs at two lines on a real display.
 
+### B5 — done (session of 2026-09-15): the skin picker, and the thumbnails rendered once
+
+**The save.** `settings.skin: string` — a setting beside the callsign rather than a profile
+fact, because it is the same kind of thing (who the player looks like) and a progress reset
+keeps settings: a wiped level should not also change a face. `shared/` holds the name only;
+`Profile.skinId` is the one reader that checks it against `BOT_CHARACTER_IDS` and falls back
+to the default for a name the catalogue does not carry. **`SAVE_VERSION` 3 → 4**, `upgradeV3`
+dressing an older save in `DEFAULT_SKIN_ID` — the M8 kind of bump, where `normaliseSave`
+would have defaulted the field anyway and the migration exists so that *"a v3 save loads
+wearing the skin it was always shown"* is a tested sentence: two new cases in
+`SaveData.test.ts` (v3 → v4 with everything else intact; a v4 naming `viper` keeps it, a
+blank falls to the default). `DEFAULT_SKIN_ID` lives in `shared/` and the client's
+`DEFAULT_CHARACTER_ID` is that name asserted against the catalogue at module load — one
+fact, checked at the seam rather than restated.
+
+**The thumbnails are rendered, not loaded.** `probes/skin-thumb.html` +
+`client/probes/skinThumb.ts` put one skin on the editor's own `CharacterStage` — same
+lights, same disc, same lens — held at a three-quarter pose (`hold(angle, distance)`, the
+stage's one concession to a script) and read back as a PNG (`snapshot`, in the same task as
+the draw); `scripts/skin-thumbs.mjs` drives it through the headless Chrome the layout probe
+uses and writes `public/models/bots/skins/thumbs/<File>.png`. Software WebGL on purpose, so
+the bytes are the same on every machine that regenerates them. **Seven renders, 50–71 kB
+each, 335–647 ms each**, committed. The Chrome plumbing — `findChrome`, `Cdp`, `evaluate`,
+the dev server, the launch, `withPage` — moved out of `layout-probe.mjs` into
+`scripts/headless-chrome.mjs` for both to share; the probe driver is 70 lines now and does
+what it did. `check:skins` gained rule 4: every skin has its thumbnail.
+
+**The picker.** CHANGE A SKIN over the foot of the stage's canvas — the strip opens *upward
+over the picture*, so the column's height is the same open and closed and the frame never
+grows — seven tiles of thumbnail and name, the chosen one in the accent. Picking writes the
+profile, puts the new body on the disc and marks the tile; the canvas's arrow bar is pinned to
+the column's foot (`margin-top: auto`) so the toggle stands in the room between it and the
+canvas rather than on it. `CharacterDefinition` gained `name` and `thumbUrl`, both versioned
+with the skin. **Local-first (decision 2):** the stage and, in D, the lineup show the pick;
+other players see the dealt body until B6.
+
+**Measured.** `npm run layout`: **22 surfaces × 8 viewports, PASS** (the strip open is the
+twenty-second). `npm run check` green — **121 tests**, `check:skins` reporting every skin
+with a thumbnail, `check:flags` with the probe's `?skin` declared undocumented. **Pane**,
+1920×1080: the strip's seven `<img>`s at 320×400, ECHO marked; VIPER picked — `settings.skin
+= "viper"`, the save at v4, the stage on `viper`, the bar at y 992–1048 under the strip's
+980; ECHO restored. No console error on a fresh load.
+
+**B6 — the wire — is not taken.** B1–B5 landed with the phase's budget spent on two GPU
+leaks and a probe that is green for the first time; B6 is `shared/net` (`characterIndex: u8`
+on `EntitySnapshot` and the join, `RandomCharacterSelector` becoming the fallback for a body
+that declared none) with `check:authority` and the netharness over it, and it opens the
+milestone's only `shared/` change. It is the first item of whatever comes next, per the
+brief.
+
+**Needs a browser:** the thumbnails against the strip's dark tiles on a real display; whether
+a portrait at a third of its size still reads which skin is which (Apex and Sentry are the
+close pair).
+
 ## Phase C — the match intro: a camera the freeze already pays for
 
 **Where it plays, and what it hides.** The brief calls this a hidden loading screen. In this
@@ -1226,10 +1280,11 @@ report that a screen "looks cut off" is answered by running it.
 
 ## How to start — the next brief
 
-Phase A is done — A1, A2, A3 and A4 recorded above, Gate A closed — and the probe is red on
-one screen, the editor's open row, which is B's. A fresh session starts at **B0** (decision
-5): recompress Viper, Echo and Hazard to the four 4–5 MB skins' size and make a 4 MB skin the
-default, a `gltf-transform` pass run once; then **B1**, the stage. `npm run layout` first, to
-see the same 16 before touching anything. Each phase closes with its gate's numbers in a
-"done" subsection here, in the order above, and the milestone closes the way M13 and M14 did:
-this section moves to the archive in the session that closes it.
+Phases A and B are done — A1–A4 and B0–B5 recorded above, Gate A closed, Gate B's layout
+and audits green (`PASS` at 22 surfaces × 8 viewports; 121 tests) — with **B6**, the wire
+step, deliberately not taken. A fresh session starts at one of two places, the human's call:
+**B6** (the `shared/net` byte, the netharness bill, `check:authority`), or **C**, the match
+intro, which depends on nothing in B. `npm run layout` first either way, to see the PASS
+before touching anything. Each phase closes with its gate's numbers in a "done" subsection
+here, in the order above, and the milestone closes the way M13 and M14 did: this section moves
+to the archive in the session that closes it.

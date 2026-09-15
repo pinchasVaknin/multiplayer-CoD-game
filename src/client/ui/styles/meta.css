@@ -214,10 +214,130 @@
   justify-content: space-between;
   height: 56px;
   padding: 0 var(--s-4);
+  /* Pinned to the column's foot: the canvas is 800 of the column's 928, and the skin bar
+   * stands in the room between, above this. */
+  margin-top: auto;
 }
 
 .lo-stage__status {
   color: var(--c-accent);
+}
+
+/*
+ * CHANGE A SKIN and its strip (B5), over the foot of the canvas. `position: absolute` in the
+ * stage, above the bar: the strip opens upward over the picture and the column's height is
+ * the same open and closed.
+ */
+.lo-skins {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 68px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: 0 var(--s-3);
+  pointer-events: none;
+}
+
+.lo-skins > * {
+  pointer-events: auto;
+}
+
+.lo-skins__toggle {
+  appearance: none;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--c-line-hi);
+  border-left: 3px solid var(--c-accent);
+  border-radius: var(--radius);
+  background: rgba(12, 14, 17, 0.9);
+  color: var(--c-text);
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  cursor: pointer;
+  order: 2;
+}
+
+.lo-skins__toggle:hover,
+.lo-skins__toggle:focus-visible {
+  background: var(--c-surface-hi);
+  outline: none;
+}
+
+.lo-skins__chevron {
+  font-size: var(--t-lead);
+  line-height: 1;
+  color: var(--c-text-faint);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.lo-skins.is-open .lo-skins__chevron {
+  transform: rotate(-90deg);
+}
+
+.lo-skins__strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--s-2);
+  padding: var(--s-2);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  background: rgba(12, 14, 17, 0.92);
+  order: 1;
+}
+
+.lo-skins__strip[hidden] {
+  display: none;
+}
+
+.lo-skin {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 2px solid var(--c-line);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  color: var(--c-text-dim);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.lo-skin:hover,
+.lo-skin:focus-visible {
+  border-color: var(--c-line-hi);
+  outline: none;
+}
+
+.lo-skin.is-on {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+/* The 320x400 render, at a third: the strip's seven fit the 860 px stage with room to spare. */
+.lo-skin__thumb {
+  display: block;
+  width: 96px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  background: radial-gradient(ellipse at 50% 70%, var(--c-surface-hi), var(--c-void));
+}
+
+.lo-skin__name {
+  font-size: var(--t-micro);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
 }
 
 /* The arrows: the stage's and the pager's are the same control. */

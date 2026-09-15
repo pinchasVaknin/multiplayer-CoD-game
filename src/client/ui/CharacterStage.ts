@@ -91,6 +91,8 @@ export class CharacterStage {
   private target = Math.PI;
   private dragging = false;
   private dragLastX = 0;
+  /** A held pose: no idle turn, no easing. The thumbnail renderer's, and nothing else's. */
+  private held = false;
   private lastSeenWidth = 0;
   private lastSeenHeight = 0;
 
@@ -169,6 +171,24 @@ export class CharacterStage {
   }
 
   /**
+   * Hold the turntable at an angle and stop it turning (M15, B5: `scripts/skin-thumbs.mjs`
+   * renders every skin at one pose so the strip's thumbnails match). Radians, 0 facing -Z.
+   */
+  hold(angle: number, distance = 4.4): void {
+    this.held = true;
+    this.angle = angle;
+    this.target = angle;
+    // Closer for a portrait: the stage's own distance leaves a 320×400 thumbnail half air.
+    this.camera.position.set(0, 1.35 - (4.4 - distance) * 0.09, distance);
+    this.camera.lookAt(0, 0.95, 0);
+  }
+
+  /** The canvas as a PNG data URL, read right after a `tick` in the same task — the buffer is not preserved past it. */
+  snapshot(): string {
+    return this.canvas.toDataURL('image/png');
+  }
+
+  /**
    * One frame: adopt the body if it has arrived, turn, animate, draw.
    *
    * Driven from `Game.draw` through the editor, so it stops with the frame loop.
@@ -183,8 +203,8 @@ export class CharacterStage {
       }
     }
 
-    if (this.dragging) {
-      // The hand is on it: no idle turn, no easing.
+    if (this.dragging || this.held) {
+      // The hand is on it, or a script is: no idle turn, no easing.
     } else {
       this.target += IDLE_TURN * dt;
       this.angle += (this.target - this.angle) * Math.min(1, SETTLE * dt);

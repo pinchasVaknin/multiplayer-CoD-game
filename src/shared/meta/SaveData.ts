@@ -102,7 +102,29 @@ export interface SettingsV1 {
    * `BOT_DIFFICULTY`; see `MatchDeps.difficulty`.
    */
   botDifficulty: BotDifficulty;
+
+  // ---- M15 -----------------------------------------------------------------
+  /**
+   * The operator's skin (Phase B5): which of the character skins the player wears.
+   *
+   * A setting rather than a profile fact, beside the callsign, because it is the same kind of
+   * thing — who the player looks like — and because "reset progress" keeps settings and
+   * erases the rest, and a wiped level should not also change a face. Held as a string:
+   * `shared/` does not know the catalogue (`client/characters/CharacterCatalog.ts` is the one
+   * list of ids), so this layer keeps the name and `Profile.skinId` is what checks it against
+   * the catalogue and falls back to `DEFAULT_SKIN_ID` for a name it does not know.
+   *
+   * Local-first (M15 decision 2): what the stage and the summary's lineup show. Other
+   * players still see the dealt body until B6 puts the choice on the wire.
+   */
+  skin: string;
 }
+
+/**
+ * The skin every player has worn since M13 — the default that preloads at boot. The client's
+ * catalogue asserts at load that it names a real skin; `shared/` only knows the name.
+ */
+export const DEFAULT_SKIN_ID = 'echo';
 
 export const SHADOW_QUALITIES = ['off', 'low', 'medium', 'high'] as const;
 export type ShadowQuality = (typeof SHADOW_QUALITIES)[number];
@@ -157,7 +179,7 @@ export interface Versioned {
 }
 
 export interface SaveV2 extends Versioned {
-  version: 3;
+  version: 4;
   profile: ProfileData;
   weapons: Record<string, WeaponSaveData>;
   loadouts: LoadoutSlot[];
@@ -185,8 +207,12 @@ export interface SaveV2 extends Versioned {
  * repair placed there would be permanent: nobody could ever bind ADS to middle mouse again,
  * because every load would move it back. A migration runs **once**, which is exactly the
  * shape of "this stored value was written by a version that was wrong about what it meant".
+ *
+ * The v4 bump (M15, B5) is the M8 kind: `normaliseSave` would default `settings.skin` without
+ * it, and it is a migration anyway so that "a v3 save loads wearing the skin it was always
+ * shown" is a tested sentence rather than a side effect of a default.
  */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 export const SAVE_KEY = 'operator.save';
 
 /** The key M1-M5 wrote settings to. Read once, by the migration, then left alone. */
@@ -213,6 +239,7 @@ export function defaultSettings(modeId: string, mapId: string, fov: number): Set
     bindings: defaultBindings(),
     callsign: generateCallsign(),
     botDifficulty: 'MIX',
+    skin: DEFAULT_SKIN_ID,
   };
 }
 
@@ -508,6 +535,9 @@ export function normaliseSave(raw: unknown, fallbackSettings: SettingsV1): SaveR
     s.motionBlur = settings['motionBlur'] === true;
     s.colorblind = oneOf(settings['colorblind'], COLORBLIND_MODES, fallbackSettings.colorblind);
     s.botDifficulty = oneOf(settings['botDifficulty'], BOT_DIFFICULTIES, fallbackSettings.botDifficulty);
+    // A name, checked against the catalogue by the client (`Profile.skinId`), not here.
+    const storedSkin = settings['skin'];
+    s.skin = typeof storedSkin === 'string' && storedSkin.trim() !== '' ? storedSkin.slice(0, 32) : fallbackSettings.skin;
     // `normaliseBindings` restores the defaults for any action the save never heard of, so
     // a pre-M8 save comes back fully bound rather than with three dead killstreak keys.
     s.bindings = normaliseBindings(settings['bindings']);
@@ -629,10 +659,11 @@ function normaliseWeaponLoadout(
 export function migrateSave(raw: unknown, fromVersion: number, fallbackSettings: SettingsV1): SaveV2 | null {
   if (!isRecord(raw)) return null;
 
-  // The edges are walked in order, so a v0 payload passes through all three upgrades.
+  // The edges are walked in order, so a v0 payload passes through all four upgrades.
   const afterV0 = fromVersion < 1 ? upgradeV0(raw) : raw;
   const afterV1 = fromVersion < 2 ? upgradeV1(afterV0) : afterV0;
-  const upgraded = fromVersion < 3 ? upgradeV2(afterV1) : afterV1;
+  const afterV2 = fromVersion < 3 ? upgradeV2(afterV1) : afterV1;
+  const upgraded = fromVersion < 4 ? upgradeV3(afterV2) : afterV2;
   const { save, losses } = normaliseSave(upgraded, fallbackSettings);
   save.version = SAVE_VERSION;
 
@@ -643,6 +674,21 @@ export function migrateSave(raw: unknown, fromVersion: number, fallbackSettings:
   );
   for (const line of losses) log.info(`  ${line}`);
   return save;
+}
+
+/**
+ * v3 to v4 (M15, B5): the settings block gains the operator's skin.
+ *
+ * Every player has been shown `DEFAULT_SKIN_ID` since M13 — it is the body the default
+ * preload warms and the one the stage showed before there was a picker — so an upgrading
+ * save states that skin rather than leaving the field for `normaliseSave` to default. Same
+ * value either way; the difference is that this one is asserted by a test. Nothing outside
+ * `settings.skin` is touched.
+ */
+function upgradeV3(raw: Record<string, unknown>): Record<string, unknown> {
+  const settings = isRecord(raw['settings']) ? raw['settings'] : {};
+  if (typeof settings['skin'] === 'string') return raw;
+  return { ...raw, settings: { ...settings, skin: DEFAULT_SKIN_ID } };
 }
 
 /**

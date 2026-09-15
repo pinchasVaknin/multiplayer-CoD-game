@@ -10,7 +10,7 @@ import { perkDef, perksOfTier, PERK_TIERS, type PerkTier } from '../../shared/pe
 import { attachmentDef } from '../../shared/weapons/Attachments';
 import { ALL_WEAPONS, requireWeapon, type WeaponDef } from '../../shared/weapons/WeaponDefs';
 import type { CharacterAssetService } from '../characters/CharacterAssetService';
-import { DEFAULT_CHARACTER_ID } from '../characters/CharacterCatalog';
+import { BOT_CHARACTER_IDS, characterDefinition } from '../characters/CharacterCatalog';
 import { CharacterStage } from './CharacterStage';
 import { createScreen } from './Frame';
 import { LoadoutStats } from './LoadoutStats';
@@ -195,6 +195,8 @@ export class LoadoutEditor {
   private readonly tip: HTMLElement;
   /** The stage's one line of status, written from `tick` because the body arrives between edits. */
   private stageStatus: HTMLElement | null = null;
+  /** Whether the skin strip is open over the stage's foot (B5). */
+  private skinsOpen = false;
 
   private slotIndex = 0;
   /** The open box and tab, or null when the zone shows its hint. */
@@ -238,9 +240,9 @@ export class LoadoutEditor {
     this.page = 0;
     this.hoveredWeaponId = null;
     this.screen.hidden = false;
+    this.skinsOpen = false;
     this.paint();
-    // B5 puts the player's pick here; until then the operator is the default body.
-    this.stage.show(DEFAULT_CHARACTER_ID);
+    this.stage.show(this.deps.profile.skinId);
   }
 
   hide(): void {
@@ -478,8 +480,83 @@ export class LoadoutEditor {
     bar.className = 'lo-stage__bar';
     bar.append(left, status, right);
 
-    wrap.append(this.stage.canvas, bar);
+    wrap.append(this.stage.canvas, this.paintSkins(), bar);
     return wrap;
+  }
+
+  /**
+   * CHANGE A SKIN (B5): a bar over the stage's foot, and the strip of every skin it opens.
+   *
+   * The strip lies *over* the canvas rather than under the bar, so the column's height never
+   * changes and the frame never has to. The thumbnails are `scripts/skin-thumbs.mjs`'s renders
+   * — seven live stages would be seven contexts and the whole library fetched to open a menu.
+   * Picking writes the profile (a setting, kept across a progress reset like the callsign) and
+   * puts the new body on the disc; other players see the dealt body until B6 (decision 2).
+   */
+  private paintSkins(): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'lo-skins';
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'lo-skins__toggle';
+    const label = document.createElement('span');
+    label.textContent = 'CHANGE A SKIN';
+    const chevron = document.createElement('span');
+    chevron.className = 'lo-skins__chevron';
+    chevron.textContent = '›';
+    toggle.append(label, chevron);
+    toggle.addEventListener('click', () => {
+      this.skinsOpen = !this.skinsOpen;
+      this.refresh();
+    });
+
+    const strip = document.createElement('div');
+    strip.className = 'lo-skins__strip';
+    strip.setAttribute('role', 'listbox');
+    strip.setAttribute('aria-label', 'Skins');
+    for (const id of BOT_CHARACTER_IDS) {
+      const def = characterDefinition(id);
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'lo-skin';
+      tile.setAttribute('role', 'option');
+      const img = document.createElement('img');
+      img.className = 'lo-skin__thumb';
+      img.src = def.thumbUrl;
+      img.alt = '';
+      img.draggable = false;
+      const name = document.createElement('span');
+      name.className = 'lo-skin__name';
+      name.textContent = def.name;
+      tile.append(img, name);
+      tile.addEventListener('click', () => {
+        this.deps.profile.setSkin(id);
+        this.stage.show(id);
+        this.refresh();
+      });
+      this.refreshers.push(() => {
+        const on = this.deps.profile.skinId === id;
+        tile.classList.toggle('is-on', on);
+        tile.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      strip.appendChild(tile);
+    }
+
+    this.refreshers.push(() => {
+      wrap.classList.toggle('is-open', this.skinsOpen);
+      toggle.setAttribute('aria-expanded', this.skinsOpen ? 'true' : 'false');
+      strip.hidden = !this.skinsOpen;
+    });
+
+    wrap.append(toggle, strip);
+    return wrap;
+  }
+
+  /** Open the skin strip — for the layout probe, which measures it. */
+  openSkins(): void {
+    this.skinsOpen = true;
+    this.refresh();
   }
 
   /** The six boxes, each showing only what is equipped. */

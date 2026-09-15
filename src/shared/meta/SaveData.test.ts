@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { installLogSink } from '../core/Log';
 import { levelForXp } from './Levels';
 import {
+  DEFAULT_SKIN_ID,
   defaultSettings,
   makeSyntheticV0Save,
   migrateSave,
@@ -114,6 +115,23 @@ describe('migrateSave', () => {
     const out = migrateSave(v3, 3, fallback());
     expect(out?.settings.bindings.ads).toEqual(['Mouse1']);
     expect(out?.settings.bindings.use).toEqual(['KeyE', 'KeyP']);
+  });
+
+  it('v3 -> v4 dresses the save in the skin it was always shown, and keeps everything else', () => {
+    const v3 = { ...saveV2(), version: 3 };
+    const out = migrateSave(v3, 3, fallback());
+    expect(out?.version).toBe(SAVE_VERSION);
+    expect(out?.settings.skin).toBe(DEFAULT_SKIN_ID);
+    expect(out?.settings.fov).toBe(95);
+    expect(out?.profile.xp).toBe(XP);
+  });
+
+  it('a v4 save keeps the skin it names; shared/ checks only that it is a name', () => {
+    const v4 = { ...saveV2(), version: 4, settings: { ...(saveV2()['settings'] as object), skin: 'viper' } };
+    const out = migrateSave(v4, 4, fallback());
+    expect(out?.settings.skin).toBe('viper');
+    const blank = { ...v4, settings: { ...(v4.settings as object), skin: '' } };
+    expect(migrateSave(blank, 4, fallback())?.settings.skin).toBe(fallback().skin);
   });
 
   it('migrates the synthetic v0 the way verify/progression.js expects', () => {

@@ -63,6 +63,8 @@
     "check:decorators": "node scripts/check-decorators.mjs",
     "//animations": "M13 Phase D. What is inside every animation GLB — clip names, lengths, bones, the hips' height — read from the JSON chunk in Node. Run over incoming/ to decide a new file's slot from a table rather than from its name; animation-import.mjs then moves it into the slot folder as one named clip.",
     "animations": "node scripts/animation-manifest.mjs",
+    "skins:compress": "node scripts/skin-compress.mjs",
+    "skins:thumbs": "node scripts/skin-thumbs.mjs",
     "//test": "M14 Phase A. Unit tests of pure functions, co-located as X.test.ts beside X.ts and compiled by the partition they sit in — a shared/ test runs with no DOM lib and imports describe/it/expect from vitest explicitly. The harnesses stay the integration instruments; a test that goes red against the tree reports a finding, it does not get fixed in a harness.",
     "test": "vitest run",
     "test:watch": "vitest"
