@@ -1,11 +1,18 @@
 import * as THREE from 'three';
 import { logger } from '../../shared/core/Log';
 import type { ShadowQuality } from '../../shared/meta/SaveData';
+import { navBakeOptionsFor } from '../../shared/ai/BotDirector';
 import { findMap } from '../../shared/modes/ModeRegistry';
+import { DEFAULT_MOVEMENT_CONFIG } from '../../shared/player/MovementConfig';
 import type { LaneDef, MapDef, Vec3Lit } from '../../shared/world/maps/types';
+import { loadMapCollision } from '../../shared/world/MapLoader';
+import { bakeNavmesh } from '../../shared/world/NavBake';
 import type { ProceduralTextures } from '../engine/ProceduralTextures';
+import type { NavGrid } from '../../shared/world/Navmesh';
+import type { CharacterAssetService } from '../characters/CharacterAssetService';
 import { MapBuildQueue } from './MapBuildQueue';
 import { applyAmbient, type LoadedMap } from './MapRender';
+import { MenuSkirmish } from './MenuSkirmish';
 import { Particulate } from './Particulate';
 
 const log = logger('backdrop');
@@ -18,16 +25,22 @@ const log = logger('backdrop');
  * dolly along one of the map's authored lanes at eye height. It is the brief's "cinematic
  * background video" answered without a video (decision 1: no video asset exists and none is
  * wanted at 5–20 MB against a 391 kB client), and it is the whole of the backdrop for Phase
- * A; the bodies and the shooting are Phase E, on E's numbers.
+ * A; the bodies and the shooting are Phase E — `MenuSkirmish`, below — on E's numbers.
  *
- * ## What this is not
+ * ## What this is, and is not
  *
- * **No simulation runs.** There is no `Match`, no bots, no `PlayerController`, no bus
- * subscription, no navmesh bake. The world is a `LoadedMap` (mesh, lights, sky — the map's
- * own root) plus `applyAmbient` and the map's particulate, and a camera this class moves. That
- * is the same three things `MatchWorld` puts in the scene before it builds a player into
- * them, and nothing else — which is why `dispose` is one `scene.remove` and one
- * `LoadedMap.dispose`, the same two lines `MatchWorld.dispose` ends with.
+ * The world is a `LoadedMap` (mesh, lights, sky — the map's own root) plus `applyAmbient` and
+ * the map's particulate, and a camera this class moves. That is the same three things
+ * `MatchWorld` puts in the scene before it builds a player into them — which is why the
+ * map's half of `dispose` is one `scene.remove` and one `LoadedMap.dispose`, the same two
+ * lines `MatchWorld.dispose` ends with.
+ *
+ * On that map, when `combat` is on (Phase E), a `MenuSkirmish`: a bots-only deathmatch on the
+ * shared simulation, stepped from the loop's fixed step through `simulate` and drawn through
+ * the dolly's camera. It is still **no `Match`** in `ClientMatch`'s sense — no player, no HUD,
+ * no audio, no netcode — and it is on a bus of its own, so nothing that listens to the game's
+ * bus hears a shot fired behind the menu. `combat` off is Phase A's backdrop exactly, which is
+ * the fallback E's numbers were measured against.
  *
  * ## Built the way §6.5 builds
  *
@@ -80,6 +93,9 @@ export interface MenuBackdropDeps {
   readonly scene: THREE.Scene;
   readonly textures: ProceduralTextures;
   readonly shadowQuality: () => ShadowQuality;
+  /** The skins, for the skirmish's bodies (E). The same service the match draws from. */
+  readonly characterAssets: CharacterAssetService;
+  readonly anisotropy: () => number;
 }
 
 interface Dolly {
@@ -103,6 +119,21 @@ export class MenuBackdrop {
   private map: LoadedMap | null = null;
   private particulate: Particulate | null = null;
   private dolly: Dolly | null = null;
+  /**
+   * The fight on the map (E), or null with `combat` off or no map yet. Rebuilt with the next
+   * seed when its match is over.
+   */
+  private skirmish: MenuSkirmish | null = null;
+  /** Navmeshes baked so far, by map id: a bake is once per map per page, not once per menu. */
+  private readonly navs = new Map<string, NavGrid>();
+  /** Consecutive skirmishes deal different decks and fight different fights. */
+  private skirmishesBuilt = 0;
+  /**
+   * Whether the map behind the menu carries the fight (E). On by default; a console can turn
+   * it off (`__operator.game.backdrop.combat = false`) for the isolation half of a measurement,
+   * and the flag is the switch the phase ships behind: off is Phase A's dolly alone.
+   */
+  combat = true;
   /** Seconds since the map was adopted; the dolly and the sway run on it. */
   private elapsed = 0;
   /** The map asked for, whether built, building or waiting. */
@@ -141,24 +172,61 @@ export class MenuBackdrop {
    */
   prepare(mapId: string): void {
     if (mapId === this.wantedMapId) return;
+    let entry;
     try {
-      findMap(mapId);
+      entry = findMap(mapId);
     } catch {
       log.warn(`no map "${mapId}" to draw behind the menu.`);
       return;
     }
     this.release();
     this.wantedMapId = mapId;
+    if (this.combat) this.bakeNav(entry.def);
     this.queue.start(mapId);
   }
 
   /**
-   * One render frame's worth: pump the build, move the camera, drift the motes.
+   * The skirmish's navmesh, baked here rather than on the frame the map lands (E).
+   *
+   * A bake is ~230 ms on Foundry and cannot be chunked, so it goes where a stall is not seen:
+   * before the map's first frame, on a menu that has not started moving yet, once per map per
+   * page. Against a `loadMapCollision` of the same def rather than the built map's collision —
+   * the same geometry, so the same grid, and exactly how the server's `MapBakery` bakes at
+   * boot before any match wraps it. Measured before this: a 475 ms frame as the map appeared.
+   */
+  private bakeNav(def: MapDef): void {
+    if (this.navs.has(def.id)) return;
+    const t0 = performance.now();
+    const nav = bakeNavmesh(loadMapCollision(def).collision, def.navBounds, navBakeOptionsFor(def, DEFAULT_MOVEMENT_CONFIG));
+    this.navs.set(def.id, nav);
+    log.info(`${def.name}: navmesh for the fight behind the menu baked in ${(performance.now() - t0).toFixed(0)} ms.`);
+  }
+
+  /**
+   * One fixed simulation step, from the loop's `sim` while there is no world (E): the fight
+   * advances on the same clock a match does. Nothing to do without a map or with `combat` off;
+   * a finished fight is replaced here, on the step that found it over.
+   */
+  simulate(): void {
+    const map = this.map;
+    if (map === null) return;
+    if (!this.combat) {
+      this.dropSkirmish();
+      return;
+    }
+    if (this.skirmish?.isOver === true) this.dropSkirmish();
+    const fight = this.skirmish ?? this.buildSkirmish(map);
+    fight.step();
+  }
+
+  /**
+   * One render frame's worth: pump the build, move the camera, drift the motes — and, with a
+   * fight on, pose its bodies between sim steps and advance its effects.
    *
    * Returns the camera to render the scene through, or null while nothing is built yet —
    * the caller clears the canvas in that case, exactly as it did before this class existed.
    */
-  frame(dt: number, aspect: number): THREE.PerspectiveCamera | null {
+  frame(dt: number, aspect: number, alpha = 1): THREE.PerspectiveCamera | null {
     this.queue.pump();
     const map = this.map;
     if (map === null) return null;
@@ -183,6 +251,7 @@ export class MenuBackdrop {
 
     // The same call the match makes, on the same clock: decoration rides the render dt.
     this.particulate?.update(cam.position.x, cam.position.y, cam.position.z, dt);
+    this.skirmish?.render(alpha, dt, cam);
     return cam;
   }
 
@@ -213,8 +282,30 @@ export class MenuBackdrop {
     );
   }
 
+  private buildSkirmish(map: LoadedMap): MenuSkirmish {
+    const mapEntry = findMap(map.def.id);
+    const built = new MenuSkirmish({
+      scene: this.deps.scene,
+      map,
+      mapEntry,
+      characterAssets: this.deps.characterAssets,
+      anisotropy: this.deps.anisotropy,
+      seed: 0x4e5a_1000 + this.skirmishesBuilt++,
+      nav: this.navs.get(map.def.id),
+    });
+    this.navs.set(map.def.id, built.nav);
+    this.skirmish = built;
+    return built;
+  }
+
+  private dropSkirmish(): void {
+    this.skirmish?.dispose();
+    this.skirmish = null;
+  }
+
   private release(): void {
     this.queue.cancel();
+    this.dropSkirmish();
     const map = this.map;
     if (map !== null) {
       this.deps.scene.remove(map.root);

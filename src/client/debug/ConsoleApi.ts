@@ -10,6 +10,7 @@ import { sanitiseLoadout, UnlockState } from '../../shared/meta/Unlocks';
 import { PERKS, type PerkId } from '../../shared/perks/PerkDefs';
 import { STREAK_DEFS, type StreakId } from '../../shared/streaks/StreakDefs';
 import { PLAYER_ENTITY_ID } from '../../shared/combat/DamageSystem';
+import { EventBus } from '../../shared/core/EventBus';
 import {
   DETERMINISM_DEFAULTS,
   runDeterminismScenario,
@@ -81,6 +82,19 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
     speedometer: () => game.speedo,
     stats: () => game.stats,
     gpu: () => game.gpuMemory,
+    /**
+     * The three counts a leak shows in (M15, E): live bus subscriptions across every bus in
+     * the page, the renderer's geometries and textures, and the JS heap where the browser
+     * reports one. Read once per cycle of whatever is being cycled; flat is the claim.
+     */
+    leaks: () => {
+      const memory = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
+      return {
+        subscriptions: EventBus.liveSubscriptions,
+        ...game.gpuMemory,
+        heapMb: memory === undefined ? null : Math.round(memory.usedJSHeapSize / 1048576),
+      };
+    },
     latency: () => game.activeMatch?.latency,
     sim: () => game.playerSim,
     setSyntheticLoad: (ms: number) => game.setSyntheticLoad(ms),

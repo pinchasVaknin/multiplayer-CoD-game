@@ -244,7 +244,8 @@ export class Game {
   private readonly renderer: Renderer;
   private readonly textures: ProceduralTextures;
   /** The map behind the main menu (M15, A3). Exists only while `world` is null. */
-  private readonly backdrop: MenuBackdrop;
+  /** The map behind the menu (A3) and, on it, the fight (E). Public for the console's switch. */
+  readonly backdrop: MenuBackdrop;
   /** Parsed GLB templates survive MatchWorld teardown and are shared by every mode. */
   private readonly characterAssets = new CharacterAssetService();
   /** Worlds built this session. Moves the skin deck between matches — see `buildWorld`. */
@@ -553,6 +554,10 @@ export class Game {
       scene: this.scene,
       textures: this.textures,
       shadowQuality: () => this.profile.settings.shadowQuality,
+      // The fight behind the menu (M15, E) draws its bodies from the same service and with the
+      // same filtering as a match does.
+      characterAssets: this.characterAssets,
+      anisotropy: () => this.textures.anisotropy,
     });
     // Warm one representative bundle while BOOT/MENU are visible. Other skins load only when
     // an actor receives them, so a match does not reserve the whole cosmetic catalogue on the
@@ -2366,7 +2371,12 @@ export class Game {
 
   private simulate(tick: number): void {
     const world = this.world;
-    if (world === null) return;
+    // No world: the fight behind the menu takes the step instead (M15, E). Same loop, same
+    // fixed `DT`, so a menu is simulated the way a match is and costs what its bots cost.
+    if (world === null) {
+      this.backdrop.simulate();
+      return;
+    }
 
     // Input crosses the netcode boundary even in single player: the sim only ever
     // sees command data, which is what keeps the command seam real (S4.2). Which command
@@ -2504,7 +2514,7 @@ export class Game {
        * or over a cleared canvas while that map is still building, because a canvas that is
        * neither drawn nor cleared holds the last frame of the previous match.
        */
-      const backdropCam = this.backdrop.frame(dt, this.renderer.aspect);
+      const backdropCam = this.backdrop.frame(dt, this.renderer.aspect, alpha);
       if (backdropCam !== null) this.renderer.render(this.scene, backdropCam, null);
       else this.renderer.clear();
       return;

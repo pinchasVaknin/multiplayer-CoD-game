@@ -101,6 +101,14 @@ export class BotRenderer {
     this.group.add(this.groupA, this.groupB, this.indicatorGroup);
   }
 
+  /**
+   * Whether the nameplates, health bars and pads are drawn at all (M15, E). The fight behind
+   * the menu is a picture, not a HUD; the markers are one layer, so it is one flag.
+   */
+  setIndicatorsVisible(on: boolean): void {
+    this.indicatorGroup.visible = on;
+  }
+
   /** The scene node holding one side's bodies. See `groupA`. */
   groupFor(team: BotTeam): THREE.Group {
     return team === 'A' ? this.groupA : this.groupB;
