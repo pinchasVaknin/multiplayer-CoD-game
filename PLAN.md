@@ -1292,6 +1292,37 @@ screenshot this session, so the record is poses and pixels, not pictures.
 **Gate C is where this stops**, as asked. Phase D — the end of the match — and B6 are the
 open items; E after D.
 
+### Between phases — the spawn zones (2026-09-15): seven, not two
+
+The brief named two — Foundry B (−27, 2) and Depot B (−28, −19), the intro harness's first
+bad sample on each map. Measured before moving anything, with the standing capsule (r 0.35,
+h 1.8) at every zone's authored centre on every map: **seven zones in a solid**, from four
+authored positions. Both maps author team A's half and rotate it; the props are
+rotationally symmetric and the zones were written mirror-symmetric, so the east flank of
+each carries a container where its west twin has open floor. Foundry `put(26.5, −2)` was
+10 cm inside the container at (25, −4), `put(26.5, 14)` 10 cm into the corner of the one at
+(25, 17); Depot `put(28, 19)` 0.6 m inside the stack at (27, 20); Testbed A (−22, −10) 15 cm
+into the west end of the bay divider, under a comment that says every zone is open floor.
+The sim's first-tick de-penetration had hidden all seven; the selector snaps every jittered
+sample to a nav cell, so only sample 0 — the authored point — ever stood there.
+
+**Two `B:` commits** (`68e8bfd` the brief's two, `966307a` the other three), each placed
+by a horizontal clearance sweep against the west twin's number: Foundry's flip zone into
+the back alley behind the spine at **(27.6, −2)**, 1.05 m each side — the alley is the
+lane's designed feature and it keeps the author's 12 m spacing from B's flank; the flank
+to **(26.5, 11.5)**, 2.2 m to the wall like its twin; Depot to **(28, 14)**, the stack's
+foot, 1.7 m like its twin; Testbed to **(−22, −11.5)**, 1.4 m. The capsule test reads
+**0 hits** after.
+
+**The one place in M15 where byte-identical is not the claim, measured both ways.**
+`npm run content` (stash → build → run; pop → build → run): exactly the moved zones and
+their rotated twins — four lines, then three. Seeded harness (5 TDM on Foundry, 141
+lines): lines 1–92 identical — mode briefs, roster deals, XP shapes, the bake — and the
+35 line-pairs after are the match outcomes, **structure identical with every numeral
+stripped**. `npm run intro`: **299 PASSED** both times, the diff only the moved zones'
+rows (Foundry's alley plan is the same 21 m route; Depot's approach 5 m nearer, trimmed
+12 m not 18). `npm run check` green, 125 tests.
+
 ## Phase D — the end of the match: the lineup and the accordion
 
 **D1, the lineup.** Top half: the winning team — in Free-for-All the top three — on a stage,
