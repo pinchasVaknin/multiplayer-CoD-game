@@ -138,7 +138,8 @@ export interface CharacterDefinition {
   readonly animations: Readonly<Record<CharacterAnimationId, CharacterAnimationSlot>>;
 }
 
-const CHARACTER_VERSION = '2026-09-14-library-v2';
+// M15 B0: the skins were re-encoded (1024 px, JPEG) — the URLs move so a cached 28 MB Echo is not kept.
+const CHARACTER_VERSION = '2026-09-15-skins-jpeg';
 const ANIMATION_ROOT = '/models/bots/animations';
 
 /**

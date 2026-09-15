@@ -903,6 +903,39 @@ it is a 40 % step and the smallest text is now 14 — or whether the ramp wants 
 
 ## Phase B — Create-a-Class: the stage, six boxes, the strips, the skins
 
+### B0 — done (session of 2026-09-15): the skins at a twentieth of their weight
+
+**What the weight was.** Read from the GLBs without a parser package (`scripts/glb-images.mjs`
+— a `.glb` is a header, a JSON chunk and a binary chunk the images sit in): Viper, Echo and
+Hazard carried two or three material sets each with a **2048×2048 PNG normal map and a
+2048×2048 PNG diffuse, 6–8 MB apiece**; the four light skins carried the same maps at 1024
+(1–1.6 MB). Geometry was never the cost — 24–32 k vertices is 1.5–1.9 MB. Every material in
+the library is `OPAQUE` metallic-roughness with `KHR_materials_specular`, so nothing reads an
+alpha channel.
+
+**The pass.** `scripts/skin-compress.mjs`: `gltf-transform resize` to at most 1024 on a side
+(Lanczos3, never enlarging) and `gltf-transform jpeg` at quality 88 over the PNGs, through
+`npx` at a pinned `@gltf-transform/cli@4.5.0` — run once, not a build dependency (S2 holds).
+It replaces a file only if `rigSignature` — node names in order, joint counts, animation
+names and channel counts — is byte-for-byte the same before and after; all seven were.
+**109.0 MB → 17.3 MB**: Apex 4.38 → 1.62, Echo 28.24 → 3.95, Hazard 37.56 → 3.85, Pulse
+4.45 → 1.49, Rhino 4.93 → 1.52, Sentry 5.15 → 1.65, Viper 24.26 → 3.21. The default skin
+stays `echo`, now 3.95 MB — decision 5's "a 4 MB skin as the default" is met by the skin
+that was there. `CHARACTER_VERSION` moved to `2026-09-15-skins-jpeg` so a client holding the
+old bytes fetches the new ones.
+
+**The gate.** `scripts/check-skins.mjs`, `check:skins` in `check` after `check:animations`:
+every catalogued skin exists and every shipped one is catalogued; none over **5 MB**; no
+texture over 1024 on a side or a PNG — the last two so the message names the cause and the
+script to run. Proved red on the shipped tree before the pass (65 problems: three skins over
+the limit, every 2048 map, every PNG) and green after: `7 skins, 17.3 MB in all, 47 textures`.
+
+**Measured in the pane:** a solo match on Foundry loads all seven re-encoded skins (`GLB
+character template … is ready` × 7), nine actors drawn, no console error. `npm run check`
+green (119 tests). **Needs a browser:** JPEG at 88 on a normal map — whether a seam or a
+block shows on a body at play distance is a display question; the quality constant is one
+number in the script.
+
 **B1, the stage.** Left half: the selected skin on a lit disc, `idleWeaponReady` looping,
 holding the class's primary through the weapon socket (`CharacterSkin.setWeapon`, the call
 the match makes), turning at 0.1 rad/s with the two arrows below it to grab. Rendered
