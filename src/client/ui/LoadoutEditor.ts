@@ -11,6 +11,7 @@ import { attachmentDef } from '../../shared/weapons/Attachments';
 import { ALL_WEAPONS, requireWeapon, type WeaponDef } from '../../shared/weapons/WeaponDefs';
 import type { CharacterAssetService } from '../characters/CharacterAssetService';
 import { BOT_CHARACTER_IDS, characterDefinition } from '../characters/CharacterCatalog';
+import { categoryIcon, CATEGORY_VIEWBOX, type CategoryIconId } from './CategoryIcons';
 import { CharacterStage } from './CharacterStage';
 import { createScreen } from './Frame';
 import { LoadoutStats } from './LoadoutStats';
@@ -21,28 +22,35 @@ import { WeaponPreview } from './WeaponPreview';
  * Create-a-Class (brief S6.3; rebuilt on the design frame by M15, Phase B): the `LOADOUT`
  * state's screen.
  *
- * ## The shape
+ * ## The shape (round 2, 2026-09-15)
  *
  * The operator on a lit disc on the left — the player's skin, holding the class's primary,
- * turning, the same `ActorAvatar` a match draws (`CharacterStage`) — and on the right a column
- * of **six boxes** that each show only what is equipped: PRIMARY, SECONDARY, EQUIPMENT (lethal
- * and tactical), PERKS (three), KILLSTREAKS (three, each with its key), FIELD UPGRADE. Fourteen
- * rows became six boxes because six fit a 1080 frame with room for an icon and two lines and
- * fourteen did not. The five class slots are tabs across the top, with the slot's name beside
- * them.
+ * turning, the same `ActorAvatar` a match draws (`CharacterStage`) — and on the right **one
+ * list**. Closed, the list is the six **category bars**, each showing only what is equipped:
+ * PRIMARY, SECONDARY, EQUIPMENT (lethal and tactical), PERKS (three), KILLSTREAKS (three, each
+ * with its key), FIELD UPGRADE — with the equipped weapon's silhouette or the category's
+ * glyph at twice B2's size. Clicking a bar **replaces the whole list** with that category's
+ * options, in the same bar shape, each with its own picture, name, blurb and state; a row of
+ * tabs stands over the list where a category holds more than one thing to choose — WEAPON /
+ * ATTACHMENTS / SKIN for the two weapons, LETHAL / TACTICAL, PERK 1 / 2 / 3, KEY 3 / 4 / 5 —
+ * and a pager beside them, because a list longer than the column is **paged**, never
+ * scrolled. The five class slots are tabs across the top, with the slot's name beside them.
  *
- * ## The strip is docked, not dropped
+ * ## Three states, and the stage answers the list
  *
- * Clicking a box opens its options in a **zone under the column**, in the same place for
- * every box, with tabs across its top where a box has more than one thing to choose — WEAPON
- * / ATTACHMENTS / SKIN for the two weapons, LETHAL / TACTICAL, PERK 1 / 2 / 3, KEY 3 / 4 / 5.
- * The reference drops the strip directly under the box; under a rule that nothing may scroll
- * and nothing may leave the frame, a strip under KILLSTREAKS would either push FIELD UPGRADE
- * off the bottom or cover it, and a strip that flips above its box for the last two rows is a
- * strip in two places. So it is in one place: opening PERKS does not move KILLSTREAKS, and
- * the frame never has to grow. A list longer than the zone is **paged**, never scrolled —
- * the arrows at each end are the reference's — which is what closed the last row of A1's red
- * list.
+ * A bar is grey-white at rest (a vertical gradient through the letters, which is as metallic
+ * as type gets without an image), grows a few percent and whitens under the pointer — the
+ * whole bar, picture included, with a gap between bars so the grown one covers nothing — and
+ * takes the accent when it is the equipped option or the open category. A press changes its
+ * colour and nothing else: a bar that shrinks under the pointer has to know when the pointer
+ * left it, and that is a state machine for a button.
+ *
+ * While a weapon category is open the **weapon stands on the stage** where the operator did —
+ * the `WeaponPreview` at stage size, spinning, showing the weapon under the pointer or the
+ * equipped one in its finish — and SAVE / CANCEL stand under it: SAVE keeps what was picked
+ * and returns to the categories; CANCEL puts the class back the way it was when the category
+ * opened. The other categories keep the operator on the stage, there being no grenade or
+ * perk to stand there (no assets, M12's first paragraph).
  *
  * ## What each box still means
  *
@@ -50,19 +58,18 @@ import { WeaponPreview } from './WeaponPreview';
  * this screen draws is a *courtesy*, and the enforcement is `sanitiseLoadout` behind it.
  * Locked content is drawn with its requirement rather than hidden (M5's rule); every
  * requirement comes from `UnlockState` (round 4, B7). `LoadoutStats`, *"the point of the
- * screen"* (M6), is a band under the weapon tiles rather than a column: the same
- * `resolveLoadout` the match makes, on every edit. The SKIN tab (the reference's word for
- * what this project has called camo since M5 — the label changed, `CamoId` did not) shows the
- * finish on the `WeaponPreview` in that band, because a held weapon is one shared material
- * and does not carry a camo.
+ * screen"* (M6), is a band under the weapon lists: the same `resolveLoadout` the match makes,
+ * on every edit. The SKIN tab (the reference's word for what this project has called camo
+ * since M5 — the label changed, `CamoId` did not) shows the finish on the weapon standing on
+ * the stage, because a held weapon is one shared material and does not carry a camo.
  *
  * ## Built once, refreshed in place (playtest round 4, B11 — the mechanism, kept)
  *
  * `paint()` runs once per `show()`. Every mutable piece registers a closure in `refreshers`
- * and `refresh()` runs them; opening a box appends the zone's closures after
+ * and `refresh()` runs them; opening a category appends its list's closures after
  * `staticRefresherCount` and closing it truncates back. B11 built this so a scrolled list
- * survived an edit; there is no scroll now, and the test is that the open zone's *page*
- * survives one. A rebuilt tree would also be a lost tooltip and a jumped strip.
+ * survived an edit; there is no scroll now, and the test is that the open list's *page*
+ * survives one. A rebuilt tree would also be a lost tooltip and a jumped list.
  *
  * ## One action, and it saves (playtest round 4, B5)
  *
@@ -164,9 +171,6 @@ const BOXES: readonly BoxDef[] = [
   },
 ];
 
-/** Tiles across the zone, and rows down it: two when the stat band is under them, else three. */
-const PAGE_COLUMNS = 4;
-
 /** Which weapon a list is about, for the stage's hands and the stat band. */
 function weaponSlotOf(list: ListKind): WeaponSlot {
   switch (list.kind) {
@@ -199,8 +203,11 @@ export class LoadoutEditor {
   private skinsOpen = false;
 
   private slotIndex = 0;
-  /** The open box and tab, or null when the zone shows its hint. */
-  private open: { box: BoxDef; tab: number; element: HTMLElement } | null = null;
+  /**
+   * The open category and tab, or null when the list shows the categories. `snapshot` is the
+   * class as it was when the category opened, for CANCEL.
+   */
+  private open: { box: BoxDef; tab: number; snapshot: LoadoutSlot } | null = null;
   private page = 0;
   private pageCount = 1;
   /**
@@ -209,8 +216,16 @@ export class LoadoutEditor {
    */
   private readonly refreshers: (() => void)[] = [];
   private staticRefresherCount = 0;
-  /** The zone the open box paints into, and the six boxes, so opening can find them. */
-  private zone: HTMLElement | null = null;
+  /** The list's three parts: the head (label, tabs, pager), the categories, the options. */
+  private listHead: HTMLElement | null = null;
+  private cats: HTMLElement | null = null;
+  private opts: HTMLElement | null = null;
+  /** The stat band under the list, shown for the weapon lists. */
+  private band: HTMLElement | null = null;
+  /** The stage's parts the weapon preview replaces, and the SAVE / CANCEL row. */
+  private stageParts: HTMLElement[] = [];
+  private stageBar: HTMLElement | null = null;
+  private stageActions: HTMLElement | null = null;
   private readonly boxElements = new Map<BoxKind, HTMLElement>();
   /**
    * Which weapon the stage is holding, when it is not simply the slot's own.
@@ -222,7 +237,12 @@ export class LoadoutEditor {
 
   constructor(deps: LoadoutEditorDeps) {
     this.deps = deps;
-    this.preview = new WeaponPreview({ anisotropy: deps.anisotropy });
+    this.preview = new WeaponPreview({
+      anisotropy: deps.anisotropy,
+      width: STAGE_PREVIEW_WIDTH,
+      height: STAGE_PREVIEW_HEIGHT,
+      className: 'lo-preview--stage',
+    });
     this.stage = new CharacterStage({ characterAssets: deps.characterAssets, anisotropy: deps.anisotropy });
     const { layer, frame } = createScreen('op-screen lo');
     this.screen = layer;
@@ -258,8 +278,8 @@ export class LoadoutEditor {
    */
   tick(dt: number): void {
     if (this.screen.hidden) return;
-    this.stage.tick(dt);
-    this.preview.tick(dt);
+    if (this.weaponOnStage()) this.preview.tick(dt);
+    else this.stage.tick(dt);
     const status = this.stageStatus;
     if (status !== null) {
       const text = this.stage.ready ? '' : 'LOADING OPERATOR…';
@@ -274,7 +294,7 @@ export class LoadoutEditor {
   openBox(kind: BoxKind, tab = 0): void {
     const box = BOXES.find((b) => b.kind === kind);
     if (box === undefined) return;
-    this.showList(box, tab);
+    this.openCategory(box, tab);
     this.refresh();
   }
 
@@ -309,11 +329,29 @@ export class LoadoutEditor {
     const stage = this.paintStage();
     const right = document.createElement('div');
     right.className = 'lo-right';
-    const zone = document.createElement('section');
-    zone.className = 'lo-zone';
-    this.zone = zone;
-    right.append(this.paintBoxes(), zone);
-    this.paintZoneHint(zone);
+
+    const head = document.createElement('div');
+    head.className = 'lo-list-head';
+    head.hidden = true;
+    this.listHead = head;
+
+    const list = document.createElement('div');
+    list.className = 'lo-list';
+    const cats = this.paintCategories();
+    const opts = document.createElement('div');
+    opts.className = 'lo-opts';
+    opts.hidden = true;
+    this.cats = cats;
+    this.opts = opts;
+    list.append(cats, opts);
+
+    const band = document.createElement('div');
+    band.className = 'lo-band';
+    band.hidden = true;
+    band.appendChild(this.stats.element);
+    this.band = band;
+
+    right.append(head, list, band);
 
     this.frame.replaceChildren(this.paintHeader(), stage, right, this.tip);
     this.staticRefresherCount = this.refreshers.length;
@@ -480,7 +518,24 @@ export class LoadoutEditor {
     bar.className = 'lo-stage__bar';
     bar.append(left, status, right);
 
-    wrap.append(this.stage.canvas, this.paintSkins(), bar);
+    const skins = this.paintSkins();
+    // The operator's three parts, hidden together while a weapon stands in their place; the
+    // arrow bar also steps aside for SAVE / CANCEL while a category is open (a drag still turns).
+    this.stageParts = [this.stage.canvas, skins, bar];
+    this.stageBar = bar;
+
+    // SAVE keeps the picks and returns to the categories; CANCEL restores the snapshot first.
+    const actions = document.createElement('div');
+    actions.className = 'op-actions lo-stage__actions';
+    actions.hidden = true;
+    const cancel = button('Cancel', () => this.cancelCategory());
+    cancel.classList.add('op-btn--quiet');
+    const save = button('Save', () => this.saveCategory());
+    save.classList.add('op-btn--primary');
+    actions.append(cancel, save);
+    this.stageActions = actions;
+
+    wrap.append(this.stage.canvas, this.preview.element, skins, bar, actions);
     return wrap;
   }
 
@@ -559,40 +614,36 @@ export class LoadoutEditor {
     this.refresh();
   }
 
-  /** The six boxes, each showing only what is equipped. */
-  private paintBoxes(): HTMLElement {
+  /** The six category bars, each showing only what is equipped. Clicking one opens its list. */
+  private paintCategories(): HTMLElement {
     const wrap = document.createElement('div');
-    wrap.className = 'lo-boxes';
+    wrap.className = 'lo-cats';
     for (const box of BOXES) {
       const el = document.createElement('button');
       el.type = 'button';
-      el.className = 'lo-box';
+      el.className = 'lo-bar lo-bar--cat';
       el.dataset['box'] = box.kind;
 
       const icon = document.createElement('span');
-      icon.className = 'lo-box__icon';
+      icon.className = 'lo-bar__icon';
       const text = document.createElement('span');
-      text.className = 'lo-box__text';
+      text.className = 'lo-bar__text';
       const cat = document.createElement('span');
-      cat.className = 'lo-box__cat op-label';
+      cat.className = 'lo-bar__cat op-label';
       cat.textContent = box.label;
       const value = document.createElement('span');
-      value.className = 'lo-box__value';
+      value.className = 'lo-bar__value';
       text.append(cat, value);
       const chevron = document.createElement('span');
-      chevron.className = 'lo-box__chevron';
+      chevron.className = 'lo-bar__chevron';
       chevron.textContent = '›';
       el.append(icon, text, chevron);
 
       el.addEventListener('click', () => {
-        if (this.open?.box === box) this.closeList();
-        else this.showList(box, 0);
+        this.openCategory(box, 0);
         this.refresh();
       });
-      this.refreshers.push(() => {
-        el.classList.toggle('is-open', this.open?.box === box);
-        this.paintBoxValue(box, icon, value);
-      });
+      this.refreshers.push(() => this.paintBoxValue(box, icon, value));
       this.boxElements.set(box.kind, el);
       wrap.appendChild(el);
     }
@@ -654,15 +705,15 @@ export class LoadoutEditor {
       }
     }
 
-    // The icon: the weapon's own outline for the two weapon boxes; the category's initial
-    // for the rest, there being no image assets (M12's first paragraph).
+    // The icon: the weapon's own outline for the two weapon bars; the category's glyph for
+    // the rest (`CategoryIcons`), there being no image assets (M12's first paragraph).
     const iconKey = weaponId ?? box.kind;
     if (icon.dataset['key'] !== iconKey) {
       icon.dataset['key'] = iconKey;
       icon.replaceChildren(
         weaponId !== null
-          ? makeIconSvg(iconFor(weaponId), ICON_VIEWBOX, 'lo-box__silhouette')
-          : glyph(box.label.charAt(0)),
+          ? makeIconSvg(iconFor(weaponId), ICON_VIEWBOX, 'lo-bar__silhouette')
+          : makeIconSvg(categoryIcon(CATEGORY_GLYPH[box.kind]), CATEGORY_VIEWBOX, 'lo-bar__glyph'),
       );
     }
 
@@ -674,7 +725,7 @@ export class LoadoutEditor {
     value.replaceChildren(
       ...chips.map((chip, i) => {
         const span = document.createElement('span');
-        span.className = i === 0 ? 'lo-chip lo-chip--lead' : 'lo-chip';
+        span.className = i === 0 ? 'lo-chip lo-chip--lead lo-metal' : 'lo-chip';
         span.textContent = chip.text;
         span.tabIndex = 0;
         this.attachTip(span, () => chip.tip);
@@ -683,30 +734,29 @@ export class LoadoutEditor {
     );
   }
 
-  private paintZoneHint(zone: HTMLElement): void {
-    const hint = document.createElement('p');
-    hint.className = 'lo-zone__hint op-label';
-    hint.textContent = 'Select a category to change what is equipped';
-    zone.replaceChildren(hint);
-    zone.classList.remove('is-open');
-  }
+  // -- the list ---------------------------------------------------------------
 
-  // -- the zone ---------------------------------------------------------------
-
-  /** Open a box's list at a tab. Replaces whatever the zone held. */
-  private showList(box: BoxDef, tab: number): void {
-    const zone = this.zone;
-    if (zone === null) return;
-    this.closeList();
+  /**
+   * Open a category at a tab: the list becomes that category's options, the head its label,
+   * tabs and pager, the band its numbers where they apply. Switching tabs within the open
+   * category keeps its snapshot; opening another takes a fresh one.
+   */
+  private openCategory(box: BoxDef, tab: number): void {
+    const head = this.listHead;
+    const opts = this.opts;
+    const cats = this.cats;
+    if (head === null || opts === null || cats === null) return;
+    const snapshot = this.open?.box === box ? this.open.snapshot : cloneSlot(this.slot);
+    this.closeList(false);
     const tabDef = box.tabs[tab] ?? box.tabs[0];
     if (tabDef === undefined) return;
 
-    const content = document.createElement('div');
-    content.className = 'lo-zone__content';
-
-    // Tabs across the top, one per list this box holds; a single-list box shows its label.
+    // The head: the category, its tabs, and the pager at the right end.
+    const label = document.createElement('span');
+    label.className = 'lo-list-head__label op-label';
+    label.textContent = box.label;
     const tabs = document.createElement('div');
-    tabs.className = 'op-tabs lo-zone__tabs';
+    tabs.className = 'op-tabs lo-list-head__tabs';
     box.tabs.forEach((t, index) => {
       const b = document.createElement('button');
       b.type = 'button';
@@ -714,39 +764,40 @@ export class LoadoutEditor {
       b.classList.toggle('op-tab--on', index === tab);
       b.textContent = t.label;
       b.addEventListener('click', () => {
-        this.showList(box, index);
+        this.openCategory(box, index);
         this.refresh();
       });
       tabs.appendChild(b);
     });
 
     const withBand = showsBand(tabDef.list);
-    const rows = withBand ? 2 : 3;
-    const pageSize = PAGE_COLUMNS * rows;
-    const tiles = document.createElement('div');
-    tiles.className = 'lo-tiles';
-    tiles.style.setProperty('--lo-tile-rows', String(rows));
+    const pageSize = withBand ? PAGE_WITH_BAND : PAGE_FULL;
     const options = this.optionsFor(tabDef.list);
-    for (const option of options) tiles.appendChild(option);
+    opts.replaceChildren(...options);
     this.page = 0;
     this.pageCount = Math.max(1, Math.ceil(options.length / pageSize));
+    head.replaceChildren(label, tabs, this.paintPager(options, pageSize));
 
-    // The pager shares the tabs' row, at its right end: a row of its own was 28 px the zone
-    // did not have under two rows of tiles and the band.
-    tabs.appendChild(this.paintPager(options, pageSize));
+    head.hidden = false;
+    cats.hidden = true;
+    opts.hidden = false;
+    if (this.band !== null) this.band.hidden = !withBand;
+    this.open = { box, tab, snapshot };
+  }
 
-    content.append(tabs, tiles);
-    if (withBand) {
-      const band = document.createElement('div');
-      band.className = 'lo-zone__band';
-      // The finish is shown on the preview; the numbers under everything else.
-      band.appendChild(tabDef.list.kind === 'camo' ? this.preview.element : this.stats.element);
-      content.appendChild(band);
-    }
+  /** SAVE: the picks stand; back to the categories. */
+  private saveCategory(): void {
+    this.closeList();
+    this.refresh();
+  }
 
-    zone.replaceChildren(content);
-    zone.classList.add('is-open');
-    this.open = { box, tab, element: content };
+  /** CANCEL: the class as it was when the category opened; back to the categories. */
+  private cancelCategory(): void {
+    const open = this.open;
+    if (open === null) return;
+    this.edit((slot) => assignSlot(slot, open.snapshot));
+    this.closeList();
+    this.refresh();
   }
 
   /** The page arrows and the count. Hidden when everything fits on one page. */
@@ -784,17 +835,18 @@ export class LoadoutEditor {
    * turns into a leak. `refreshers` is truncated back to the length it had before the list
    * opened, which is possible because a list's refreshers are always appended last.
    */
-  private closeList(): void {
+  private closeList(showCategories = true): void {
     const open = this.open;
     if (open === null) return;
-    open.element.remove();
-    // The band's two panels are long-lived elements; take them out of the removed subtree.
-    this.stats.element.remove();
-    this.preview.element.remove();
+    this.opts?.replaceChildren();
     this.open = null;
     this.refreshers.length = this.staticRefresherCount;
     this.hoveredWeaponId = null;
-    if (this.zone !== null) this.paintZoneHint(this.zone);
+    if (!showCategories) return;
+    if (this.listHead !== null) this.listHead.hidden = true;
+    if (this.opts !== null) this.opts.hidden = true;
+    if (this.cats !== null) this.cats.hidden = false;
+    if (this.band !== null) this.band.hidden = true;
   }
 
   private optionsFor(list: ListKind): HTMLElement[] {
@@ -823,6 +875,7 @@ export class LoadoutEditor {
                 s[which].weaponId = def.id;
                 s[which].attachments = [];
               }),
+            makeIconSvg(iconFor(def.id), ICON_VIEWBOX, 'lo-bar__silhouette'),
           );
           // F15: the operator holds the weapon under the cursor, so "the weapon you are
           // choosing" is visible before the choice is made rather than after it.
@@ -851,6 +904,7 @@ export class LoadoutEditor {
                   if (at >= 0) held.splice(at, 1);
                   else held.push(id);
                 }),
+              glyphIcon('attachment'),
             ),
           );
         }
@@ -871,6 +925,7 @@ export class LoadoutEditor {
               this.edit((s) => {
                 s[which].camo = null;
               }),
+            glyphIcon('camo'),
           ),
         );
         for (const id of CAMO_IDS) {
@@ -886,6 +941,7 @@ export class LoadoutEditor {
                 this.edit((s) => {
                   s[which].camo = id;
                 }),
+              glyphIcon('camo'),
             ),
           );
         }
@@ -913,6 +969,7 @@ export class LoadoutEditor {
                 this.edit((s) => {
                   s[wantSlot] = eq.id;
                 }),
+              glyphIcon(eq.id === 'smoke' ? 'smoke' : wantSlot === 'lethal' ? 'lethal' : 'tactical'),
             ),
           );
         }
@@ -932,6 +989,7 @@ export class LoadoutEditor {
               this.edit((s) => {
                 s.perks[tier - 1] = null;
               }),
+            glyphIcon('perk'),
           ),
         );
         for (const perk of perksOfTier(tier)) {
@@ -947,6 +1005,7 @@ export class LoadoutEditor {
                 this.edit((s) => {
                   s.perks[tier - 1] = perk.id;
                 }),
+              glyphIcon('perk'),
             ),
           );
         }
@@ -966,6 +1025,7 @@ export class LoadoutEditor {
               this.edit((s) => {
                 s.streaks[list.index] = null;
               }),
+            glyphIcon('streak'),
           ),
         );
         for (const def of STREAK_DEFS) {
@@ -984,6 +1044,7 @@ export class LoadoutEditor {
                 this.edit((s) => {
                   s.streaks[list.index] = def.id;
                 }),
+              glyphIcon('streak'),
             ),
           );
         }
@@ -1004,6 +1065,7 @@ export class LoadoutEditor {
                 this.edit((s) => {
                   s.fieldUpgrade = id;
                 }),
+              glyphIcon('field'),
             ),
           );
         }
@@ -1044,17 +1106,26 @@ export class LoadoutEditor {
     locked: () => boolean,
     requirement: () => string,
     apply: () => void,
+    icon: SVGSVGElement,
   ): HTMLElement {
     const el = document.createElement('button');
     el.type = 'button';
-    el.className = 'lo-tile';
+    el.className = 'lo-bar lo-bar--opt';
 
+    const picture = document.createElement('span');
+    picture.className = 'lo-bar__icon';
+    picture.appendChild(icon);
+    const text = document.createElement('span');
+    text.className = 'lo-bar__text';
     const label = document.createElement('span');
-    label.className = 'lo-tile__name';
+    label.className = 'lo-bar__name lo-metal';
     label.textContent = name;
     const detail = document.createElement('span');
-    detail.className = 'lo-tile__blurb';
-    el.append(label, detail);
+    detail.className = 'lo-bar__blurb';
+    text.append(label, detail);
+    const state = document.createElement('span');
+    state.className = 'lo-bar__state op-label';
+    el.append(picture, text, state);
     el.addEventListener('click', () => {
       if (locked()) return;
       apply();
@@ -1063,10 +1134,12 @@ export class LoadoutEditor {
     this.refreshers.push(() => {
       const isLocked = locked();
       const need = requirement();
-      el.classList.toggle('is-on', on());
+      const isOn = on();
+      el.classList.toggle('is-on', isOn);
       el.classList.toggle('is-locked', isLocked);
       el.disabled = isLocked;
-      detail.textContent = isLocked && need.length > 0 ? `${need} — ${blurb()}` : blurb();
+      detail.textContent = blurb();
+      state.textContent = isLocked ? need : isOn ? 'EQUIPPED' : '';
     });
     return el;
   }
@@ -1192,11 +1265,82 @@ export class LoadoutEditor {
     const list = this.open === null ? null : (this.open.box.tabs[this.open.tab]?.list ?? null);
     const which = list === null ? 'primary' : weaponSlotOf(list);
     const equipped = this.slot[which];
-    this.stage.setWeapon(this.hoveredWeaponId ?? equipped.weaponId);
-    if (list !== null && list.kind === 'camo') {
-      this.preview.show(equipped.weaponId, equipped.camo, requireWeapon(equipped.weaponId).name);
+    const onStage = this.weaponOnStage();
+
+    for (const part of this.stageParts) part.hidden = onStage;
+    if (this.stageBar !== null) this.stageBar.hidden = onStage || this.open !== null;
+    this.preview.element.hidden = !onStage;
+    if (this.stageActions !== null) this.stageActions.hidden = this.open === null;
+
+    if (onStage) {
+      // The weapon under the pointer, or the equipped one — in its finish only when it is the
+      // equipped one, because a hovered weapon has not been given this class's camo.
+      const shown = this.hoveredWeaponId ?? equipped.weaponId;
+      const camo = shown === equipped.weaponId ? equipped.camo : null;
+      this.preview.show(shown, camo, requireWeapon(shown).name);
+    } else {
+      this.preview.release();
+      this.stage.setWeapon(equipped.weaponId);
     }
   }
+
+  /** Whether the open list is one of the two weapons', which is when the weapon takes the stage. */
+  private weaponOnStage(): boolean {
+    const list = this.open === null ? null : (this.open.box.tabs[this.open.tab]?.list ?? null);
+    return list !== null && showsBand(list);
+  }
+}
+
+/** Design-frame pixels of the weapon preview on the stage: the stage's width, at the band's aspect. */
+const STAGE_PREVIEW_WIDTH = 860;
+const STAGE_PREVIEW_HEIGHT = 480;
+
+/** Option bars a page holds: with the stat band under the list, and without. */
+const PAGE_WITH_BAND = 7;
+const PAGE_FULL = 8;
+
+/** The glyph a category bar shows when it has no weapon to show. */
+const CATEGORY_GLYPH: Readonly<Record<BoxKind, CategoryIconId>> = {
+  primary: 'attachment',
+  secondary: 'attachment',
+  equipment: 'equipment',
+  perks: 'perk',
+  streaks: 'streak',
+  field: 'field',
+};
+
+function glyphIcon(id: CategoryIconId): SVGSVGElement {
+  return makeIconSvg(categoryIcon(id), CATEGORY_VIEWBOX, 'lo-bar__glyph');
+}
+
+/** A copy of a class deep enough to restore from: every array its own. */
+function cloneSlot(slot: LoadoutSlot): LoadoutSlot {
+  return {
+    name: slot.name,
+    primary: { weaponId: slot.primary.weaponId, attachments: [...slot.primary.attachments], camo: slot.primary.camo },
+    secondary: { weaponId: slot.secondary.weaponId, attachments: [...slot.secondary.attachments], camo: slot.secondary.camo },
+    lethal: slot.lethal,
+    tactical: slot.tactical,
+    perks: [...slot.perks],
+    fieldUpgrade: slot.fieldUpgrade,
+    streaks: [...slot.streaks],
+  };
+}
+
+/** Put `from` into `target` in place: the profile owns `target`, so it is written, not replaced. */
+function assignSlot(target: LoadoutSlot, from: LoadoutSlot): void {
+  target.name = from.name;
+  target.primary.weaponId = from.primary.weaponId;
+  target.primary.attachments = [...from.primary.attachments];
+  target.primary.camo = from.primary.camo;
+  target.secondary.weaponId = from.secondary.weaponId;
+  target.secondary.attachments = [...from.secondary.attachments];
+  target.secondary.camo = from.secondary.camo;
+  target.lethal = from.lethal;
+  target.tactical = from.tactical;
+  target.perks = [...from.perks];
+  target.fieldUpgrade = from.fieldUpgrade;
+  target.streaks = [...from.streaks];
 }
 
 function button(text: string, onClick: () => void): HTMLButtonElement {
@@ -1216,13 +1360,6 @@ function arrowButton(text: string, label: string, onClick: () => void): HTMLButt
   b.setAttribute('aria-label', label);
   b.addEventListener('click', onClick);
   return b;
-}
-
-function glyph(letter: string): HTMLElement {
-  const el = document.createElement('span');
-  el.className = 'lo-box__glyph';
-  el.textContent = letter;
-  return el;
 }
 
 function emptyNote(text: string): HTMLElement {

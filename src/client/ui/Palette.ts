@@ -70,7 +70,7 @@ const BASE: GameplayPalette = {
   friendly: 0x57a9ff,
   hostile: 0xe8604c,
   local: 0xe8eaee,
-  neutral: 0xffb340,
+  neutral: 0xc89953,
   hitmarker: 0xe8eaee,
   hitmarkerKill: 0xe8604c,
   damage: 0xe8604c,

@@ -208,6 +208,16 @@
   cursor: grabbing;
 }
 
+/*
+ * The operator's three parts step aside for the weapon (round 2). Each sets its own `display`,
+ * so each needs the `[hidden]` companion the UA rule cannot supply (round 4, B13).
+ */
+.lo-stage__canvas[hidden],
+.lo-stage__bar[hidden],
+.lo-skins[hidden] {
+  display: none;
+}
+
 .lo-stage__bar {
   display: flex;
   align-items: center;
@@ -368,105 +378,244 @@
   cursor: default;
 }
 
-/* ---- the right column: six boxes over one zone ---------------------------- */
+/* ---- the right column: one list (round 2, 2026-09-15) --------------------- */
 
+/*
+ * The column is a head (hidden with the categories showing), the list, and the stat band
+ * (shown under the weapon lists). The list holds the six category bars or an open
+ * category's option bars, one at a time; a page of options is what fits the column, so the
+ * page size is a constant in `LoadoutEditor` and the bar's height is a constant here, and the
+ * two agree by arithmetic: 8 × 88 + 7 × 12 = 788 in the 860 the list has without the band,
+ * 7 × 88 + 6 × 12 = 688 in the 708 it has with one. The rest is the room a grown bar needs.
+ */
 .lo-right {
   grid-area: right;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
   min-width: 0;
   min-height: 0;
 }
 
-.lo-boxes {
+.lo-list-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  height: 44px;
+  padding: 0 var(--s-2);
+}
+
+.lo-list-head[hidden] {
+  display: none;
+}
+
+.lo-list-head__label {
+  color: var(--c-accent);
+  flex: none;
+}
+
+.lo-list-head__tabs {
+  flex: 1 1 auto;
+  border-bottom: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.lo-list-head__tabs .op-tab {
+  padding: var(--s-2) var(--s-3);
+}
+
+.lo-list {
+  min-height: 0;
+  /* Room for a hovered bar to grow 3.5 % without its edge touching the column's. */
+  padding: 4px 8px;
+}
+
+.lo-cats,
+.lo-opts {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+}
+
+.lo-cats[hidden],
+.lo-opts[hidden] {
+  display: none;
 }
 
 /*
- * A box: the icon, the category over the equipped item, a chevron. 70 px tall so six of them
- * and the zone stand in the column — 6 × 70 + 5 × 10 + 16 + 430 = 916 of the column's 928 —
- * and the chips wrap to one line and clip past it.
+ * A bar: the picture, the text, the state. Three states —
+ *
+ *   rest    grey-white type (`.lo-metal`, a vertical gradient through the letters), the picture
+ *           at three quarters;
+ *   hover   the whole bar 3.5 % larger, the type whitened, the picture full — the gap between
+ *           bars is what keeps the grown one off its neighbours;
+ *   on      the accent: a rule on the left, the glow behind, the type white. A press changes
+ *           the colour and nothing else.
  */
-.lo-box {
+.lo-bar {
   appearance: none;
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 24px;
+  grid-template-columns: 148px minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--s-3);
-  height: 70px;
-  padding: 0 var(--s-4) 0 var(--s-3);
+  gap: var(--s-4);
+  height: 88px;
+  padding: 0 var(--s-5) 0 var(--s-3);
   border: 1px solid var(--c-line);
   border-left: 3px solid var(--c-line-hi);
   border-radius: var(--radius);
-  background: rgba(20, 23, 28, 0.82);
+  background: linear-gradient(180deg, rgba(28, 32, 39, 0.92), rgba(16, 19, 24, 0.92));
   color: var(--c-text);
   text-align: left;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  transform-origin: center;
+  transition:
+    transform var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
 }
 
-.lo-box:hover,
-.lo-box:focus-visible {
-  background: var(--c-surface-hi);
+.lo-bar--cat {
+  height: 112px;
+}
+
+.lo-bar[hidden] {
+  display: none;
+}
+
+.lo-bar:hover:not(:disabled),
+.lo-bar:focus-visible {
+  transform: scale(1.035);
+  border-color: var(--c-line-hi);
+  border-left-color: var(--c-text-dim);
+  background: linear-gradient(180deg, rgba(40, 45, 54, 0.96), rgba(22, 26, 32, 0.96));
   outline: none;
+  position: relative;
+  z-index: 1;
 }
 
-.lo-box.is-open {
+.lo-bar:active:not(:disabled) {
+  background: linear-gradient(180deg, rgba(30, 60, 70, 0.96), rgba(18, 34, 40, 0.96));
+}
+
+.lo-bar.is-on {
   border-left-color: var(--c-accent);
-  background: var(--c-surface-hi);
+  border-color: var(--c-accent-dim);
+  background: linear-gradient(90deg, var(--c-accent-glow), rgba(16, 19, 24, 0.92) 60%);
 }
 
-.lo-box__icon {
+.lo-bar.is-locked {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* Metallic type: a light-to-steel gradient through the letters, solid white under the pointer. */
+.lo-metal {
+  background: linear-gradient(180deg, #f4f6f8 0%, #c9cfd8 48%, #8f97a3 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.lo-bar:hover:not(:disabled) .lo-metal,
+.lo-bar:focus-visible .lo-metal,
+.lo-bar.is-on .lo-metal {
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  color: #f4f6f8;
+}
+
+.lo-bar__icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 64px;
-  height: 48px;
+  width: 148px;
+  height: 72px;
   color: var(--c-text-dim);
+  opacity: 0.78;
+  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 
-.lo-box__silhouette {
-  width: 64px;
-  height: 22px;
+.lo-bar:hover:not(:disabled) .lo-bar__icon,
+.lo-bar:focus-visible .lo-bar__icon,
+.lo-bar.is-on .lo-bar__icon {
+  opacity: 1;
+  color: var(--c-text);
+}
+
+.lo-bar__silhouette {
+  width: 140px;
+  height: 48px;
   fill: currentColor;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6));
 }
 
-.lo-box__glyph {
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--c-line-hi);
-  border-radius: 50%;
-  font-size: var(--t-lead);
-  font-weight: var(--w-heavy);
-  color: var(--c-text-faint);
+.lo-bar__glyph {
+  width: 60px;
+  height: 60px;
+  fill: currentColor;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6));
 }
 
-.lo-box__text {
+.lo-bar__text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 
-.lo-box__cat {
-  color: var(--c-accent-dim);
+.lo-bar__cat {
+  color: var(--c-text-faint);
 }
 
-.lo-box__value {
+.lo-bar.is-on .lo-bar__cat,
+.lo-bar:hover:not(:disabled) .lo-bar__cat {
+  color: var(--c-accent);
+}
+
+.lo-bar__name {
+  font-family: var(--font-ui);
+  font-size: var(--t-lead);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  /* 1.45, not 1.2: the heavy capitals overrun a tight line box by two pixels under
+   * `overflow: hidden` (B1–B4 found the same on the tiles). */
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lo-bar__blurb {
+  font-size: var(--t-small);
+  color: var(--c-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lo-bar__state {
+  color: var(--c-text-faint);
+  white-space: nowrap;
+  justify-self: end;
+}
+
+.lo-bar.is-on .lo-bar__state {
+  color: var(--c-accent);
+}
+
+.lo-bar__value {
   display: flex;
+  align-items: baseline;
   gap: var(--s-2);
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
 }
 
-/* A chip: one equipped thing. The lead chip is the box's own answer; the rest are details. */
+/* A chip: one equipped thing. The lead chip is the bar's own answer; the rest are details. */
 .lo-chip {
   font-size: var(--t-small);
   font-weight: var(--w-medium);
@@ -480,9 +629,8 @@
 }
 
 .lo-chip--lead {
-  font-size: var(--t-body);
+  font-size: var(--t-lead);
   font-weight: var(--w-heavy);
-  color: var(--c-text);
   border-color: transparent;
   padding-left: 0;
 }
@@ -494,157 +642,28 @@
   outline: none;
 }
 
-.lo-box__chevron {
-  font-size: 28px;
+.lo-bar__chevron {
+  font-size: 32px;
   line-height: 1;
   color: var(--c-text-faint);
   justify-self: end;
 }
 
-/*
- * The zone: 430 px, in one place, under the boxes. `is-open` gives it its border; closed it
- * holds the hint and nothing else. Its content at the design size is about 385 px against
- * 404 inside the padding — 5 % of slack, because text zoomed to a fraction rasterises to
- * whole pixels and a screen that fit by one pixel at 1920 was four over at 800×600.
- */
-.lo-zone {
-  height: 430px;
-  display: flex;
-  flex-direction: column;
-  padding: var(--s-3) var(--s-4);
-  border: 1px solid var(--c-line);
-  border-radius: var(--radius);
-  background: rgba(12, 14, 17, 0.88);
-  overflow: hidden;
-}
-
-.lo-zone.is-open {
-  border-left: 3px solid var(--c-accent);
-}
-
-.lo-zone__hint {
-  margin: auto;
-  color: var(--c-text-faint);
-}
-
-.lo-zone__content {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-  height: 100%;
-  min-height: 0;
-}
-
-.lo-zone__tabs {
-  margin-bottom: 0;
-  flex: none;
-  align-items: center;
-}
-
-/* Shorter than the settings' tabs: the zone's height is the constraint here. */
-.lo-zone__tabs .op-tab {
-  padding: var(--s-1) var(--s-3);
-}
-
-/*
- * The tiles: four across, two or three down (`--lo-tile-rows`, set by the editor from
- * whether the band is under them). A page is what fits; the pager turns it.
- */
-.lo-tiles {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-auto-rows: 78px;
-  gap: var(--s-2);
-  flex: none;
-}
-
-.lo-tile {
-  appearance: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  /* 8 + 23 (name) + 4 + 36 (two blurb lines) + 8 = 79 against a 78 px row; the name never
-   * shrinks, the blurb's second line is what gives a pixel. */
-  padding: 8px var(--s-3);
-  border: 1px solid var(--c-line);
-  border-left: 2px solid var(--c-line-hi);
-  border-radius: var(--radius);
-  background: var(--c-surface);
-  color: var(--c-text-dim);
-  text-align: left;
-  cursor: pointer;
-  overflow: hidden;
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
-}
-
-.lo-tile[hidden] {
-  display: none;
-}
-
-.lo-tile:hover:not(:disabled),
-.lo-tile:focus-visible {
-  background: var(--c-surface-hi);
-  outline: none;
-}
-
-.lo-tile.is-on {
-  border-left-color: var(--c-accent);
-  background: var(--c-surface-hi);
-}
-
-.lo-tile__name {
-  font-size: var(--t-small);
-  font-weight: var(--w-heavy);
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
+.lo-bar:hover:not(:disabled) .lo-bar__chevron {
   color: var(--c-text);
-  /* Tall enough for the heavy capitals' glyph box: at `normal` the glyphs overran the line by
-   * two pixels, and an `overflow: hidden` element that clips its own text is what the layout
-   * probe exists to refuse. */
-  line-height: 1.45;
-  flex: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.lo-tile.is-on .lo-tile__name {
-  color: var(--c-accent);
-}
-
-/* Two lines of blurb, clipped at the second: the tile is a fixed height and the text is not. */
-.lo-tile__blurb {
-  font-size: var(--t-micro);
-  line-height: 1.3;
-  color: var(--c-text-faint);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-}
-
-.lo-tile.is-locked {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.lo-tile.is-locked .lo-tile__name {
-  text-decoration: line-through;
 }
 
 .lo-empty {
-  grid-column: 1 / -1;
-  align-self: center;
+  padding: var(--s-4);
   color: var(--c-text-faint);
 }
 
 .lo-pager {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: var(--s-2);
   margin-left: auto;
-  padding-bottom: 2px;
+  flex: none;
 }
 
 .lo-pager[hidden] {
@@ -652,9 +671,9 @@
 }
 
 .lo-pager .lo-arrow {
-  width: 34px;
-  height: 28px;
-  font-size: 20px;
+  width: 36px;
+  height: 36px;
+  font-size: var(--t-lead);
 }
 
 .lo-pager__count {
@@ -662,19 +681,21 @@
   text-align: center;
 }
 
-/* ---- the band: the numbers, or the finish ---------------------------------- */
+/* ---- the band: the numbers ------------------------------------------------- */
 
 /*
- * What is left of the zone under two rows of tiles: about 150 px. The stat panel stands in
- * it as a five-column grid of twenty rows (was a column of twenty), the preview as a picture
- * with its name beside it.
+ * Under the weapon lists: the stat panel as a five-column grid of twenty rows, 152 px, the
+ * same `resolveLoadout` the match makes. Hidden under every other list.
  */
-.lo-zone__band {
-  flex: 1 1 auto;
-  min-height: 0;
+.lo-band {
+  height: 152px;
   display: flex;
   border-top: 1px solid var(--c-line);
   padding-top: var(--s-2);
+}
+
+.lo-band[hidden] {
+  display: none;
 }
 
 .lo-stats {
@@ -758,26 +779,51 @@
 }
 
 /* The camo preview in the band: the picture at the band's height, the name beside it. */
-.lo-zone__band .lo-preview {
+/*
+ * The weapon on the stage (round 2): the preview at 860×480, centred in the operator's box,
+ * its caption beneath. Hidden while the operator stands there.
+ */
+.lo-preview--stage {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   align-items: center;
-  gap: var(--s-4);
+  justify-content: center;
+  gap: var(--s-3);
+  width: 860px;
+  height: 800px;
   padding: 0;
   border: 0;
-  background: none;
+  background: radial-gradient(ellipse at 50% 62%, rgba(28, 32, 39, 0.9), rgba(7, 8, 10, 0.2) 70%);
+  border-radius: var(--radius);
+}
+
+.lo-preview--stage[hidden] {
+  display: none;
 }
 
 .lo-preview__canvas {
   display: block;
-  height: 132px;
-  width: auto;
+  width: 860px;
+  height: 480px;
   border-radius: var(--radius);
-  background: radial-gradient(ellipse at 50% 40%, var(--c-surface-hi), var(--c-void));
 }
 
 .lo-preview__name {
   color: var(--c-accent);
+  font-size: var(--t-lead);
+}
+
+/* SAVE / CANCEL under the stage, at its foot, while a category is open. */
+.lo-stage__actions {
+  justify-content: flex-end;
+  gap: var(--s-3);
+  min-height: 56px;
+  padding: 0 var(--s-4);
+  margin-top: auto;
+}
+
+.lo-stage__actions[hidden] {
+  display: none;
 }
 
 /* ---- the tooltip (B4) ------------------------------------------------------ */

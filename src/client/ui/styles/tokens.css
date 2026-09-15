@@ -20,16 +20,17 @@
   --c-text-dim: #9aa1ad;
   --c-text-faint: #626a77;
 
-  /* The one accent. Nothing else gets to be colourful. */
-  --c-accent: #ffb340;
-  --c-accent-dim: #a8722a;
-  --c-accent-glow: rgba(255, 179, 64, 0.16);
+  /* The one accent. Nothing else gets to be colourful. Cyan since 2026-09-15 — the human's
+     palette (#3FA9C7 against #1A1D23 / #2E333C / #9AA0A3) replaced the amber it was. */
+  --c-accent: #3fa9c7;
+  --c-accent-dim: #2c7d94;
+  --c-accent-glow: rgba(63, 169, 199, 0.16);
 
   /* Semantic-only, used by instrumentation where meaning beats restraint. `--c-good` is
      the team colour (ui/Palette rewrites it at boot); `--c-positive` is good news. */
   --c-good: #57a9ff;
   --c-positive: #6fd08c;
-  --c-warn: #ffb340;
+  --c-warn: #c89953;
   --c-bad: #e8604c;
 
   /* ---- Spacing: strict 4px grid ---- */

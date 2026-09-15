@@ -47,9 +47,18 @@ import { buildWeaponModel, type WeaponModel } from '../weapons/WeaponMesh';
 export interface WeaponPreviewDeps {
   /** The same anisotropy `ClientMatch` builds its viewmodels with. */
   readonly anisotropy: () => number;
+  /**
+   * Design-frame pixels of the canvas (Create-a-Class round 2, 2026-09-15). The default is
+   * the band's 360×200; the editor's stage puts the weapon where the operator stands at
+   * 860×480 — the same 1.8 aspect, so the lens and `FIT_DIAGONAL` hold, and the backing
+   * store follows the on-screen rect the way `CharacterStage`'s does.
+   */
+  readonly width?: number;
+  readonly height?: number;
+  readonly className?: string;
 }
 
-/** Pixels. Fixed rather than responsive: the panel is a fixed column in `.lo-columns`. */
+/** Pixels. The band's panel; a stage-sized preview passes its own. */
 const WIDTH = 360;
 const HEIGHT = 200;
 
@@ -73,7 +82,7 @@ export class WeaponPreview {
   private readonly canvas: HTMLCanvasElement;
   private readonly caption: HTMLElement;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(30, WIDTH / HEIGHT, 0.05, 12);
+  private readonly camera: THREE.PerspectiveCamera;
   /** The model hangs off this, so the spin is one rotation rather than per-part maths. */
   private readonly turntable = new THREE.Group();
 
@@ -83,20 +92,27 @@ export class WeaponPreview {
   /** What `model` is, so an unchanged selection does not rebuild it every refresh. */
   private modelKey = '';
   private spinRadians = 0;
+  private readonly width: number;
+  private readonly height: number;
+  private lastSeenWidth = 0;
+  private lastSeenHeight = 0;
 
   constructor(deps: WeaponPreviewDeps) {
     this.deps = deps;
+    this.width = deps.width ?? WIDTH;
+    this.height = deps.height ?? HEIGHT;
+    this.camera = new THREE.PerspectiveCamera(30, this.width / this.height, 0.05, 12);
 
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'lo-preview__canvas';
-    this.canvas.width = WIDTH;
-    this.canvas.height = HEIGHT;
+    this.canvas.width = this.width;
+    this.canvas.height = this.height;
 
     this.caption = document.createElement('div');
     this.caption.className = 'lo-preview__name op-label';
 
     this.element = document.createElement('div');
-    this.element.className = 'lo-preview';
+    this.element.className = deps.className === undefined ? 'lo-preview' : `lo-preview ${deps.className}`;
     this.element.append(this.canvas, this.caption);
 
     const key = new THREE.DirectionalLight(0xffffff, 2.6);
@@ -157,7 +173,9 @@ export class WeaponPreview {
     if (this.model === null) return;
     this.spinRadians += SPIN_DEG_PER_SEC * (Math.PI / 180) * dt;
     this.turntable.rotation.y = this.spinRadians;
-    this.ensureRenderer().render(this.scene, this.camera);
+    const renderer = this.ensureRenderer();
+    this.fitBackingStore(renderer);
+    renderer.render(this.scene, this.camera);
   }
 
   /**
@@ -188,10 +206,25 @@ export class WeaponPreview {
     made.outputColorSpace = THREE.SRGBColorSpace;
     made.toneMapping = THREE.ACESFilmicToneMapping;
     made.toneMappingExposure = 1.25;
-    made.setPixelRatio(Math.min(2, window.devicePixelRatio));
-    made.setSize(WIDTH, HEIGHT, false);
     this.renderer = made;
     return made;
+  }
+
+  /**
+   * Size the backing store to what is on screen: the canvas's CSS box is in frame pixels and
+   * the frame is zoomed, so the rect is the truth and the attribute is not (as `CharacterStage`).
+   */
+  private fitBackingStore(renderer: THREE.WebGLRenderer): void {
+    const rect = this.canvas.getBoundingClientRect();
+    const ratio = Math.min(2, window.devicePixelRatio || 1);
+    const width = Math.max(1, Math.round((rect.width || this.width) * ratio));
+    const height = Math.max(1, Math.round((rect.height || this.height) * ratio));
+    if (width === this.lastSeenWidth && height === this.lastSeenHeight) return;
+    this.lastSeenWidth = width;
+    this.lastSeenHeight = height;
+    renderer.setSize(width, height, false);
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
   }
 
   private disposeModel(): void {

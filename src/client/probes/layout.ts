@@ -647,9 +647,11 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
     hide: () => loadout.hide(),
   },
   /**
-   * Every box open, and the weapon box on each of its tabs (M15, B3): a probe that measures
-   * only the closed editor measures the easy state. The zone is docked in one place, so these
-   * are nine measurements of one layout with different contents — which is the claim.
+   * Every category open, and the weapon category on each of its tabs (M15, B3; the one-list
+   * editor of round 2): a probe that measures only the closed editor measures the easy state.
+   * The list is one place and a page of it is a constant, so these are nine measurements of
+   * one layout with different contents — which is the claim. The weapon lists also put the
+   * preview on the stage and the stat band under the list, the fullest the column gets.
    */
   ...(
     [

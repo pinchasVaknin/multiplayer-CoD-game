@@ -417,7 +417,7 @@ const UP = new THREE.Vector3(0, 1, 0);
 
 const PLINTH_MATERIAL = (): THREE.MeshStandardMaterial =>
   new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.65, metalness: 0.2 });
-const ACCENT_MATERIAL = (): THREE.MeshBasicMaterial => new THREE.MeshBasicMaterial({ color: 0xffb340, toneMapped: false });
+const ACCENT_MATERIAL = (): THREE.MeshBasicMaterial => new THREE.MeshBasicMaterial({ color: 0x3fa9c7, toneMapped: false });
 
 /**
  * The lit disc: a low cylinder in a dark surface with an emissive ring at its edge — the

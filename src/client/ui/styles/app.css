@@ -507,7 +507,7 @@ body.op-locked #viewport {
 }
 
 .op-nav--primary::after {
-  background: linear-gradient(100deg, rgba(255, 179, 64, 0) 0%, rgba(255, 179, 64, 0.35) 50%, rgba(255, 179, 64, 0) 100%);
+  background: linear-gradient(100deg, rgba(63, 169, 199, 0) 0%, rgba(63, 169, 199, 0.35) 50%, rgba(63, 169, 199, 0) 100%);
 }
 
 .op-nav--primary:hover,
@@ -762,7 +762,7 @@ body.op-locked #viewport {
 /* The player's own row gets the one accent edge. Nothing else is highlighted. */
 .sb__row--local {
   border-left: 2px solid var(--c-accent);
-  background: rgba(255, 179, 64, 0.08);
+  background: rgba(63, 169, 199, 0.08);
 }
 
 .sb__name {
