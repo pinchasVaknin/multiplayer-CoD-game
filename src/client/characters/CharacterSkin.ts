@@ -111,6 +111,20 @@ export class CharacterSkin {
     this.weapon = null;
     this.weaponId = null;
     this.hasSupportGrip = false;
+    /**
+     * The skeletons are this clone's, and each holds a bone texture on the GPU (M15, B1 —
+     * found by the stage's show/hide cycle: two textures per body, never freed).
+     *
+     * `SkeletonUtils.clone` gives every skinned mesh a new `Skeleton` over the cloned bones —
+     * that is the whole reason it is used instead of `Object3D.clone` — and a `Skeleton`
+     * uploads its bone matrices as a `DataTexture` the first time it is drawn. Geometry and
+     * materials are the template's and stay; the skeletons are ours and go. Every body a match
+     * retired left its two behind until this line.
+     */
+    this.root.traverse((node) => {
+      const skinned = node as THREE.Object3D & { isSkinnedMesh?: boolean; skeleton?: THREE.Skeleton };
+      if (skinned.isSkinnedMesh === true && skinned.skeleton !== undefined) skinned.skeleton.dispose();
+    });
     this.root.clear();
   }
 
