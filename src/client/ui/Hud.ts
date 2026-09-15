@@ -454,6 +454,21 @@ export class Hud {
   }
 
   /**
+   * The match intro is drawing (M15, Phase C): the crosshair, the ammo, the health, the
+   * tactical strip, the compass and the minimap are the player's instruments and the camera
+   * is not the player's, so they go; the header, the phase banner and the quick class
+   * selector stay — the freeze exists for the last of those. One class on the root, the
+   * stylesheet does the rest, and the toggle is guarded so a frame changes nothing.
+   */
+  setIntro(on: boolean): void {
+    if (this.introShown === on) return;
+    this.introShown = on;
+    this.root.classList.toggle('hud--intro', on);
+  }
+
+  private introShown = false;
+
+  /**
    * The cheat tag's text, or `''` to take it down (playtest round 4, F14).
    *
    * Called every frame from `Game.updateHudSurfaces` through `Match.setCheatTag`, and guarded on

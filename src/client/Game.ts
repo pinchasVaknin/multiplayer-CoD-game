@@ -14,6 +14,7 @@ import type { InputCommand } from '../shared/core/InputCommand';
 import { DT, MAX_STEPS_PER_FRAME, type FrameSample } from '../shared/core/Loop';
 import { Loop } from './engine/FrameLoop';
 import { ChopperCamera } from './streaks/ChopperCamera';
+import { IntroCamera } from './cinematic/IntroCamera';
 import { makeSnapshot, type PlayerSnapshot } from '../shared/player/PlayerState';
 import { DEG2RAD } from '../shared/core/MathUtil';
 import { Rng } from '../shared/core/Rng';
@@ -407,6 +408,8 @@ export class Game {
   private readonly selection: MenuSelection;
   /** M9. Process-wide: the takeover is per-match, the camera object need not be. */
   private readonly chopperCamera = new ChopperCamera();
+  /** The match intro's camera (M15, Phase C): asked for once per render frame, before the chopper's. */
+  private readonly introCamera: IntroCamera;
 
   /**
    * The per-match world: the map, the player, the match and its debug tooling.
@@ -535,6 +538,7 @@ export class Game {
 
     this.renderer = new Renderer(canvas);
     this.renderer.setSize(window.innerWidth, window.innerHeight, settings.renderScale);
+    this.introCamera = new IntroCamera({ movement: this.movementConfig });
     // The same fact for the DOM: the front end's 1920x1080 frame scales to this window (M15, A1).
     applyFrameScale(uiHost, window.innerWidth, window.innerHeight);
     this.textures = new ProceduralTextures(this.renderer.three);
@@ -1620,6 +1624,8 @@ export class Game {
     const keep = options.keepConnection === true || this.rotating;
     this.world?.dispose({ keepConnection: keep });
     this.world = null;
+    // The intro's plan was for that world; the next one plans afresh on its first frame.
+    this.introCamera.reset();
     this.speedo.reset();
     if (!keep) this.server = null;
     /**
@@ -2566,7 +2572,18 @@ export class Game {
     const chopper = match.streaks.activeChopperFor(match.localId);
     // M9: the streak reports a pose and a lens; `ChopperCamera` keeps the actual camera.
     const takeover = this.chopperCamera.cameraFor(chopper, this.renderer.aspect);
-    if (takeover !== null) {
+    /**
+     * The match intro (M15, Phase C), asked the same way and first: it answers for the
+     * round-one freeze and for nothing else, and while it does the world is drawn through
+     * its lens with no viewmodel — the player is not holding anything the camera can see —
+     * and the HUD's instruments come down. It is client-only presentation over a world the
+     * server already froze; nothing about it is on the wire.
+     */
+    const intro = this.introCamera.cameraFor(world, cam, this.renderer.aspect);
+    match.ui.hud.setIntro(intro !== null);
+    if (intro !== null) {
+      this.renderer.render(this.scene, intro, null);
+    } else if (takeover !== null) {
       /**
        * A grey render pass over the world with the bodies drawn by side, not a filter over
        * the ordinary image (S6.1). No viewmodel: the player is not holding anything.

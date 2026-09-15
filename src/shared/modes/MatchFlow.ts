@@ -230,6 +230,15 @@ export class MatchFlow extends Disposable {
   }
 
   /**
+   * The whole of the phase `phaseSecondsRemaining` counts down (M15, Phase C): the match
+   * intro runs on `total - remaining`, so a client that joins with four seconds left gets
+   * four seconds of intro and lands on its own eyes at the same moment as everybody else.
+   */
+  get phaseSecondsTotal(): number {
+    return this.phase === 'WARMUP' ? this.warmupSeconds : this.roundEndSeconds;
+  }
+
+  /**
    * Adopt match state from the server (M10).
    *
    * On a dedicated server this flow is the only one running its clock; every client holds an

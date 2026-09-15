@@ -51,6 +51,9 @@ export default defineConfig({
         // maps must leave alone: scoreboard columns, the win condition over a score grid, and
         // every spawn zone. A printer, not a judge: run it before and after, and diff.
         content: 'src/server/content.ts',
+        // M15 Gate C. The match intro planned for every map x mode x spawn, sampled every
+        // 25 cm against the map's own colliders and held to the freeze's budget.
+        intro: 'src/server/intro.ts',
       },
       output: { entryFileNames: '[name].js', format: 'esm' },
     },

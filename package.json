@@ -30,6 +30,7 @@
     "progression": "npm run build:server && node dist-server/progression.js",
     "//content": "Deep clean, 2026-09-14. What the modes and maps say — every scoreboard column, the win condition over a grid of team scores with the clock running and run out, every spawn zone — printed as text. Pure functions of the content, so two runs on one tree are byte-identical; a structural change to a mode or a map is proved by running it before and after and diffing. Always exits 0.",
     "content": "npm run build:server && node dist-server/content.js",
+    "intro": "npm run build:server && node dist-server/intro.js",
     "//hashes": "S6.6. Node writes the per-tick hashes; the browser writes its own from the debug console; the differ reports the first divergent tick.",
     "hashes": "npm run build:server && node dist-server/hashRun.js",
     "//layout": "Playtest round 5 P1. Every full-screen surface mounted at six viewports in a headless Chrome, asserting that nothing is off the top of a screen that cannot scroll and that nothing scrolls sideways. Needs a browser on the machine (CHROME_PATH overrides the search), which is why it is an instrument and not part of the gate: the deploy host runs check and has none.",

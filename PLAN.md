@@ -1184,6 +1184,114 @@ seeded harness byte-identical (the harness never renders, so the intro never run
 **Needs a browser:** whether the whip reads as a whip and whether −6° is the right pitch are
 display questions.
 
+### Between phases — a report from the chopper (2026-09-15), fixed the same day
+
+*"When I activate the Chopper Gunner and look through its thermal camera, the character
+bodies are completely invisible. I can only see their weapons floating in the air."* Correct,
+and the suspicion in the report was right: the three thermal override materials share
+`GUNSHIP_VERT`, which round 2 taught to apply `instanceMatrix` by hand and nobody taught to
+skin. three sets `USE_SKINNING` from the object, not the material, and a vertex stage that
+reads `position` raw draws a `SkinnedMesh` unposed, in rig space — nowhere the optic looks.
+The held weapons are plain meshes in the hand bone's frame and were right all along, which is
+what made the report read the way it did. **Measured on Dunes from the chopper, the same
+frame, the shader swapped in place:** the one enemy in the open reads **50/81 hot pixels at
+its torso with the fix and 9/81 (the weapon) without**; 81 hot pixels on screen against 9.
+Bodies under the covered street stay occluded, as the depth pass intends. `723630a`, on its
+own. The instrument was `gl.readPixels` on the game's own canvas from the pane, projecting
+each body's torso through the chopper's camera — no screenshot was needed, which is as well,
+since the pane could not take one.
+
+### C — done (session of 2026-09-15): the intro, planned, proved, and played
+
+**The plan** (`shared/cinematic/IntroPlan.ts`, 885 lines): pure geometry — loose numbers,
+`simSin`/`simCos`, no `three`, no clock — so the same function runs in the client on the
+freeze's first frame and in the harness on the server build. Three phases in one budget:
+of the ten seconds, **1.0 is the player's own view** and **0.5 the blend back to it**; the
+plan's segments fill the 8.5 that remain. **Approach** ≤ 3.5 s: the bots' route (a second
+`Pathfinder` over the match's `NavGrid`, solved synchronously with `measureLanes`' budget)
+from where the player *stands* — the spawn de-penetrated with the player's own capsule, the
+way the sim does it on tick one — to the nav bounds' centre on its nearest walkable cell, at
+1.65 m, a smoothstep profile whose peak is 9 m/s, **trimmed from the spawn end** past
+21 m rather than sped up. **Overview** 1.5 s: a pull-back from the centre to the distance
+at which the map's half-diagonal fits a 60° lens, along the clearest of a fan of rays — the
+spawn's azimuth at 45° when it reaches 80 % of the way, else twelve azimuths at three
+elevations, each *marched with the eye's own sphere* rather than cast as a line, because the
+first line ray passed the edge of Foundry's bridge deck by a centimetre and the eye did not.
+**Objectives** ≤ 3.5 s: the pull-back *reversed* (0.5 s, clear because the pull-back was),
+then a whip along the nav route at eye height to each objective's stand-off (4 m back along
+the arrival, 3 m up, the first of five stand-offs the eye finds clear), a 0.3 s hold with
+the label, on to the next; the speed profile inverted, peak 40 m/s, a whip capped at 1.0 s;
+a route the grid cannot find falls back to an arc above the map (**none did**); an
+objective that would overrun the budget is left out. Domination visits **A → B** — the
+third flag does not fit 3.5 s at 40 m/s on any shipped map, and the plan says which it
+visited; Search & Destroy visits both sites. The deathmatch modes hold the overview.
+
+**Three things the geometry taught, all found by the harness before a frame was drawn:**
+
+- **A Catmull-Rom cuts corners into crates.** The first spline's first bad sample was 0.95 m
+  from the nearest waypoint, inside the crate the route was string-pulled around. The route
+  is a polyline with 12 cm fillets now; the *heading* is what the eye smooths (a 0.3 s lag on
+  the approach), not the position.
+- **The bots' route mantles.** Two waypoints a ledge apart are joined by a line the capsule
+  is carried through; the camera on that line went through Foundry's box 31 at head height.
+  Where the rise exceeds a step the camera goes *up first*, over the lower waypoint, then
+  across — and the mirror for a drop.
+- **The route hugs corners at the capsule's clearance, and the eye is in the capsule's top
+  cap.** At 1.65 m a 0.35 capsule is 0.287 wide, so an eye sphere of 0.3 flagged the route
+  the bots walk by millimetres. `EYE_RADIUS` is **0.25** — twice the lens's 0.12 near plane —
+  and a `relax` pass pushes any tabulated point the sphere still touches off it with the
+  movement system's own `resolveAt`, up to four rounds and 30 cm, then retakes the table;
+  a plan reports how many it nudged (one to three, typically).
+
+**`npm run intro`** (`server/intro.ts`, 166 lines; `intro` in `vite.server.config.ts`):
+every map × every roster mode × every spawn zone — **299 plans** — collision and navmesh
+baked as `MapBakery` bakes them, sampled every 25 cm, asserting zero samples inside a
+collider and every phase inside its budget; `--debug` names the collider the first bad
+sample is in. The first run failed **106 of 299**; four fixes later, **`INTRO CHECK PASSED —
+299 plans`**, 104 of them with objectives (52 A → B, 52 the two sites), 283 approaches
+trimmed, 0 arcs. The timeline arithmetic and the Foundry plan are four vitest cases
+(`IntroPlan.test.ts`): the budgets phase by phase, the deathmatch hold and S&D's two sites,
+the eye clear of every collider from the first spawn, `poseAt` continuous across every seam.
+
+**The client** (`client/cinematic/IntroCamera.ts`, 250 lines). `Game` asks
+`introCamera.cameraFor(world, rig, aspect)` once per render frame, before the chopper — the
+same asked-not-pushed shape — and while it answers renders the scene through it with no
+viewmodel and `hud.setIntro(true)` (`hud--intro` takes down the crosshair, ammo, health,
+the tactical strip, the compass and the minimap; the header, the banner and the quick
+selector stay). Eligible only for `WARMUP` in round one, not the arena, not the range; the
+timeline is `flow.phaseSecondsTotal − phaseSecondsRemaining` (the getter is new on
+`MatchFlow`), so a late joiner gets the tail; planned on the first eligible frame and
+played once per world. Three blends the plan does not know about: 0.35 s from the rig's eye
+into the plan (a push, not a cut — the trim can start it 20 m up the route), 0.5 s back, and
+the lens with it, 90° → 60° → 90°. Any key or button skips to the return blend; the digits
+that pick a class and `Escape` do not.
+
+**Measured in the pane** — Dunes, Domination, from spawn A, frames stepped by hand: the plan
+`approach 3.30 · pullback 1.50 · snap 0.50 · whip[A] 1.00 · hold 0.30 · whip[B] 1.00 · hold
+0.30 · hold 0.60 = 8.50 s`, objectives A → B, overview 95 m. The camera at t = 0.05 in the
+rig's eye at (−25, 1.7, 32.6) and 88°; t = 2.7 at the centre at 1.6 m; t = 4.7 at
+(−41, 69, 53), the overview; t = 5.4 back at the centre with the label A; t = 6.05 at A's
+stand-off; t = 8.05 at B's; t = 8.73 blending back at 74°; **t = 9.40 `active = false`,
+90°, at the eye, `hud--intro` off** — a second before the freeze lifts, as the budget says.
+**Seeded harness normalised-identical** before and after (stash → build → run; pop → build →
+run; 142 lines, `t`/`pid`/`simMsMean`/`heapMb` stripped): the harness never renders, and the
+one `shared/` seam it can see, `MatchFlow.phaseSecondsTotal`, is a getter. Content probe:
+not re-run; nothing under `modes/` or `maps/` changed. `npm run check` green, **125 tests**.
+
+**Found while here — two spawn zones authored against a crate.** Foundry B (−27, 2) and
+Depot B (−28, −19): the eye at the zone's position is inside a rotated 6 × 2.6 m crate,
+half a metre deep on Depot. The sim de-penetrates the body on its first tick, so nobody has
+noticed; the plan starts from the de-penetrated point for the same reason. The zones should
+move; a map-data fix, not this phase's.
+
+**Needs a browser:** whether the whip reads as a whip; whether −6° on the approach and the
+60° lens are right; the overview's azimuth on Foundry (the fan picked a 75 m ray — which
+one, a display will say); and the push out of the eyes at 0.35 s. The pane could not take a
+screenshot this session, so the record is poses and pixels, not pictures.
+
+**Gate C is where this stops**, as asked. Phase D — the end of the match — and B6 are the
+open items; E after D.
+
 ## Phase D — the end of the match: the lineup and the accordion
 
 **D1, the lineup.** Top half: the winning team — in Free-for-All the top three — on a stage,
@@ -1280,11 +1388,12 @@ report that a screen "looks cut off" is answered by running it.
 
 ## How to start — the next brief
 
-Phases A and B are done — A1–A4 and B0–B5 recorded above, Gate A closed, Gate B's layout
-and audits green (`PASS` at 22 surfaces × 8 viewports; 121 tests) — with **B6**, the wire
-step, deliberately not taken. A fresh session starts at one of two places, the human's call:
-**B6** (the `shared/net` byte, the netharness bill, `check:authority`), or **C**, the match
-intro, which depends on nothing in B. `npm run layout` first either way, to see the PASS
-before touching anything. Each phase closes with its gate's numbers in a "done" subsection
-here, in the order above, and the milestone closes the way M13 and M14 did: this section moves
-to the archive in the session that closes it.
+Phases A, B and C are done — recorded above, Gate A closed, Gate B's layout and audits green
+(`PASS` at 22 surfaces × 8 viewports), Gate C's harness green (`INTRO CHECK PASSED — 299
+plans`), 125 tests — with **B6**, the wire step, deliberately not taken. A fresh session
+starts at **D**, the end of the match (the lineup on B1's stage, the accordion), or at **B6**
+(the `shared/net` byte, the netharness bill, `check:authority`) — the human's call; **E**
+after D, on its three numbers. `npm run layout` and `npm run intro` first either way, to see
+both green before touching anything. Each phase closes with its gate's numbers in a "done"
+subsection here, in the order above, and the milestone closes the way M13 and M14 did: this
+section moves to the archive in the session that closes it.

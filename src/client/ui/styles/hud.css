@@ -49,6 +49,20 @@
 
 /* ---- crosshair -------------------------------------------------------- */
 
+/*
+ * The match intro (M15, Phase C): the camera is not the player's for ten seconds, so the
+ * player's own instruments are taken down — every surface that reads "where am I aiming"
+ * or "what am I holding". The header, the phase banner and the quick selector stay.
+ */
+.hud--intro .hud-cross,
+.hud--intro .hud-ammo,
+.hud--intro .hud-health,
+.hud--intro .hud-tac,
+.hud--intro .hud-map,
+.hud--intro .hud-bearing {
+  visibility: hidden;
+}
+
 .hud-cross {
   position: absolute;
   left: 50%;
