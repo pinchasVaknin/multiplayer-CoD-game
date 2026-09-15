@@ -1349,6 +1349,64 @@ with 2, 6 and 10 players (the probe already mounts it with fixed rows); `progres
 byte-identical (the numbers the accordion shows are `XpReport`'s, and this phase does not
 touch `XpRules`); the pane, the S6.1 cadence timed against its constants.
 
+### D — done (session of 2026-09-15): the lineup, the toggle, the accordion
+
+**The stage is B1's, with a list on it.** `CharacterStage` (327 → 475 lines) takes `StageOptions`
+— the editor's disc and turntable are the default, so `LoadoutEditor` and the thumbnail
+script are untouched — and a list of `StageFigure`s: `show(id)` is a lineup of one, and
+`showLineup(figures)` the same list with five. `LINEUP_STAGE` is an 1824×560 canvas, a
+6.8 × 2.6 m platform with the ring's accent as a frame round its edge, a lens 5.3 m back
+(6.2 left the bodies a quarter of the height, measured in the pane), and no turning. Every
+figure is the same `ActorAvatar` a match draws, `idleWeaponReady`, holding `buildHeldWeapon`.
+
+**Who stands where** is `ui/Lineup.ts` (97 lines, nine vitest cases): `lineupOf` — the
+winning side in ladder order, Free-for-All's top three with the crowned winner pinned first
+for `personalOutcome`'s reason, a draw's best five — and `slotPositions`: the MVP centre and
+0.45 m forward, the rest fanning out by rank at 1.25 m, the flanks turned in. **What each
+wears and holds** is `LineupSource`, answered by `Game`: the world's own
+`RandomCharacterSelector` (kept on `Game` for the world's life), `profile.skinId` for the
+local player, and the weapon in each entity's hands from `Match.actorsForRender` — the
+renderer's own supplier, exposed once — or `weapons.definition.id` for the local player.
+**Nameplates** are DOM, in viewer-relative team colour (`relationTo`, the board's rule),
+placed under the feet by `projectToCanvas` through the stage's lens — pure arithmetic, so
+the probe measures them on a page that never draws. **The toggle** is two tabs over the
+same `Scoreboard` instance; `.eom .sb--embedded` is 1600 wide so the blocks stand side by
+side at the frame's ramp.
+
+**The accordion.** `XpSummary` (352 → 446) is a bottom-anchored column: the strip — one
+`<button>`, LEVEL · bar and label · total · chevron — and the list above it, `hidden` until
+it opens. The cadence is the constant it was: rows land on `ROW_INTERVAL` into the hidden
+list, the bar fills behind them, a level-up interrupts with the flourish now absolute over
+the strip. `open()` un-hides, reflows at `max-height: 0` and transitions to
+`--xp-list-ceiling` (196 px in a 300 px band); `open(true)` is the probe's instant path;
+DONE opens it on its own. The rows are three across, so twelve lines are four rows under
+the ceiling with the tail beneath. CONTINUE / EXIT are the band's right cell, `align-items:
+end`, on the strip's line. The `.eom .op-frame` old-ramp pin is gone, as it said.
+
+**Gate D.** `npm run layout`: **28 surfaces × 8 viewports, PASS** — `summary/2`, `/6`, `/10`
+folded and open (`/xp`) on the fullest report the accordion can be handed (twelve lines,
+two of each unlock kind), `summary/board`, and `summary/ffa` on both tabs, the sixteen-row
+ladder. The first green run measured the easy state — the probe had never un-hidden
+`xpSlot`, which `GameScreens` does — and the picture caught it before the number did.
+`progression` byte-identical (stash → build → run, pop → build → run; 50 lines, `cmp`).
+`npm run check` green, **134 tests** (boundaries 360 files). **Pane**, a real solo match at
+1920×1080 ended by the clock: five bodies on the platform — `hazard` with the sniper as
+MVP, `echo` with the shotgun, `sentry` with the SMG, `sentry` with the Vulcan, `apex` — the
+plates at 21 / 36 / 50 / 64 / 79 % under the feet, the MVP's lower for its step; a second
+match VICTORY with OPERATOR at the end in the picked skin. **The cadence:** rows at +0,
++334, +346 ms — 0.34 s, frame-quantised; the bar 15 → 1,025 through a level-up; the list
+opened on its own with `.xp__strip` at y 960 before and after, CONTINUE at 968 unmoved. The
+LEVEL 3 flourish caught over the strip (217 × 95 at the accordion's centre). SCOREBOARD tab:
+the board at 1600 wide, two 776-px blocks; the strip clicked shut and open again, y 960
+throughout. **GPU:** the stage's own renderer at **17 geometries / 44 textures, flat over
+20 lineup → release cycles**, every lineup ready within four ticks on the warm cache.
+**Bundle:** 1 551.83 kB raw / 447.57 gzip / 60.22 CSS (C left it at 1 545.22 / 445.66 /
+57.18). Nothing in `shared/` or `server/`.
+
+**Needs a browser:** whether 5.3 m is the right distance with five bodies at play distance;
+the flanks' 0.11 rad/m turn-in; the plates' size against the bodies; whether the list should
+open on its own or wait for the click.
+
 ## Phase E — combat behind the menu, last
 
 Decision 1 chose a live render over a video, and the reference asks for *combat*. Phase A's
@@ -1419,25 +1477,19 @@ report that a screen "looks cut off" is answered by running it.
 
 ## How to start — the next brief
 
-Phases A, B and C are done — recorded above, Gate A closed, Gate B's layout and audits green
-(`PASS` at 22 surfaces × 8 viewports), Gate C's harness green (`INTRO CHECK PASSED — 299
-plans`), 125 tests — with **B6**, the wire step, deliberately not taken. **The human's call,
-taken 2026-09-15 (revised the same day): the two spawn zones first, then D, then E; B6 is
-deferred past this milestone** — the picker stays local-first, as decision 2 allowed. A
-fresh session starts with the **spawn fix**: Foundry B (−27, 2) and Depot B (−28, −19) are
-authored inside a rotated crate (found by `npm run intro`); move the zones in the map data,
-its own `B:` commit — and note that moving a spawn zone changes what `npm run content`
-prints and what the seeded harness does, so that commit is the one place in this milestone
-where "byte-identical" is *not* the claim: print both before and after, and the diff should
-be those two zones and what follows from them, nothing else. Then **D**, the end of the
-match — D1 the lineup on B1's `CharacterStage` (five bodies, the winning team, MVP a step
-forward, each wearing the body the match dealt it, the local player in their picked skin),
-D2 the accordion in a bottom-anchored band with S6.1's cadence kept, the scoreboard as a
-toggle over the lineup; Gate D is `npm run layout` green on the summary at eight viewports,
-collapsed and expanded, with 2, 6 and 10 players, and `progression` byte-identical. Then
-**E**, on its three numbers. B6 — `characterIndex: u8` on `EntitySnapshot` and the join,
+Phases A, B, C and D are done — recorded above, Gate A closed, Gate B's layout and audits
+green, Gate C's harness green (`INTRO CHECK PASSED — 299 plans`), Gate D's probe green
+(`PASS` at 28 surfaces × 8 viewports) with `progression` byte-identical, 134 tests — and
+the seven spawn zones moved (the section between C and D). **B6 is deferred past this
+milestone** (the human's call, 2026-09-15): the picker stays local-first, as decision 2
+allowed. What is left is **E**, on its three numbers: a solo `Match` on the backdrop map
+with a full roster of bots and no player entity, stepped by the frame loop in `MENU`, the
+camera on A3's dolly — shipped only if the leak count is flat over 100 MENU ↔ MATCH
+cycles, the sim's ms per frame in the pane is a number a laptop on battery can carry, and
+the bundle delta is recorded; if any of the three is wrong, A3's dolly *is* the menu and E
+closes as "measured, not taken". `npm run layout` and `npm run intro` first, to see both
+green before touching anything. E closes with its numbers in a "done" subsection here, and
+the milestone closes the way M13 and M14 did: this section moves to the archive in the
+session that closes it, and B6 — `characterIndex: u8` on `EntitySnapshot` and the join,
 `RandomCharacterSelector` as the fallback, `check:authority` and the netharness over it —
-is the first item of whatever milestone follows. `npm run layout` and `npm run intro`
-first, to see both green before touching anything. Each phase closes with its gate's
-numbers in a "done" subsection here, in the order above, and the milestone closes the way
-M13 and M14 did: this section moves to the archive in the session that closes it.
+is the first item of whatever milestone follows.
