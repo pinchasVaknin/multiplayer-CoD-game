@@ -193,7 +193,7 @@ export class SaveStore<T extends Versioned> {
 function probeStorage(): Storage | null {
   try {
     const s = window.localStorage;
-    const probe = '__operator_probe__';
+    const probe = '__p7_probe__';
     s.setItem(probe, '1');
     s.removeItem(probe);
     return s;

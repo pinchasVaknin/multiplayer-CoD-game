@@ -1,4 +1,4 @@
-# OPERATOR
+# PROTOCOL SEVEN
 
 A browser-based arena FPS. Bots, progression, loadouts, killstreaks, five modes and three
 maps, playable end to end from the main menu to the post-match board.
@@ -72,7 +72,7 @@ the browser. The per-tick state hashes must match exactly.
 npm run hashes
 ```
 
-Then in the browser console: `__operator.determinism.download()`, and
+Then in the browser console: `__p7.determinism.download()`, and
 
 ```bash
 node scripts/diff-hashes.mjs node-hashes.json browser-hashes.json
@@ -154,23 +154,23 @@ The server is a single Node process. Build it, copy it, run it under systemd.
 
 ```bash
 npm run build:server
-rsync -a dist-server package.json node_modules/ws user@host:/opt/operator/
+rsync -a dist-server package.json node_modules/ws user@host:/opt/protocol-seven/
 ```
 
 ```bash
-sudo cp deploy/operator.service /etc/systemd/system/
-sudo cp deploy/operator.env /etc/operator.env    # edit this
+sudo cp deploy/protocol-seven.service /etc/systemd/system/
+sudo cp deploy/protocol-seven.env /etc/protocol-seven.env    # edit this
 sudo systemctl daemon-reload
-sudo systemctl enable --now operator
+sudo systemctl enable --now protocol-seven
 ```
 
 | | |
 |---|---|
-| **Restart** | `sudo systemctl restart operator` |
+| **Restart** | `sudo systemctl restart protocol-seven` |
 | **Stop** | `sudo systemctl stop operator` — clients get a `Bye` with a reason, not a dead socket |
-| **Logs** | `journalctl -u operator -f` |
-| **Metrics** | `journalctl -u operator -o cat \| jq 'select(.event=="metrics")'` |
-| **Config** | `/etc/operator.env`, then restart |
+| **Logs** | `journalctl -u protocol-seven -f` |
+| **Metrics** | `journalctl -u protocol-seven -o cat \| jq 'select(.event=="metrics")'` |
+| **Config** | `/etc/protocol-seven.env`, then restart |
 
 Everything operational — address, port, snapshot rate, bot count, interpolation delay — comes
 from that env file. Nothing is hardcoded.
@@ -216,7 +216,7 @@ served over HTTPS the server must be `wss://`, and there is no way around it. Tw
 ```
 # Caddy
 play.example.com {
-    root * /opt/operator/dist
+    root * /opt/protocol-seven/dist
     file_server
     reverse_proxy /ws localhost:8080
 }
@@ -466,6 +466,6 @@ than filtering the picture.
 
 `DEBUG.md` documents every panel, harness and console tool, with a worked example of using
 each to answer a real question. The short version: **F1** opens the overlay, and
-`window.__operator` is the console surface everything is measured through.
+`window.__p7` is the console surface everything is measured through.
 
 Unit tests: `npm test`; where they live and the two rules they obey are in `DEBUG.md` under "Tests".

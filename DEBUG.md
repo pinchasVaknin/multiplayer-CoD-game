@@ -1,4 +1,4 @@
-# OPERATOR — debug tooling
+# PROTOCOL SEVEN — debug tooling
 
 Everything here exists from M1 and every later milestone extends it rather than
 building a second overlay.
@@ -92,18 +92,18 @@ it falls back to the console. **Reset** restores the shipped defaults.
 
 ## Console API
 
-`window.__operator` is installed once the world is built.
+`window.__p7` is installed once the world is built.
 
 ```js
-__operator.report()            // full harness report: speeds, slide rules, movement bound
-__operator.harness             // debug/Harness.ts instance, for custom runs
-__operator.sim()               // live PlayerSim
-__operator.stats()             // FrameStats
-__operator.gpu()               // live geometry and texture counts (M15: the menu backdrop's build/dispose cycle)
-__operator.leaks()             // live bus subscriptions + the gpu counts + JS heap MB (M15 E: the MENU <-> MATCH cycle)
-__operator.speedometer()       // Speedometer
-__operator.setSyntheticLoad(30) // ms of busy-wait per frame
-__operator.game                // everything else
+__p7.report()            // full harness report: speeds, slide rules, movement bound
+__p7.harness             // debug/Harness.ts instance, for custom runs
+__p7.sim()               // live PlayerSim
+__p7.stats()             // FrameStats
+__p7.gpu()               // live geometry and texture counts (M15: the menu backdrop's build/dispose cycle)
+__p7.leaks()             // live bus subscriptions + the gpu counts + JS heap MB (M15 E: the MENU <-> MATCH cycle)
+__p7.speedometer()       // Speedometer
+__p7.setSyntheticLoad(30) // ms of busy-wait per frame
+__p7.game                // everything else
 ```
 
 ### The headless harness
@@ -113,10 +113,10 @@ against a real `CollisionWorld`, with no renderer and no wall clock. It is the r
 tool for anything that is a property of the simulation.
 
 ```js
-__operator.harness.measureSpeeds()          // steady-state speed per locomotion mode
-__operator.harness.measureMaxSustained(60)  // adversarial slide-cancel chaining, 60 s
-__operator.harness.verifySlideRules()       // the LOCKED S5.2 numbers, read back out of a live run
-__operator.harness.run(seconds, policy)     // custom policy
+__p7.harness.measureSpeeds()          // steady-state speed per locomotion mode
+__p7.harness.measureMaxSustained(60)  // adversarial slide-cancel chaining, 60 s
+__p7.harness.verifySlideRules()       // the LOCKED S5.2 numbers, read back out of a live run
+__p7.harness.run(seconds, policy)     // custom policy
 ```
 
 A policy is `(tick, player, cmd) => void` and writes into a reused mutable command.
@@ -180,7 +180,7 @@ The **pattern plot** draws three traces in one space: the authored pattern in gr
 burst you just fired in amber, and the burst before it in green. Two magazines fired with
 the trigger held from a fixed position land exactly on top of each other — that is
 acceptance criterion 2, visible rather than asserted. Call
-`__operator.weaponDebug().resetBursts()` first if you want only the next two mags in view.
+`__p7.weaponDebug().resetBursts()` first if you want only the next two mags in view.
 
 The **spread ring** shows the live cone against the weapon's authored bounds (hip moving,
 hip standing, ADS) with the last thirty rounds plotted inside it.
@@ -222,12 +222,12 @@ a real `PlayerController` and a real `WeaponSystem`, against a purpose-built wor
 thin steel panel and a thick concrete one. No renderer, no audio, no DOM.
 
 ```js
-__operator.weaponReport()                       // everything the criteria ask for
-__operator.weaponHarness.verifyDeterminism()    // two magazines, same seed, max deviation
-__operator.weaponHarness.measureZones(26)       // head / torso / limb at a range
-__operator.weaponHarness.measurePenetration()   // thin panel through, thick panel blocked
-__operator.weaponHarness.measureTimings()       // ADS, both reloads, sprint-to-fire, RPM
-__operator.weaponHarness.fireMagazine(seed)     // raw shot placements, degrees
+__p7.weaponReport()                       // everything the criteria ask for
+__p7.weaponHarness.verifyDeterminism()    // two magazines, same seed, max deviation
+__p7.weaponHarness.measureZones(26)       // head / torso / limb at a range
+__p7.weaponHarness.measurePenetration()   // thin panel through, thick panel blocked
+__p7.weaponHarness.measureTimings()       // ADS, both reloads, sprint-to-fire, RPM
+__p7.weaponHarness.fireMagazine(seed)     // raw shot placements, degrees
 ```
 
 `measureZoneDamage` reads its numbers back out of `DamageSystem.lastHit` rather than
@@ -286,7 +286,7 @@ a second spawn selector.
 
 `Measure lane timings` runs the **real** A\* from each team's lane spawn to the point in that lane
 where the two teams meet, measures the smoothed path and divides by sprint speed. It prints a
-table and caches the result on `__operator.laneReport()`. This is what acceptance criterion 3 is
+table and caches the result on `__p7.laneReport()`. This is what acceptance criterion 3 is
 read from; a hand-measured straight line would report the distance the author intended rather than
 the distance a player walks around the cover the author placed.
 
@@ -312,8 +312,8 @@ the round abstraction's side swap, which Team Deathmatch never triggers by itsel
 logs the heap at every boundary (S7).
 
 ```js
-await __operator.runMatches(3)     // or 10
-__operator.matchReport()           // the boundaries again, without re-running
+await __p7.runMatches(3)     // or 10
+__p7.matchReport()           // the boundaries again, without re-running
 ```
 
 The M3 harness proved a *firefight* does not leak. This proves a **match** does not, which is a
@@ -474,17 +474,17 @@ and RESET as every other config in the project.
 rig; no renderer, no audio, no DOM.
 
 ```js
-__operator.arsenal()                          // the harness
-__operator.balanceTable()                     // the TTK table as Markdown
-__operator.arsenalReport()                    // TTK + attachment deltas + purity checks
-__operator.attachmentDeltas()                 // what each attachment measurably costs
-__operator.arsenal().measureTtk(def, 25, 'head')
-__operator.arsenal().measurePelletSpread(def, 6)
-__operator.arsenal().measureSlideEntry(def)   // one slide into a room
-__operator.arsenal().measureSlideAggression(def, 30)  // the chained exploit
-__operator.weapons                            // every WeaponDef
-__operator.equipmentDefs                      // every EquipmentDef
-__operator.equipment()                        // the live MatchEquipment
+__p7.arsenal()                          // the harness
+__p7.balanceTable()                     // the TTK table as Markdown
+__p7.arsenalReport()                    // TTK + attachment deltas + purity checks
+__p7.attachmentDeltas()                 // what each attachment measurably costs
+__p7.arsenal().measureTtk(def, 25, 'head')
+__p7.arsenal().measurePelletSpread(def, 6)
+__p7.arsenal().measureSlideEntry(def)   // one slide into a room
+__p7.arsenal().measureSlideAggression(def, 30)  // the chained exploit
+__p7.weapons                            // every WeaponDef
+__p7.equipmentDefs                      // every EquipmentDef
+__p7.equipment()                        // the live MatchEquipment
 ```
 
 **`measureTtk` zeroes spread and recoil and does not zero the pellet cone.** A TTK table
@@ -544,7 +544,7 @@ every control works, which is why the pause menu has a button for the overlay.
 ### Pointer lock, after the M5 hotfix
 
 ```js
-__operator.pointer()   // { locked, armed, keyboardCapture }
+__p7.pointer()   // { locked, armed, keyboardCapture }
 ```
 
 `armed` is the thing worth knowing. A bare `requestPointerLock` only succeeds from a user
@@ -640,24 +640,24 @@ S7's four asks, as four groups of buttons.
 ## The M6 console API
 
 ```js
-__operator.profile                     // the Profile. Process-wide, unlike the match handles
-__operator.save()                      // the live SaveV1 document
-__operator.unlocks()                   // the UnlockState snapshot
-__operator.loadouts()                  // all five slots
-__operator.resolveLoadout(unrestricted?)  // the same call Game.buildWorld makes
-__operator.perks / .challenges / .camos / .fieldUpgrades / .levelTable
-__operator.perkState()                 // the live match's resolved PerkState
-__operator.perkResolve(def, ids)       // a def with perks applied, through the real resolver
-__operator.perkStateOf(ids)            // a PerkState without equipping anything
-__operator.challengeProgress()         // every challenge with its definition and counter
-__operator.progression()               // the live MatchProgression
-__operator.simulateXp(n, startXp?)     // fast-forward n matches, printed
-__operator.testMigration()             // V0 -> V1 without touching the save
-__operator.syntheticV0()               // the hand-written V0 payload
-__operator.inspectSave(raw)            // { save, losses } — repair without importing
-__operator.sanitise(slot, level, out)  // force a loadout legal at a level
-__operator.saveWrites()                // { writes, lastWriteMs, persistent }
-__operator.bus                         // the EventBus, for driving a real event
+__p7.profile                     // the Profile. Process-wide, unlike the match handles
+__p7.save()                      // the live SaveV1 document
+__p7.unlocks()                   // the UnlockState snapshot
+__p7.loadouts()                  // all five slots
+__p7.resolveLoadout(unrestricted?)  // the same call Game.buildWorld makes
+__p7.perks / .challenges / .camos / .fieldUpgrades / .levelTable
+__p7.perkState()                 // the live match's resolved PerkState
+__p7.perkResolve(def, ids)       // a def with perks applied, through the real resolver
+__p7.perkStateOf(ids)            // a PerkState without equipping anything
+__p7.challengeProgress()         // every challenge with its definition and counter
+__p7.progression()               // the live MatchProgression
+__p7.simulateXp(n, startXp?)     // fast-forward n matches, printed
+__p7.testMigration()             // V0 -> V1 without touching the save
+__p7.syntheticV0()               // the hand-written V0 payload
+__p7.inspectSave(raw)            // { save, losses } — repair without importing
+__p7.sanitise(slot, level, out)  // force a loadout legal at a level
+__p7.saveWrites()                // { writes, lastWriteMs, persistent }
+__p7.bus                         // the EventBus, for driving a real event
 ```
 
 **`saveWrites().writes` is what acceptance criterion 8 is read from.** It counts writes at
@@ -710,17 +710,17 @@ Everything, in one table. The detail is in the sections above and below.
 | Collision visualiser | `F2` | Is the capsule where I think it is; which hash cells are queried |
 | AI visualiser | `F4` | Navmesh, paths, sight lines, cover occupancy, spawn scores |
 | Tuning sliders | `F1`, right column | Every feel constant, live; **COPY CONFIG** writes it back as source |
-| Movement harness | `__operator.report()` | Speeds, slide timings, the speed bound — headless |
-| Weapon harness | `__operator.weaponReport()` | Fire timing, recoil determinism, damage, penetration |
-| Arsenal harness | `__operator.balanceTable()` | TTK across all twelve weapons; attachment deltas |
+| Movement harness | `__p7.report()` | Speeds, slide timings, the speed bound — headless |
+| Weapon harness | `__p7.weaponReport()` | Fire timing, recoil determinism, damage, penetration |
+| Arsenal harness | `__p7.balanceTable()` | TTK across all twelve weapons; attachment deltas |
 | Bot harness | `?harness=botmatch` | An AFK bot match, at up to 32x speed |
-| Match harness | `__operator.runMatches(n)` | Does a build-and-teardown cycle leak |
-| Lane report | `__operator.laneReport()` | Are this map's lanes within 15% of each other |
-| **Snag sweep** | `__operator.snagSweep()` | **Sprint every wall on this map** |
-| **Frame export** | `__operator.frameReport()` | p50/p95/p99/worst, plus the whole buffer, as JSON |
-| **Latency export** | `__operator.latencyReport()` | Input latency in ms and in frames |
-| **Render sweep** | `__operator.renderSweep()` | Which render scale fits this machine |
-| **Allocation probe** | `__operator.allocationProbe()` | Does the per-tick sim path allocate |
+| Match harness | `__p7.runMatches(n)` | Does a build-and-teardown cycle leak |
+| Lane report | `__p7.laneReport()` | Are this map's lanes within 15% of each other |
+| **Snag sweep** | `__p7.snagSweep()` | **Sprint every wall on this map** |
+| **Frame export** | `__p7.frameReport()` | p50/p95/p99/worst, plus the whole buffer, as JSON |
+| **Latency export** | `__p7.latencyReport()` | Input latency in ms and in frames |
+| **Render sweep** | `__p7.renderSweep()` | Which render scale fits this machine |
+| **Allocation probe** | `__p7.allocationProbe()` | Does the per-tick sim path allocate |
 | Save inspector | `F1`, right column | Migration, repair, what a bad save costs you |
 
 ## URL flags
@@ -764,7 +764,7 @@ The context block is the part that makes an export worth keeping. "p99 was 31 ms
 indistinguishable from noise unless it also says what it was 31 ms *of* — which map, how
 many bots, at what render scale, on what machine.
 
-`__operator.copyReport(report)` puts any of them on the clipboard as JSON.
+`__p7.copyReport(report)` puts any of them on the clipboard as JSON.
 
 ---
 
@@ -775,7 +775,7 @@ S4.7 gives all game logic 3.0 ms a frame. The AI is the part most likely to spen
 1. Boot a heavy bot match: `?harness=botmatch&map=mp_depot&bots=10&speed=1`.
 2. `F1`, and read the **AI** section: `decide`, `steer`, `perception` and `path` in
    milliseconds, plus nodes expanded and deferred requests.
-3. Leave it a minute, then `__operator.frameReport()`.
+3. Leave it a minute, then `__p7.frameReport()`.
 
 Read `peaks.mode` and the AI figures against 3.0 ms. If `deferredRequests` is climbing and
 `budgetExhaustedTicks` is non-zero, the pathfinder is the problem and `ai/AiScheduler.ts`
@@ -793,7 +793,7 @@ overlay before believing the label.
 
 ## Worked example 2 — "did the last match leak?"
 
-1. `await __operator.runMatches(3)` — or use `&matches=3`, which is the same code.
+1. `await __p7.runMatches(3)` — or use `&matches=3`, which is the same code.
 2. Read the boundary table it prints.
 
 Each row is a settled heap sample: the harness provokes a collection and waits before
@@ -813,7 +813,7 @@ three modes; the third boundary *fell*, so nothing was retained.
 S4.7 asks for zero allocations in the per-tick sim path.
 
 ```js
-await __operator.allocationProbe()
+await __p7.allocationProbe()
 ```
 
 It stops the loop, warms up 5,000 ticks, then runs 300,000 ticks — eighty-three minutes of
@@ -843,7 +843,7 @@ allocation to a stack.
 Start a match on the heaviest thing available — Depot, ten bots — and:
 
 ```js
-const sweep = await __operator.renderSweep()
+const sweep = await __p7.renderSweep()
 ```
 
 Six four-second holds at 1.0 down to 0.5, percentiles at each, and the setting restored to
@@ -856,7 +856,7 @@ render scale is the wrong lever — check `peaks.mode` and the AI section instea
 ## Worked example 5 — "is there anywhere on this map you get stuck?"
 
 ```js
-__operator.snagSweep()
+__p7.snagSweep()
 ```
 
 `debug/SnagHarness.ts` derives its run lines from the collision world rather than from a
@@ -890,9 +890,9 @@ three of its controls are useful while measuring:
   find out whether the depth pass is your problem.
 - **FPS counter** — a 4 Hz read-out that survives leaving a match, unlike the overlay.
 
-`__operator.settings()` returns the live record and `__operator.applySettings(patch)` applies
+`__p7.settings()` returns the live record and `__p7.applySettings(patch)` applies
 one the same way the screen does, so a script can change a setting and assert what moved.
-`__operator.palette()` returns the live gameplay colours, which is how the colourblind
+`__p7.palette()` returns the live gameplay colours, which is how the colourblind
 acceptance check is made rather than asserted.
 
 ## The navmesh read-outs M8 added
@@ -914,7 +914,7 @@ bots actually doing?"* rather than *"how fast is this frame?"*.
 
 ## Three switches, not one mode
 
-F1 → **Spectator (QA)**, or `__operator.spectate.*` from the console. They are independent on
+F1 → **Spectator (QA)**, or `__p7.spectate.*` from the console. They are independent on
 purpose, because they answer different questions:
 
 | Switch | Code | What it does | The question it answers |
@@ -955,7 +955,7 @@ observe through and one that is strobing at you.
 **Turning the spectator off is not one toggle.** `SPEC[]4` clears all three only when all three
 are on; from any other state it *completes* the set, because the codes are toggles and a toggle of
 a set is "complete it unless it is already complete". The panel's headline button and
-`__operator.spectate.off()` go through `bitsClearing`, which asks for one single-bit toggle per bit
+`__p7.spectate.off()` go through `bitsClearing`, which asks for one single-bit toggle per bit
 that is actually set. Reaching for the combo code to mean "off" is what shipped a bug where one
 active cheat became three across a migration.
 
@@ -966,12 +966,12 @@ where the geometry you flew out to inspect is geometry you cannot get out of.
 ## Console
 
 ```js
-__operator.spectate.all(true)        // all three; the common case
-__operator.spectate.god(true)        // just invulnerability
-__operator.spectate.invisible(true)  // implies god
-__operator.spectate.noclip(true)     // just the free-cam
-__operator.spectate.off()            // everything back
-__operator.spectate.state()          // "god · unseen · noclip", or "off"
+__p7.spectate.all(true)        // all three; the common case
+__p7.spectate.god(true)        // just invulnerability
+__p7.spectate.invisible(true)  // implies god
+__p7.spectate.noclip(true)     // just the free-cam
+__p7.spectate.off()            // everything back
+__p7.spectate.state()          // "god · unseen · noclip", or "off"
 ```
 
 Each returns the state line, so a console session reads back what it just did. Reachable
@@ -1074,7 +1074,7 @@ Post-M8 also added the knife (`V`). It has no panel, but the swing is on the bus
 `weapon.meleeSwing` with `{ sourceId, x, y, z, hit, lethal }`, which is enough to tap:
 
 ```js
-__operator.game.bus.on('weapon.meleeSwing', (p) => console.log(p));
+__p7.game.bus.on('weapon.meleeSwing', (p) => console.log(p));
 ```
 
 A swing that reports `hit: false` at the full 2 m reach found no target; one that reports
@@ -1095,14 +1095,14 @@ frame the hitbox test runs.
 through the ordinary ammunition readout with an infinity glyph in the reserve slot:
 
 ```js
-__operator.match().streaks.activeChopperFor(0)   // .mag, .magSize, .reloading, .reloadFraction
+__p7.match().streaks.activeChopperFor(0)   // .mag, .magSize, .reloading, .reloadFraction
 ```
 
 **Where the S&D bomb starts.** Authored per map rather than derived, so it can be read without
 a live match:
 
 ```js
-__operator.game.world.map.def.objectives.filter((o) => o.kind === 'bombspawn')
+__p7.game.world.map.def.objectives.filter((o) => o.kind === 'bombspawn')
 ```
 
 **Whether the depth buffer is actually 24-bit.** The z-fighting fix depends on it, and it is a

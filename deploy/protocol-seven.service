@@ -1,33 +1,33 @@
-# OPERATOR dedicated server (M10, S6.6).
+# PROTOCOL SEVEN dedicated server (M10, S6.6).
 #
 # S6.6 asks for "a single Node process, a documented port, a process manager or systemd unit
 # that restarts it on crash". This is that unit.
 #
-#   sudo cp deploy/operator.service /etc/systemd/system/
-#   sudo cp deploy/operator.env /etc/operator.env      # then edit it
+#   sudo cp deploy/protocol-seven.service /etc/systemd/system/
+#   sudo cp deploy/protocol-seven.env /etc/protocol-seven.env      # then edit it
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now operator
-#   systemctl status operator
-#   journalctl -u operator -f
+#   sudo systemctl enable --now protocol-seven
+#   systemctl status protocol-seven
+#   journalctl -u protocol-seven -f
 #
 # The server writes structured JSON to stdout when stdout is not a TTY, which under systemd
-# it never is — so `journalctl -u operator` is already machine-readable and
-# `journalctl -u operator -o cat | jq 'select(.event=="metrics")'` gets the S7 metrics out.
+# it never is — so `journalctl -u protocol-seven` is already machine-readable and
+# `journalctl -u protocol-seven -o cat | jq 'select(.event=="metrics")'` gets the S7 metrics out.
 
 [Unit]
-Description=OPERATOR dedicated game server
-Documentation=https://github.com/your-org/operator
+Description=PROTOCOL SEVEN dedicated game server
+Documentation=https://github.com/pinchasVaknin/protocol-seven
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=operator
-Group=operator
-WorkingDirectory=/opt/operator
+User=protocol-seven
+Group=protocol-seven
+WorkingDirectory=/opt/protocol-seven
 
 # Everything operational is configuration (S4.9), never baked into the build.
-EnvironmentFile=/etc/operator.env
+EnvironmentFile=/etc/protocol-seven.env
 
 ExecStart=/usr/bin/node dist-server/serve.js
 

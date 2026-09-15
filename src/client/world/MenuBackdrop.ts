@@ -130,7 +130,7 @@ export class MenuBackdrop {
   private skirmishesBuilt = 0;
   /**
    * Whether the map behind the menu carries the fight (E). On by default; a console can turn
-   * it off (`__operator.game.backdrop.combat = false`) for the isolation half of a measurement,
+   * it off (`__p7.game.backdrop.combat = false`) for the isolation half of a measurement,
    * and the flag is the switch the phase ships behind: off is Phase A's dolly alone.
    */
   combat = true;

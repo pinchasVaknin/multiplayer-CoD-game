@@ -27,7 +27,7 @@ import { simulateXp, simulationToLines } from '../../shared/meta/XpSimulator';
 import { cssHex, palette } from '../ui/Palette';
 
 /**
- * `window.__operator`, the console surface the acceptance measurements are read from.
+ * `window.__p7`, the console surface the acceptance measurements are read from.
  *
  * Documented in DEBUG.md. Read-only handles plus the headless harnesses; nothing here mutates
  * gameplay except the two debug levers that exist for that purpose (`setSyntheticLoad` and the
@@ -119,7 +119,7 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
      * God mode, invisibility and free-cam, from the console as well as from the overlay.
      *
      * Reachable without opening the overlay on purpose: the overlay is a large modal panel
-     * and half the reason to spectate is to *watch the screen*. `__operator.spectate.all()`
+     * and half the reason to spectate is to *watch the screen*. `__p7.spectate.all()`
      * is the one-liner; the three below are the individual switches, and each returns the
      * spectator's state line so a console session reads back what it just did.
      *
@@ -259,8 +259,8 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
      * identical `shared/` modules, and produces the identical shape of output. If the two
      * fingerprints match, the simulation is the same program in both runtimes.
      *
-     *   __operator.determinism.fingerprint()   -> compare against the Node run at a glance
-     *   __operator.determinism.download()      -> browser-hashes.json, for the differ
+     *   __p7.determinism.fingerprint()   -> compare against the Node run at a glance
+     *   __p7.determinism.download()      -> browser-hashes.json, for the differ
      */
     determinism: {
       run: (ticks = DETERMINISM_DEFAULTS.ticks, seed = DETERMINISM_DEFAULTS.seed) =>
@@ -291,7 +291,7 @@ export function installConsoleApi(game: Game, harness: Harness, matchHarness: Ma
       },
     },
   };
-  Object.defineProperty(window, '__operator', { value: api, configurable: true });
+  Object.defineProperty(window, '__p7', { value: api, configurable: true });
 }
 
 /** The live gameplay palette, for the colourblind acceptance check. */

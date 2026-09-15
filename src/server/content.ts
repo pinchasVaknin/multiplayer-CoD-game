@@ -140,7 +140,7 @@ function printSpawns(entry: MapEntry): void {
 }
 
 function main(): number {
-  console.log('OPERATOR — content facts (modes and maps)');
+  console.log('PROTOCOL SEVEN — content facts (modes and maps)');
   for (const entry of MODES) printColumns(entry);
   for (const entry of MODES) printWinGrid(entry);
   for (const entry of MAPS) printSpawns(entry);

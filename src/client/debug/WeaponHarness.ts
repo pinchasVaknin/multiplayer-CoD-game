@@ -35,7 +35,7 @@ import { CollisionWorld } from '../../shared/world/CollisionWorld';
  * exact aim vector: the point there is to isolate the rig and the falloff maths from the
  * spread cone, which would otherwise put a fraction of a degree of noise on every reading.
  *
- * Available in the browser console as `__operator.weaponHarness`.
+ * Available in the browser console as `__p7.weaponHarness`.
  */
 
 const FLOOR_HALF = 200;

@@ -11,7 +11,7 @@ import type { MatchHarness } from './MatchHarness';
  * S6.5 splits the performance pass in two: what this build does, and what it *hands over*
  * because it cannot be answered on the wrong hardware. This file is the second half, and
  * the brief's requirement is specific — *"make each a single click or URL flag and document
- * it in DEBUG.md"*. So each is one call on `window.__operator`, each returns a plain object,
+ * it in DEBUG.md"*. So each is one call on `window.__p7`, each returns a plain object,
  * and each of those objects has the same envelope:
  *
  * ```

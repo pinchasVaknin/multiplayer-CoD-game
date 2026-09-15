@@ -167,7 +167,7 @@ const CASES: readonly Case[] = [
 ];
 
 function main(): number {
-  console.log('OPERATOR — progression probe (playtest round 4)\n');
+  console.log('PROTOCOL SEVEN — progression probe (playtest round 4)\n');
   console.log(
     'level table: %d levels, %s XP to the cap, %s XP in the last step',
     MAX_LEVEL,
@@ -343,7 +343,7 @@ function ladder(): number {
   const unlocks = UnlockState.fromSave(save);
   const rungs = buildLadder(averagePerMatch, newcomerPerMatch);
 
-  console.log('\n\nOPERATOR — the unlock ladder (playtest round 5, F10)\n');
+  console.log('\n\nPROTOCOL SEVEN — the unlock ladder (playtest round 5, F10)\n');
   console.log(
     'a match pays %s XP at the shipped AVERAGE_MATCH and %s at the declared NEWCOMER_MATCH;',
     averagePerMatch.toLocaleString(),

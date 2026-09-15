@@ -15,7 +15,7 @@ import type { FrameStats } from './FrameStats';
  * "Your job is to make that one click." So it is one call:
  *
  * ```js
- * await __operator.runMatches(3)   // or 10; the human's number, not mine
+ * await __p7.runMatches(3)   // or 10; the human's number, not mine
  * ```
  *
  * and the heap is logged at every boundary. Three things make the number trustworthy:

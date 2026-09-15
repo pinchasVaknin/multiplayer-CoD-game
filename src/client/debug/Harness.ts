@@ -17,7 +17,7 @@ import { CollisionWorld } from '../../shared/world/CollisionWorld';
  * than by a human trying to break it by hand.
  *
  * Everything here runs on the same fixed DT the game uses. Available in the browser
- * console as `__operator.harness`.
+ * console as `__p7.harness`.
  */
 
 export interface RunResult {

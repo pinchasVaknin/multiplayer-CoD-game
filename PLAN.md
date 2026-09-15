@@ -1,4 +1,4 @@
-# OPERATOR — PLAN
+# PROTOCOL SEVEN — PLAN
 
 Browser arena FPS. This file is the handover: what exists, what was decided, and what the next
 milestone needs to know. A fresh session inherits the repository and this file, nothing else.
@@ -828,7 +828,7 @@ moves — two screenshots five seconds apart show the wall's end and the far bea
 The header sat on a sunlit wall, so the top fade went from 0.78 → 0 at 26 % to 0.9 → 0 at
 34 % and the header text carries a shadow; whether that is enough on a display is below.
 
-**GPU, with a new instrument.** `__operator.gpu()` reads `renderer.info.memory` (one console
+**GPU, with a new instrument.** `__p7.gpu()` reads `renderer.info.memory` (one console
 entry, in DEBUG.md's list). Frames stepped by hand in the hidden pane (`loop.frame`, the
 pane suspends rAF):
 
@@ -1439,7 +1439,7 @@ a finished match is replaced by the next seed on the step that found it over. **
 is baked in `prepare`**, once per map per page, before the map's first frame: in the frame
 the map landed it was a 475 ms hitch (bake 228 of it; the second build on a cached grid is
 5.5 ms). `backdrop.combat = false` is Phase A's dolly alone, and it is the switch the phase
-ships behind. `__operator.leaks()` (DEBUG.md) reads live bus subscriptions, the GPU counts
+ships behind. `__p7.leaks()` (DEBUG.md) reads live bus subscriptions, the GPU counts
 and the JS heap in one call.
 
 **The three numbers, in the pane** (Foundry, 5 v 5, 1920×1080):

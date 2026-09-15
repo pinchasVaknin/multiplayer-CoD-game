@@ -8,7 +8,7 @@
  * Both halves write the same JSON shape:
  *
  *   node dist-server/hashRun.js --out node-hashes.json
- *   # in the browser console: __operator.determinism.download()
+ *   # in the browser console: __p7.determinism.download()
  *   node scripts/diff-hashes.mjs node-hashes.json browser-hashes.json
  *
  * The "and the field that differs" clause is why each sample carries named fields as well as

@@ -6,7 +6,7 @@ import { AudioGraph } from './AudioGraph';
 /**
  * The game's own voices, layered out of the two primitives in `AudioGraph` (brief S6.7).
  *
- * Everything audible in OPERATOR is a handful of `noiseBurst` and `oscHit` calls with
+ * Everything audible in PROTOCOL SEVEN is a handful of `noiseBurst` and `oscHit` calls with
  * different numbers — that is the toolkit S6.7 asks for, and it is why M5 can add eleven
  * weapons without adding a synthesis engine. The weapon voices live next to the weapons,
  * in `weapons/WeaponAudio.ts`; what is here is the world: feet, landings and the slide.

@@ -822,7 +822,7 @@ async function main(): Promise<number> {
   if (args.tierSweep) return runTierSweep(args, log);
 
   log.info(
-    `OPERATOR headless — node ${process.version}, ${args.matches} match(es), ` +
+    `PROTOCOL SEVEN headless — node ${process.version}, ${args.matches} match(es), ` +
       `${args.mode} on ${args.map}, ${args.bots} bots, tier ${args.tier}, seed ${args.seed}, ` +
       `${args.asap ? 'unpaced' : 'real time at 60 Hz'}.`,
   );

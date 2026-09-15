@@ -187,7 +187,7 @@ export class BotHarness {
 
     console.info(
       `[BotHarness] ${teamA}v${teamB} bots, tier ${tier}, ${speed}x sim speed. ` +
-        `__operator.harnessReport() for numbers.`,
+        `__p7.harnessReport() for numbers.`,
     );
   }
 

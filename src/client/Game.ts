@@ -1280,7 +1280,7 @@ export class Game {
   /**
    * Ask for an entitlement by bits, for the surfaces that are not a text field (round 4, F14).
    *
-   * The QA spectator panel and `__operator.spectate.*` want *"god mode on"* rather than a string
+   * The QA spectator panel and `__p7.spectate.*` want *"god mode on"* rather than a string
    * to type, and they must not become a second way to grant one — so the bits are resolved to the
    * code that toggles them and go through the same door a typed code does. A bit combination with
    * no code is not a request anybody can make, which is the point rather than an edge case.

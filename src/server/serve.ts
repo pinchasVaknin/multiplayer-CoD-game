@@ -32,7 +32,7 @@ async function main(): Promise<number> {
   installServerLogging(process.stdout.isTTY === true ? 'text' : 'json', 'info');
 
   const log = logger('server');
-  log.info(`OPERATOR dedicated server — node ${process.version}, protocol v${PROTOCOL_VERSION}.`);
+  log.info(`PROTOCOL SEVEN dedicated server — node ${process.version}, protocol v${PROTOCOL_VERSION}.`);
   if (!isIdle(cfg.conditions)) {
     log.warn(`NET_SIM active on every outbound link: ${describeConditions(cfg.conditions)}`);
   }

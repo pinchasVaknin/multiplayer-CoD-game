@@ -173,7 +173,7 @@ export class Spectator {
   }
 
   /**
-   * Put everything back. Called by `__operator.spectate.off()`, and by nothing else.
+   * Put everything back. Called by `__p7.spectate.off()`, and by nothing else.
    *
    * **Not called on teardown any more.** `DebugSuite.dispose` did, from before F14, when these
    * three switches were booleans this class owned and `reset()` wrote them to false. Once they

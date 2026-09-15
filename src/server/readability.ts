@@ -1019,7 +1019,7 @@ function metresToPx(metres: number, distance: number): number {
 
 // -- main -------------------------------------------------------------------
 
-console.log('OPERATOR readability probe — playtest round 4, P9 (B2, B12, F9)');
+console.log('PROTOCOL SEVEN readability probe — playtest round 4, P9 (B2, B12, F9)');
 
 const crosshair = crosshairTable();
 scopedWeapons();

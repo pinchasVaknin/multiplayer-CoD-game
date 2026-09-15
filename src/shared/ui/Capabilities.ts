@@ -82,7 +82,7 @@ export function playability(caps: DeviceCapabilities): Playability {
       ok: false,
       headline: 'This browser cannot capture the mouse',
       detail:
-        'OPERATOR aims by locking the pointer to the page, and this browser does not offer the ' +
+        'PROTOCOL SEVEN aims by locking the pointer to the page, and this browser does not offer the ' +
         'Pointer Lock API. A current desktop Chrome, Edge, Firefox or Safari will run it.',
     };
   }
@@ -90,7 +90,7 @@ export function playability(caps: DeviceCapabilities): Playability {
     return {
       id: 'no-fine-pointer',
       ok: false,
-      headline: 'OPERATOR needs a keyboard and a mouse',
+      headline: 'PROTOCOL SEVEN needs a keyboard and a mouse',
       detail:
         'This is a desktop shooter: it is played with WASD and a mouse, and there is no touch ' +
         'control scheme. Nothing here would work on a touchscreen, so rather than let you into ' +

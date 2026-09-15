@@ -48,7 +48,7 @@ const failures = await withPage('layout', PAGE, async ({ cdp, sessionId, binary 
   const viewports = await evaluate(cdp, sessionId, 'window.__layoutProbe.viewports');
   const surfaces = await evaluate(cdp, sessionId, 'window.__layoutProbe.surfaces');
 
-  console.log(`OPERATOR layout probe — ${binary}`);
+  console.log(`PROTOCOL SEVEN layout probe — ${binary}`);
   console.log(`${surfaces.length} surfaces x ${viewports.length} viewports\n`);
 
   let count = 0;

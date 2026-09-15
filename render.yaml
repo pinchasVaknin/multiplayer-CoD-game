@@ -10,7 +10,7 @@
 # mixed-content rule satisfied on Render's HTTPS, and leaves no cross-origin request to allow.
 services:
   - type: web
-    name: operator
+    name: protocol-seven
     runtime: node
     plan: free
     # `npm run build` is the gate, then the client into dist/, then the server into

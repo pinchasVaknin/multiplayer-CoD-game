@@ -1,4 +1,4 @@
-# Deploying OPERATOR to Render.com
+# Deploying PROTOCOL SEVEN to Render.com
 
 The whole game is **one web service**: the Node process serves the built client *and* the
 WebSocket on the same port. That is the shape this guide assumes, and it is why there is no

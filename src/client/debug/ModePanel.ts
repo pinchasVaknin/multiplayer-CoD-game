@@ -146,7 +146,7 @@ export class ModePanel extends Disposable {
     overlay.addTextHook(() => this.refresh());
   }
 
-  /** The lane report, measured on demand and cached. Exposed on `__operator.laneReport()`. */
+  /** The lane report, measured on demand and cached. Exposed on `__p7.laneReport()`. */
   laneReport(): LaneReport {
     if (this.laneCache === null) this.laneCache = this.measureLanes();
     return this.laneCache;

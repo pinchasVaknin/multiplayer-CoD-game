@@ -14,7 +14,7 @@ import { nodeClock } from './NodeClock';
  *
  * Runs the fixed command sequence through the shared simulation and writes one JSON file of
  * per-tick samples. The browser writes its own from the debug console
- * (`__operator.determinism.download()`), and `scripts/diff-hashes.mjs` compares the two and
+ * (`__p7.determinism.download()`), and `scripts/diff-hashes.mjs` compares the two and
  * reports the first divergent tick and the field that differs.
  *
  * Kept as its own entry point rather than a flag on `main.ts` because it is not a match — it

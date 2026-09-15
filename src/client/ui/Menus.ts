@@ -128,7 +128,7 @@ export class Menus {
     this.page = 'MAIN';
     this.screen.hidden = false;
     this.frame.classList.remove('op-menu');
-    this.frame.replaceChildren(title('OPERATOR'), subtitle(message));
+    this.frame.replaceChildren(title('PROTOCOL SEVEN'), subtitle(message));
   }
 
   /**
@@ -150,7 +150,7 @@ export class Menus {
     const body = document.createElement('p');
     body.className = 'op-screen__note';
     body.textContent = detail;
-    this.frame.replaceChildren(title('OPERATOR'), subtitle(headline), body);
+    this.frame.replaceChildren(title('PROTOCOL SEVEN'), subtitle(headline), body);
   }
 
   /** Open the front end at its main page. */
@@ -192,7 +192,7 @@ export class Menus {
     brand.className = 'op-menu__brand';
     const wordmark = document.createElement('h1');
     wordmark.className = 'op-menu__wordmark';
-    wordmark.textContent = 'OPERATOR';
+    wordmark.textContent = 'PROTOCOL SEVEN';
     const rule = document.createElement('span');
     rule.className = 'op-menu__rule';
     const tag = document.createElement('span');

@@ -1,4 +1,4 @@
-# OPERATOR — Balance
+# PROTOCOL SEVEN — Balance
 
 The reference for every future tuning argument (brief S6.5).
 
@@ -19,7 +19,7 @@ then, in the browser console:
 ```js
 fetch('/verify/arsenal.js').then(r => r.text()).then(eval)
 __verifyArsenal.balance()      // the table, as a console table and as Markdown
-__operator.balanceTable()      // just the Markdown, ready to paste back over this file
+__p7.balanceTable()      // just the Markdown, ready to paste back over this file
 ```
 
 The debug overlay has a **MEASURE BALANCE TABLE** button in the *Arsenal* panel that runs

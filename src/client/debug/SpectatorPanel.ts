@@ -7,7 +7,7 @@ import type { Spectator } from './Spectator';
  * Three independent checkboxes plus one "all of it" button, matching `Spectator`'s shape —
  * see that file for why the three are not one switch. The panel owns no state of its own: the
  * checkboxes are re-read from the `Spectator` on every text refresh, so a toggle flipped from
- * the console (`__operator.spectate.god(true)`) is reflected here rather than leaving the
+ * the console (`__p7.spectate.god(true)`) is reflected here rather than leaving the
  * panel disagreeing with the game about what is on.
  *
  * **That last property is what makes the panel honest about a refusal** (round 4, F14). Every

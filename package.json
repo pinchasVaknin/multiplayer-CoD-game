@@ -1,9 +1,9 @@
 {
-  "name": "operator",
+  "name": "protocol-seven",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "OPERATOR - arena FPS. Milestone 9: the simulation leaves the browser.",
+  "description": "PROTOCOL SEVEN - arena FPS. Milestone 9: the simulation leaves the browser.",
   "scripts": {
     "dev": "vite",
     "//build": "The deployable artefact: the gate, then the client into dist/, then the server into dist-server/. A managed host runs this as its build command and `npm start` afterwards, so both halves have to come out of one script.",

@@ -21,7 +21,7 @@
  * rather than re-priced: the burst is the reward for finishing a first match, and every
  * other gated category is already authored against these numbers.
  *
- * Every number here is reachable from the XP simulator (`__operator.simulateXp(n)` in the
+ * Every number here is reachable from the XP simulator (`__p7.simulateXp(n)` in the
  * F1 panel, `xpPerMatch` in `npm run progression`), which fast-forwards N matches of a
  * declared performance and reports where the curve puts you — S7's requirement, and the
  * thing that makes this table tunable without playing 55 levels.

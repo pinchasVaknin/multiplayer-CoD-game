@@ -33,7 +33,7 @@ import { Disposable } from '../core/Disposable';
  * **The side swap.** A mode that sets `swapSidesAfterRound` gets its ends changed for real:
  * the team totals swap and the spawn selector starts drawing each team's candidates from the
  * other team's zones. TDM never triggers it, but it is implemented rather than stubbed,
- * and `__operator.flow().swapSides()` exercises it.
+ * and `__p7.flow().swapSides()` exercises it.
  *
  * **The killfeed's input.** The flow already resolves killer and victim against the roster
  * to build a `KillEvent`; having the feed subscribe separately would be two places that can

@@ -188,7 +188,7 @@ export class DebugOverlay extends Disposable {
     header.className = 'dbg-header';
     const headTitle = document.createElement('span');
     headTitle.className = 'dbg-header__title';
-    headTitle.textContent = 'OPERATOR · DEBUG';
+    headTitle.textContent = 'PROTOCOL SEVEN · DEBUG';
     const headHint = document.createElement('span');
     headHint.className = 'dbg-header__hint op-label';
     headHint.textContent = 'F2 collision · F3 reset stats · Esc close';
