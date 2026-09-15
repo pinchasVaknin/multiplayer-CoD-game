@@ -6,7 +6,7 @@ import {
 import type { GameModeId } from '../../shared/modes/GameMode';
 import { MAPS, MODES, modesForMap } from '../../shared/modes/ModeRegistry';
 import { createScreen } from './Frame';
-import { makeEmblem, makeLockup } from './Emblem';
+import { makeLockup, makeMark } from './Emblem';
 import { makeIconSvg } from './WeaponIcons';
 
 /**
@@ -204,7 +204,7 @@ export class Menus {
     tag.className = 'op-menu__tag';
     tag.textContent = 'ARENA FPS';
     // The mark to the left of the name, its eyes breathing (`Emblem.ts`).
-    brand.append(makeEmblem('op-menu__emblem'), wordmark, rule, tag);
+    brand.append(makeMark('op-menu__mark'), wordmark, rule, tag);
 
     head.append(brand, this.playerCard());
     return head;
