@@ -1526,27 +1526,36 @@ asks: the logo as the screen the game opens on; the menu's buttons in the Create
 bars' colours and "a little broken" like the reference; the skull alone as the mark to the
 left of the name; its eyes breathing.
 
-**Built** (`8ddb535`; `Emblem.ts` 100 lines new). An attached image never reaches the disk
-and the project ships no raster (M12's first paragraph), so the mask is **paths** — crown
-corners, angry slits, the light past the mask, vents, brush damage, strokes — with the eyes
-and the light as their own shapes so `app.css` can breathe through them: opacity 0.55 → 1
-with a drop-shadow glow, **2.8 s on the eyes, 3.7 s on the light** so the two never lock
-into one beat; `prefers-reduced-motion` holds them lit. The mark is 56 px beside the
-wordmark; `makeLockup` is the logo's arrangement at 340 / 96 / 150 px, and `showBoot` and
-the device gate stand on it (`.op-boot`) on the black the canvas clears to until the map
-lands — the game opens on the logo. The nav plates carry the bars' gradient, left rule and
-grey-white type, and one jagged `clip-path` — seven irregular steps down the leading edge,
-a chipped trailing top corner, a notch in the trailing bottom; PLAY is the accent rule and
-glow an equipped bar has, not a white slab.
+**First pass, turned down** (`8ddb535`): the mask as SVG paths, on the ground that the
+project ships no raster and an attached image never reaches the disk. The human's verdict —
+*"I can see you cannot draw it"* — and the correct one: a logo is the artwork, not a
+reading of it. The logo *was* on disk, in Downloads.
 
-**Measured.** `npm run layout` PASS with a new `boot` surface (lockup 1003 × 415; the device
-gate 1003 × 571 on it); `npm run check` green, 134 tests. Pane: the eyes at opacity
-0.56 → 0.98 → 0.76 across one cycle, the animation `op-emblem-breathe` at 2.8 s.
+**Built** (`ab69e36`). `public/brand/` holds the project's first image assets, cut from
+that file by a one-off Pillow pass (the numbers are in the commit, not in a build script):
+`logo.png` (1024², 272 kB) with its black keyed to alpha, so the boot screen and the device
+gate stand it on the canvas's clear without a box; `mark.png` (438 × 611, 160 kB), the
+skull cut from the logo and keyed the same way, edge pixels un-premultiplied; and
+`mark-eyes.png` (26 kB), the same cut reduced to its cyan — the eyes and the light through
+them. **The eyes breathe on the artwork itself**: in `mark.png` the cyan sits at 40 % of
+itself, and the eyes layer over it swings the other 60 % in and out (opacity 0.35 → 1 with
+a drop-shadow glow, 2.8 s; `prefers-reduced-motion` holds them lit). `Emblem.ts` is
+`makeMark` and `makeLockup` over those three files; the paths are gone. The mark is 84 px
+beside the wordmark. The nav plates (kept from the first pass) carry the bars' gradient,
+left rule and grey-white type, and one jagged `clip-path` — seven irregular steps down the
+leading edge, a chipped trailing top corner, a notch in the trailing bottom; PLAY is the
+accent rule and glow an equipped bar has.
 
-**Needs a browser, and one decision:** whether the vector mask is the logo or a cousin of
-it — the raster's grain is what the paths cannot be. If the exact PNG is wanted behind the
-boot screen, `public/brand/protocol-seven.png` becomes the project's one image asset and
-the lockup's background is a line of CSS; the mark by the name stays vector, for the eyes.
+**Measured.** In the probe's headless Chrome, four captures of the mark over one cycle: the
+eyes' mean brightness **157 at the peak, 113 at the trough**, the glow's area 2 860 → 2 073
+px — the first cut, before the face layer's cyan was dimmed, could only glow *brighter*
+(the area swung ±13 % and the eyes never fell below the artwork's own). `npm run layout`
+PASS with a new `boot` surface (880 × 880); `npm run check` green, 134 tests.
+
+**What this changes about the project:** M12's "no asset files" is no longer a fact — three
+PNGs, 464 kB, under `public/brand/`. Nothing gates them (`check:skins` scans its own
+folder); if the brand grows, a `check:brand` in the shape of `check:skins` is the next
+line to write.
 
 ## What each item breaks
 
