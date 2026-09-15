@@ -993,7 +993,7 @@ this phase must not have moved it); the pane, 50 cycles of MENU → LOADOUT → 
 
 ### B1–B4 — done (session of 2026-09-15): the stage, six boxes, the docked zone, the tooltip
 
-**The stage** (`ui/CharacterStage.ts`, 300 lines). The figure is an `ActorAvatar` from
+**The stage** (`ui/CharacterStage.ts`, 307 lines). The figure is an `ActorAvatar` from
 `CharacterAssetService.avatarProvider(def).create()` — the object `BotRenderer` makes for a
 body in a match — driven each tick by `update` with a standing, armed, idle
 `ActorAnimationInput`, which the selector answers with `idleWeaponReady`; the weapon in its
@@ -1007,7 +1007,7 @@ first paint faced the camera at its back — a body at yaw 0 faces −Z — so t
 at a half turn. `LOADING OPERATOR…` is written from `tick`, because the body arrives between
 edits and a refresher only runs on one.
 
-**Six boxes** (`LoadoutEditor.ts`, 864 → 1 010 lines with the zone, the pager and the tooltip
+**Six boxes** (`LoadoutEditor.ts`, 864 → 1 173 lines with the zone, the pager and the tooltip
 in it): PRIMARY and SECONDARY (the weapon's own silhouette from `iconFor`, its name, its
 finish, its attachments as chips), EQUIPMENT (lethal + tactical), PERKS (three chips, `—`
 for an empty tier), KILLSTREAKS (three, the box's tab labels carry the keys), FIELD UPGRADE.
