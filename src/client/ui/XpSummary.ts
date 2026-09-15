@@ -24,6 +24,20 @@ import type { ProceduralAudio } from '../engine/ProceduralAudio';
  * deliberately: this plays over a torn-down match with no simulation running, and it is
  * presentation with no gameplay consequence — S4.1's constant `dt` governs gameplay
  * integration, and there is none here.
+ *
+ * ## The accordion (M15, D2)
+ *
+ * The element is two parts in a bottom-anchored column: the **strip** — level, bar, total —
+ * which is always shown and is what the summary's band holds when nothing else is asked for,
+ * and the **list** — the rows and the unlock tail — above it, `hidden` until the accordion
+ * opens. The cadence plays exactly as before: rows are appended on their interval, the bar
+ * fills behind them, a level-up interrupts; only the rows land out of sight until the list
+ * opens, which it does on a click on the strip or on its own when the cadence finishes.
+ * Opening grows the list *upward* inside the band — `max-height` from 0 to a ceiling the
+ * frame's stylesheet sets, on a list that sits on the strip — so the strip, the buttons and
+ * everything above the band stay where they are, and the page never moves. The band's height
+ * is fixed by the screen; the ceiling is the room the list has, and a report that outruns it
+ * is what `npm run layout` would refuse.
  */
 
 /** Seconds between one row landing and the next. */
@@ -38,7 +52,8 @@ const TAIL_DELAY = 0.4;
 type Phase = 'IDLE' | 'ROWS' | 'BAR' | 'LEVELUP' | 'TAIL' | 'DONE';
 
 export interface XpSummaryDeps {
-  readonly audio: ProceduralAudio;
+  /** The two cues the cadence plays. `ProceduralAudio` in the client; two no-ops on the layout probe. */
+  readonly audio: Pick<ProceduralAudio, 'playXpTick' | 'playLevelUp'>;
 }
 
 export class XpSummary {
@@ -52,6 +67,8 @@ export class XpSummary {
    */
   prestige = 0;
 
+  private readonly listEl: HTMLElement;
+  private readonly strip: HTMLButtonElement;
   private readonly rowsEl: HTMLElement;
   private readonly totalEl: HTMLElement;
   private readonly levelEl: HTMLElement;
@@ -59,6 +76,7 @@ export class XpSummary {
   private readonly barLabel: HTMLElement;
   private readonly flourish: HTMLElement;
   private readonly tailEl: HTMLElement;
+  private opened = false;
 
   private readonly deps: XpSummaryDeps;
 
@@ -79,36 +97,104 @@ export class XpSummary {
     this.element = document.createElement('div');
     this.element.className = 'xp';
 
-    const head = document.createElement('div');
-    head.className = 'xp__head';
+    // The list: the rows and the unlock tail, above the strip, hidden until the accordion opens.
+    this.listEl = document.createElement('div');
+    this.listEl.className = 'xp__list';
+    this.listEl.hidden = true;
 
-    this.levelEl = document.createElement('div');
+    this.rowsEl = document.createElement('div');
+    this.rowsEl.className = 'xp__rows';
+
+    this.tailEl = document.createElement('div');
+    this.tailEl.className = 'xp__tail';
+
+    this.listEl.append(this.rowsEl, this.tailEl);
+
+    // The strip: the level, the bar with its label, the running total, and the chevron. One
+    // button, so the whole strip is the accordion's handle and a keyboard can reach it.
+    this.strip = document.createElement('button');
+    this.strip.type = 'button';
+    this.strip.className = 'xp__strip';
+    this.strip.setAttribute('aria-expanded', 'false');
+    this.strip.addEventListener('click', () => this.toggle());
+
+    const levelBlock = document.createElement('div');
+    levelBlock.className = 'xp__level-block';
+    const levelCaption = document.createElement('span');
+    levelCaption.className = 'op-label';
+    levelCaption.textContent = 'LEVEL';
+    this.levelEl = document.createElement('span');
     this.levelEl.className = 'xp__level op-num';
+    levelBlock.append(levelCaption, this.levelEl);
 
-    this.totalEl = document.createElement('div');
-    this.totalEl.className = 'xp__total op-num';
-
-    head.append(this.levelEl, this.totalEl);
-
+    const barBlock = document.createElement('div');
+    barBlock.className = 'xp__bar-block';
     const bar = document.createElement('div');
     bar.className = 'xp__bar';
     this.barFill = document.createElement('i');
     bar.appendChild(this.barFill);
-
     this.barLabel = document.createElement('div');
     this.barLabel.className = 'xp__bar-label op-label';
+    barBlock.append(bar, this.barLabel);
 
-    this.rowsEl = document.createElement('div');
-    this.rowsEl.className = 'xp__rows';
+    this.totalEl = document.createElement('div');
+    this.totalEl.className = 'xp__total op-num';
+
+    const chevron = document.createElement('span');
+    chevron.className = 'xp__chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+
+    this.strip.append(levelBlock, barBlock, this.totalEl, chevron);
 
     this.flourish = document.createElement('div');
     this.flourish.className = 'xp__flourish';
     this.flourish.hidden = true;
 
-    this.tailEl = document.createElement('div');
-    this.tailEl.className = 'xp__tail';
+    this.element.append(this.listEl, this.strip, this.flourish);
+  }
 
-    this.element.append(head, bar, this.barLabel, this.rowsEl, this.flourish, this.tailEl);
+  /** Whether the row list is showing. */
+  get isOpen(): boolean {
+    return this.opened;
+  }
+
+  /**
+   * Grow the list up out of the strip. `instant` skips the transition — the layout probe's,
+   * which measures in the same task it calls this in and wants the geometry the client reaches
+   * `--dur-med` later, not the first keyframe of it.
+   */
+  open(instant = false): void {
+    if (this.opened) return;
+    this.opened = true;
+    this.strip.setAttribute('aria-expanded', 'true');
+    this.listEl.hidden = false;
+    if (instant) this.element.classList.add('xp--instant');
+    // A reflow between un-hiding and the class, so the height is a transition from 0.
+    void this.listEl.offsetHeight;
+    this.element.classList.add('xp--open');
+    if (instant) {
+      void this.listEl.offsetHeight;
+      this.element.classList.remove('xp--instant');
+    }
+  }
+
+  /** Fold the list back into the strip. */
+  close(): void {
+    if (!this.opened) return;
+    this.opened = false;
+    this.strip.setAttribute('aria-expanded', 'false');
+    this.element.classList.remove('xp--open');
+    const onEnd = (e: TransitionEvent): void => {
+      if (e.target !== this.listEl) return;
+      this.listEl.removeEventListener('transitionend', onEnd);
+      if (!this.opened) this.listEl.hidden = true;
+    };
+    this.listEl.addEventListener('transitionend', onEnd);
+  }
+
+  toggle(): void {
+    if (this.opened) this.close();
+    else this.open();
   }
 
   /** Start the animation. Safe to call again; the previous run is abandoned. */
@@ -127,8 +213,14 @@ export class XpSummary {
 
     this.rowsEl.replaceChildren();
     this.tailEl.replaceChildren();
+    this.tailEl.classList.remove('is-in');
     this.flourish.hidden = true;
     this.flourish.classList.remove('is-on');
+    // Folded, every time: the rows land out of sight and the list opens when they are all in.
+    this.opened = false;
+    this.strip.setAttribute('aria-expanded', 'false');
+    this.element.classList.remove('xp--open');
+    this.listEl.hidden = true;
     this.paintLevel(report.levelBefore);
     this.paintBar();
     this.totalEl.textContent = '+0 XP';
@@ -210,6 +302,8 @@ export class XpSummary {
         if (this.timer < TAIL_DELAY) break;
         this.paintTail();
         this.phase = 'DONE';
+        // The cadence is over: show what it landed, without being asked (D2).
+        this.open();
         break;
 
       case 'IDLE':

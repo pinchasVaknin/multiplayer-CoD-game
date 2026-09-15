@@ -5,7 +5,7 @@ import type { Profile } from './meta/Profile';
 import type { CharacterAssetService } from './characters/CharacterAssetService';
 import type { XpReport } from '../shared/meta/XpRules';
 import type { MatchResult } from '../shared/modes/GameMode';
-import { EndOfMatch } from './ui/EndOfMatch';
+import { EndOfMatch, type LineupSource } from './ui/EndOfMatch';
 import { LoadoutEditor } from './ui/LoadoutEditor';
 import { Menus, type MenuSelection } from './ui/Menus';
 import { PauseMenu } from './ui/PauseMenu';
@@ -148,6 +148,9 @@ export class GameScreens {
         this.xpSummary.finish();
         deps.onExitSummary();
       },
+      // The lineup's bodies (M15, D1): the same service and the same filtering as the match's.
+      characterAssets: deps.characterAssets,
+      anisotropy: deps.anisotropy,
     });
     // The M4 insertion point, filled (S6.1). `EndOfMatch` needed no other change.
     this.summary.xpSlot.appendChild(this.xpSummary.element);
@@ -167,6 +170,8 @@ export class GameScreens {
     mapName: string,
     report: XpReport | null,
     prestige: number,
+    /** Which body and which weapon each entity on the podium gets (M15, D1). `Game` answers. */
+    lineup: LineupSource,
     /**
      * Whether a server is holding this screen (M11, §6.9).
      *
@@ -189,6 +194,7 @@ export class GameScreens {
       match.localTeam,
       match.localId,
       match.score,
+      lineup,
     );
     this.summary.xpSlot.hidden = report === null;
     if (report === null) return;

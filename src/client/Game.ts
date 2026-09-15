@@ -90,6 +90,7 @@ import {
   DEFAULT_CHARACTER_ID,
 } from './characters/CharacterCatalog';
 import { RandomCharacterSelector } from './characters/RandomCharacterSelector';
+import type { LineupSource } from './ui/EndOfMatch';
 import { GameScreens } from './GameScreens';
 import { applyEquippedLoadout, asModeId } from './GameLoadout';
 import type { ResolvedLoadout } from '../shared/meta/Loadouts';
@@ -418,6 +419,12 @@ export class Game {
    * absent. Null outside a match; `MatchWorld` itself has no optional members.
    */
   private world: MatchWorld | null = null;
+  /**
+   * The skin deck the current world was dealt from (M15, D1): the summary's lineup asks it
+   * which body each entity wore, so the body on the platform is the body the player shot.
+   * Null between worlds.
+   */
+  private characterSelector: RandomCharacterSelector | null = null;
 
   // ---- process-wide -------------------------------------------------------
   private readonly harness: Harness;
@@ -1055,6 +1062,7 @@ export class Game {
           this.mapEntry().name,
           banks ? report : null,
           this.profile.prestige,
+          this.lineupSource(match),
           // The connection decides this, not the hold. See `GameScreens.showSummary`.
           this.server !== null,
         );
@@ -1080,6 +1088,32 @@ export class Game {
         this.teardownWorld();
       },
     });
+  }
+
+  /**
+   * What the podium needs about each entity (M15, D1): the body the world's own selector
+   * dealt it — the local player's is the skin they picked (B5), since nobody draws their body
+   * on this client — and what it was last holding, from the list the renderer draws: the
+   * local player's from the weapon in their hands, everybody else's from their actor, and
+   * null for an entity the renderer never saw armed, which is an unarmed body rather than a
+   * wrong one.
+   */
+  private lineupSource(match: Match): LineupSource {
+    const selector = this.characterSelector;
+    const localId = match.localId;
+    return {
+      characterIdFor: (entityId) => {
+        if (entityId === localId) return this.profile.skinId;
+        return selector === null ? DEFAULT_CHARACTER_ID : selector.characterIdFor(entityId);
+      },
+      weaponIdFor: (entityId) => {
+        if (entityId === localId) return match.weapons.definition.id;
+        for (const actor of match.actorsForRender()) {
+          if (actor.entityId === entityId) return actor.weaponId;
+        }
+        return null;
+      },
+    };
   }
 
   // -- the loadout doctrine -------------------------------------------------
@@ -1523,6 +1557,7 @@ export class Game {
     const characterSelector = new RandomCharacterSelector(
       new Rng(CHARACTER_DECK_SALT ^ (this.profile.save.profile.matchesPlayed << 16) ^ this.worldsBuilt),
     );
+    this.characterSelector = characterSelector;
     this.world = new MatchWorld({
       bus: this.bus,
       scene: this.scene,
@@ -1624,6 +1659,7 @@ export class Game {
     const keep = options.keepConnection === true || this.rotating;
     this.world?.dispose({ keepConnection: keep });
     this.world = null;
+    this.characterSelector = null;
     // The intro's plan was for that world; the next one plans afresh on its first frame.
     this.introCamera.reset();
     this.speedo.reset();
@@ -2442,6 +2478,8 @@ export class Game {
     // own, so it stops with the frame loop instead of running on in a background tab. It
     // early-outs when the screen is hidden, which is every frame of a match.
     this.screens.loadoutEditor.tick(dt);
+    // The summary's lineup, the same way (M15, D1): it early-outs when the screen is hidden.
+    this.screens.summary.tick(dt);
     /**
      * The post-match return clock, once per frame, from the server's own deadline.
      *

@@ -86,10 +86,10 @@
  * grows with it. The fixed widths of frame content (`.op-settings`, `.op-pickers`, the pause
  * stack, the sliders, the binding buttons) are scaled by hand in `app.css` where they stand.
  *
- * Two screens sit on the *old* ramp on purpose until their phase rebuilds them — the class
- * editor (`.lo`, Phase B) and the summary (`.eom`, Phase D) — because at this ramp they do
- * not fit the frame, and a clipped screen is worse than a small one. Each says so where it
- * pins the old values.
+ * Two screens sat on the *old* ramp until their phase rebuilt them — the class editor (`.lo`,
+ * Phase B) and the summary (`.eom`, Phase D) — because at this ramp they did not fit the
+ * frame, and a clipped screen is worse than a small one. Both are on this ramp now; nothing
+ * inside a frame pins the old values.
  */
 .op-frame {
   --t-micro: 14px;

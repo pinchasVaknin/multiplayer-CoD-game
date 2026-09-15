@@ -782,43 +782,54 @@ body.op-locked #viewport {
   color: var(--c-text-dim);
 }
 
-/* ---- end of match (M4) ------------------------------------------------- */
+/* ---- end of match (M4; on the frame, M15 Phase D) ------------------------ */
 
 /*
- * Only the gap. The scrolling, the padding and the start-alignment were this rule's until
- * round 5's P1 — three declarations that were `.op-screen`'s job written out again here,
- * and again on `.lo`, and never on the main menu, which is the one that got reported. The
- * layer does all three now; a screen that needs a tighter rhythm than the layer's still
- * says so, which is what this is.
- */
-/*
- * The layer's frame, not the layer: the frame is the flex column now (M15, A1).
+ * Three rows on the frame's grid — the head, the top (the lineup or the board), the band —
+ * and the band a fixed height at the bottom, so nothing above it moves when the XP accordion
+ * opens (D2). The frame's padding is the editor's 32/48 rather than 48/72, for the editor's
+ * reason: this screen has the most on it.
  *
- * On the HUD's ramp, not the frame's, until Phase D rebuilds this screen: at the frame's ramp
- * the sixteen-row Free-for-All board is taller than the frame, and a clipped summary is worse
- * than a small one. The values are `tokens.css`'s `:root` ramp, restated so the pin is visible
- * where it applies. Phase D deletes this block.
+ * Two numbers are the accordion's room. `--eom-band` is what the screen gives it; the
+ * strip (level, bar, total) stands at its foot, and `--xp-list-ceiling` is what the row list
+ * may grow to above the strip. The list is `max-height`-animated up to the ceiling and
+ * clips while it grows; at rest a report must fit under the ceiling, and `npm run layout`
+ * measures the fullest report there is (twelve lines and a tail) against it.
+ *
+ * The old-ramp pin that stood here — `--t-body: 13px` and the rest, restated so the sixteen-row
+ * board would fit under the frame's ramp — is gone with the rebuild, as it said it would be.
  */
 .eom .op-frame {
-  gap: var(--s-5);
-  --t-micro: 10px;
-  --t-small: 11px;
-  --t-body: 13px;
-  --t-lead: 16px;
-  --t-title: 22px;
-  --t-display: 40px;
-  --s-1: 4px;
-  --s-2: 8px;
-  --s-3: 12px;
-  --s-4: 16px;
-  --s-5: 20px;
-  --s-6: 24px;
-  --s-8: 32px;
-  --s-12: 48px;
+  --eom-band: 300px;
+  --xp-list-ceiling: 196px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) var(--eom-band);
+  gap: var(--s-4);
+  justify-content: stretch;
+  justify-items: stretch;
+  align-items: stretch;
+  padding: 32px 48px;
 }
 
 .eom[hidden] {
   display: none;
+}
+
+/* ---- the head ---- */
+
+.eom__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-8);
+  min-width: 0;
+}
+
+.eom__titles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-width: 0;
 }
 
 .eom__outcome {
@@ -829,6 +840,7 @@ body.op-locked #viewport {
   margin: 0;
   line-height: 1;
   color: var(--c-text);
+  white-space: nowrap;
 }
 
 .eom__outcome--win {
@@ -839,24 +851,19 @@ body.op-locked #viewport {
   color: var(--c-bad);
 }
 
+.eom__detail {
+  white-space: nowrap;
+}
+
 /*
- * Six figures on one line while there is room for six, and on two when there is not.
- *
- * `grid-auto-flow: column` cannot wrap — it answers "how many columns" with "as many as there
- * are items" and the row is then as wide as they are, 451px of it inside a 375px window. The
- * same fold `.sb__grid` above uses, for the same reason: the point at which six stats stop
- * fitting is a property of the stats, not a breakpoint to write down. The column gap is
- * unchanged, so nothing moves at any width where it already fitted.
+ * The local player's six figures, in a row between the headline and the tabs. They were a
+ * boxed row of their own between the headline and the board; on the frame the head has the
+ * width for them and the top has none to spare.
  */
 .eom__personal {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--s-4) var(--s-8);
-  padding: var(--s-4) var(--s-6);
-  background: var(--c-surface);
-  border: 1px solid var(--c-line);
-  border-radius: var(--radius);
+  gap: var(--s-8);
+  margin-left: auto;
 }
 
 .eom__stat {
@@ -873,21 +880,150 @@ body.op-locked #viewport {
   color: var(--c-text);
 }
 
-/*
- * The XP breakdown's home. M6 fills it; until then it is `hidden` and this rule is the
- * whole contract — a laid-out, styled slot rather than a fake bar animating to a made-up
- * number.
- */
-.eom__xp {
-  width: min(1040px, 100%);
-  min-height: 48px;
-  border: 1px solid var(--c-line);
+.eom__tabs {
+  display: flex;
+  gap: var(--s-1);
+  flex: none;
+}
+
+.eom__tab {
+  appearance: none;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--c-line-hi);
   border-radius: var(--radius);
   background: var(--c-surface);
+  color: var(--c-text-dim);
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.eom__tab:hover {
+  color: var(--c-text);
+}
+
+.eom__tab.is-on {
+  color: var(--c-accent);
+  border-color: var(--c-accent);
+}
+
+/* ---- the top: the lineup, or the board ---- */
+
+.eom__top {
+  position: relative;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/*
+ * The stage's box is the lens's own aspect in frame pixels (`LINEUP_STAGE`), like the
+ * editor's 860×800: the nameplates are placed as fractions of it from the camera's
+ * projection, and a box of another shape would put them beside the feet rather than under.
+ */
+.eom-stage {
+  position: relative;
+  width: 1824px;
+  height: 560px;
+  flex: none;
+}
+
+.eom-stage[hidden] {
+  display: none;
+}
+
+.eom-stage__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius);
+  background: radial-gradient(ellipse at 50% 70%, rgba(28, 32, 39, 0.9), rgba(7, 8, 10, 0.2) 70%);
+}
+
+.eom-stage__plates {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* A nameplate: hung from the point under the figure's feet, centred on it. */
+.eom-plate {
+  position: absolute;
+  transform: translate(-50%, 0);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--s-1) var(--s-3);
+  border: 1px solid var(--c-line-hi);
+  border-radius: var(--radius);
+  background: rgba(7, 8, 10, 0.82);
+  white-space: nowrap;
+}
+
+.eom-plate__name {
+  font-family: var(--font-ui);
+  font-size: var(--t-small);
+  font-weight: var(--w-heavy);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--c-text);
+}
+
+.eom-plate--friendly .eom-plate__name {
+  color: var(--c-good);
+}
+
+.eom-plate--hostile .eom-plate__name {
+  color: var(--c-bad);
+}
+
+/* The player's own plate gets the one accent edge, as their row on the board does. */
+.eom-plate--local {
+  border-left: 2px solid var(--c-accent);
+}
+
+.eom-plate__sub {
+  font-size: var(--t-micro);
+  color: var(--c-text-dim);
+}
+
+/*
+ * The board on the SCOREBOARD tab: the same `.sb--embedded`, given the frame's width so the
+ * two team blocks stand side by side at the frame's ramp rather than folding to two lines.
+ */
+.eom .sb--embedded {
+  width: min(1600px, 100%);
+}
+
+/* ---- the band ---- */
+
+.eom__band {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s-8);
+  align-items: end;
+  height: var(--eom-band);
+  min-height: 0;
+}
+
+/* The accordion's cell. `XpSummary` fills it; a mode that banks nothing hides it. */
+.eom__xp {
+  min-width: 0;
+  height: 100%;
 }
 
 .eom__xp[hidden] {
   display: none;
+}
+
+/* CONTINUE and EXIT at the band's right end, on the strip's line, and they never move. */
+.eom__actions {
+  padding-bottom: var(--s-3);
 }
 
 /* M1's placeholder reticle dot lived here. M2 replaced it with the real dynamic

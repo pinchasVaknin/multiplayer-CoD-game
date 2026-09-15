@@ -1064,6 +1064,17 @@ export class Match {
   }
 
   /**
+   * The bodies this match draws, whichever kind of match it is (M15, D1).
+   *
+   * The same supplier `BotRenderer` was handed — the director's roster in single-player, the
+   * snapshot's remote set when networked — so the summary's lineup asks the one list the
+   * renderer draws from for what each entity is holding, rather than a second answer to it.
+   */
+  actorsForRender(): Iterable<RenderableActor> {
+    return this.deps.actors?.() ?? this.bots.bots;
+  }
+
+  /**
    * Find a body by entity id, whichever kind of match this is (M10, playtest round 2).
    *
    * Single-player has one place to look and a networked match has another: the roster holds

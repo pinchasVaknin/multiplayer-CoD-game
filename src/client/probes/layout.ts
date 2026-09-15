@@ -2,6 +2,8 @@ import { createGameBus } from '../../shared/core/Events';
 import { ScoreSystem, type ScoreTeam } from '../../shared/combat/ScoreSystem';
 import type { ColumnDef } from '../../shared/modes/GameMode';
 import { defaultSettings } from '../../shared/meta/SaveData';
+import { XP_SOURCES, type XpLine, type XpLines, type XpReport } from '../../shared/meta/XpRules';
+import { ALL_WEAPONS } from '../../shared/weapons/WeaponDefs';
 import { playability } from '../../shared/ui/Capabilities';
 import {
   DEFAULT_MAP_ID,
@@ -11,13 +13,15 @@ import {
   modesForMap,
 } from '../../shared/modes/ModeRegistry';
 import { CharacterAssetService } from '../characters/CharacterAssetService';
+import { BOT_CHARACTER_IDS, DEFAULT_CHARACTER_ID } from '../characters/CharacterCatalog';
 import { Profile } from '../meta/Profile';
 import { DEFAULT_CAMERA_CONFIG } from '../player/CameraConfig';
-import { EndOfMatch } from '../ui/EndOfMatch';
+import { EndOfMatch, type LineupSource } from '../ui/EndOfMatch';
 import { LoadoutEditor } from '../ui/LoadoutEditor';
 import { Menus, type MenuSelection } from '../ui/Menus';
 import { PauseMenu } from '../ui/PauseMenu';
 import { Settings } from '../ui/Settings';
+import { XpSummary } from '../ui/XpSummary';
 import { applyFrameScale } from '../ui/Frame';
 import { PROBE_VIEWPORTS, type Viewport } from './Viewports';
 
@@ -304,8 +308,25 @@ const pause = new PauseMenu({
 // version of a screen is the one that has to fit.
 pause.setDebugAvailable(true);
 
-const summary = new EndOfMatch({ rowsPerTeam: 8, onContinue: noop, onExit: noop });
+/**
+ * A skin service whose repository never answers: the stage asks for a body when the editor
+ * or the summary is shown, and this page measures layout — a 4 MB fetch per surface would be
+ * a download with no reader, and a body that arrived would change nothing the probe measures.
+ */
+const characterAssets = new CharacterAssetService({ preload: () => new Promise(() => undefined), dispose: noop });
+
+const summary = new EndOfMatch({ rowsPerTeam: 8, onContinue: noop, onExit: noop, characterAssets, anisotropy: () => 1 });
 host.appendChild(summary.element);
+
+/**
+ * The XP accordion in the summary's band (M15, D2), with the two cues stubbed: the cadence's
+ * `requestAnimationFrame` loop runs on this page as it does in the client, and a probe that
+ * measured the band without the accordion in it would measure the easy state.
+ */
+const xpSummary = new XpSummary({ audio: { playXpTick: noop, playLevelUp: noop } });
+summary.xpSlot.appendChild(xpSummary.element);
+// `GameScreens.showSummary` un-hides the slot for a mode that banks; every summary here does.
+summary.xpSlot.hidden = false;
 
 const loadout = new LoadoutEditor({
   host,
@@ -313,12 +334,7 @@ const loadout = new LoadoutEditor({
   onSaveAndExit: noop,
   unrestricted: () => false,
   anisotropy: () => 1,
-  /**
-   * A skin service whose repository never answers: the stage asks for a body when the editor
-   * is shown, and this page measures layout — a 4 MB fetch per surface would be a download
-   * with no reader, and a body that arrived would change nothing the probe measures.
-   */
-  characterAssets: new CharacterAssetService({ preload: () => new Promise(() => undefined), dispose: noop }),
+  characterAssets,
 });
 
 /**
@@ -353,13 +369,13 @@ function widestColumns(): { columns: ColumnDef[]; modeName: string; mapName: str
   return best;
 }
 
-/** A full board: eight a side, the local player among them, plausible callsigns. */
-function fullBoard(): ScoreSystem {
+/** A board of `perTeam` a side, the local player among them, plausible callsigns. Eight a side is full. */
+function boardOf(perTeam: number): ScoreSystem {
   const score = new ScoreSystem(createGameBus());
   const teams: readonly ScoreTeam[] = ['A', 'B'];
   let id = 1;
   for (const team of teams) {
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < perTeam; i++) {
       const name = `${team === 'A' ? 'ALLY' : 'HOSTILE'}-${String(id).padStart(3, '0')}`;
       const row = score.register(id, name, team);
       if (row !== undefined) {
@@ -385,7 +401,68 @@ function fullBoard(): ScoreSystem {
 const board = widestColumns();
 summary.setColumns(board.columns, board.modeName, board.mapName);
 summary.setNetworked(true);
-const boardScore = fullBoard();
+const boardScore = boardOf(8);
+
+/**
+ * What each podium body wears and holds (D1): the catalogue dealt round by entity id, and the
+ * widest weapon in the arsenal — the plates are what the probe measures, and a body that never
+ * arrives (see `characterAssets`) has no width of its own.
+ */
+const lineupFixture: LineupSource = {
+  characterIdFor: (entityId) => BOT_CHARACTER_IDS[entityId % BOT_CHARACTER_IDS.length] ?? DEFAULT_CHARACTER_ID,
+  weaponIdFor: () => ALL_WEAPONS[0]?.id ?? null,
+};
+
+/**
+ * The fullest report the accordion can be handed (D2): every source in the table with a count
+ * that prints, and a tail of two of each unlock kind. The list's ceiling is measured against
+ * this, and a thirteenth source or a taller tag is a red run here before it is a clipped row
+ * on a screen.
+ */
+function fullestReport(): XpReport {
+  const lines = XP_SOURCES.map<XpLine>((source) => ({
+    id: source.id,
+    label: source.label,
+    count: source.kind === 'each' ? 12 : 1,
+    xp: source.value * (source.kind === 'each' ? 12 : 1),
+    kind: source.kind,
+  }));
+  const head = lines[0];
+  if (head === undefined) throw new Error('layout probe: XP_SOURCES is empty');
+  const total = lines.reduce((sum, line) => sum + line.xp, 0);
+  return {
+    lines: [head, ...lines.slice(1)] as unknown as XpLines,
+    total,
+    xpBefore: 12_000,
+    levelBefore: 7,
+    levelAfter: 9,
+    weaponLevelUps: ['ar_m4', 'smg_mp5'].filter((id) => ALL_WEAPONS.some((w) => w.id === id)),
+    challengesCompleted: ['first_blood', 'double_kill'],
+    camosUnlocked: ['digital', 'tiger'],
+  };
+}
+
+/** A team-mode result for `perTeam` a side: B wins, so the podium is the far side of the board. */
+function teamResult(perTeam: number): { show: () => HTMLElement; hide: () => void } {
+  const score = boardOf(perTeam);
+  return {
+    show: () => {
+      summary.show(
+        { kind: 'match', winner: 'B', reason: 'SCORE LIMIT', scoreA: 68, scoreB: 75, roundsA: 0, roundsB: 1 },
+        'A',
+        1,
+        score,
+        lineupFixture,
+      );
+      xpSummary.play(fullestReport());
+      return summary.element;
+    },
+    hide: () => {
+      xpSummary.stop();
+      summary.hide();
+    },
+  };
+}
 
 /** Click a button by its exact label, and say so loudly when it is no longer there. */
 function click(within: HTMLElement, label: string): void {
@@ -479,29 +556,61 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
     },
     hide: () => pause.hide(),
   },
+  /**
+   * The summary at three roster sizes, the accordion folded and open (M15, Gate D). Folded is
+   * the state the screen opens in — the strip, the lineup, the buttons; open is the state it
+   * reaches when the cadence finishes, taken instantly here (`open(true)`) because the probe
+   * measures in the task it shows in, and it wants the geometry the client reaches
+   * `--dur-med` later rather than the first keyframe of it. The fullest report the accordion
+   * can be handed is what opens.
+   */
+  ...([2, 6, 10] as const).flatMap((players) => {
+    const fixture = teamResult(players / 2);
+    return [
+      { name: `summary/${players}`, show: fixture.show, hide: fixture.hide },
+      {
+        name: `summary/${players}/xp`,
+        show: (): HTMLElement => {
+          const layer = fixture.show();
+          xpSummary.finish();
+          xpSummary.open(true);
+          return layer;
+        },
+        hide: fixture.hide,
+      },
+    ];
+  }),
+  /** The SCOREBOARD tab over a full team board: two blocks of eight, side by side at the frame's width. */
   {
-    name: 'summary',
+    name: 'summary/board',
     show: () => {
       summary.show(
         { kind: 'match', winner: 'B', reason: 'SCORE LIMIT', scoreA: 68, scoreB: 75, roundsA: 0, roundsB: 1 },
         'A',
         1,
         boardScore,
+        lineupFixture,
       );
+      xpSummary.play(fullestReport());
+      summary.showBoard(true);
       return summary.element;
     },
-    hide: () => summary.hide(),
+    hide: () => {
+      xpSummary.stop();
+      summary.hide();
+    },
   },
   /**
    * The Free-for-All summary (M13 Phase A, bug 4.4).
    *
    * One ladder of sixteen rather than two columns of eight — the tallest board this screen
-   * can be handed — and the case the bug was about: the winner is entity 3, on the local
-   * player's own substrate side, so the headline must be a place and not VICTORY.
+   * can be handed, on the SCOREBOARD tab — and the case the bug was about: the winner is
+   * entity 3, on the local player's own substrate side, so the headline must be a place and
+   * not VICTORY. The podium is the ladder's top three.
    */
-  {
-    name: 'summary/ffa',
-    show: () => {
+  ...(['lineup', 'board'] as const).map((tab) => ({
+    name: tab === 'lineup' ? 'summary/ffa' : 'summary/ffa/board',
+    show: (): HTMLElement => {
       summary.setViewer({ team: 'A', freeForAll: true });
       summary.show(
         {
@@ -517,14 +626,18 @@ const SURFACES: readonly Readonly<{ name: string; show: () => HTMLElement; hide:
         'A',
         1,
         boardScore,
+        lineupFixture,
       );
+      xpSummary.play(fullestReport());
+      summary.showBoard(tab === 'board');
       return summary.element;
     },
-    hide: () => {
+    hide: (): void => {
+      xpSummary.stop();
       summary.hide();
       summary.setViewer({ team: 'A', freeForAll: false });
     },
-  },
+  })),
   {
     name: 'create-a-class',
     show: () => {

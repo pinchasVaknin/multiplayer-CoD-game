@@ -1,23 +1,34 @@
 import { accuracy, killDeath, type PlayerScore, type ScoreSystem, type ScoreTeam } from '../../shared/combat/ScoreSystem';
 import type { ColumnDef, MatchResult } from '../../shared/modes/GameMode';
 import { personalOutcome } from '../../shared/modes/MatchOutcome';
+import { relationClass, relationTo, type ViewerContext } from '../../shared/ui/TeamColour';
+import type { CharacterAssetService } from '../characters/CharacterAssetService';
+import type { CharacterId } from '../characters/CharacterCatalog';
+import { CharacterStage, LINEUP_STAGE, type StageFigure } from './CharacterStage';
 import { createScreen } from './Frame';
+import { lineupOf, slotPositions } from './Lineup';
 import { Scoreboard } from './Scoreboard';
-import type { ViewerContext } from '../../shared/ui/TeamColour';
 
 /**
- * The post-match summary (brief S6.5).
+ * The post-match summary (brief S6.5; rebuilt on the design frame for M15, Phase D).
  *
- * The result, the local player's own line, and the full scoreboard — which is the same
- * `Scoreboard` the player has been holding Tab on all match, not a second implementation of
- * it. Two boards that format the same numbers differently is exactly how a summary screen
- * ends up disagreeing with the match it is summarising.
+ * Three bands on the 1920×1080 frame, and nothing scrolls. **The head**: the result — VICTORY,
+ * DEFEAT, a place — the detail line, the local player's own match in six figures, and the
+ * LINEUP / SCOREBOARD tabs. **The top**: the lineup — the winning team on B1's `CharacterStage`
+ * with a platform under it, the MVP centre and a step forward, each body the one the match
+ * dealt that entity (`characterSelector.characterIdFor`, through `LineupSource`) and the local
+ * player in the skin they picked (B5), holding their last weapon, nameplates in team colour
+ * under their feet; or, on the SCOREBOARD tab, the board — the same `Scoreboard` the player
+ * has been holding Tab on all match, not a second implementation of it. Two boards that
+ * format the same numbers differently is exactly how a summary screen ends up disagreeing
+ * with the match it is summarising. **The band**: fixed height, bottom-anchored, holding the
+ * XP accordion (`XpSummary`, in `xpSlot`) and, at its right end, CONTINUE and EXIT, which
+ * never move.
  *
- * **The XP insertion point.** M6 adds an animated XP breakdown bar. `xpSlot` is an empty
- * element between the personal line and the scoreboard, laid out and styled, and it is
- * `hidden` while nothing fills it — so M6 appends to one place and changes nothing else here.
- * It is deliberately not a placeholder bar animating to a fake number: a summary screen that
- * shows invented progression is worse than one that shows none.
+ * **The XP insertion point.** `xpSlot` is the band's left cell; `GameScreens` appends the
+ * `XpSummary` to it and hides it for a mode that banks nothing. It is not a placeholder bar
+ * animating to a fake number: a summary screen that shows invented progression is worse than
+ * one that shows none.
  */
 
 export interface SummaryDeps {
@@ -29,7 +40,25 @@ export interface SummaryDeps {
   readonly onContinue: () => void;
   /** The secondary: leave the server for the main menu. Offered only when there is a server. */
   readonly onExit: () => void;
+  /** The skins, for the lineup (D1). The same service the match drew the bodies from. */
+  readonly characterAssets: CharacterAssetService;
+  readonly anisotropy: () => number;
 }
+
+/**
+ * What the lineup needs to know about an entity that the board does not carry (D1): which
+ * body it wore and what it held. `Game` answers from the world's own character selector and
+ * the renderer's actor list; the layout probe answers with a fixture.
+ */
+export interface LineupSource {
+  /** The body the match dealt this entity — or, for the local player, the skin they picked. */
+  characterIdFor(entityId: number): CharacterId;
+  /** What this entity was last holding, or null for a body the screen never saw armed. */
+  weaponIdFor(entityId: number): string | null;
+}
+
+/** Just in front of the toes, where the nameplate hangs. Metres. */
+const PLATE_LEAD = 0.42;
 
 export class EndOfMatch {
   readonly element: HTMLElement;
@@ -39,32 +68,73 @@ export class EndOfMatch {
   private readonly outcome: HTMLElement;
   private readonly detail: HTMLElement;
   private readonly personal: HTMLElement;
+  private readonly lineupTab: HTMLButtonElement;
+  private readonly boardTab: HTMLButtonElement;
+  private readonly stageBox: HTMLElement;
+  private readonly stage: CharacterStage;
+  private readonly plates: HTMLElement;
   private readonly board: Scoreboard;
   private readonly continueButton: HTMLButtonElement;
   private readonly exitButton: HTMLButtonElement;
   private readonly actions: HTMLElement;
+  private viewer: ViewerContext = { team: 'A', freeForAll: false };
 
   constructor(deps: SummaryDeps) {
     const { layer, frame } = createScreen('op-screen eom');
     this.element = layer;
     this.element.hidden = true;
 
+    // ---- the head ----
+    const head = document.createElement('div');
+    head.className = 'eom__head';
+
+    const titles = document.createElement('div');
+    titles.className = 'eom__titles';
     this.outcome = document.createElement('h1');
     this.outcome.className = 'eom__outcome';
-
     this.detail = document.createElement('p');
-    this.detail.className = 'op-screen__sub';
+    this.detail.className = 'eom__detail op-screen__sub';
+    titles.append(this.outcome, this.detail);
 
     this.personal = document.createElement('div');
     this.personal.className = 'eom__personal';
 
-    this.xpSlot = document.createElement('div');
-    this.xpSlot.className = 'eom__xp';
-    this.xpSlot.hidden = true;
+    const tabs = document.createElement('div');
+    tabs.className = 'eom__tabs';
+    tabs.setAttribute('role', 'tablist');
+    this.lineupTab = makeTab('Lineup');
+    this.boardTab = makeTab('Scoreboard');
+    this.lineupTab.addEventListener('click', () => this.showBoard(false));
+    this.boardTab.addEventListener('click', () => this.showBoard(true));
+    tabs.append(this.lineupTab, this.boardTab);
+
+    head.append(titles, this.personal, tabs);
+
+    // ---- the top: the lineup, or the board ----
+    const top = document.createElement('div');
+    top.className = 'eom__top';
+
+    this.stageBox = document.createElement('div');
+    this.stageBox.className = 'eom-stage';
+    this.stage = new CharacterStage({ characterAssets: deps.characterAssets, anisotropy: deps.anisotropy }, LINEUP_STAGE);
+    this.plates = document.createElement('div');
+    this.plates.className = 'eom-stage__plates';
+    this.stageBox.append(this.stage.canvas, this.plates);
 
     this.board = new Scoreboard(deps.rowsPerTeam);
     // The same component, shown flat rather than as a hold-to-view overlay.
     this.board.element.classList.add('sb--embedded', 'sb--on');
+    this.board.element.hidden = true;
+
+    top.append(this.stageBox, this.board.element);
+
+    // ---- the band: the XP accordion, and the way out ----
+    const band = document.createElement('div');
+    band.className = 'eom__band';
+
+    this.xpSlot = document.createElement('div');
+    this.xpSlot.className = 'eom__xp';
+    this.xpSlot.hidden = true;
 
     /**
      * Two buttons, and only where they mean two different things (playtest round 4, B4).
@@ -102,20 +172,13 @@ export class EndOfMatch {
      * would have been a fresh block with the same hole to forget.
      */
     this.actions = document.createElement('div');
-    this.actions.className = 'op-actions';
+    this.actions.className = 'op-actions eom__actions';
     this.actions.append(this.continueButton, this.exitButton);
 
-    frame.append(
-      this.outcome,
-      this.detail,
-      this.personal,
-      this.xpSlot,
-      this.board.element,
-      this.actions,
-    );
-  }
+    band.append(this.xpSlot, this.actions);
 
-  /** Bind the mode's scoreboard columns. Same call the in-match board gets. */
+    frame.append(head, top, band);
+  }
 
   /**
    * How long the **server** is still holding this screen, seconds. `null` when nobody is.
@@ -165,6 +228,7 @@ export class EndOfMatch {
     this.paintButton();
   }
 
+  /** Bind the mode's scoreboard columns. Same call the in-match board gets. */
   setColumns(columns: ColumnDef[], modeName: string, mapName: string): void {
     this.board.setColumns(columns, modeName, mapName);
   }
@@ -176,8 +240,10 @@ export class EndOfMatch {
    * board it cannot take the viewer at construction — there is no seat yet. `GameScreens
    * .showSummary` sets it from `match.localTeam`, beside the winner it already passes for
    * exactly the same reason: it is the one place that knows which side this client was on.
+   * The nameplates on the platform read it too: a colour is a relation to the viewer.
    */
   setViewer(viewer: ViewerContext): void {
+    this.viewer = viewer;
     this.board.setViewer(viewer);
   }
 
@@ -192,8 +258,12 @@ export class EndOfMatch {
    * The detail line names the winner where there is one to name: in a team mode the two team
    * scores say who won, and in Free-for-All `scoreA — scoreB` are the leader's and the
    * runner-up's kills, which say nothing about *who* unless the leader is named.
+   *
+   * Then the lineup (D1): `lineupOf` decides who stands on the platform and `slotPositions`
+   * where; `lineup` says what body and what weapon each of them gets. The board is refreshed
+   * behind the LINEUP tab, which is the one the screen opens on.
    */
-  show(result: MatchResult, localTeam: ScoreTeam, localId: number, score: ScoreSystem): void {
+  show(result: MatchResult, localTeam: ScoreTeam, localId: number, score: ScoreSystem, lineup: LineupSource): void {
     const outcome = personalOutcome(result, localTeam, localId, score.rows);
     this.outcome.textContent = outcome.label;
     this.outcome.classList.toggle('eom__outcome--win', outcome.kind === 'WIN');
@@ -207,20 +277,59 @@ export class EndOfMatch {
 
     this.paintPersonal(score);
     this.board.refresh(score);
+
+    const rows = lineupOf(result, score.rows, this.viewer.freeForAll);
+    const slots = slotPositions(rows.length);
+    const figures: StageFigure[] = [];
+    this.plates.replaceChildren();
+    rows.forEach((row, index) => {
+      const slot = slots[index];
+      if (slot === undefined) return;
+      figures.push({
+        characterId: lineup.characterIdFor(row.entityId),
+        weaponId: lineup.weaponIdFor(row.entityId),
+        x: slot.x,
+        z: slot.z,
+        yaw: slot.yaw,
+      });
+      this.plates.appendChild(this.plateFor(row, index === 0, this.stage.projectToCanvas(slot.x, 0, slot.z + PLATE_LEAD)));
+    });
+    this.stage.showLineup(figures);
+
+    this.showBoard(false);
     this.element.hidden = false;
     this.continueButton.focus();
   }
 
+  /** The SCOREBOARD tab, or the LINEUP tab. The probe measures both. */
+  showBoard(on: boolean): void {
+    this.stageBox.hidden = on;
+    this.board.element.hidden = !on;
+    this.lineupTab.setAttribute('aria-selected', on ? 'false' : 'true');
+    this.boardTab.setAttribute('aria-selected', on ? 'true' : 'false');
+    this.lineupTab.classList.toggle('is-on', !on);
+    this.boardTab.classList.toggle('is-on', on);
+  }
+
+  /** One frame of the lineup. Driven from `Game.draw`, so it stops with the frame loop. */
+  tick(dt: number): void {
+    if (this.element.hidden || this.stageBox.hidden) return;
+    this.stage.tick(dt);
+  }
+
   hide(): void {
     this.element.hidden = true;
+    // The bodies go with the screen: a lineup nobody is looking at is five skins held for nothing.
+    this.stage.release();
   }
 
   dispose(): void {
+    this.stage.dispose();
     this.board.dispose();
     this.element.remove();
   }
 
-  /** The local player's own match, in five figures. */
+  /** The local player's own match, in six figures. */
   private paintPersonal(score: ScoreSystem): void {
     const mine = findLocal(score.rows);
     this.personal.replaceChildren();
@@ -247,6 +356,37 @@ export class EndOfMatch {
       this.personal.appendChild(cell);
     }
   }
+
+  /**
+   * A nameplate under a figure's feet: the callsign in the team's colour — a relation to the
+   * viewer, as the board's is — the score, and MVP on the first. Positioned as fractions of
+   * the canvas from the lens's own projection, so it lands where the body stands at any
+   * frame scale; the canvas's CSS box keeps the lens's aspect for exactly this reason.
+   */
+  private plateFor(row: PlayerScore, mvp: boolean, at: { readonly u: number; readonly v: number }): HTMLElement {
+    const plate = document.createElement('div');
+    plate.className = `eom-plate eom-plate--${relationClass(relationTo(this.viewer, row.team))}`;
+    if (row.isLocal) plate.classList.add('eom-plate--local');
+    plate.style.left = `${(at.u * 100).toFixed(2)}%`;
+    plate.style.top = `${(at.v * 100).toFixed(2)}%`;
+    const name = document.createElement('span');
+    name.className = 'eom-plate__name';
+    name.textContent = row.displayName;
+    const sub = document.createElement('span');
+    sub.className = 'eom-plate__sub op-num';
+    sub.textContent = mvp ? `MVP · ${row.score.toLocaleString()}` : row.score.toLocaleString();
+    plate.append(name, sub);
+    return plate;
+  }
+}
+
+function makeTab(label: string): HTMLButtonElement {
+  const tab = document.createElement('button');
+  tab.type = 'button';
+  tab.className = 'eom__tab';
+  tab.setAttribute('role', 'tab');
+  tab.textContent = label;
+  return tab;
 }
 
 function findLocal(rows: readonly PlayerScore[]): PlayerScore | undefined {

@@ -824,32 +824,97 @@
   opacity: 0.3;
 }
 
-/* ---- XP breakdown -------------------------------------------------------- */
+/* ---- XP breakdown (M6; the accordion, M15 D2) ---------------------------- */
 
+/*
+ * A bottom-anchored column: the list (rows and the unlock tail) over the strip (level, bar,
+ * total). The list is `hidden` until the accordion opens; opening un-hides it at
+ * `max-height: 0` and transitions to the ceiling the summary's frame sets, so it grows
+ * *upward* out of the strip and the strip does not move. `.xp--instant` is the layout probe's:
+ * the same final geometry with the transition taken off, so a measurement in the same task
+ * sees where the list ends rather than where it starts.
+ */
 .xp {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  height: 100%;
+  min-height: 0;
+}
+
+.xp__list {
   display: flex;
   flex-direction: column;
   gap: var(--s-2);
-  padding: var(--s-3) var(--s-4);
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height var(--dur-med) var(--ease);
 }
 
-.xp__head {
+.xp__list[hidden] {
+  display: none;
+}
+
+.xp--open .xp__list {
+  max-height: var(--xp-list-ceiling, 196px);
+}
+
+.xp--instant .xp__list {
+  transition: none;
+}
+
+/* The strip: one button, so the whole thing is the handle. */
+.xp__strip {
+  appearance: none;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--s-6);
+  width: 100%;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  color: var(--c-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.xp__strip:hover,
+.xp__strip:focus-visible {
+  border-color: var(--c-line-hi);
+}
+
+.xp__level-block {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--s-4);
+  flex-direction: column;
+  gap: 2px;
+  min-width: 96px;
 }
 
 .xp__level {
   font-size: var(--t-title);
   font-weight: var(--w-heavy);
+  line-height: 1;
   color: var(--c-accent);
   letter-spacing: var(--track-display);
+}
+
+.xp__bar-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-width: 0;
 }
 
 .xp__total {
   font-size: var(--t-lead);
   font-weight: var(--w-heavy);
+  min-width: 150px;
+  text-align: right;
 }
 
 .xp__bar {
@@ -872,10 +937,28 @@
   text-align: right;
 }
 
+/* The chevron: a rotated corner, pointing up when the list can open and down when it is. */
+.xp__chevron {
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--c-text-faint);
+  border-bottom: 2px solid var(--c-text-faint);
+  transform: rotate(-135deg) translate(-2px, -2px);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.xp--open .xp__chevron {
+  transform: rotate(45deg) translate(-2px, -2px);
+}
+
+/*
+ * Twelve rows at most (`XP_SOURCES`), three across, so the fullest report is four rows tall
+ * under the ceiling with the tail beneath it.
+ */
 .xp__rows {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px var(--s-6);
 }
 
 /*
@@ -884,7 +967,7 @@
  */
 .xp__row {
   display: grid;
-  grid-template-columns: 1fr auto 84px;
+  grid-template-columns: 1fr auto 96px;
   gap: var(--s-3);
   align-items: baseline;
   padding: 2px var(--s-1);
@@ -917,27 +1000,37 @@
 
 /*
  * The level-up flourish. It is the only thing in the project allowed to be loud, and it
- * earns it by happening a few times an hour.
+ * earns it by happening a few times an hour. Over the strip rather than in the flow, so it
+ * moves nothing when it lands.
  */
 .xp__flourish {
+  position: absolute;
+  left: 50%;
+  bottom: var(--s-2);
+  transform: translate(-50%, 0) scale(0.94);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--s-1);
-  padding: var(--s-3);
+  padding: var(--s-3) var(--s-6);
   border: 1px solid var(--c-accent);
   border-radius: var(--radius);
   background: var(--c-accent-glow);
   opacity: 0;
-  transform: scale(0.94);
+  pointer-events: none;
+  white-space: nowrap;
   transition:
     opacity var(--dur-med) var(--ease),
     transform var(--dur-med) var(--ease);
 }
 
+.xp__flourish[hidden] {
+  display: none;
+}
+
 .xp__flourish.is-on {
   opacity: 1;
-  transform: none;
+  transform: translate(-50%, 0);
 }
 
 .xp__flourish-title {
@@ -958,6 +1051,10 @@
   gap: var(--s-2);
   opacity: 0;
   transition: opacity var(--dur-med) var(--ease);
+}
+
+.xp__tail:empty {
+  display: none;
 }
 
 .xp__tail.is-in {
