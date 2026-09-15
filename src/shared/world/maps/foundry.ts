@@ -389,7 +389,12 @@ function spawnHalf(): SpawnZone[] {
   put(0, 16, 2.5);
   // Flip side: past the centre line, for when team A has been pushed off the map.
   put(-26.5, -2, 2.5);
-  put(26.5, -2, 2.5);
+  // The east flip zone stands in the back alley behind the container spine (x 26.25 to the
+  // wall at 29), not on the spine's face: at x = 26.5 the standing capsule was 10 cm inside
+  // the container at (25, -4) — the props are rotationally symmetric and the zones were
+  // authored mirror-symmetric, so only this side had a container there. Found by
+  // `npm run intro` (M15 C); the sim's first-tick de-penetration had hidden it.
+  put(27.6, -2, 2.5);
 
   return a;
 }

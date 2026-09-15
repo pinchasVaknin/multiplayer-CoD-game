@@ -600,7 +600,11 @@ function spawnHalf(): SpawnZone[] {
   put(0, 29, 3.0);
   put(LANE_X, 28, 3.0);
   put(-28, 19, 2.4);
-  put(28, 19, 2.4);
+  // 14, not 19: the east perimeter carries the rotated copy of the west spine (the stack at
+  // (27, 20), z 17 to 23), and at z = 19 the standing capsule was 0.6 m inside it. Its
+  // west twin is open floor at z = 19; this one is at the stack's foot with the same
+  // 1.7 m to the wall. Found by `npm run intro` (M15 C).
+  put(28, 14, 2.4);
   put(-11, 22, 2.0);
   put(11, 22, 2.0);
   // Flip side: past the centre line, inside the enemy-side shed.
