@@ -1088,8 +1088,8 @@ uses and writes `public/models/bots/skins/thumbs/<File>.png`. Software WebGL on 
 the bytes are the same on every machine that regenerates them. **Seven renders, 50–71 kB
 each, 335–647 ms each**, committed. The Chrome plumbing — `findChrome`, `Cdp`, `evaluate`,
 the dev server, the launch, `withPage` — moved out of `layout-probe.mjs` into
-`scripts/headless-chrome.mjs` for both to share; the probe driver is 70 lines now and does
-what it did. `check:skins` gained rule 4: every skin has its thumbnail.
+`scripts/headless-chrome.mjs` for both to share; the probe driver is 95 lines now (was 310)
+and does what it did. `check:skins` gained rule 4: every skin has its thumbnail.
 
 **The picker.** CHANGE A SKIN over the foot of the stage's canvas — the strip opens *upward
 over the picture*, so the column's height is the same open and closed and the frame never
