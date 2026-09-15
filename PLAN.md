@@ -1471,6 +1471,53 @@ as a collision; the tracers' brightness against the fade; whether the fight shou
 silent — it is — or carry the gunshots at the menu's mix; the first-menu hitch on a real
 machine.
 
+### Playtest report (2026-09-15), built the same day: Create-a-Class round 2, and the cyan
+
+The human's brief against a reference screen (an operator on a plinth, a right-hand column
+of category bars with big pictures, a skin strip under the stage): bigger pictures; three
+states — idle grey-white with a metallic read, hover that grows the whole bar and whitens it
+with room between bars, a click that changes colour and does not shrink; the bottom zone
+gone — the list opens on the categories and a click replaces it with that category's
+options, each shown as it looks; the chosen weapon on the stage in the operator's place;
+tabs over the list (the weapon's WEAPON / ATTACHMENTS / SKIN); SAVE and CANCEL under the
+stage; and no orange anywhere.
+
+**Built** (`ce18829`; `LoadoutEditor.ts` 1 173 → 1 387, `CategoryIcons.ts` 64 new). One list
+in the right column: the six category bars — 112 px, the equipped weapon's silhouette at
+140 px or a glyph at 60 (eight paths, no assets: frag, flash, smoke, shield, UAV, case, swatch,
+scope) — and, on a click, the category's options as 88 px bars with the same pictures, a
+blurb, and EQUIPPED / LEVEL N at the right end; tabs and the pager in a head over the list;
+**8 bars a page, 7 with the stat band**, which is the arithmetic the CSS comment carries
+(788 in 860, 688 in 708). The states are CSS: `.lo-metal` is a light-to-steel gradient
+clipped to the type; hover is `scale(1.035)` on the bar with a 12 px gap; `is-on` is the
+accent rule and glow; `:active` is a colour. The **weapon stands on the stage**:
+`WeaponPreview` took `width / height / className` and a rect-fitted backing store, and at
+860×480 it replaces the operator's canvas, skin strip and arrow bar while a weapon category
+is open — the weapon under the pointer, or the equipped one in its finish. SAVE closes the
+list; CANCEL restores the class from the snapshot the category opened with (`cloneSlot` /
+`assignSlot`, in place, because the profile owns the object). The other four categories keep
+the operator — there is no grenade or perk mesh to stand there.
+
+**The cyan.** `--c-accent` #3fa9c7 (dim #2c7d94), `--c-warn` and `Palette.neutral` the
+human's gold #c89953, and the three front-end sites that had the amber by hand — the menu's
+sweep, the board's local row, the stage's ring. The debug overlays and the maps' hazard
+paint keep theirs: instrumentation and environment, not the UI.
+
+**Measured.** `npm run layout` PASS, the ten editor surfaces at **1016 of 1016** at 1920×1080
+after three findings on the way: the heavy capitals' 2 px overrun at `line-height: 1.2`
+(B1–B4's tile finding, again), the band 13 px short of its four lines, and — the one worth
+the sentence — the operator's canvas *not* stepping aside because `.lo-stage__canvas` sets
+its own `display` and the `hidden` attribute lost to it (round 4's B13, again; three
+`[hidden]` companions). `npm run check` green, 134 tests; the readability probe's colour
+invariants unchanged with the new neutral. **Pane**, the real client: WASP 9 picked → on the
+stage with its model, the operator hidden; CANCEL → the M4 back, the categories showing;
+SAVE → the category bar reads WASP 9. The stage's renderer **5 g / 11 t** and the preview's
+**0 g / 3 t**, flat over 20 MENU ↔ LOADOUT cycles with three categories opened each.
+
+**Needs a browser:** whether the gradient reads as metal or as grey; 3.5 % against the
+reference's growth; the cyan on the PLAY button against the backdrop; whether a locked bar
+at 55 % is dim enough to read as locked and bright enough to read at all.
+
 ## What each item breaks
 
 - **B1/B2's fix is replaced, not removed.** The `safe center` + `overflow: auto` reasoning in
